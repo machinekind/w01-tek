@@ -76,8 +76,8 @@ before building the rest.
 - **Actor observation** (only signals the real robot has): gyro, gravity direction derived from
   the IMU orientation, 12 joint positions relative to home, 12 joint velocities, previous action,
   and the command. Sensor noise is added in training.
-- **Critic observation**: the actor observation plus true base linear velocity, foot contact
-  flags, and the episode's randomized physics parameters. The critic is discarded at deployment.
+- **Critic observation**: the actor observation plus true base linear velocity and foot contact
+  flags. The critic is discarded at deployment.
 - **Reward**: the Go1 joystick terms, ported. Tracking rewards for commanded linear and angular
   velocity. Penalties for vertical velocity, body tilt, torque, action rate, and joint-limit
   proximity. A feet-air-time term encourages stepping. An episode ends early when the robot falls.

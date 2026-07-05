@@ -1,0 +1,90 @@
+<?xml version="1.0"?>
+<robot name="quadruped" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- position command interface => MD80 IMPEDANCE mode; the drive runs
+       tau = kp*(q_target - q) - kd*dq clamped to max_torque, which is
+       exactly the actuator model the policy was trained with
+       (four_bar_bot_mjx.xml: gainprm=20, biasprm="0 -20 -1", forcerange 6)
+       when kp=20, kd=1, max_torque=6. -->
+  <xacro:macro name="fbb_joint" params="name can_id kp kd max_torque">
+    <joint name="${name}">
+      <command_interface name="position" />
+      <state_interface name="position">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="velocity">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="effort">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+
+      <param name="can_id">${can_id}</param>
+      <param name="max_torque">${max_torque}</param>
+
+      <!-- q_/dq_ PID params are required by the driver's URDF parser but
+           unused in IMPEDANCE mode; ddq_kp/ddq_kd are the impedance gains. -->
+      <param name="q_kp">10.0</param>
+      <param name="q_ki">0.5</param>
+      <param name="q_kd">0.0</param>
+      <param name="q_windup">1.0</param>
+      <param name="dq_kp">2.0</param>
+      <param name="dq_ki">0.5</param>
+      <param name="dq_kd">0.0</param>
+      <param name="dq_windup">0.1</param>
+      <param name="ddq_kp">${kp}</param>
+      <param name="ddq_kd">${kd}</param>
+    </joint>
+  </xacro:macro>
+
+  <xacro:macro name="fbb_ros2_control" params="kp kd max_torque usb_port">
+    <ros2_control name="MD80HardwareInterface" type="system">
+      <hardware>
+        <plugin>md80_hardware_interface/MD80HardwareInterface</plugin>
+        <param name="usb_port">${usb_port}</param>
+        <param name="bus">usb</param>
+      </hardware>
+
+      <xacro:fbb_joint name="front_left_first_joint" can_id="10" kp="${kp}" kd="${kd}" max_torque="${max_torque}" />
+      <xacro:fbb_joint name="front_left_second_joint" can_id="11" kp="${kp}" kd="${kd}" max_torque="${max_torque}" />
+      <xacro:fbb_joint name="front_left_third_joint" can_id="12" kp="${kp}" kd="${kd}" max_torque="${max_torque}" />
+
+      <xacro:fbb_joint name="front_right_first_joint" can_id="20" kp="${kp}" kd="${kd}" max_torque="${max_torque}" />
+      <xacro:fbb_joint name="front_right_second_joint" can_id="21" kp="${kp}" kd="${kd}" max_torque="${max_torque}" />
+      <xacro:fbb_joint name="front_right_third_joint" can_id="22" kp="${kp}" kd="${kd}" max_torque="${max_torque}" />
+
+      <xacro:fbb_joint name="rear_right_first_joint" can_id="30" kp="${kp}" kd="${kd}" max_torque="${max_torque}" />
+      <xacro:fbb_joint name="rear_right_second_joint" can_id="31" kp="${kp}" kd="${kd}" max_torque="${max_torque}" />
+      <xacro:fbb_joint name="rear_right_third_joint" can_id="32" kp="${kp}" kd="${kd}" max_torque="${max_torque}" />
+
+      <xacro:fbb_joint name="rear_left_first_joint" can_id="40" kp="${kp}" kd="${kd}" max_torque="${max_torque}" />
+      <xacro:fbb_joint name="rear_left_second_joint" can_id="41" kp="${kp}" kd="${kd}" max_torque="${max_torque}" />
+      <xacro:fbb_joint name="rear_left_third_joint" can_id="42" kp="${kp}" kd="${kd}" max_torque="${max_torque}" />
+    </ros2_control>
+  </xacro:macro>
+
+  <xacro:macro name="fbb_imu_ros2_control" params="port baud_rate:=9600">
+    <ros2_control name="imu" type="sensor">
+      <hardware>
+        <plugin>bmx160_serial_hardware_interface/BMX160SerialHardwareInterface</plugin>
+        <param name="port">${port}</param>
+        <param name="baud_rate">${baud_rate}</param>
+      </hardware>
+      <sensor name="imu">
+        <state_interface name="orientation.x" />
+        <state_interface name="orientation.y" />
+        <state_interface name="orientation.z" />
+        <state_interface name="orientation.w" />
+        <state_interface name="magnetometer.x" />
+        <state_interface name="magnetometer.y" />
+        <state_interface name="magnetometer.z" />
+        <state_interface name="angular_velocity.x" />
+        <state_interface name="angular_velocity.y" />
+        <state_interface name="angular_velocity.z" />
+        <state_interface name="linear_acceleration.x" />
+        <state_interface name="linear_acceleration.y" />
+        <state_interface name="linear_acceleration.z" />
+      </sensor>
+    </ros2_control>
+  </xacro:macro>
+</robot>

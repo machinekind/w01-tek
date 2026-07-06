@@ -1,0 +1,8 @@
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+# symlinks created by run.sh build / real-build
+ros2_ws/src/four_bar_bot_description
+ros2_ws/src/md80_hardware_interface
+ros2_ws/src/bmx160_serial_hardware_interface
+__pycache__/

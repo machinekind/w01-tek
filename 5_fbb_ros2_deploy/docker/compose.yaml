@@ -1,0 +1,47 @@
+x-common: &common
+  image: fbb-deploy
+  build:
+    context: ../..
+    dockerfile: 5_fbb_ros2_deploy/docker/Dockerfile
+  network_mode: host
+  ipc: host
+
+services:
+  # MuJoCo sim + policy + RViz (needs X11: run `xhost +local:docker` once).
+  sim:
+    <<: *common
+    environment:
+      - ROS_DOMAIN_ID=42
+      - DISPLAY=${DISPLAY:-:0}
+      - QT_X11_NO_MITSHM=1
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    command: ros2 launch fbb_policy sim.launch.py
+
+  # Same, headless (CI / remote).
+  sim-headless:
+    <<: *common
+    command: ros2 launch fbb_policy sim.launch.py rviz:=false
+
+  # Keyboard teleop, run alongside sim: docker compose run --rm teleop
+  teleop:
+    <<: *common
+    stdin_open: true
+    tty: true
+    command: ros2 run teleop_twist_keyboard teleop_twist_keyboard
+
+  # Real robot (MD80 over CANdle USB + BMX160 serial). Build the hardware
+  # interface packages first -- see README "Real robot".
+  real:
+    <<: *common
+    image: fbb-deploy-real
+    build:
+      context: ../..
+      dockerfile: 5_fbb_ros2_deploy/docker/Dockerfile.real
+    privileged: true
+    ulimits:
+      rtprio: { soft: 99, hard: 99 }
+      memlock: { soft: 102400, hard: 102400 }
+    volumes:
+      - /dev:/dev
+    command: ros2 launch fbb_policy real.launch.py max_torque:=2.0

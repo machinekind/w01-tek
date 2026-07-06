@@ -1,0 +1,20 @@
+# Real-robot image: sim image + MD80/BMX160 hardware interfaces.
+# Requires the candle submodule:
+#   git submodule update --init quadruped_ros2_original/md80_hardware_interface/3rd_party/candle
+# Build from the repo root:
+#   docker build -f 5_fbb_ros2_deploy/docker/Dockerfile.real -t fbb-deploy-real .
+
+FROM fbb-deploy
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libusb-1.0-0-dev udev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY quadruped_ros2_original/md80_hardware_interface src/md80_hardware_interface
+COPY quadruped_ros2_original/bmx160_serial_hardware_interface src/bmx160_serial_hardware_interface
+
+RUN source /opt/ros/humble/setup.bash && \
+    test -f src/md80_hardware_interface/3rd_party/candle/CMakeLists.txt || \
+        (echo "ERROR: candle submodule missing -- run git submodule update --init" && exit 1) && \
+    colcon build --symlink-install --packages-select \
+        md80_hardware_interface bmx160_serial_hardware_interface

@@ -7,18 +7,42 @@ REPO="$(cd .. && pwd)"
 RL_PY="$REPO/4_four_bar_bot_rl/.venv/bin/python"
 
 ros_env() {
-  # shellcheck disable=SC1091
-  source "/opt/ros/${ROS_DISTRO:-humble}/setup.bash"
+  if [ -d "/opt/ros/${ROS_DISTRO:-humble}" ]; then
+    # shellcheck disable=SC1091
+    source "/opt/ros/${ROS_DISTRO:-humble}/setup.bash"
+  else
+    # No system ROS (e.g. Fedora): use the RoboStack conda env instead.
+    # Its activation scripts reference unset vars, so relax -u around them.
+    set +u
+    # shellcheck disable=SC1091
+    source "$HOME/miniconda3/etc/profile.d/conda.sh"
+    conda activate ros-humble
+    set -u
+  fi
+  set +u
   [ -f ros2_ws/install/setup.bash ] && source ros2_ws/install/setup.bash
+  set -u
   return 0
 }
 
 case "${1:-}" in
-  deps)       # one-time: apt + pip dependencies (needs sudo)
-    sudo apt-get install -y ros-humble-xacro ros-humble-robot-state-publisher \
-      ros-humble-teleop-twist-keyboard ros-humble-rviz2 \
-      ros-humble-ros2-control ros-humble-ros2-controllers
-    pip3 install --user mujoco ;;
+  deps)       # one-time dependencies
+    if command -v apt-get >/dev/null; then   # Ubuntu/Debian with system ROS
+      sudo apt-get install -y ros-humble-xacro ros-humble-robot-state-publisher \
+        ros-humble-teleop-twist-keyboard ros-humble-rviz2 \
+        ros-humble-ros2-control ros-humble-ros2-controllers
+      pip3 install --user mujoco
+    else                                     # Fedora etc.: RoboStack conda env
+      # shellcheck disable=SC1091
+      source "$HOME/miniconda3/etc/profile.d/conda.sh"
+      conda create -n ros-humble --override-channels \
+        -c conda-forge -c robostack-staging -y \
+        ros-humble-desktop ros-humble-xacro ros-humble-teleop-twist-keyboard \
+        colcon-common-extensions compilers cmake pkg-config make ninja python=3.11
+      # setuptools>=80 drops `setup.py develop --editable` which colcon
+      # --symlink-install still uses
+      conda run -n ros-humble pip install mujoco "setuptools<80"
+    fi ;;
 
   build)      # colcon build (description package + fbb_policy)
     ros_env
@@ -34,6 +58,10 @@ case "${1:-}" in
   teleop)     # keyboard teleop (run next to sim)
     ros_env
     ros2 run teleop_twist_keyboard teleop_twist_keyboard ;;
+
+  wasd)       # hold-to-move WASD teleop (release key = stop)
+    ros_env
+    python3 tools/wasd_teleop.py ;;
 
   real-build) # additionally build the hardware interfaces (on the robot)
     ros_env

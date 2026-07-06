@@ -21,11 +21,16 @@ services:
   # Same, headless (CI / remote).
   sim-headless:
     <<: *common
+    environment:
+      - ROS_DOMAIN_ID=42
     command: ros2 launch fbb_policy sim.launch.py rviz:=false
 
   # Keyboard teleop, run alongside sim: docker compose run --rm teleop
   teleop:
     <<: *common
+    environment:
+      # Must match the sim service, or teleop's /cmd_vel never reaches it.
+      - ROS_DOMAIN_ID=42
     stdin_open: true
     tty: true
     command: ros2 run teleop_twist_keyboard teleop_twist_keyboard

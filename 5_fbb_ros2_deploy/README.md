@@ -18,7 +18,11 @@ ROS.
 ./run.sh teleop     # in a second terminal: drive with the keyboard
 ```
 
-(No ROS on this machine? `./run.sh docker-build && ./run.sh docker-sim`.)
+On non-Ubuntu hosts (e.g. Fedora) `./run.sh deps` installs ROS 2 Humble
+natively via [RoboStack](https://robostack.github.io/) into a conda env named
+`ros-humble` (requires miniconda); `run.sh` picks it up automatically when
+`/opt/ros` is absent. Docker remains as a last resort:
+`./run.sh docker-build && ./run.sh docker-sim`.
 
 The robot stands in RViz and walks when you send velocity commands
 (`teleop_twist_keyboard` publishes `/cmd_vel`). Useful knobs:

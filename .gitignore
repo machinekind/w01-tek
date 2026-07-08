@@ -4,3 +4,4 @@ __pycache__/
 4_four_bar_bot_rl/runs/
 4_four_bar_bot_rl/pose_previews/
 4_four_bar_bot_rl/videos/
+.env

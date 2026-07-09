@@ -1,0 +1,52 @@
+x-common-config:
+  &common-config
+  network_mode: host
+  ipc: host
+
+services:
+  piesek_robot:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: piesek_robot
+    <<: *common-config
+    # Realtime hardware (https://control.ros.org/master/doc/ros2_control/controller_manager/doc/userdoc.html#determinism)
+    privileged: true
+    ulimits:
+      rtprio:
+        soft: 99
+        hard: 99
+      memlock:
+        soft: 102400
+        hard: 102400
+    volumes:
+      - ../src:/ros2_ws/src
+      - ./config/cyclonedds.xml:/config/cyclonedds.xml
+      # Full /dev instead of a static snapshot: the IMU's CP2102 drops off
+      # the bus under a flaky cable and re-enumerates (sometimes as a new
+      # ttyUSBx). A privileged container's tmpfs /dev is frozen at container
+      # start, so hotplugged nodes and the /dev/serial/by-id symlinks (which
+      # the URDF uses as the IMU port) only stay correct with the host's
+      # /dev mounted directly.
+      - /dev:/dev
+      # md80_hardware_interface's candle library identifies the CAN-USB
+      # adapter via `udevadm info` (checks ID_VENDOR_ID/ID_USB_MODEL_ID),
+      # not just by opening the device file. udevadm reads the udev
+      # database in /run/udev, which is host-only state -- without this
+      # mount candle always reports "No devices found!" even though
+      # /dev/ttyACM0 itself is visible (privileged: true is not enough).
+      - /run/udev:/run/udev:ro
+      # GUI (RViz, sim.launch.py's rviz:=true default) needs the host's X
+      # server - a genuine, unavoidable host-side exception, same category
+      # as udev rules. ../dev.sh runs `xhost +local:docker` for you before
+      # starting this container; without it RViz will fail to open a window.
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    environment:
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///config/cyclonedds.xml
+      - DISPLAY=${DISPLAY}
+    # No command: override here on purpose - the image's CMD (sleep infinity)
+    # just keeps this standing as a dev environment. Use ../dev.sh to start
+    # this and get a shell in one step; edit src/ on the host as normal,
+    # then `colcon build` inside the container and `ros2 run`/`ros2 launch`
+    # by hand.

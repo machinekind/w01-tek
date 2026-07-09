@@ -1,0 +1,18 @@
+<mujoco model="four_bar_bot scene">
+  <include file="four_bar_bot.xml"/>
+
+  <option gravity="0 0 -9.81" timestep="0.001"/>
+
+  <asset>
+    <texture name="texplane" type="2d" builtin="checker" rgb1=".0 .0 .0" rgb2=".8 .8 .8" width="100" height="100"/>
+    <material name="matplane" texture="texplane" texuniform="true" texrepeat="1 1" reflectance="0."/>
+  </asset>
+
+  <worldbody>
+    <light directional="true" diffuse="0.4 0.4 0.4" specular="0.1 0.1 0.1" pos="0 0 5.0" dir="0 0 -1" castshadow="false"/>
+    <light directional="true" diffuse="0.6 0.6 0.6" specular="0.2 0.2 0.2" pos="0 0 4" dir="0 0 -1"/>
+    <geom name="ground" type="plane" pos="0 0 0" quat="1 0 0 0" size="100 100 0.001" material="matplane" condim="3" conaffinity="15"/>
+    <camera name="fixed" pos="0 -3.0 0.7388076085151868" xyaxes="1 0 0 0 0 1"/>
+    <camera name="track" mode="trackcom" pos="0 -3.0 0.7388076085151868" xyaxes="1 0 0 0 0 1"/>
+  </worldbody>
+</mujoco>

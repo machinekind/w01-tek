@@ -59,7 +59,7 @@ def generate_launch_description():
             Node(
                 package="rviz2",
                 executable="rviz2",
-                arguments=["-d", os.path.join(policy_share, "rviz", "fbb.rviz")],
+                arguments=["-d", os.path.join(policy_share, "rviz", "wojtek.rviz")],
                 condition=IfCondition(LaunchConfiguration("rviz")),
             ),
         ]

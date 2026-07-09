@@ -3,12 +3,12 @@ import jax.numpy as jp
 import numpy as np
 import pytest
 
-from wojtek_rl import env as fbb_env
+from wojtek_rl import env as wojtek_env
 
 
 @pytest.fixture(scope="module")
 def env():
-    return fbb_env.WojtekJoystick()
+    return wojtek_env.WojtekJoystick()
 
 
 @pytest.fixture(scope="module")
@@ -17,8 +17,8 @@ def reset_state(env):
 
 
 def test_obs_shapes(env, reset_state):
-    assert reset_state.obs["state"].shape == (fbb_env.OBS_SIZE,)
-    assert reset_state.obs["privileged_state"].shape == (fbb_env.PRIVILEGED_SIZE,)
+    assert reset_state.obs["state"].shape == (wojtek_env.OBS_SIZE,)
+    assert reset_state.obs["privileged_state"].shape == (wojtek_env.PRIVILEGED_SIZE,)
 
 
 def test_action_size(env):

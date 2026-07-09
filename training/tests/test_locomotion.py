@@ -5,12 +5,12 @@ import jax.numpy as jp
 import numpy as np
 import pytest
 
-from wojtek_rl import env as fbb_env
+from wojtek_rl import env as wojtek_env
 
 
 @pytest.fixture(scope="module")
 def env():
-    return fbb_env.WojtekJoystick()
+    return wojtek_env.WojtekJoystick()
 
 
 def _cmd(vx=0.0, vy=0.0, wz=0.0, h=0.125):
@@ -20,8 +20,8 @@ def _cmd(vx=0.0, vy=0.0, wz=0.0, h=0.125):
 def test_command_is_4d_and_obs_sizes(env):
     state = jax.jit(env.reset)(jax.random.PRNGKey(0))
     assert state.info["command"].shape == (4,)
-    assert state.obs["state"].shape == (fbb_env.OBS_SIZE,)
-    assert state.obs["privileged_state"].shape == (fbb_env.PRIVILEGED_SIZE,)
+    assert state.obs["state"].shape == (wojtek_env.OBS_SIZE,)
+    assert state.obs["privileged_state"].shape == (wojtek_env.PRIVILEGED_SIZE,)
 
 
 def test_zero_command_keeps_height(env):
@@ -52,8 +52,8 @@ def test_gait_blend_walk_to_trot(env):
     walk = np.array(env._leg_phases(slow))
     trot = np.array(env._leg_phases(fast))
     wrap = lambda x: (x + np.pi) % (2 * np.pi) - np.pi
-    np.testing.assert_allclose(walk, wrap(np.array(fbb_env.WALK_PHASE)), atol=1e-5)
-    np.testing.assert_allclose(trot, wrap(np.array(fbb_env.TROT_PHASE)), atol=1e-5)
+    np.testing.assert_allclose(walk, wrap(np.array(wojtek_env.WALK_PHASE)), atol=1e-5)
+    np.testing.assert_allclose(trot, wrap(np.array(wojtek_env.TROT_PHASE)), atol=1e-5)
 
 
 def test_clock_freezes_when_standing(env):

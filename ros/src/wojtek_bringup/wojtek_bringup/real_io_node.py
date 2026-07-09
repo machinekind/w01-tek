@@ -60,7 +60,7 @@ from std_msgs.msg import Float64MultiArray
 from std_srvs.srv import SetBool, Trigger
 
 from wojtek_policy.joint_map import JointMap
-from wojtek_policy.policy import FbbPolicy
+from wojtek_policy.policy import WojtekPolicy
 
 from wojtek_bringup import poses
 
@@ -79,7 +79,7 @@ class RealIoNode(Node):
         self.declare_parameter("ramp_rate_hz", 50.0)
 
         pdir = self.get_parameter("policy_dir").value
-        policy = FbbPolicy(f"{pdir}/policy.npz")
+        policy = WojtekPolicy(f"{pdir}/policy.npz")
         self.jmap = JointMap(self.get_parameter("joint_map_yaml").value)
         self.joint_names = policy.joint_names
 

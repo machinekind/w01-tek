@@ -94,7 +94,7 @@ def generate_launch_description():
                 parameters=[{"robot_description": robot_description}],
                 remappings=[("joint_states", "fbb/joint_states_abs")],
             ),
-            # fbb.rviz uses odom as the fixed frame (the sim publishes ground
+            # wojtek.rviz uses odom as the fixed frame (the sim publishes ground
             # truth odom -> base_link); there is no odometry on the real robot
             # yet, so pin base_link at the origin for visualization.
             Node(
@@ -137,7 +137,7 @@ def generate_launch_description():
             Node(
                 package="rviz2",
                 executable="rviz2",
-                arguments=["-d", os.path.join(policy_share, "rviz", "fbb.rviz")],
+                arguments=["-d", os.path.join(policy_share, "rviz", "wojtek.rviz")],
                 condition=IfCondition(LaunchConfiguration("rviz")),
             ),
         ]

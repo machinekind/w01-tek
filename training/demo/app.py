@@ -14,7 +14,7 @@ draws a top-down minimap; clicking it drops a new target.
 
 Run:
     ./run.sh app                          # serves http://127.0.0.1:8010
-    FBB_RUN_DIR=runs/<run> ./run.sh app
+    WOJTEK_RUN_DIR=runs/<run> ./run.sh app
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ from loguru import logger
 
 ROBOT_KEY = "fbb"
 ROBOT_LABEL = "four_bar_bot"
-DEFAULT_RUN_DIR = os.environ.get("FBB_RUN_DIR", "policies/fbb_v3")
+DEFAULT_RUN_DIR = os.environ.get("WOJTEK_RUN_DIR", "policies/fbb_v3")
 
 # Chase-cam + nav profile tuned for this robot's scale (standing height ~0.10 m,
 # body ~0.35 m long -- roughly 1/3 the size of jaxpot's Go1). The jaxpot Go1
@@ -86,7 +86,7 @@ class Sim:
         import mujoco
         from mujoco import mjx
 
-        from wojtek_rl import env as fbb_env
+        from wojtek_rl import env as wojtek_env
         from demo.navigation import NavConfig
         from wojtek_rl.policy_io import load_policy
         from wojtek_rl.train import build_ppo_params
@@ -97,7 +97,7 @@ class Sim:
 
         self._jax = jax
         self._mjx = mjx
-        self.env = fbb_env.WojtekJoystick()
+        self.env = wojtek_env.WojtekJoystick()
         ppo_params = build_ppo_params([], smoke=False)
         policy = load_policy(ckpt_dir, self.env, ppo_params, deterministic=True)
 

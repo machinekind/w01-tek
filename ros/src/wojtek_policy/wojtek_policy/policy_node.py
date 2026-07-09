@@ -12,7 +12,7 @@ parameters differ:
                                   absolute; 12 actuated joints)
   services    /fbb/enable (std_srvs/SetBool), /fbb/reset (std_srvs/Trigger)
 
-The policy itself (wojtek_policy.policy.FbbPolicy) works in the MuJoCo/training
+The policy itself (wojtek_policy.policy.WojtekPolicy) works in the MuJoCo/training
 convention; this node converts on both edges using joint_map.yaml.
 """
 
@@ -26,7 +26,7 @@ from std_msgs.msg import Float32
 from std_srvs.srv import SetBool, Trigger
 
 from wojtek_policy.joint_map import JointMap
-from wojtek_policy.policy import FbbPolicy, gravity_from_quat
+from wojtek_policy.policy import WojtekPolicy, gravity_from_quat
 
 # Training command ranges: never ask the policy for more than it was trained
 # to track. Fallback for metas without cmd_low/cmd_high (fbb_v3, env.py
@@ -69,7 +69,7 @@ class PolicyNode(Node):
         self.declare_parameter("action_ema", 0.0)
 
         pdir = self.get_parameter("policy_dir").value
-        self.policy = FbbPolicy(
+        self.policy = WojtekPolicy(
             f"{pdir}/policy.npz",
             clamp_knee=self.get_parameter("clamp_knee").value,
         )

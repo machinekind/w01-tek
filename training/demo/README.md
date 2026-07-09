@@ -25,7 +25,7 @@ From the training project root:
 
 ```bash
 ./run.sh app                          # serves http://127.0.0.1:8010
-FBB_RUN_DIR=policies/fbb_v3 ./run.sh app
+WOJTEK_RUN_DIR=policies/fbb_v3 ./run.sh app
 ```
 
 Needs the GPU (EGL rendering + JAX). Open the URL and click anywhere on the map;

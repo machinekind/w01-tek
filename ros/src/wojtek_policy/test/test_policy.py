@@ -13,14 +13,14 @@ PKG = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PKG))
 
 from wojtek_policy.joint_map import JointMap  # noqa: E402
-from wojtek_policy.policy import FbbPolicy, gravity_from_quat  # noqa: E402
+from wojtek_policy.policy import WojtekPolicy, gravity_from_quat  # noqa: E402
 
 CONFIG = PKG / "config"
 
 
 @pytest.fixture
 def policy():
-    return FbbPolicy(CONFIG / "policy.npz")
+    return WojtekPolicy(CONFIG / "policy.npz")
 
 
 def test_home_obs_gives_bounded_targets(policy):
@@ -62,7 +62,7 @@ def test_determinism(policy):
 
 
 def test_knee_clamp():
-    clamped = FbbPolicy(CONFIG / "policy.npz", clamp_knee=True)
+    clamped = WojtekPolicy(CONFIG / "policy.npz", clamp_knee=True)
     for _ in range(50):
         t = clamped.step(np.zeros(3), [0, 0, -1.0], clamped.home_ctrl, np.zeros(12), [0.6, 0.4, 0.7])
         assert np.all(t[2::3] <= clamped.knee_singularity + 1e-9)
@@ -91,7 +91,7 @@ def test_joint_map_roundtrip():
 def test_joint_map_home_within_urdf_limits_for_second_joint():
     """The trained home pose maps to finite URDF angles (sanity of offsets)."""
     jm = JointMap(CONFIG / "joint_map.yaml")
-    policy = FbbPolicy(CONFIG / "policy.npz")
+    policy = WojtekPolicy(CONFIG / "policy.npz")
     urdf_home = jm.to_urdf(policy.joint_names, policy.home_ctrl)
     assert np.all(np.isfinite(urdf_home))
 
@@ -101,10 +101,10 @@ def test_action_ema_smooths_targets_but_not_obs():
     obs (so the policy's inputs are identical with the filter on or off);
     the motor targets are anchor + EMA(raw actions) * action_scale."""
     import numpy as np
-    from wojtek_policy.policy import FbbPolicy
+    from wojtek_policy.policy import WojtekPolicy
 
-    a = FbbPolicy("config/policy.npz")
-    b = FbbPolicy("config/policy.npz")
+    a = WojtekPolicy("config/policy.npz")
+    b = WojtekPolicy("config/policy.npz")
     af = 0.5
     b.action_ema = af
     q = a.home_ctrl.copy()

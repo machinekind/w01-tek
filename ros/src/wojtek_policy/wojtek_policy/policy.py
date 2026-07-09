@@ -39,7 +39,7 @@ CMD_WZ_WEIGHT = 0.3  # _cmd_speed: |v_xy| + 0.3 * |wz|
 STAND_SPEED = 0.05  # below this command speed the clock freezes
 
 
-class FbbPolicy:
+class WojtekPolicy:
     def __init__(self, npz_path, meta_path=None, clamp_knee=False):
         npz_path = Path(npz_path)
         meta_path = Path(meta_path) if meta_path else npz_path.with_name(

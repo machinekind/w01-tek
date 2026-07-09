@@ -1,6 +1,6 @@
 """Export a Brax PPO checkpoint to a plain .npz for ROS deployment.
 
-The deploy stack (5_fbb_ros2_deploy) runs the policy with numpy only -- no
+The deploy stack (ros/, the wojtek_policy package) runs the policy with numpy only -- no
 jax/brax on the robot. This script flattens the checkpoint into:
 
   norm_mean/norm_std       observation normalizer for the "state" key (53,)

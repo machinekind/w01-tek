@@ -50,7 +50,7 @@ def _prepare_model_xml():
 
     share = Path(get_package_share_directory("wojtek_bringup")) / "config"
     meshes = Path(get_package_share_directory("wojtek_description")) / "meshes"
-    tmp = Path(tempfile.mkdtemp(prefix="fbb_mj_"))
+    tmp = Path(tempfile.mkdtemp(prefix="wojtek_mj_"))
     robot = (share / "wojtek_mjx.xml").read_text()
     robot = re.sub(r'meshdir="[^"]*"', f'meshdir="{meshes}"', robot)
     (tmp / "wojtek_mjx.xml").write_text(robot)
@@ -60,7 +60,7 @@ def _prepare_model_xml():
 
 class MujocoSimNode(Node):
     def __init__(self):
-        super().__init__("fbb_mujoco_sim")
+        super().__init__("wojtek_mujoco_sim")
         policy_share = get_package_share_directory("wojtek_policy")
         self.declare_parameter("model_xml", "")
         self.declare_parameter("joint_map_yaml", f"{policy_share}/config/joint_map.yaml")

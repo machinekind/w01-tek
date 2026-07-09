@@ -75,9 +75,9 @@ def check_gpu(nenv: int, nsteps: int) -> bool:
     from mujoco_playground import registry
 
     m = mujoco.MjModel.from_xml_path(str(paths.SCENE_XML))
-    fbb_model = mjx.put_model(m, impl="jax")
-    fbb_rate = _bench(mjx, jax, jp, fbb_model, m.key("home").qpos, nenv, nsteps)
-    print(f"fbb : {fbb_rate:,.0f} steps/s ({nenv} envs)")
+    wojtek_model = mjx.put_model(m, impl="jax")
+    wojtek_rate = _bench(mjx, jax, jp, wojtek_model, m.key("home").qpos, nenv, nsteps)
+    print(f"wojtek : {wojtek_rate:,.0f} steps/s ({nenv} envs)")
 
     go1_env = registry.load("Go1JoystickFlatTerrain", config_overrides={"impl": "jax"})
     g = go1_env.mj_model
@@ -85,8 +85,8 @@ def check_gpu(nenv: int, nsteps: int) -> bool:
         mjx, jax, jp, go1_env.mjx_model, g.key("home").qpos, nenv, nsteps
     )
     print(f"go1 : {go1_rate:,.0f} steps/s ({nenv} envs)")
-    print(f"ratio: {fbb_rate / go1_rate:.2f} (gate: >= 0.20)")
-    return fbb_rate >= go1_rate / 5
+    print(f"ratio: {wojtek_rate / go1_rate:.2f} (gate: >= 0.20)")
+    return wojtek_rate >= go1_rate / 5
 
 
 def main() -> None:

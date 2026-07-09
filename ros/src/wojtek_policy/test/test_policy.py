@@ -1,6 +1,6 @@
 """Unit tests for the numpy policy runtime and joint map (no ROS required).
 
-Run: 5_fbb_ros2_deploy/run.sh test
+Run: cd ros/src/wojtek_policy && python -m pytest test
 """
 
 import sys

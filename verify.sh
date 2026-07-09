@@ -99,9 +99,9 @@ t0(){
 
   # gitignore hygiene: big artifacts must not leak into status, and every pattern is ignored
   ok "big artifacts don't leak into git status" \
-     bash -c '! git status --porcelain --untracked-files=all | grep -qE "training/(\.venv|runs|videos|pose_previews|\.jax_cache)/|\.log$|\.DS_Store$"'
+     bash -c '! git status --porcelain --untracked-files=all | grep -qE "training/(\.venv|runs|videos|pose_previews|\.jax_cache|policies)/|ros/(build|install|log)/|\.log$|\.DS_Store$"'
   ok "gitignore covers every artifact pattern" \
-     bash -c 'for p in training/.venv training/runs training/videos training/pose_previews training/.jax_cache training/x.log training/.DS_Store; do git check-ignore -q "$p" || { echo "not ignored: $p"; exit 1; }; done'
+     bash -c 'for p in training/.venv training/runs training/videos training/pose_previews training/.jax_cache training/policies training/x.log training/.DS_Store ros/build/x ros/install/x ros/log/x; do git check-ignore -q "$p" || { echo "not ignored: $p"; exit 1; }; done'
 
   # ---- equivalence: the model training reads must be byte-identical to the baseline ----
   if git rev-parse --verify -q "$BASE_REF" >/dev/null; then

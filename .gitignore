@@ -1,22 +1,14 @@
-# Python
-.venv/
-__pycache__/
-*.pyc
+# Repo-wide only. Project-specific artifacts live in ros/.gitignore and
+# training/.gitignore.
 
 # OS
 .DS_Store
 
+# Python
+__pycache__/
+*.pyc
+.venv/
+
 # Logs
 *.log
 MUJOCO_LOG.TXT
-
-# Tool caches
-.jax_cache/
-.pytest_cache/
-.ruff_cache/
-
-# Training artifacts (big / generated)
-training/.venv/
-training/runs/
-training/pose_previews/
-training/videos/

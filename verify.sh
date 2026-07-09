@@ -78,6 +78,7 @@ t0(){
   absent "no live 'FbbPolicy' class ref (renamed -> WojtekPolicy)" 'FbbPolicy' . ':(exclude)*.md'
   absent "no live 'fbb_env' alias ref (renamed -> wojtek_env)" 'fbb_env' . ':(exclude)*.md'
   absent "no live 'fbb.rviz' ref (renamed -> wojtek.rviz)" 'fbb\.rviz' . ':(exclude)*.md'
+  absent "no live urdf fbb_*/four_bar_bot xacro tokens (renamed -> wojtek_*)" 'fbb_(real|sim|joint|ros2_control|imu_ros2_control|bmi160_imu_ros2_control)|four_bar_bot_body|four_bar_bot\.urdf\.xacro' . ':(exclude)*.md'
   absent "removed legacy launches not referenced" '(bringup|robot_state_publisher)\.launch\.py' 'ros/src/*/launch/*.py'
 
   # paths.py points at ros/, not the dropped quadruped dir

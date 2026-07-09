@@ -67,7 +67,7 @@ from wojtek_bringup import poses
 
 class RealIoNode(Node):
     def __init__(self):
-        super().__init__("fbb_real_io")
+        super().__init__("wojtek_real_io")
         share = get_package_share_directory("wojtek_policy")
         self.declare_parameter("policy_dir", f"{share}/config")
         self.declare_parameter("joint_map_yaml", f"{share}/config/joint_map.yaml")

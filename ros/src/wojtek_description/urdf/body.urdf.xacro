@@ -1,13 +1,13 @@
 <?xml version="1.0"?>
-<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="four_bar_bot_body">
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="wojtek_body">
   <xacro:include filename="$(find wojtek_description)/urdf/inertia.urdf.xacro" />
   <xacro:include filename="$(find wojtek_description)/urdf/leg.urdf.xacro" />
 
   <!-- Mechanical assembly shared by every bringup of this robot: material,
        base_link/body_link/imu_link, and the four legs. ros2_control/Gazebo
        blocks are deliberately not part of this macro - callers add their
-       own on top (see four_bar_bot.urdf.xacro for the stock example). -->
-  <xacro:macro name="four_bar_bot_body">
+       own on top (see wojtek.urdf.xacro for the stock example). -->
+  <xacro:macro name="wojtek_body">
     <material name="grey">
       <color rgba="0.5 0.5 0.5 1" />
     </material>

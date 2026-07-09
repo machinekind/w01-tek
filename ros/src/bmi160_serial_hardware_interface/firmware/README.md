@@ -14,7 +14,7 @@ R X: <qx> Y: <qy> Z: <qz> W: <qw>
 
 Classic ESP32 (Xtensa, CP210x USB-serial bridge). arduino-cli FQBN:
 `esp32:esp32:esp32`. Serial baud: **115200** (must match `baud_rate` param
-in the `fbb_bmi160_imu_ros2_control` xacro macro).
+in the `wojtek_bmi160_imu_ros2_control` xacro macro).
 
 ## Dependencies
 

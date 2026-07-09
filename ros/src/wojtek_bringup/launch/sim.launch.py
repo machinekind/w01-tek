@@ -25,7 +25,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 def generate_launch_description():
     share = get_package_share_directory("wojtek_bringup")
     policy_share = get_package_share_directory("wojtek_policy")
-    xacro_file = os.path.join(share, "urdf", "fbb_sim.urdf.xacro")
+    xacro_file = os.path.join(share, "urdf", "wojtek_sim.urdf.xacro")
     robot_description = ParameterValue(Command(f"xacro {xacro_file}"), value_type=str)
 
     return LaunchDescription(

@@ -1,7 +1,7 @@
 """Policy on the real robot: MD80 (IMPEDANCE) via ros2_control.
 
     IMU is currently DISABLED (flaky loaner BMI160, and fbb_loco_v8 doesn't
-    observe it). To re-enable: uncomment the sensor in fbb_real.urdf.xacro,
+    observe it). To re-enable: uncomment the sensor in wojtek_real.urdf.xacro,
     the imu_sensor_broadcaster in real_controllers.yaml, and the spawner
     argument / policy-node remap + imu_mount_rpy below.
 
@@ -38,7 +38,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 def generate_launch_description():
     share = get_package_share_directory("wojtek_bringup")
     policy_share = get_package_share_directory("wojtek_policy")
-    xacro_file = os.path.join(share, "urdf", "fbb_real.urdf.xacro")
+    xacro_file = os.path.join(share, "urdf", "wojtek_real.urdf.xacro")
     max_torque = LaunchConfiguration("max_torque")
     imu_port = LaunchConfiguration("imu_port")
     robot_description = ParameterValue(
@@ -83,7 +83,7 @@ def generate_launch_description():
                 package="controller_manager",
                 executable="spawner",
                 # imu_sensor_broadcaster removed: IMU disabled (flaky BMI160;
-                # v8 policy doesn't observe it) -- see fbb_real.urdf.xacro.
+                # v8 policy doesn't observe it) -- see wojtek_real.urdf.xacro.
                 arguments=["joint_state_broadcaster",
                            "forward_position_controller"],
             ),

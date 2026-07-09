@@ -11,7 +11,7 @@
   <xacro:arg name="use_hardware" default="True" />
   <xacro:arg name="use_sim" default="False" />
 
-  <xacro:four_bar_bot_body />
+  <xacro:wojtek_body />
 
   <xacro:quadruperd_ros2_control use_hardware="$(arg use_hardware)" use_sim="$(arg use_sim)" />
 

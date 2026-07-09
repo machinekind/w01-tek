@@ -6,7 +6,7 @@ controller_manager:
       type: joint_state_broadcaster/JointStateBroadcaster
 
     # IMU disabled (flaky BMI160; v8 policy doesn't observe it) -- see
-    # fbb_real.urdf.xacro.
+    # wojtek_real.urdf.xacro.
     # imu_sensor_broadcaster:
     #   type: imu_sensor_broadcaster/IMUSensorBroadcaster
 

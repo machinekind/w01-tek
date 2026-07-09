@@ -12,7 +12,17 @@ EXCLUDE  = --exclude='.git/' --exclude='__pycache__/' --exclude='*.pyc' \
            --exclude='docs/' --exclude='*.mp4' --exclude='wandb/' \
            --exclude='superpowers/' --exclude='outputs/'
 
-.PHONY: hpc-push hpc-train hpc-status hpc-logs hpc-pull
+.PHONY: hpc-push hpc-train hpc-status hpc-logs hpc-pull verify verify-quick verify-static
+
+# Reorg verification harness (see verify.sh). `verify` runs T0-T3 (ROS build
+# needs Docker); `verify-quick` skips the slow train/eval/docker steps;
+# `verify-static` is the fast dependency-free T0 gate (good for pre-push/CI).
+verify:
+	./verify.sh
+verify-quick:
+	./verify.sh --quick
+verify-static:
+	./verify.sh --tier 0
 
 hpc-push:
 	rsync -avz $(EXCLUDE) ./ $(HPC):$(REMOTE)/

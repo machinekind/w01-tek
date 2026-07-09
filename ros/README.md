@@ -1,6 +1,6 @@
-# piesek_ws
+# Wojtek ROS 2 workspace
 
-ROS 2 workspace for the four-bar-bot dog: `wojtek_policy` (RL policy runtime +
+ROS 2 workspace for Wojtek, the quadruped dog: `wojtek_policy` (RL policy runtime +
 node), `wojtek_bringup` (real robot / MuJoCo sim launch), hardware
 interfaces (MD80 motors, BMI160/BMX160 IMU), robot description.
 

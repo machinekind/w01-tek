@@ -1,13 +1,13 @@
 # Click-to-walk demo
 
-Interactive web app: **click a point on the map and the four_bar_bot walks
+Interactive web app: **click a point on the map and Wojtek walks
 there.** A FastAPI server holds the MJX env + trained policy and runs a
 closed-loop sim over a websocket, streaming a live chase-cam view + the robot
 pose to the browser.
 
 This is a thin presentation layer on top of the training package — it imports
-`fbb_rl.env` (the robot's MJX env), `fbb_rl.policy_io` (checkpoint loader) and
-`fbb_rl.train` (PPO config), so it runs inside the training project's venv.
+`wojtek_rl.env` (the robot's MJX env), `wojtek_rl.policy_io` (checkpoint loader) and
+`wojtek_rl.train` (PPO config), so it runs inside the training project's venv.
 Ported from the Go1 click-to-walk app and retargeted to the dog (chase-cam +
 nav constants scaled for its ~0.10 m standing height).
 

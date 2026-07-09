@@ -19,7 +19,7 @@ setup(
     zip_safe=True,
     maintainer="Jakub Chmielewski",
     maintainer_email="kchmielewski707@gmail.com",
-    description="Bringup (real + MuJoCo sim) for four_bar_bot / wojtek_policy.",
+    description="Bringup (real + MuJoCo sim) for Wojtek / wojtek_policy.",
     license="MIT",
     entry_points={
         "console_scripts": [

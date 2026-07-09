@@ -18,7 +18,7 @@ setup(
     zip_safe=True,
     maintainer="Michal Pogoda",
     maintainer_email="michalpogoda@surferseo.com",
-    description="RL locomotion policy for four_bar_bot (numpy runtime + ROS node).",
+    description="RL locomotion policy for Wojtek (numpy runtime + ROS node).",
     license="MIT",
     entry_points={
         "console_scripts": [

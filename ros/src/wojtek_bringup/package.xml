@@ -4,7 +4,7 @@
   <name>wojtek_bringup</name>
   <version>0.1.0</version>
   <description>
-    Bringup for four_bar_bot: launches wojtek_policy against the real robot
+    Bringup for Wojtek: launches wojtek_policy against the real robot
     (MD80 + BMX160 through ros2_control) or against a MuJoCo simulation.
   </description>
   <maintainer email="kchmielewski707@gmail.com">Jakub Chmielewski</maintainer>

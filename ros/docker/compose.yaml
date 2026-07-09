@@ -4,11 +4,11 @@ x-common-config:
   ipc: host
 
 services:
-  piesek_robot:
+  wojtek_robot:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    container_name: piesek_robot
+    container_name: wojtek_robot
     <<: *common-config
     # Realtime hardware (https://control.ros.org/master/doc/ros2_control/controller_manager/doc/userdoc.html#determinism)
     privileged: true

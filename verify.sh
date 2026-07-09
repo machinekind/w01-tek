@@ -69,7 +69,7 @@ t0(){
   absent "no live 'quadruped_ros2_original' ref" 'quadruped_ros2_original' . ':(exclude)*.md'
   absent "no live 'quadruped_controller' ref"    'quadruped_controller' . ':(exclude)*.md'
   absent "no live 'fbb_policy' ref (renamed -> wojtek_policy)" 'fbb_policy' . ':(exclude)*.md'
-  absent "no live 'piesek_bringup' ref (renamed -> wojtek_bringup)" 'piesek_bringup' . ':(exclude)*.md'
+  absent "no live 'piesek' ref (piesek_bringup/piesek_robot -> wojtek_*)" 'piesek' . ':(exclude)*.md'
   absent "removed legacy launches not referenced" '(bringup|robot_state_publisher)\.launch\.py' 'ros/src/*/launch/*.py'
 
   # paths.py points at ros/, not the dropped quadruped dir

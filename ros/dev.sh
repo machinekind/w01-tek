@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Get a shell inside the piesek_robot dev container: builds the image and/or
+# Get a shell inside the wojtek_robot dev container: builds the image and/or
 # starts the container if needed (idempotent - safe to run repeatedly, a
 # no-op if it's already running), then attaches.
 #
@@ -20,4 +20,4 @@ if [ -n "${DISPLAY:-}" ] && command -v xhost >/dev/null 2>&1; then
 fi
 
 docker compose up -d
-exec docker exec -it piesek_robot bash
+exec docker exec -it wojtek_robot bash

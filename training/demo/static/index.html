@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>four_bar_bot — click to walk</title>
+<style>
+  :root { --bg:#0e1116; --panel:#171b22; --ink:#e6edf3; --mut:#8b949e; --acc:#3fb950; --tgt:#f85149; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 ui-sans-serif,system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:14px 20px; border-bottom:1px solid #21262d; }
+  header h1 { margin:0; font-size:16px; font-weight:650; }
+  header p  { margin:3px 0 0; color:var(--mut); font-size:12.5px; }
+  .wrap { display:flex; gap:18px; padding:18px 20px; flex-wrap:wrap; align-items:flex-start; }
+  .panel { background:var(--panel); border:1px solid #21262d; border-radius:10px; padding:12px; }
+  .panel h2 { margin:0 0 8px; font-size:12px; font-weight:600; color:var(--mut); text-transform:uppercase; letter-spacing:.06em; }
+  #cam { display:block; width:480px; height:360px; background:#000; border-radius:6px; }
+  #map { display:block; background:#0b0e13; border-radius:6px; cursor:crosshair; touch-action:none; }
+  .bar { display:flex; gap:10px; align-items:center; margin-top:10px; flex-wrap:wrap; }
+  button { background:#21262d; color:var(--ink); border:1px solid #30363d; border-radius:6px; padding:7px 13px; cursor:pointer; font-size:13px; }
+  button:hover { background:#2b323b; }
+  .stat { font-variant-numeric:tabular-nums; color:var(--mut); }
+  .stat b { color:var(--ink); font-weight:600; }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--mut); margin-right:5px; vertical-align:1px; }
+  .dot.on { background:var(--acc); }
+</style>
+</head>
+<body>
+<header>
+  <h1>four_bar_bot — click to walk</h1>
+  <p>Trained MuJoCo Playground (MJX) + Brax PPO joystick policy. <b>Click anywhere on the map</b> — the robot walks there.</p>
+</header>
+
+<div class="wrap">
+  <div class="panel">
+    <h2>Chase camera</h2>
+    <img id="cam" alt="robot view" />
+  </div>
+
+  <div class="panel">
+    <h2>Top-down map — click to set target</h2>
+    <canvas id="map" width="380" height="380"></canvas>
+    <div class="bar">
+      <button id="reset">Reset robot</button>
+      <button id="clear">Clear target</button>
+      <span class="stat"><span id="conn" class="dot"></span><span id="connTxt">connecting…</span></span>
+    </div>
+    <div class="bar">
+      <span class="stat">dist <b id="dist">–</b> m</span>
+      <span class="stat">cmd [vx,vy,ω] <b id="cmd">–</b></span>
+      <span class="stat">pos <b id="pos">–</b></span>
+    </div>
+  </div>
+</div>
+
+<script>
+let WORLD_HALF = 2.5;               // map spans [-WORLD_HALF, WORLD_HALF] m in x and y
+const cam = document.getElementById('cam');
+const map = document.getElementById('map');
+const ctx = map.getContext('2d');
+const W = map.width, H = map.height;
+
+let state = { x:0, y:0, yaw:0, tx:null, ty:null, reached:false };
+let trail = [];
+
+// Pull the world scale from the server so the map matches the loaded robot.
+async function initInfo() {
+  try {
+    const info = await (await fetch('/api/info')).json();
+    if (info.world_half) WORLD_HALF = info.world_half;
+  } catch (e) { /* server not ready yet; fall back to default scale */ }
+}
+
+const worldToPx = (wx, wy) => [ W/2 + wx/WORLD_HALF*(W/2), H/2 - wy/WORLD_HALF*(H/2) ];
+const pxToWorld = (px, py) => [ (px - W/2)/(W/2)*WORLD_HALF, -(py - H/2)/(H/2)*WORLD_HALF ];
+
+function draw() {
+  ctx.clearRect(0,0,W,H);
+  // grid
+  ctx.strokeStyle = '#1b212b'; ctx.lineWidth = 1;
+  for (let m=-Math.ceil(WORLD_HALF); m<=Math.ceil(WORLD_HALF); m++) {
+    const [gx] = worldToPx(m,0), [,gy] = worldToPx(0,m);
+    ctx.beginPath(); ctx.moveTo(gx,0); ctx.lineTo(gx,H); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0,gy); ctx.lineTo(W,gy); ctx.stroke();
+  }
+  // axes
+  ctx.strokeStyle = '#2c333d';
+  const [cx,cy] = worldToPx(0,0);
+  ctx.beginPath(); ctx.moveTo(cx,0); ctx.lineTo(cx,H); ctx.moveTo(0,cy); ctx.lineTo(W,cy); ctx.stroke();
+
+  // trail
+  if (trail.length > 1) {
+    ctx.strokeStyle = 'rgba(63,185,80,.55)'; ctx.lineWidth = 2; ctx.beginPath();
+    trail.forEach(([tx,ty],i) => { const [px,py]=worldToPx(tx,ty); i?ctx.lineTo(px,py):ctx.moveTo(px,py); });
+    ctx.stroke();
+  }
+  // target
+  if (state.tx !== null) {
+    const [px,py] = worldToPx(state.tx, state.ty);
+    ctx.strokeStyle = state.reached ? '#3fb950' : '#f85149'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(px,py,9,0,2*Math.PI); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(px-13,py); ctx.lineTo(px+13,py); ctx.moveTo(px,py-13); ctx.lineTo(px,py+13); ctx.stroke();
+  }
+  // robot (triangle pointing along yaw)
+  const [rx,ry] = worldToPx(state.x, state.y);
+  ctx.save(); ctx.translate(rx,ry); ctx.rotate(-state.yaw);  // canvas y is down -> negate
+  ctx.fillStyle = '#58a6ff';
+  ctx.beginPath(); ctx.moveTo(12,0); ctx.lineTo(-7,7); ctx.lineTo(-7,-7); ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
+function setConn(ok) {
+  document.getElementById('conn').classList.toggle('on', ok);
+  document.getElementById('connTxt').textContent = ok ? 'live' : 'disconnected';
+}
+
+let ws;
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => setConn(true);
+  ws.onclose = () => { setConn(false); setTimeout(connect, 1000); };
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.frame) cam.src = 'data:image/jpeg;base64,' + m.frame;
+    state = m;
+    trail.push([m.x, m.y]); if (trail.length > 600) trail.shift();
+    document.getElementById('dist').textContent = m.tx===null ? '–' : m.dist.toFixed(2);
+    document.getElementById('cmd').textContent  = '[' + m.cmd.join(', ') + ']';
+    document.getElementById('pos').textContent  = m.x.toFixed(2) + ', ' + m.y.toFixed(2);
+    draw();
+  };
+}
+initInfo().then(() => { connect(); draw(); });
+
+map.addEventListener('click', (e) => {
+  const r = map.getBoundingClientRect();
+  const [wx, wy] = pxToWorld(e.clientX - r.left, e.clientY - r.top);
+  ws && ws.readyState === 1 && ws.send(JSON.stringify({ type:'target', x:wx, y:wy }));
+});
+document.getElementById('reset').onclick = () => { trail = []; ws && ws.send(JSON.stringify({ type:'reset' })); };
+document.getElementById('clear').onclick = () => { ws && ws.send(JSON.stringify({ type:'reset' })); trail = []; };
+draw();
+</script>
+</body>
+</html>

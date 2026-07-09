@@ -1,0 +1,80 @@
+{
+  "run_name": "fbb_v2",
+  "num_timesteps": 200000000,
+  "final_reward": 43.70832443237305,
+  "checkpoint_dir": "policies/fbb_v2/checkpoints",
+  "env_config": {
+    "action_delay": 1,
+    "action_scale": 0.5,
+    "command": {
+      "resample_steps": 250,
+      "vx": [
+        -0.6,
+        0.6
+      ],
+      "vy": [
+        -0.4,
+        0.4
+      ],
+      "wz": [
+        -0.7,
+        0.7
+      ],
+      "zero_prob": 0.1
+    },
+    "ctrl_dt": 0.02,
+    "episode_length": 1000,
+    "fall": {
+      "max_tilt_gz": -0.4,
+      "min_height": 0.06
+    },
+    "obs_noise": {
+      "gravity": 0.05,
+      "gyro": 0.2,
+      "joint_pos": 0.01,
+      "joint_vel": 1.5
+    },
+    "push": {
+      "enable": true,
+      "interval_steps": 200,
+      "vel": 0.4
+    },
+    "reward": {
+      "scales": {
+        "action_rate": -0.01,
+        "ang_vel_xy": -0.05,
+        "feet_air_time": 2.0,
+        "lin_vel_z": -2.0,
+        "orientation": -5.0,
+        "pose": -0.5,
+        "termination": -1.0,
+        "torques": -0.0002,
+        "tracking_ang_vel": 0.8,
+        "tracking_lin_vel": 1.5
+      },
+      "tracking_sigma": 0.25
+    },
+    "sim_dt": 0.004
+  },
+  "ppo_config": {
+    "action_repeat": 1,
+    "batch_size": 256,
+    "discounting": 0.97,
+    "entropy_cost": 0.01,
+    "episode_length": 1000,
+    "learning_rate": 0.0003,
+    "max_grad_norm": 1.0,
+    "network_factory": "policy_hidden_layer_sizes: &id001 !!python/tuple\n- 512\n- 256\n- 128\npolicy_obs_key: state\nvalue_hidden_layer_sizes: *id001\nvalue_obs_key: privileged_state\n",
+    "normalize_observations": true,
+    "num_envs": 8192,
+    "num_evals": 10,
+    "num_minibatches": 32,
+    "num_resets_per_eval": 10,
+    "num_timesteps": 200000000,
+    "num_updates_per_batch": 4,
+    "reward_scaling": 1.0,
+    "unroll_length": 20
+  },
+  "kp": 20.0,
+  "kd": 0.5
+}

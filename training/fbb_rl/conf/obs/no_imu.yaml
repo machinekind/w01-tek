@@ -1,0 +1,11 @@
+# @package task.env.obs
+# Robot without an IMU. Lists exactly what the actor gets: joint encoders,
+# its own action history, and the task command signals. No gyro, no
+# gravity/orientation estimate. The privileged critic still sees everything.
+include:
+  - joint_pos
+  - joint_vel
+  - last_act
+  - command # joystick
+  - phase # joystick
+  - jump_signal # jump

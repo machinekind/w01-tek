@@ -1,0 +1,27 @@
+name: getup
+
+env:
+  # Observations, in order. state = actor (real sensors), privileged =
+  # critic. Catalog: gyro, gravity, joint_pos, joint_vel, last_act, linvel,
+  # base_height, actuator_force, foot_contact.
+  obs:
+    state:
+      - gyro
+      - gravity
+      - joint_pos
+      - joint_vel
+      - last_act
+    privileged:
+      - gyro
+      - gravity
+      - joint_pos
+      - joint_vel
+      - last_act
+      - linvel
+      - base_height
+      - actuator_force
+      - foot_contact
+
+ppo:
+  # Shorter episodes than joystick; recovery is a 6 s problem.
+  num_timesteps: 150000000

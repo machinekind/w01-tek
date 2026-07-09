@@ -1,4 +1,4 @@
-# cluster HPC workflow for fbb-rl (see 4_four_bar_bot_rl/hpc/ and
+# cluster HPC workflow for fbb-rl (see training/hpc/ and
 # .claude/skills/cluster-hpc). Personal remote dir: ~/M/wojtek
 # (the shared account hosts other people's work elsewhere).
 
@@ -8,7 +8,7 @@ REMOTE   = /home/$(HPC_USER)/M/wojtek
 EXCLUDE  = --exclude='.git/' --exclude='__pycache__/' --exclude='*.pyc' \
            --exclude='.venv*/' --exclude='venv/' --exclude='logs/' \
            --exclude='runs/' --exclude='videos/' --exclude='.jax_cache/' \
-           --exclude='.claude/' --exclude='3_jaxpot_robotics/' \
+           --exclude='.claude/' \
            --exclude='docs/' --exclude='*.mp4' --exclude='wandb/' \
            --exclude='superpowers/' --exclude='outputs/'
 
@@ -22,7 +22,7 @@ hpc-push:
 hpc-train:
 	ssh $(HPC) "cd $(REMOTE) && mkdir -p logs && sbatch \
 	  --export=ALL$(if $(EXPERIMENT),\,EXPERIMENT=$(EXPERIMENT))$(if $(RUN_NAME),\,RUN_NAME=$(RUN_NAME))$(if $(NUM_ENVS),\,NUM_ENVS=$(NUM_ENVS))$(if $(BATCH),\,BATCH=$(BATCH))$(if $(EXTRA),\,EXTRA='$(EXTRA)') \
-	  $(if $(TIME),--time=$(TIME)) 4_four_bar_bot_rl/hpc/train.slurm"
+	  $(if $(TIME),--time=$(TIME)) training/hpc/train.slurm"
 
 hpc-status:
 	ssh $(HPC) "squeue -u $(HPC_USER) -o '%.10i %.12j %.4t %.10M %.20R'"
@@ -32,4 +32,4 @@ hpc-logs:
 	ssh $(HPC) "tail -40 $(REMOTE)/logs/*$(JOB)*.out; echo ===ERR===; tail -20 $(REMOTE)/logs/*$(JOB)*.err"
 
 hpc-pull:
-	rsync -avz $(HPC):$(REMOTE)/4_four_bar_bot_rl/runs/ 4_four_bar_bot_rl/runs/
+	rsync -avz $(HPC):$(REMOTE)/training/runs/ training/runs/

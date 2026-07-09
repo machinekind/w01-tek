@@ -10,7 +10,7 @@ from wojtek_rl import env as fbb_env
 
 @pytest.fixture(scope="module")
 def env():
-    return fbb_env.FourBarBotJoystick()
+    return fbb_env.WojtekJoystick()
 
 
 def _cmd(vx=0.0, vy=0.0, wz=0.0, h=0.125):

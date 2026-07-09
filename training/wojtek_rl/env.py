@@ -12,7 +12,7 @@ from ml_collections import config_dict
 from mujoco import mjx
 from mujoco_playground._src import mjx_env
 
-from wojtek_rl.base import FourBarBotEnv
+from wojtek_rl.base import WojtekEnv
 from wojtek_rl.build_model import FOOT_RADIUS
 
 # 3 gyro + 3 gravity + 12 qpos + 12 qvel + 12 last_act + 4 cmd + 8 phase
@@ -43,7 +43,7 @@ def default_config() -> config_dict.ConfigDict:
             gyro=0.2, gravity=0.05, joint_pos=0.01, joint_vel=1.5
         ),
         # Declarative observation spec: ordered lists of catalog names (see
-        # FourBarBotEnv._obs_catalog + this env's command/phase additions).
+        # WojtekEnv._obs_catalog + this env's command/phase additions).
         # `state` is the actor (sensors the real robot has), `privileged`
         # the critic. Changing either changes obs sizes, so checkpoints
         # don't transfer across obs configs.
@@ -139,7 +139,7 @@ def default_config() -> config_dict.ConfigDict:
     )
 
 
-class FourBarBotJoystick(FourBarBotEnv):
+class WojtekJoystick(WojtekEnv):
     def __init__(self, config=None, config_overrides=None):
         super().__init__(config or default_config(), config_overrides)
 

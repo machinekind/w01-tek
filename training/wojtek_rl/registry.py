@@ -11,9 +11,9 @@ from wojtek_rl import env as env_joystick
 from wojtek_rl import env_getup, env_jump
 
 TASKS = {
-    "joystick": (env_joystick.FourBarBotJoystick, env_joystick.default_config),
-    "getup": (env_getup.FourBarBotGetup, env_getup.default_config),
-    "jump": (env_jump.FourBarBotJump, env_jump.default_config),
+    "joystick": (env_joystick.WojtekJoystick, env_joystick.default_config),
+    "getup": (env_getup.WojtekGetup, env_getup.default_config),
+    "jump": (env_jump.WojtekJump, env_jump.default_config),
 }
 
 

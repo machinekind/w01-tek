@@ -13,7 +13,7 @@ from ml_collections import config_dict
 from mujoco import mjx
 from mujoco_playground._src import mjx_env
 
-from wojtek_rl.base import KNEE_ACTUATORS, KNEE_SINGULARITY, FourBarBotEnv
+from wojtek_rl.base import KNEE_ACTUATORS, KNEE_SINGULARITY, WojtekEnv
 
 # 3 gyro + 3 gravity + 12 qpos + 12 qvel + 12 last_act + 2 jump signal
 OBS_SIZE = 44
@@ -47,7 +47,7 @@ def default_config() -> config_dict.ConfigDict:
             gyro=0.2, gravity=0.05, joint_pos=0.01, joint_vel=1.5
         ),
         # Declarative observation spec: ordered catalog names, see
-        # FourBarBotEnv._obs_catalog + jump_signal. state = actor,
+        # WojtekEnv._obs_catalog + jump_signal. state = actor,
         # privileged = critic.
         obs=config_dict.create(
             include=(),  # obs presets whitelist actor sensors; () = all
@@ -101,7 +101,7 @@ def default_config() -> config_dict.ConfigDict:
     )
 
 
-class FourBarBotJump(FourBarBotEnv):
+class WojtekJump(WojtekEnv):
     def __init__(self, config=None, config_overrides=None):
         super().__init__(config or default_config(), config_overrides)
         if not self._config.stand_height:

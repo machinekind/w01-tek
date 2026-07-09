@@ -10,7 +10,7 @@ every exported policy generation:
   fbb_loco_v8 (48): (qpos-home)(12) + qvel(12) + last_action(12)
                     + command(4: vx,vy,wz,height) + cos/sin phase(8)
 
-Action pipeline (matches wojtek_rl.env.FourBarBotJoystick.step):
+Action pipeline (matches wojtek_rl.env.WojtekJoystick.step):
 
   anchor = height_ctrl(command[3]) if the command carries a height, else home
   motor_targets = clip(anchor + tanh_mlp(obs) * action_scale, ctrlrange)

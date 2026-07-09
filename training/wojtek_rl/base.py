@@ -24,7 +24,7 @@ KNEE_ACTUATORS = (2, 5, 8, 11)
 KNEE_SINGULARITY = 3.2
 
 
-class FourBarBotEnv(mjx_env.MjxEnv):
+class WojtekEnv(mjx_env.MjxEnv):
     def __init__(self, config, config_overrides=None):
         super().__init__(config, config_overrides)
         self._mj_model = mujoco.MjModel.from_xml_path(str(paths.SCENE_XML))

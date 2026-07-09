@@ -1,7 +1,7 @@
 """Click-to-walk web app: click a point, the trained four_bar_bot walks to it.
 
 Ported from 3_jaxpot_robotics/jaxpot_robotics/app.py, trimmed to the single
-FourBarBotJoystick robot (wojtek_rl isn't in the mujoco_playground registry, so
+WojtekJoystick robot (wojtek_rl isn't in the mujoco_playground registry, so
 there's no ``envs.load_env``/``envs.load_policy`` indirection -- we build the
 env and load the checkpoint directly, mirroring wojtek_rl/eval.py's jit/reset/
 step/inference idiom).
@@ -91,13 +91,13 @@ class Sim:
         from wojtek_rl.policy_io import load_policy
         from wojtek_rl.train import build_ppo_params
 
-        self.env_name = "FourBarBotJoystick"
+        self.env_name = "WojtekJoystick"
         ckpt_dir = _resolve_checkpoint(run_dir)
         logger.info(f"[{ROBOT_KEY}] loading {self.env_name} policy from {ckpt_dir}")
 
         self._jax = jax
         self._mjx = mjx
-        self.env = fbb_env.FourBarBotJoystick()
+        self.env = fbb_env.WojtekJoystick()
         ppo_params = build_ppo_params([], smoke=False)
         policy = load_policy(ckpt_dir, self.env, ppo_params, deterministic=True)
 

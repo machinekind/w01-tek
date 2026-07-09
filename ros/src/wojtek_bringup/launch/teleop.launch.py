@@ -2,7 +2,7 @@
 
 Run alongside real.launch.py or sim.launch.py:
 
-    ros2 launch piesek_bringup teleop.launch.py
+    ros2 launch wojtek_bringup teleop.launch.py
 
 Left stick = velocity (vx/vy), right stick X = yaw, right stick Y slowly
 raises/lowers the commanded body height. Pair the pad over Bluetooth first

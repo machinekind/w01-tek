@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>piesek_bringup</name>
+  <name>wojtek_bringup</name>
   <version>0.1.0</version>
   <description>
     Bringup for four_bar_bot: launches wojtek_policy against the real robot

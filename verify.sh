@@ -69,6 +69,7 @@ t0(){
   absent "no live 'quadruped_ros2_original' ref" 'quadruped_ros2_original' . ':(exclude)*.md'
   absent "no live 'quadruped_controller' ref"    'quadruped_controller' . ':(exclude)*.md'
   absent "no live 'fbb_policy' ref (renamed -> wojtek_policy)" 'fbb_policy' . ':(exclude)*.md'
+  absent "no live 'piesek_bringup' ref (renamed -> wojtek_bringup)" 'piesek_bringup' . ':(exclude)*.md'
   absent "removed legacy launches not referenced" '(bringup|robot_state_publisher)\.launch\.py' 'ros/src/*/launch/*.py'
 
   # paths.py points at ros/, not the dropped quadruped dir
@@ -83,7 +84,7 @@ t0(){
     ros/src/md80_hardware_interface/config/AK80-9.cfg \
     ros/src/wojtek_policy/config/policy.npz \
     ros/src/wojtek_policy/config/policy_meta.json \
-    ros/src/piesek_bringup/config/four_bar_bot_mjx.xml \
+    ros/src/wojtek_bringup/config/four_bar_bot_mjx.xml \
     training/demo/app.py training/demo/navigation.py training/demo/static/index.html; do
     ok "exists: $f" test -f "$f"; done
 
@@ -177,7 +178,7 @@ t3(){
   # The Dockerfile's `RUN colcon build --packages-select <6 pkgs>` IS the build check.
   echo "  (building ros/docker image — runs colcon build of all 6 packages; slow, esp. under emulation)"
   if docker build -f ros/docker/Dockerfile -t shrek-verify:ros ros >/tmp/verify_docker.$$ 2>&1; then
-    pass "colcon build (four_bar_bot_description, md80_hw, bmx160, bmi160, wojtek_policy, piesek_bringup)"
+    pass "colcon build (four_bar_bot_description, md80_hw, bmx160, bmi160, wojtek_policy, wojtek_bringup)"
   else
     fail "ROS colcon build via docker" "$(tail -15 /tmp/verify_docker.$$ 2>/dev/null)"
   fi

@@ -1,6 +1,6 @@
 """MuJoCo sim + policy + RViz.
 
-    ros2 launch piesek_bringup sim.launch.py [rviz:=false] [initial_pose:=folded]
+    ros2 launch wojtek_bringup sim.launch.py [rviz:=false] [initial_pose:=folded]
 
 initial_pose:=folded spawns the robot in the real robot's boot/zeroing pose
 (lying flat, knees folded -- see real_io_node) instead of standing at home.
@@ -23,7 +23,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
-    share = get_package_share_directory("piesek_bringup")
+    share = get_package_share_directory("wojtek_bringup")
     policy_share = get_package_share_directory("wojtek_policy")
     xacro_file = os.path.join(share, "urdf", "fbb_sim.urdf.xacro")
     robot_description = ParameterValue(Command(f"xacro {xacro_file}"), value_type=str)
@@ -38,7 +38,7 @@ def generate_launch_description():
                 parameters=[{"robot_description": robot_description}],
             ),
             Node(
-                package="piesek_bringup",
+                package="wojtek_bringup",
                 executable="mujoco_sim_node",
                 output="screen",
                 parameters=[{"initial_pose": LaunchConfiguration("initial_pose")}],

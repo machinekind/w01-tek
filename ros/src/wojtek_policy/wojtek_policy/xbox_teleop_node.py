@@ -13,7 +13,7 @@ The Bluetooth link itself is handled by the OS + the `joy` package
     scan on            # hold the pad's pair button until it blinks fast
     pair <MAC>; trust <MAC>; connect <MAC>
 
-then `ros2 launch piesek_bringup teleop.launch.py` starts joy_node + this.
+then `ros2 launch wojtek_bringup teleop.launch.py` starts joy_node + this.
 
 Command scaling comes from policy_meta.json (cmd_low/cmd_high,
 cmd_height_range), so the pad can never command more than the policy was

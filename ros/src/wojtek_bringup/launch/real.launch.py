@@ -5,7 +5,7 @@
     the imu_sensor_broadcaster in real_controllers.yaml, and the spawner
     argument / policy-node remap + imu_mount_rpy below.
 
-    ros2 launch piesek_bringup real.launch.py [max_torque:=2.0] [dry_run:=true]
+    ros2 launch wojtek_bringup real.launch.py [max_torque:=2.0] [dry_run:=true]
                                               [boot_pose:=home|folded]
 
 Startup procedure:
@@ -36,7 +36,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
-    share = get_package_share_directory("piesek_bringup")
+    share = get_package_share_directory("wojtek_bringup")
     policy_share = get_package_share_directory("wojtek_policy")
     xacro_file = os.path.join(share, "urdf", "fbb_real.urdf.xacro")
     max_torque = LaunchConfiguration("max_torque")
@@ -103,7 +103,7 @@ def generate_launch_description():
                 arguments=["--frame-id", "odom", "--child-frame-id", "base_link"],
             ),
             Node(
-                package="piesek_bringup",
+                package="wojtek_bringup",
                 executable="real_io_node",
                 output="screen",
                 parameters=[

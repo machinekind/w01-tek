@@ -1,11 +1,11 @@
 # piesek_ws
 
 ROS 2 workspace for the four-bar-bot dog: `wojtek_policy` (RL policy runtime +
-node), `piesek_bringup` (real robot / MuJoCo sim launch), hardware
+node), `wojtek_bringup` (real robot / MuJoCo sim launch), hardware
 interfaces (MD80 motors, BMI160/BMX160 IMU), robot description.
 
 Real-robot startup procedure (zero → stand_up → arm) is documented in
-`src/piesek_bringup/launch/real.launch.py`.
+`src/wojtek_bringup/launch/real.launch.py`.
 
 ## Xbox controller teleop
 
@@ -39,8 +39,8 @@ and retry.
 ### Run
 
 ```bash
-ros2 launch piesek_bringup real.launch.py    # or sim.launch.py
-ros2 launch piesek_bringup teleop.launch.py  # second terminal
+ros2 launch wojtek_bringup real.launch.py    # or sim.launch.py
+ros2 launch wojtek_bringup teleop.launch.py  # second terminal
 ```
 
 Launch order vs. controller power-on doesn't matter (`joy_node` hot-plugs).

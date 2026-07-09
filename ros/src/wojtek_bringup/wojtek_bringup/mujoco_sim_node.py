@@ -15,7 +15,7 @@ it to ROS:
 The initial_pose parameter selects where the robot spawns: "home" (the home
 keyframe, standing) or "folded" (the real robot's boot/zeroing pose: lying
 flat, hips straight, knees on the mechanical stop -- same definition as
-real_io_node, see piesek_bringup.poses). The folded pose is reached by
+real_io_node, see wojtek_bringup.poses). The folded pose is reached by
 settling from the home keyframe under gravity with folded ctrl targets, so
 the four-bar closure stays consistent.
 """
@@ -30,7 +30,7 @@ from tf2_ros import TransformBroadcaster
 
 from wojtek_policy.joint_map import JointMap
 
-from piesek_bringup import poses
+from wojtek_bringup import poses
 
 import mujoco  # noqa: isort  (heavier import last)
 
@@ -40,7 +40,7 @@ from ament_index_python.packages import get_package_share_directory
 def _prepare_model_xml():
     """Copy the MJX scene next to the installed meshes so includes resolve.
 
-    piesek_bringup ships the MJX XMLs in its share/config; the robot file
+    wojtek_bringup ships the MJX XMLs in its share/config; the robot file
     expects meshdir ../meshes relative to itself, so rewrite it to the
     meshes installed by four_bar_bot_description.
     """
@@ -48,7 +48,7 @@ def _prepare_model_xml():
     import tempfile
     from pathlib import Path
 
-    share = Path(get_package_share_directory("piesek_bringup")) / "config"
+    share = Path(get_package_share_directory("wojtek_bringup")) / "config"
     meshes = Path(get_package_share_directory("four_bar_bot_description")) / "meshes"
     tmp = Path(tempfile.mkdtemp(prefix="fbb_mj_"))
     robot = (share / "four_bar_bot_mjx.xml").read_text()

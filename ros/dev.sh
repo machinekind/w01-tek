@@ -5,8 +5,8 @@
 #
 # Once inside, ROS is already sourced (~/.bashrc in the image, since `docker
 # exec` bypasses the image's ENTRYPOINT) - just run plain ROS commands, e.g.:
-#   ros2 launch piesek_bringup real.launch.py dry_run:=true
-#   ros2 launch piesek_bringup sim.launch.py rviz:=false
+#   ros2 launch wojtek_bringup real.launch.py dry_run:=true
+#   ros2 launch wojtek_bringup sim.launch.py rviz:=false
 #   colcon build   # after editing anything under src/ on the host
 #
 # Handles X11 access for RViz GUI (sim.launch.py's rviz:=true default)

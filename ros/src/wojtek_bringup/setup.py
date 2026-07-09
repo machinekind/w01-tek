@@ -2,7 +2,7 @@ from glob import glob
 
 from setuptools import setup
 
-package_name = "piesek_bringup"
+package_name = "wojtek_bringup"
 
 setup(
     name=package_name,
@@ -23,8 +23,8 @@ setup(
     license="MIT",
     entry_points={
         "console_scripts": [
-            "mujoco_sim_node = piesek_bringup.mujoco_sim_node:main",
-            "real_io_node = piesek_bringup.real_io_node:main",
+            "mujoco_sim_node = wojtek_bringup.mujoco_sim_node:main",
+            "real_io_node = wojtek_bringup.real_io_node:main",
         ],
     },
 )

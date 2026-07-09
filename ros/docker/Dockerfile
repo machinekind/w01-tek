@@ -33,7 +33,7 @@ RUN apt-get update && \
         colcon build --symlink-install \
             --packages-select four_bar_bot_description md80_hardware_interface \
                 bmx160_serial_hardware_interface bmi160_serial_hardware_interface \
-                wojtek_policy piesek_bringup \
+                wojtek_policy wojtek_bringup \
             --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF" && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*

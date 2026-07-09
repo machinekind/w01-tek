@@ -1,6 +1,6 @@
 """Hydra-configured Brax PPO trainer for the four_bar_bot tasks.
 
-Experiments are Hydra configs (fbb_rl/conf): pick a task group or an
+Experiments are Hydra configs (wojtek_rl/conf): pick a task group or an
 experiment preset and override anything from the CLI, e.g.
 
     ./run.sh train +experiment=getup
@@ -24,7 +24,7 @@ from datetime import datetime
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
-from fbb_rl import paths
+from wojtek_rl import paths
 
 
 def _apply_ppo_overrides(p, overrides: dict) -> None:
@@ -78,8 +78,8 @@ def main(cfg: DictConfig) -> None:
     from brax.training.agents.ppo import train as ppo
     from mujoco_playground import wrapper
 
-    from fbb_rl.randomize import make_domain_randomize
-    from fbb_rl.registry import make_env
+    from wojtek_rl.randomize import make_domain_randomize
+    from wojtek_rl.registry import make_env
 
     task = cfg.task.name
     env_overrides = OmegaConf.to_container(cfg.task.env, resolve=True) or {}
@@ -176,7 +176,7 @@ def main(cfg: DictConfig) -> None:
         environment=env, eval_env=eval_env
     )
 
-    from fbb_rl.build_model import DEFAULT_KD, DEFAULT_KP
+    from wojtek_rl.build_model import DEFAULT_KD, DEFAULT_KP
 
     (run_dir / "run.json").write_text(
         json.dumps(

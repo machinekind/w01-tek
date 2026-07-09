@@ -3,8 +3,8 @@ import mujoco
 import numpy as np
 from mujoco import mjx
 
-from fbb_rl import paths
-from fbb_rl.randomize import make_domain_randomize
+from wojtek_rl import paths
+from wojtek_rl.randomize import make_domain_randomize
 
 
 def test_fields_vary_across_batch():

@@ -22,7 +22,7 @@ import jax
 import jax.numpy as jp
 import numpy as np
 
-from fbb_rl import paths
+from wojtek_rl import paths
 
 
 def vibration_index(qvel_hist, dt, cutoff_hz=5.0):
@@ -49,10 +49,10 @@ def main():
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
-    from fbb_rl.build_model import FOOT_RADIUS
-    from fbb_rl.policy_io import load_policy
-    from fbb_rl.registry import make_env
-    from fbb_rl.train import build_ppo_params
+    from wojtek_rl.build_model import FOOT_RADIUS
+    from wojtek_rl.policy_io import load_policy
+    from wojtek_rl.registry import make_env
+    from wojtek_rl.train import build_ppo_params
 
     run = json.loads((Path(args.run) / "run.json").read_text())
     # Measurement env: no random pushes (they contaminate vibration/slip/

@@ -1,4 +1,4 @@
-from fbb_rl import paths
+from wojtek_rl import paths
 
 
 def test_source_model_exists():

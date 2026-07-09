@@ -21,7 +21,7 @@ import jax
 import jax.numpy as jp
 import numpy as np
 
-from fbb_rl import paths
+from wojtek_rl import paths
 
 
 def _latest_checkpoint(ckpt_dir: Path) -> Path:
@@ -40,12 +40,12 @@ def main() -> None:
     ap.add_argument("--out", default="walk.mp4")
     args = ap.parse_args()
 
-    # Imported lazily: fbb_rl.env and fbb_rl.train pull in brax/mjx and may
+    # Imported lazily: wojtek_rl.env and wojtek_rl.train pull in brax/mjx and may
     # not exist yet while other tasks are still landing, and this keeps
     # --help / arg parsing cheap and dependency-light.
-    from fbb_rl.policy_io import load_policy
-    from fbb_rl.registry import make_env
-    from fbb_rl.train import _apply_ppo_overrides, build_ppo_params
+    from wojtek_rl.policy_io import load_policy
+    from wojtek_rl.registry import make_env
+    from wojtek_rl.train import _apply_ppo_overrides, build_ppo_params
 
     run = json.loads((Path(args.run) / "run.json").read_text())
     task = run.get("task", "joystick")

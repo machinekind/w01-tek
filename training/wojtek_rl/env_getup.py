@@ -20,7 +20,7 @@ from ml_collections import config_dict
 from mujoco import mjx
 from mujoco_playground._src import mjx_env
 
-from fbb_rl.base import KNEE_ACTUATORS, KNEE_SINGULARITY, FourBarBotEnv
+from wojtek_rl.base import KNEE_ACTUATORS, KNEE_SINGULARITY, FourBarBotEnv
 
 # 3 gyro + 3 gravity + 12 qpos + 12 qvel + 12 last_act
 OBS_SIZE = 42

@@ -6,7 +6,7 @@ jax/brax on the robot. This script flattens the checkpoint into:
   norm_mean/norm_std       observation normalizer for the "state" key (53,)
   hidden_{i}_kernel/bias   policy MLP layers (512/256/128 + final)
   plus a JSON metadata sidecar (home ctrl, ctrlrange, action scale, obs
-  layout, gait clock) so the runner needs no fbb_rl imports.
+  layout, gait clock) so the runner needs no wojtek_rl imports.
 
 Run: ./run.sh export --run policies/fbb_v3 --out policies/fbb_v3/deploy
 Validates the numpy forward pass against the brax inference fn before
@@ -49,8 +49,8 @@ def main() -> None:
     from brax.training.agents.ppo import checkpoint as ppo_checkpoint
     from brax.training.agents.ppo import networks as ppo_networks
 
-    from fbb_rl import paths
-    from fbb_rl.train import build_ppo_params
+    from wojtek_rl import paths
+    from wojtek_rl.train import build_ppo_params
 
     run_dir = Path(args.run)
     run = json.loads((run_dir / "run.json").read_text())
@@ -114,7 +114,7 @@ def main() -> None:
     assert worst < 1e-4, f"numpy forward mismatch vs brax: {worst}"
     print(f"validated numpy vs brax inference: max |diff| = {worst:.2e}")
 
-    # -- metadata the runner needs (no fbb_rl imports at deploy time) --------
+    # -- metadata the runner needs (no wojtek_rl imports at deploy time) --------
     mj = mujoco.MjModel.from_xml_path(str(paths.SCENE_XML))
     key_home = mj.key("home")
     env_cfg = run.get("env_config", {})

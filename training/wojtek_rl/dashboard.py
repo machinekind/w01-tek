@@ -1,4 +1,4 @@
-"""Minimal "wandb at home" live dashboard for an fbb_rl training run.
+"""Minimal "wandb at home" live dashboard for an wojtek_rl training run.
 
 Stdlib-only HTTP server that reads a local mirror of a remote training run's
 log, parses its progress lines, and serves a single self-contained HTML page
@@ -9,7 +9,7 @@ http.server / socketserver / json / re / argparse / html from the standard
 library, so it runs anywhere Python 3.11 runs.
 
 Run:
-    python -m fbb_rl.dashboard [--log PATH] [--port 8765] [--budget 200000000]
+    python -m wojtek_rl.dashboard [--log PATH] [--port 8765] [--budget 200000000]
 
 Then open http://127.0.0.1:8765/ in a browser.
 """
@@ -644,7 +644,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Minimal local live dashboard for an fbb_rl training run."
+        description="Minimal local live dashboard for an wojtek_rl training run."
     )
     parser.add_argument(
         "--log", default=DEFAULT_LOG_PATH, help="Path to the local mirror log file."
@@ -665,7 +665,7 @@ def main() -> None:
 
     server = ThreadingHTTPServer(("127.0.0.1", args.port), DashboardHandler)
     print(
-        f"fbb_rl dashboard: http://127.0.0.1:{args.port}/ "
+        f"wojtek_rl dashboard: http://127.0.0.1:{args.port}/ "
         f"(log={args.log}, budget={args.budget:,})"
     )
     try:

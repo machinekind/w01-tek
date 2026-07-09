@@ -13,8 +13,8 @@ from brax import math as brax_math
 from mujoco import mjx
 from mujoco_playground._src import mjx_env
 
-from fbb_rl import paths
-from fbb_rl.build_model import FOOT_RADIUS
+from wojtek_rl import paths
+from wojtek_rl.build_model import FOOT_RADIUS
 
 # Actuator indices of the knee cranks (third joints), paths.LEGS order.
 KNEE_ACTUATORS = (2, 5, 8, 11)

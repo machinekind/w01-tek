@@ -1,7 +1,7 @@
 import mujoco
 import numpy as np
 
-from fbb_rl import paths
+from wojtek_rl import paths
 
 
 def _load():

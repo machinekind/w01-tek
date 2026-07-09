@@ -4,7 +4,7 @@
 # The reorg is ~pure moves + repaths + deletions, so this checks the three
 # things a move can break, cheapest-first:
 #   T0  static + equivalence  — no ghost paths/imports, nothing lost, model byte-identical to baseline
-#   T1  python resolve        — fbb_rl/demo import, paths.py resolves, MJCF loads (CPU), pytest
+#   T1  python resolve        — wojtek_rl/demo import, paths.py resolves, MJCF loads (CPU), pytest
 #   T2  python liveness (CPU) — run.sh build (idempotent) + smoke train + eval render
 #   T3  ROS 2 build           — docker image build == colcon build of all 6 packages
 #
@@ -60,8 +60,8 @@ t0(){
     ok "present: $d/" test -d "$d"; done
 
   # dead imports / module targets (would crash at runtime)
-  absent "no 'from|import fbb_rl.(app|navigation)'" '(from|import)[[:space:]]+fbb_rl\.(app|navigation)' '*.py'
-  absent "no '-m fbb_rl.app' in run scripts"        '\-m[[:space:]]+fbb_rl\.app' '*.sh'
+  absent "no 'from|import wojtek_rl.(app|navigation)'" '(from|import)[[:space:]]+wojtek_rl\.(app|navigation)' '*.py'
+  absent "no '-m wojtek_rl.app' in run scripts"        '\-m[[:space:]]+wojtek_rl\.app' '*.sh'
 
   # config/scripts free of old dir names (exclude .md history + frozen foreign-abs-path meta)
   absent "no '4_four_bar_bot_rl' in code/config" '4_four_bar_bot_rl' . ':(exclude)*.md' ':(exclude)*/policy_meta.json'
@@ -73,11 +73,12 @@ t0(){
   absent "no live 'four_bar_bot_description' ref (renamed -> wojtek_description)" 'four_bar_bot_description' . ':(exclude)*.md'
   absent "no live 'four_bar_bot_mjx.xml' ref (renamed -> wojtek_mjx.xml)" 'four_bar_bot_mjx\.xml' . ':(exclude)*.md'
   absent "no live 'four_bar_bot.xml' ref (renamed -> wojtek.xml)" 'four_bar_bot\.xml' . ':(exclude)*.md'
+  absent "no live 'fbb_rl' ref (renamed -> wojtek_rl)" 'fbb_rl' . ':(exclude)*.md'
   absent "removed legacy launches not referenced" '(bringup|robot_state_publisher)\.launch\.py' 'ros/src/*/launch/*.py'
 
   # paths.py points at ros/, not the dropped quadruped dir
-  ok "paths.py model dir -> ros/"   grep -q 'ros/src/wojtek_description/mujoco' training/fbb_rl/paths.py
-  absent "paths.py free of quadruped" 'quadruped_ros2_original' training/fbb_rl/paths.py
+  ok "paths.py model dir -> ros/"   grep -q 'ros/src/wojtek_description/mujoco' training/wojtek_rl/paths.py
+  absent "paths.py free of quadruped" 'quadruped_ros2_original' training/wojtek_rl/paths.py
 
   # every referenced file exists
   for f in \
@@ -125,9 +126,9 @@ t1(){
   section "T1 — python resolve (imports, paths, model load, pytest)"
   if [ ! -x "$PY" ]; then skip "T1 python checks" "training/.venv not found"; return; fi
 
-  ok "fbb_rl + demo modules import" bash -c "cd training && ./.venv/bin/python -c 'import fbb_rl.env, fbb_rl.train, fbb_rl.eval, fbb_rl.build_model, fbb_rl.paths; from demo import app, navigation'"
-  ok "paths.py resolves all model files" bash -c "cd training && ./.venv/bin/python -c 'from fbb_rl import paths; [open(p).close() for p in (paths.SOURCE_XML, paths.ROBOT_XML, paths.SCENE_XML)]'"
-  ok "MJCF scene loads in MuJoCo (CPU)" bash -c "cd training && ./.venv/bin/python -c 'from fbb_rl import paths; import mujoco; mujoco.MjModel.from_xml_path(str(paths.SCENE_XML))'"
+  ok "wojtek_rl + demo modules import" bash -c "cd training && ./.venv/bin/python -c 'import wojtek_rl.env, wojtek_rl.train, wojtek_rl.eval, wojtek_rl.build_model, wojtek_rl.paths; from demo import app, navigation'"
+  ok "paths.py resolves all model files" bash -c "cd training && ./.venv/bin/python -c 'from wojtek_rl import paths; [open(p).close() for p in (paths.SOURCE_XML, paths.ROBOT_XML, paths.SCENE_XML)]'"
+  ok "MJCF scene loads in MuJoCo (CPU)" bash -c "cd training && ./.venv/bin/python -c 'from wojtek_rl import paths; import mujoco; mujoco.MjModel.from_xml_path(str(paths.SCENE_XML))'"
   ok "demo.app imports + argparse (heavy imports deferred)" bash -c "cd training && MUJOCO_GL=cgl ./.venv/bin/python -m demo.app --help"
   # scripts are syntactically valid
   for s in training/run.sh training/hpc/_common.sh training/hpc/train.slurm ros/build.sh ros/dev.sh verify.sh; do

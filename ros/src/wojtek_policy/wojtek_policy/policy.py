@@ -1,6 +1,6 @@
 """Numpy runtime for the exported fbb locomotion policy.
 
-Loads the .npz written by training/fbb_rl/export_policy.py and
+Loads the .npz written by training/wojtek_rl/export_policy.py and
 reproduces the training-time observation/action pipeline. The observation
 is assembled from policy_meta.json's obs_layout, so one runtime serves
 every exported policy generation:
@@ -10,7 +10,7 @@ every exported policy generation:
   fbb_loco_v8 (48): (qpos-home)(12) + qvel(12) + last_action(12)
                     + command(4: vx,vy,wz,height) + cos/sin phase(8)
 
-Action pipeline (matches fbb_rl.env.FourBarBotJoystick.step):
+Action pipeline (matches wojtek_rl.env.FourBarBotJoystick.step):
 
   anchor = height_ctrl(command[3]) if the command carries a height, else home
   motor_targets = clip(anchor + tanh_mlp(obs) * action_scale, ctrlrange)
@@ -30,7 +30,7 @@ from pathlib import Path
 
 import numpy as np
 
-# fbb_rl.env constants for policies whose meta predates their export.
+# wojtek_rl.env constants for policies whose meta predates their export.
 TROT_PHASE = (0.0, np.pi, 0.0, np.pi)
 WALK_PHASE = (0.0, np.pi, 1.5 * np.pi, 0.5 * np.pi)
 HEIGHT_TABLE = (0.084, 0.094, 0.106, 0.121, 0.139, 0.160, 0.182)
@@ -65,7 +65,7 @@ class FbbPolicy:
         self.knee_singularity = float(m["knee_singularity"])
         self.clamp_knee = clamp_knee
         # EMA low-pass on the action driving the motors, mirroring
-        # fbb_rl.env action_filter (kills hardware tremble the rigid-body
+        # wojtek_rl.env action_filter (kills hardware tremble the rigid-body
         # sim doesn't show). Exactly as in training, the RAW action feeds
         # last_act in the observation; only the motor targets are smoothed.
         # 0 = off (matches v8 training); try 0.2-0.5 on a vibrating robot.
@@ -117,7 +117,7 @@ class FbbPolicy:
         # Master clock; per-leg phases add blended offsets.
         self.phase = np.float32(0.0)
 
-    # -- gait clock (fbb_rl.env: _cmd_speed/_gait_frac/_leg_phases/_phase_dt) --
+    # -- gait clock (wojtek_rl.env: _cmd_speed/_gait_frac/_leg_phases/_phase_dt) --
     def _cmd_speed(self, command):
         return float(
             np.linalg.norm(command[:2]) + CMD_WZ_WEIGHT * abs(command[2])

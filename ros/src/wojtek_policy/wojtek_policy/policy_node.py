@@ -63,7 +63,7 @@ class PolicyNode(Node):
         # Commanded standing height (m) for 4-D-command policies (v8+);
         # live-settable: ros2 param set /wojtek_policy command_height 0.15
         self.declare_parameter("command_height", 0.13)
-        # EMA low-pass on motor targets (fbb_rl.env action_filter mirror);
+        # EMA low-pass on motor targets (wojtek_rl.env action_filter mirror);
         # 0 = off. Anti-vibration knob, live-settable:
         #   ros2 param set /wojtek_policy action_ema 0.3
         self.declare_parameter("action_ema", 0.0)

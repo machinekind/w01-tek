@@ -17,7 +17,7 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-from fbb_rl import build_model, paths
+from wojtek_rl import build_model, paths
 
 OUT_DIR = paths.PROJECT_DIR / "pose_previews"
 

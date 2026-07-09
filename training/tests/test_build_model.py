@@ -1,7 +1,7 @@
 import mujoco
 import numpy as np
 
-from fbb_rl import build_model, paths
+from wojtek_rl import build_model, paths
 
 
 def _compiled():

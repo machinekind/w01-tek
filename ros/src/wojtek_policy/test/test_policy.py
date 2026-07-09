@@ -97,7 +97,7 @@ def test_joint_map_home_within_urdf_limits_for_second_joint():
 
 
 def test_action_ema_smooths_targets_but_not_obs():
-    """Mirror of fbb_rl.env action_filter: raw action feeds last_act in the
+    """Mirror of wojtek_rl.env action_filter: raw action feeds last_act in the
     obs (so the policy's inputs are identical with the filter on or off);
     the motor targets are anchor + EMA(raw actions) * action_scale."""
     import numpy as np

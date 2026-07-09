@@ -3,7 +3,7 @@ import jax.numpy as jp
 import numpy as np
 import pytest
 
-from fbb_rl import env as fbb_env
+from wojtek_rl import env as fbb_env
 
 
 @pytest.fixture(scope="module")

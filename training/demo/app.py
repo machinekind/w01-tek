@@ -1,9 +1,9 @@
 """Click-to-walk web app: click a point, the trained four_bar_bot walks to it.
 
 Ported from 3_jaxpot_robotics/jaxpot_robotics/app.py, trimmed to the single
-FourBarBotJoystick robot (fbb_rl isn't in the mujoco_playground registry, so
+FourBarBotJoystick robot (wojtek_rl isn't in the mujoco_playground registry, so
 there's no ``envs.load_env``/``envs.load_policy`` indirection -- we build the
-env and load the checkpoint directly, mirroring fbb_rl/eval.py's jit/reset/
+env and load the checkpoint directly, mirroring wojtek_rl/eval.py's jit/reset/
 step/inference idiom).
 
 A FastAPI server holds the MJX env + trained policy and runs a closed-loop sim
@@ -67,7 +67,7 @@ def _latest_checkpoint(path: Path) -> Path:
 
 
 def _resolve_checkpoint(run_dir: str) -> Path:
-    """Same lookup as fbb_rl.eval: run.json's checkpoint_dir, latest step."""
+    """Same lookup as wojtek_rl.eval: run.json's checkpoint_dir, latest step."""
     run_path = Path(run_dir)
     run_json = run_path / "run.json"
     if run_json.exists():
@@ -86,10 +86,10 @@ class Sim:
         import mujoco
         from mujoco import mjx
 
-        from fbb_rl import env as fbb_env
+        from wojtek_rl import env as fbb_env
         from demo.navigation import NavConfig
-        from fbb_rl.policy_io import load_policy
-        from fbb_rl.train import build_ppo_params
+        from wojtek_rl.policy_io import load_policy
+        from wojtek_rl.train import build_ppo_params
 
         self.env_name = "FourBarBotJoystick"
         ckpt_dir = _resolve_checkpoint(run_dir)
@@ -154,7 +154,7 @@ class Sim:
         else:
             self._cmd = (0.0, 0.0, 0.0)
 
-        # Pin the command every step (mirrors fbb_rl.eval): the env
+        # Pin the command every step (mirrors wojtek_rl.eval): the env
         # auto-resamples internally on a timer, but since we overwrite
         # info["command"] before every step() call, that resample never wins.
         self.state.info["command"] = jp.array(self._cmd)

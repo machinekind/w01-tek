@@ -12,8 +12,8 @@ from ml_collections import config_dict
 from mujoco import mjx
 from mujoco_playground._src import mjx_env
 
-from fbb_rl.base import FourBarBotEnv
-from fbb_rl.build_model import FOOT_RADIUS
+from wojtek_rl.base import FourBarBotEnv
+from wojtek_rl.build_model import FOOT_RADIUS
 
 # 3 gyro + 3 gravity + 12 qpos + 12 qvel + 12 last_act + 4 cmd + 8 phase
 OBS_SIZE = 54

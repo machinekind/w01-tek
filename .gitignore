@@ -1,5 +1,21 @@
+# Python
 .venv/
 __pycache__/
+*.pyc
+
+# OS
+.DS_Store
+
+# Logs
+*.log
+MUJOCO_LOG.TXT
+
+# Tool caches
+.jax_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Training artifacts (big / generated)
 training/.venv/
 training/runs/
 training/pose_previews/

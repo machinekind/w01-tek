@@ -71,6 +71,8 @@ t0(){
   absent "no live 'fbb_policy' ref (renamed -> wojtek_policy)" 'fbb_policy' . ':(exclude)*.md'
   absent "no live 'piesek' ref (piesek_bringup/piesek_robot -> wojtek_*)" 'piesek' . ':(exclude)*.md'
   absent "no live 'four_bar_bot_description' ref (renamed -> wojtek_description)" 'four_bar_bot_description' . ':(exclude)*.md'
+  absent "no live 'four_bar_bot_mjx.xml' ref (renamed -> wojtek_mjx.xml)" 'four_bar_bot_mjx\.xml' . ':(exclude)*.md'
+  absent "no live 'four_bar_bot.xml' ref (renamed -> wojtek.xml)" 'four_bar_bot\.xml' . ':(exclude)*.md'
   absent "removed legacy launches not referenced" '(bringup|robot_state_publisher)\.launch\.py' 'ros/src/*/launch/*.py'
 
   # paths.py points at ros/, not the dropped quadruped dir
@@ -79,13 +81,13 @@ t0(){
 
   # every referenced file exists
   for f in \
-    ros/src/wojtek_description/mujoco/four_bar_bot.xml \
-    ros/src/wojtek_description/mujoco/four_bar_bot_mjx.xml \
+    ros/src/wojtek_description/mujoco/wojtek.xml \
+    ros/src/wojtek_description/mujoco/wojtek_mjx.xml \
     ros/src/wojtek_description/mujoco/scene_mjx.xml \
     ros/src/md80_hardware_interface/config/AK80-9.cfg \
     ros/src/wojtek_policy/config/policy.npz \
     ros/src/wojtek_policy/config/policy_meta.json \
-    ros/src/wojtek_bringup/config/four_bar_bot_mjx.xml \
+    ros/src/wojtek_bringup/config/wojtek_mjx.xml \
     training/demo/app.py training/demo/navigation.py training/demo/static/index.html; do
     ok "exists: $f" test -f "$f"; done
 
@@ -99,9 +101,13 @@ t0(){
   if git rev-parse --verify -q "$BASE_REF" >/dev/null; then
     local QB="$BASE_REF:quadruped_ros2_original/four_bar_bot_description/mujoco"
     local RH="HEAD:ros/src/wojtek_description/mujoco"
-    same "model source four_bar_bot.xml == baseline" "$QB/four_bar_bot.xml" "$RH/four_bar_bot.xml"
-    same "model four_bar_bot_mjx.xml == baseline"    "$QB/four_bar_bot_mjx.xml" "$RH/four_bar_bot_mjx.xml"
-    same "model scene_mjx.xml == baseline"           "$QB/scene_mjx.xml" "$RH/scene_mjx.xml"
+    # robot MJCFs are leaf files (no includes) -> renamed to wojtek*.xml = pure moves, still byte-identical to upstream
+    same "model source wojtek.xml == baseline (upstream four_bar_bot.xml)" "$QB/four_bar_bot.xml" "$RH/wojtek.xml"
+    same "model wojtek_mjx.xml == baseline (upstream four_bar_bot_mjx.xml)" "$QB/four_bar_bot_mjx.xml" "$RH/wojtek_mjx.xml"
+    # scene_mjx.xml differs from baseline by EXACTLY the include rename (four_bar_bot_mjx.xml -> wojtek_mjx.xml); normalize then compare
+    if diff <(git show "$QB/scene_mjx.xml") <(git show "$RH/scene_mjx.xml" | sed 's/wojtek_mjx\.xml/four_bar_bot_mjx.xml/') >/dev/null 2>&1; then
+      pass "model scene_mjx.xml == baseline (modulo include rename)"
+    else fail "model scene_mjx.xml differs beyond include rename" "$(diff <(git show "$QB/scene_mjx.xml") <(git show "$RH/scene_mjx.xml") 2>/dev/null)"; fi
     # no unexpected large content introduced (renames reuse blobs; only tiny edits are new)
     local big
     big="$(git rev-list --objects HEAD --not "$BASE_REF" 2>/dev/null | awk '{print $1}' \

@@ -4,7 +4,7 @@
   <!-- position command interface => MD80 IMPEDANCE mode; the drive runs
        tau = kp*(q_target - q) - kd*dq clamped to max_torque, which is
        exactly the actuator model the policy was trained with
-       (four_bar_bot_mjx.xml: gainprm=20, biasprm="0 -20 -1", forcerange 6)
+       (wojtek_mjx.xml: gainprm=20, biasprm="0 -20 -1", forcerange 6)
        when kp=20, kd=1, max_torque=6. -->
   <xacro:macro name="fbb_joint" params="name can_id kp kd max_torque">
     <joint name="${name}">

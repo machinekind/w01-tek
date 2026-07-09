@@ -1,7 +1,7 @@
 """Build the MJX-ready four_bar_bot model from the original MJCF.
 
-Reads the original four_bar_bot.xml, applies the training edits from the
-spec, and writes four_bar_bot_mjx.xml plus scene_mjx.xml next to it. The
+Reads the original wojtek.xml, applies the training edits from the
+spec, and writes wojtek_mjx.xml plus scene_mjx.xml next to it. The
 original files stay untouched. Edits:
   - every mesh geom stops colliding; feet get spheres, the base gets a box
   - the base gets an explicit inertial so the total mass hits a parameter
@@ -64,7 +64,7 @@ LEG_COLLISION = {
 
 
 SCENE_XML_TEXT = """<mujoco model="four_bar_bot_mjx_scene">
-  <include file="four_bar_bot_mjx.xml"/>
+  <include file="wojtek_mjx.xml"/>
   <statistic center="0 0 0.15" extent="0.8"/>
   <visual>
     <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>

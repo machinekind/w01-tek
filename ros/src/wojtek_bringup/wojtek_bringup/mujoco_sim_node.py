@@ -51,9 +51,9 @@ def _prepare_model_xml():
     share = Path(get_package_share_directory("wojtek_bringup")) / "config"
     meshes = Path(get_package_share_directory("wojtek_description")) / "meshes"
     tmp = Path(tempfile.mkdtemp(prefix="fbb_mj_"))
-    robot = (share / "four_bar_bot_mjx.xml").read_text()
+    robot = (share / "wojtek_mjx.xml").read_text()
     robot = re.sub(r'meshdir="[^"]*"', f'meshdir="{meshes}"', robot)
-    (tmp / "four_bar_bot_mjx.xml").write_text(robot)
+    (tmp / "wojtek_mjx.xml").write_text(robot)
     (tmp / "scene_mjx.xml").write_text((share / "scene_mjx.xml").read_text())
     return str(tmp / "scene_mjx.xml")
 

@@ -3,7 +3,7 @@ from fbb_rl import paths
 
 def test_source_model_exists():
     assert paths.SOURCE_XML.exists()
-    assert paths.SOURCE_XML.name == "four_bar_bot.xml"
+    assert paths.SOURCE_XML.name == "wojtek.xml"
 
 
 def test_legs():

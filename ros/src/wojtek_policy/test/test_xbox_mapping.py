@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from fbb_policy.xbox_mapping import JoyCommandMapper
+from wojtek_policy.xbox_mapping import JoyCommandMapper
 
 # fbb_loco_v8 ranges (policy_meta.json)
 V8 = dict(

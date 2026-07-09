@@ -12,8 +12,8 @@ import pytest
 PKG = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PKG))
 
-from fbb_policy.joint_map import JointMap  # noqa: E402
-from fbb_policy.policy import FbbPolicy, gravity_from_quat  # noqa: E402
+from wojtek_policy.joint_map import JointMap  # noqa: E402
+from wojtek_policy.policy import FbbPolicy, gravity_from_quat  # noqa: E402
 
 CONFIG = PKG / "config"
 
@@ -101,7 +101,7 @@ def test_action_ema_smooths_targets_but_not_obs():
     obs (so the policy's inputs are identical with the filter on or off);
     the motor targets are anchor + EMA(raw actions) * action_scale."""
     import numpy as np
-    from fbb_policy.policy import FbbPolicy
+    from wojtek_policy.policy import FbbPolicy
 
     a = FbbPolicy("config/policy.npz")
     b = FbbPolicy("config/policy.npz")

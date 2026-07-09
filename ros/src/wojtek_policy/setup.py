@@ -2,7 +2,7 @@ from glob import glob
 
 from setuptools import setup
 
-package_name = "fbb_policy"
+package_name = "wojtek_policy"
 
 setup(
     name=package_name,
@@ -22,8 +22,8 @@ setup(
     license="MIT",
     entry_points={
         "console_scripts": [
-            "policy_node = fbb_policy.policy_node:main",
-            "xbox_teleop_node = fbb_policy.xbox_teleop_node:main",
+            "policy_node = wojtek_policy.policy_node:main",
+            "xbox_teleop_node = wojtek_policy.xbox_teleop_node:main",
         ],
     },
 )

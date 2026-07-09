@@ -28,7 +28,7 @@ from sensor_msgs.msg import Imu, JointState
 from std_srvs.srv import Trigger
 from tf2_ros import TransformBroadcaster
 
-from fbb_policy.joint_map import JointMap
+from wojtek_policy.joint_map import JointMap
 
 from piesek_bringup import poses
 
@@ -61,7 +61,7 @@ def _prepare_model_xml():
 class MujocoSimNode(Node):
     def __init__(self):
         super().__init__("fbb_mujoco_sim")
-        policy_share = get_package_share_directory("fbb_policy")
+        policy_share = get_package_share_directory("wojtek_policy")
         self.declare_parameter("model_xml", "")
         self.declare_parameter("joint_map_yaml", f"{policy_share}/config/joint_map.yaml")
         self.declare_parameter("publish_rate_hz", 100.0)

@@ -36,7 +36,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Joy
 from std_msgs.msg import Float32
 
-from fbb_policy.xbox_mapping import JoyCommandMapper
+from wojtek_policy.xbox_mapping import JoyCommandMapper
 
 # Fallbacks for metas without the fields (same as policy_node).
 CMD_LOW = (-0.6, -0.4, -0.7)
@@ -47,7 +47,7 @@ HEIGHT_RANGE = (0.09, 0.17)
 class XboxTeleopNode(Node):
     def __init__(self):
         super().__init__("xbox_teleop")
-        share = get_package_share_directory("fbb_policy")
+        share = get_package_share_directory("wojtek_policy")
         self.declare_parameter("policy_dir", f"{share}/config")
         self.declare_parameter("axis_vx", 1)  # left stick Y
         self.declare_parameter("axis_vy", 0)  # left stick X

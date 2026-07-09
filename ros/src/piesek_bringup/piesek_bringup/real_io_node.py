@@ -59,8 +59,8 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
 from std_srvs.srv import SetBool, Trigger
 
-from fbb_policy.joint_map import JointMap
-from fbb_policy.policy import FbbPolicy
+from wojtek_policy.joint_map import JointMap
+from wojtek_policy.policy import FbbPolicy
 
 from piesek_bringup import poses
 
@@ -68,7 +68,7 @@ from piesek_bringup import poses
 class RealIoNode(Node):
     def __init__(self):
         super().__init__("fbb_real_io")
-        share = get_package_share_directory("fbb_policy")
+        share = get_package_share_directory("wojtek_policy")
         self.declare_parameter("policy_dir", f"{share}/config")
         self.declare_parameter("joint_map_yaml", f"{share}/config/joint_map.yaml")
         self.declare_parameter("max_arm_jump_rad", 0.15)

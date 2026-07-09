@@ -37,7 +37,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 def generate_launch_description():
     share = get_package_share_directory("piesek_bringup")
-    policy_share = get_package_share_directory("fbb_policy")
+    policy_share = get_package_share_directory("wojtek_policy")
     xacro_file = os.path.join(share, "urdf", "fbb_real.urdf.xacro")
     max_torque = LaunchConfiguration("max_torque")
     imu_port = LaunchConfiguration("imu_port")
@@ -114,7 +114,7 @@ def generate_launch_description():
                 ],
             ),
             Node(
-                package="fbb_policy",
+                package="wojtek_policy",
                 executable="policy_node",
                 output="screen",
                 parameters=[

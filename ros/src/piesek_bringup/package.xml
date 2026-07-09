@@ -4,7 +4,7 @@
   <name>piesek_bringup</name>
   <version>0.1.0</version>
   <description>
-    Bringup for four_bar_bot: launches fbb_policy against the real robot
+    Bringup for four_bar_bot: launches wojtek_policy against the real robot
     (MD80 + BMX160 through ros2_control) or against a MuJoCo simulation.
   </description>
   <maintainer email="kchmielewski707@gmail.com">Jakub Chmielewski</maintainer>
@@ -17,7 +17,7 @@
   <depend>std_srvs</depend>
   <depend>tf2_ros</depend>
   <depend>python3-numpy</depend>
-  <depend>fbb_policy</depend>
+  <depend>wojtek_policy</depend>
   <depend>four_bar_bot_description</depend>
   <depend>md80_hardware_interface</depend>
   <depend>bmx160_serial_hardware_interface</depend>

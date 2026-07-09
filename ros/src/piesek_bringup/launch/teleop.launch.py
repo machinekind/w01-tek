@@ -32,7 +32,7 @@ def generate_launch_description():
                 ],
             ),
             Node(
-                package="fbb_policy",
+                package="wojtek_policy",
                 executable="xbox_teleop_node",
                 output="screen",
             ),

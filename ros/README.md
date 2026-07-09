@@ -1,6 +1,6 @@
 # piesek_ws
 
-ROS 2 workspace for the four-bar-bot dog: `fbb_policy` (RL policy runtime +
+ROS 2 workspace for the four-bar-bot dog: `wojtek_policy` (RL policy runtime +
 node), `piesek_bringup` (real robot / MuJoCo sim launch), hardware
 interfaces (MD80 motors, BMI160/BMX160 IMU), robot description.
 

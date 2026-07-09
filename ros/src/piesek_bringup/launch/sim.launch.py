@@ -24,7 +24,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 def generate_launch_description():
     share = get_package_share_directory("piesek_bringup")
-    policy_share = get_package_share_directory("fbb_policy")
+    policy_share = get_package_share_directory("wojtek_policy")
     xacro_file = os.path.join(share, "urdf", "fbb_sim.urdf.xacro")
     robot_description = ParameterValue(Command(f"xacro {xacro_file}"), value_type=str)
 
@@ -44,7 +44,7 @@ def generate_launch_description():
                 parameters=[{"initial_pose": LaunchConfiguration("initial_pose")}],
             ),
             Node(
-                package="fbb_policy",
+                package="wojtek_policy",
                 executable="policy_node",
                 output="screen",
                 parameters=[

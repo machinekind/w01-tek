@@ -1,7 +1,7 @@
 """Named robot poses shared by the real bringup and the MuJoCo sim.
 
 Poses are expressed in the policy/MuJoCo actuator convention (same as
-policy_meta.json home_ctrl); convert with fbb_policy.joint_map.JointMap
+policy_meta.json home_ctrl); convert with wojtek_policy.joint_map.JointMap
 where URDF angles are needed.
 """
 

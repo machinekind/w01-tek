@@ -12,7 +12,7 @@ parameters differ:
                                   absolute; 12 actuated joints)
   services    /fbb/enable (std_srvs/SetBool), /fbb/reset (std_srvs/Trigger)
 
-The policy itself (fbb_policy.policy.FbbPolicy) works in the MuJoCo/training
+The policy itself (wojtek_policy.policy.FbbPolicy) works in the MuJoCo/training
 convention; this node converts on both edges using joint_map.yaml.
 """
 
@@ -25,8 +25,8 @@ from sensor_msgs.msg import Imu, JointState
 from std_msgs.msg import Float32
 from std_srvs.srv import SetBool, Trigger
 
-from fbb_policy.joint_map import JointMap
-from fbb_policy.policy import FbbPolicy, gravity_from_quat
+from wojtek_policy.joint_map import JointMap
+from wojtek_policy.policy import FbbPolicy, gravity_from_quat
 
 # Training command ranges: never ask the policy for more than it was trained
 # to track. Fallback for metas without cmd_low/cmd_high (fbb_v3, env.py
@@ -46,8 +46,8 @@ def rpy_to_mat(r, p, y):
 
 class PolicyNode(Node):
     def __init__(self):
-        super().__init__("fbb_policy")
-        share = get_package_share_directory("fbb_policy")
+        super().__init__("wojtek_policy")
+        share = get_package_share_directory("wojtek_policy")
         self.declare_parameter("policy_dir", f"{share}/config")
         self.declare_parameter("joint_map_yaml", f"{share}/config/joint_map.yaml")
         # Rotation of the IMU frame expressed in base_link (URDF imu_joint
@@ -61,11 +61,11 @@ class PolicyNode(Node):
         # orientation quaternion (for IMUs without usable fusion).
         self.declare_parameter("gravity_from_accel", False)
         # Commanded standing height (m) for 4-D-command policies (v8+);
-        # live-settable: ros2 param set /fbb_policy command_height 0.15
+        # live-settable: ros2 param set /wojtek_policy command_height 0.15
         self.declare_parameter("command_height", 0.13)
         # EMA low-pass on motor targets (fbb_rl.env action_filter mirror);
         # 0 = off. Anti-vibration knob, live-settable:
-        #   ros2 param set /fbb_policy action_ema 0.3
+        #   ros2 param set /wojtek_policy action_ema 0.3
         self.declare_parameter("action_ema", 0.0)
 
         pdir = self.get_parameter("policy_dir").value

@@ -92,7 +92,7 @@
        (accel+gyro only, no magnetometer) is what's actually wired in until
        a real BMX160 is sourced. See bmi160_serial_hardware_interface for
        why magnetometer.* is dropped: nothing downstream (imu_sensor_broadcaster,
-       fbb_policy) consumes it anyway. -->
+       wojtek_policy) consumes it anyway. -->
   <xacro:macro name="fbb_bmi160_imu_ros2_control" params="port baud_rate:=115200">
     <ros2_control name="imu" type="sensor">
       <hardware>

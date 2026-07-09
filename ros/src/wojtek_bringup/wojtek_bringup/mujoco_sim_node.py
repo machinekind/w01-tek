@@ -42,14 +42,14 @@ def _prepare_model_xml():
 
     wojtek_bringup ships the MJX XMLs in its share/config; the robot file
     expects meshdir ../meshes relative to itself, so rewrite it to the
-    meshes installed by four_bar_bot_description.
+    meshes installed by wojtek_description.
     """
     import re
     import tempfile
     from pathlib import Path
 
     share = Path(get_package_share_directory("wojtek_bringup")) / "config"
-    meshes = Path(get_package_share_directory("four_bar_bot_description")) / "meshes"
+    meshes = Path(get_package_share_directory("wojtek_description")) / "meshes"
     tmp = Path(tempfile.mkdtemp(prefix="fbb_mj_"))
     robot = (share / "four_bar_bot_mjx.xml").read_text()
     robot = re.sub(r'meshdir="[^"]*"', f'meshdir="{meshes}"', robot)

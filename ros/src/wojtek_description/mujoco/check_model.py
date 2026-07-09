@@ -7,7 +7,7 @@ settles on the floor without exploding and without its four-bar closures
 drifting apart.
 
 Run with the project venv from any directory:
-    .venv/bin/python four_bar_bot_description/mujoco/check_model.py
+    .venv/bin/python wojtek_description/mujoco/check_model.py
 """
 
 import sys

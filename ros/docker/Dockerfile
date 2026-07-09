@@ -31,7 +31,7 @@ RUN apt-get update && \
     pip3 install --break-system-packages mujoco && \
     /bin/bash -c "source /opt/ros/$ROS_DISTRO/setup.bash && \
         colcon build --symlink-install \
-            --packages-select four_bar_bot_description md80_hardware_interface \
+            --packages-select wojtek_description md80_hardware_interface \
                 bmx160_serial_hardware_interface bmi160_serial_hardware_interface \
                 wojtek_policy wojtek_bringup \
             --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF" && \

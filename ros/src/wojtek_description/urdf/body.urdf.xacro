@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="four_bar_bot_body">
-  <xacro:include filename="$(find four_bar_bot_description)/urdf/inertia.urdf.xacro" />
-  <xacro:include filename="$(find four_bar_bot_description)/urdf/leg.urdf.xacro" />
+  <xacro:include filename="$(find wojtek_description)/urdf/inertia.urdf.xacro" />
+  <xacro:include filename="$(find wojtek_description)/urdf/leg.urdf.xacro" />
 
   <!-- Mechanical assembly shared by every bringup of this robot: material,
        base_link/body_link/imu_link, and the four legs. ros2_control/Gazebo
@@ -18,7 +18,7 @@
       <visual>
         <origin rpy="0 0 ${pi}" xyz="0.0 0 0" />
         <geometry name="base_link">
-          <mesh filename="package://four_bar_bot_description/meshes/base_link.dae" />
+          <mesh filename="package://wojtek_description/meshes/base_link.dae" />
         </geometry>
 
         <xacro:grey_material />
@@ -26,7 +26,7 @@
       <collision>
         <origin rpy="0 0 ${pi}" xyz="0.0 0 0" />
         <geometry name="base_link">
-          <mesh filename="package://four_bar_bot_description/meshes/base_link.dae" />
+          <mesh filename="package://wojtek_description/meshes/base_link.dae" />
         </geometry>
       </collision>
       <xacro:box_inertia m="50.0" w="0.59" h="0.225" d="0.1" xyz="0.01 0 0.06" />

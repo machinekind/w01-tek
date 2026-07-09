@@ -18,7 +18,7 @@
   <depend>tf2_ros</depend>
   <depend>python3-numpy</depend>
   <depend>wojtek_policy</depend>
-  <depend>four_bar_bot_description</depend>
+  <depend>wojtek_description</depend>
   <depend>md80_hardware_interface</depend>
   <depend>bmx160_serial_hardware_interface</depend>
   <depend>bmi160_serial_hardware_interface</depend>

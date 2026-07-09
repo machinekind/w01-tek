@@ -56,7 +56,7 @@ t0(){
   for d in 3_jaxpot_robotics 4_four_bar_bot_rl piesek_ws quadruped_ros2_original; do
     if [ -e "$d" ]; then fail "old dir removed: $d/"; else pass "old dir removed: $d/"; fi
   done
-  for d in ros training training/demo docs ros/src/four_bar_bot_description; do
+  for d in ros training training/demo docs ros/src/wojtek_description; do
     ok "present: $d/" test -d "$d"; done
 
   # dead imports / module targets (would crash at runtime)
@@ -70,17 +70,18 @@ t0(){
   absent "no live 'quadruped_controller' ref"    'quadruped_controller' . ':(exclude)*.md'
   absent "no live 'fbb_policy' ref (renamed -> wojtek_policy)" 'fbb_policy' . ':(exclude)*.md'
   absent "no live 'piesek' ref (piesek_bringup/piesek_robot -> wojtek_*)" 'piesek' . ':(exclude)*.md'
+  absent "no live 'four_bar_bot_description' ref (renamed -> wojtek_description)" 'four_bar_bot_description' . ':(exclude)*.md'
   absent "removed legacy launches not referenced" '(bringup|robot_state_publisher)\.launch\.py' 'ros/src/*/launch/*.py'
 
   # paths.py points at ros/, not the dropped quadruped dir
-  ok "paths.py model dir -> ros/"   grep -q 'ros/src/four_bar_bot_description/mujoco' training/fbb_rl/paths.py
+  ok "paths.py model dir -> ros/"   grep -q 'ros/src/wojtek_description/mujoco' training/fbb_rl/paths.py
   absent "paths.py free of quadruped" 'quadruped_ros2_original' training/fbb_rl/paths.py
 
   # every referenced file exists
   for f in \
-    ros/src/four_bar_bot_description/mujoco/four_bar_bot.xml \
-    ros/src/four_bar_bot_description/mujoco/four_bar_bot_mjx.xml \
-    ros/src/four_bar_bot_description/mujoco/scene_mjx.xml \
+    ros/src/wojtek_description/mujoco/four_bar_bot.xml \
+    ros/src/wojtek_description/mujoco/four_bar_bot_mjx.xml \
+    ros/src/wojtek_description/mujoco/scene_mjx.xml \
     ros/src/md80_hardware_interface/config/AK80-9.cfg \
     ros/src/wojtek_policy/config/policy.npz \
     ros/src/wojtek_policy/config/policy_meta.json \
@@ -97,7 +98,7 @@ t0(){
   # ---- equivalence: the model training reads must be byte-identical to the baseline ----
   if git rev-parse --verify -q "$BASE_REF" >/dev/null; then
     local QB="$BASE_REF:quadruped_ros2_original/four_bar_bot_description/mujoco"
-    local RH="HEAD:ros/src/four_bar_bot_description/mujoco"
+    local RH="HEAD:ros/src/wojtek_description/mujoco"
     same "model source four_bar_bot.xml == baseline" "$QB/four_bar_bot.xml" "$RH/four_bar_bot.xml"
     same "model four_bar_bot_mjx.xml == baseline"    "$QB/four_bar_bot_mjx.xml" "$RH/four_bar_bot_mjx.xml"
     same "model scene_mjx.xml == baseline"           "$QB/scene_mjx.xml" "$RH/scene_mjx.xml"
@@ -136,11 +137,11 @@ t2(){
 
   # run.sh build regenerates the MJX model from source; must reproduce the committed file
   if (cd training && ./run.sh build >/tmp/verify_build.$$ 2>&1); then
-    if git diff --quiet -- ros/src/four_bar_bot_description/mujoco/; then
+    if git diff --quiet -- ros/src/wojtek_description/mujoco/; then
       pass "run.sh build reproduces committed model (deterministic + lossless)"
     else
-      fail "run.sh build changed the committed model" "$(git diff --stat -- ros/src/four_bar_bot_description/mujoco/)"
-      git checkout -- ros/src/four_bar_bot_description/mujoco/ 2>/dev/null
+      fail "run.sh build changed the committed model" "$(git diff --stat -- ros/src/wojtek_description/mujoco/)"
+      git checkout -- ros/src/wojtek_description/mujoco/ 2>/dev/null
     fi
   else
     fail "run.sh build" "$(tail -5 /tmp/verify_build.$$ 2>/dev/null)"
@@ -178,7 +179,7 @@ t3(){
   # The Dockerfile's `RUN colcon build --packages-select <6 pkgs>` IS the build check.
   echo "  (building ros/docker image — runs colcon build of all 6 packages; slow, esp. under emulation)"
   if docker build -f ros/docker/Dockerfile -t shrek-verify:ros ros >/tmp/verify_docker.$$ 2>&1; then
-    pass "colcon build (four_bar_bot_description, md80_hw, bmx160, bmi160, wojtek_policy, wojtek_bringup)"
+    pass "colcon build (wojtek_description, md80_hw, bmx160, bmi160, wojtek_policy, wojtek_bringup)"
   else
     fail "ROS colcon build via docker" "$(tail -15 /tmp/verify_docker.$$ 2>/dev/null)"
   fi

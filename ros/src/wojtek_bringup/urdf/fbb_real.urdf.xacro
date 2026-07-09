@@ -2,7 +2,7 @@
 <!--
   Real-robot URDF for running the RL policy.
 
-  Mechanically identical to four_bar_bot_description's four_bar_bot.urdf.xacro
+  Mechanically identical to wojtek_description's four_bar_bot.urdf.xacro
   (same leg macros), but the ros2_control block differs:
     * command interface `position` -> MD80 IMPEDANCE mode
     * impedance gains kp/kd and max_torque default to the values the policy
@@ -12,7 +12,7 @@
       in the original description).
 -->
 <robot name="quadruped" xmlns:xacro="http://www.ros.org/wiki/xacro">
-  <xacro:include filename="$(find four_bar_bot_description)/urdf/body.urdf.xacro" />
+  <xacro:include filename="$(find wojtek_description)/urdf/body.urdf.xacro" />
   <xacro:include filename="$(find wojtek_bringup)/urdf/fbb_ros2_control.urdf.xacro" />
 
   <xacro:arg name="kp" default="20.0" />

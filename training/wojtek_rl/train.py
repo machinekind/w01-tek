@@ -83,30 +83,35 @@ def main(cfg: DictConfig) -> None:
 
     task = cfg.task.name
     env_overrides = OmegaConf.to_container(cfg.task.env, resolve=True) or {}
-    env = make_env(task, env_overrides)
-    eval_env = make_env(task, env_overrides)
-    print(f"actor obs ({len(env.actor_obs_names)} components): {env.actor_obs_names}")
 
+    # PPO params resolve before the envs because the warp backend sizes its
+    # contact buffer across the whole training batch, so the env config
+    # needs the final num_envs at construction time.
     ppo_params = build_ppo_params({}, cfg.smoke)
-    # Episode length follows the env config unless ppo yaml overrides it.
-    # Smoke keeps episodes short too: brax's eval unrolls full episodes, so
-    # a 1000-step episode dominates a CPU pipeline check.
-    ppo_params.episode_length = (
-        min(200, env._config.episode_length) if cfg.smoke
-        else env._config.episode_length
-    )
     # Network group (conf/network) merges into the factory kwargs; explicit
     # ppo.network_factory.* overrides still win below.
     _apply_ppo_overrides(
         ppo_params.network_factory,
         OmegaConf.to_container(cfg.network, resolve=True) or {},
     )
-    _apply_ppo_overrides(
-        ppo_params, OmegaConf.to_container(cfg.task.ppo, resolve=True) or {}
-    )
-    _apply_ppo_overrides(
-        ppo_params, OmegaConf.to_container(cfg.ppo, resolve=True) or {}
-    )
+    task_ppo_overrides = OmegaConf.to_container(cfg.task.ppo, resolve=True) or {}
+    ppo_overrides = OmegaConf.to_container(cfg.ppo, resolve=True) or {}
+    _apply_ppo_overrides(ppo_params, task_ppo_overrides)
+    _apply_ppo_overrides(ppo_params, ppo_overrides)
+
+    env_overrides.setdefault("sim", {})["num_envs"] = int(ppo_params.num_envs)
+    env = make_env(task, env_overrides)
+    eval_env = make_env(task, env_overrides)
+    print(f"actor obs ({len(env.actor_obs_names)} components): {env.actor_obs_names}")
+
+    # Episode length follows the env config unless ppo yaml overrides it.
+    # Smoke keeps episodes short too: brax's eval unrolls full episodes, so
+    # a 1000-step episode dominates a CPU pipeline check.
+    if "episode_length" not in task_ppo_overrides and "episode_length" not in ppo_overrides:
+        ppo_params.episode_length = (
+            min(200, env._config.episode_length) if cfg.smoke
+            else env._config.episode_length
+        )
 
     restore = cfg.restore
     if restore and not os.path.isabs(restore):

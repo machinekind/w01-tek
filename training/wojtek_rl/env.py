@@ -90,6 +90,11 @@ def default_config() -> config_dict.ConfigDict:
         ),
         push=config_dict.create(enable=True, interval_steps=200, vel=0.4),
         action_delay=1,  # control steps of latency between policy and motors
+        # Randomized per-episode control latency at substep granularity
+        # (see WojtekEnv._step_with_latency). Disabled by default: the
+        # resolved delay is a static n_substeps-or-0 from action_delay
+        # above, so this reproduces the legacy path bitwise (no rng spent).
+        latency=config_dict.create(enable=False, min_substeps=0, max_substeps=5),
         # EMA low-pass on actions before the PD targets (0 = off). Kills the
         # noise-driven standing limit cycle structurally; mirror the same
         # one-liner on the robot when deploying a policy trained with it.
@@ -237,6 +242,16 @@ class WojtekJoystick(WojtekEnv):
         data = self._make_data()
         data = data.replace(qpos=qpos, qvel=jp.zeros(self._mj_model.nv), ctrl=anchor)
         data = mjx.forward(self._mjx_model, data)
+        # Per-episode ctrl delay (substeps). Disabled path is a static
+        # python int derived from action_delay -> zero extra rng spent,
+        # so the default trajectory matches pre-latency code bitwise.
+        lat = self._config.latency
+        if lat.enable:
+            rng, r_delay = jax.random.split(rng)  # only consumed when enabled
+            d = jax.random.randint(r_delay, (), lat.min_substeps, lat.max_substeps + 1)
+            d = jp.clip(d, 0, self.n_substeps)
+        else:
+            d = self.n_substeps if self._config.action_delay > 0 else 0
         info = {
             "rng": rng,
             "command": command,
@@ -249,6 +264,7 @@ class WojtekJoystick(WojtekEnv):
             "motor_targets": anchor,
             "step_count": jp.array(0),
             "phase": jp.array(0.0),  # master clock; per-leg via _leg_phases
+            "ctrl_delay": jp.int32(d),
         }
         metrics = {f"reward/{k}": jp.zeros(()) for k in self._config.reward.scales}
         obs = self._get_obs(data, info)
@@ -270,10 +286,6 @@ class WojtekJoystick(WojtekEnv):
             self._ctrlrange[:, 0],
             self._ctrlrange[:, 1],
         )
-        # one control step of latency: the motors receive last step's targets
-        applied_targets = (
-            info["motor_targets"] if self._config.action_delay > 0 else motor_targets
-        )
         data = state.data
         # random horizontal push, every push.interval_steps
         if self._config.push.enable:
@@ -285,7 +297,24 @@ class WojtekJoystick(WojtekEnv):
             qvel = data.qvel.at[:2].add(jp.where(push_now, push, jp.zeros(2)))
             data = data.replace(qvel=qvel)
 
-        data = mjx_env.step(self._mjx_model, data, applied_targets, self.n_substeps)
+        if self._config.latency.enable:
+            # Substeps < ctrl_delay apply last step's targets, >= apply the
+            # new ones (see WojtekEnv._step_with_latency).
+            data = self._step_with_latency(
+                data, info["motor_targets"], motor_targets, info["ctrl_delay"]
+            )
+        else:
+            # Legacy path (byte-identical to pre-latency code): the whole
+            # control period uses one ctrl. `_step_with_latency`'s general
+            # branch is mathematically equivalent here but its per-substep
+            # `where` perturbs float32 output a couple ULPs (see that
+            # docstring), so the disabled default is kept on this exact,
+            # select-free code path to guarantee bitwise parity.
+            applied_targets = (
+                info["motor_targets"] if self._config.action_delay > 0
+                else motor_targets
+            )
+            data = mjx_env.step(self._mjx_model, data, applied_targets, self.n_substeps)
 
         contact = self._foot_contact(data)
         contact_filt = contact | info["last_contact"]

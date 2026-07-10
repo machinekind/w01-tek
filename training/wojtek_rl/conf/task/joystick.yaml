@@ -25,4 +25,14 @@ env:
       - linvel
       - foot_contact
 
+  # Randomized per-episode control latency at substep granularity. Off by
+  # default: action_delay (see env.py default_config) drives a static
+  # ctrl_delay=n_substeps, i.e. today's fixed one-control-step latency.
+  # Enable to sample d ~ U[min_substeps, max_substeps] per env per episode;
+  # d=0 = no delay, d=n_substeps(=5 at ctrl_dt=0.02/sim_dt=0.004) = today.
+  latency:
+    enable: false
+    min_substeps: 0
+    max_substeps: 5
+
 ppo: {}

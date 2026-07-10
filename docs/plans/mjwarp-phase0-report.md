@@ -1,7 +1,7 @@
 # Phase-0 report: MJWarp feasibility
 
-**Status:** GPU spike complete (RTX 4090, vast.ai, 2026-07-10) except the final
-clean-budget throughput table (round 4) and the non-blocking cluster pmap smoke.
+**Status:** the GPU spike is complete (RTX 4090, vast.ai, 2026-07-10). The 2-GPU pmap
+smoke remains open. It waits for a cluster node and does not block G0.
 **Date started:** 2026-07-10
 **Companion to:** `docs/plans/2026-07-10-mjwarp-migration.md` (gate **G0**).
 
@@ -43,37 +43,38 @@ The plan abbreviates "single call site"; there are actually a few to thread `sim
 
 ## 4. GPU results (RTX 4090, vast.ai, driver 595.71.05, 2026-07-10)
 
-Four spike runs; runs 2–4 iterated the warp buffer-budget sizing (findings below).
+The spike ran four times. Runs 2 to 4 corrected the warp buffer budgets. The sizing rules
+they produced are recorded below.
 
-**Version-set correction — the pre-GPU finding in §1 was wrong.** `warp-lang==1.14.0`
-(our pin) breaks the vendored MJWarp glue on mujoco-mjx 3.10.0: 1.14 moved
-`warp._src.jax_experimental`, the `GraphMode` import silently falls back to `int`, and
-`put_model(impl="warp")` dies with `AttributeError: type object 'int' has no attribute
-'WARP'` — the *same* error as on the Mac, so that error was version skew all along, not a
-no-CUDA symptom. mujoco-mjx 3.10.0 declares `Requires-Dist: warp-lang==1.13.0; extra ==
-"warp"`; with **warp-lang 1.13.0** everything works. → Workstream A must pin
-`warp-lang==1.13.0` (a downgrade, not the feared bump).
+**The version finding in §1 was wrong.** Our `warp-lang==1.14.0` pin breaks the vendored
+MJWarp in mujoco-mjx 3.10.0. Version 1.14 removed `warp._src.jax_experimental`, so the
+`GraphMode` import falls back to `int` and `put_model(impl="warp")` raises
+`AttributeError: type object 'int' has no attribute 'WARP'`. The Mac raised the same
+error. It was version skew, not a missing GPU. mujoco-mjx 3.10.0 declares
+`warp-lang==1.13.0` as its warp requirement, and everything works on 1.13.0. Workstream A
+pins `warp-lang==1.13.0`.
 
-- [x] **Four-bar closure / stability under `impl="warp"`** — no NaN, standing stable
-  (z 0.125→0.119 m), 4/4 feet in contact. The literal ≤2 mm gate read **FAIL at 2.35 mm**,
-  but that gate was mis-calibrated: it applies a settled-pose tolerance to a running max
-  over 2000 *random-action* steps. The identical protocol under `impl="jax"` (same box,
-  CPU) opens the loop to **18.1 mm** (0.93 mm settled). Warp holds the closure ~8× tighter
-  than jax under abuse. _Verdict: PASS — no kill criterion touched; fix the spike gate to
-  compare against the jax baseline if it's ever re-run._
-- [x] **DR batching under warp** — PASS at 64 envs: all five randomized fields batch
-  through the existing `tree_replace` path with correct leading dims. No native-nworld
-  rewrite needed for Workstream A.
-- [x] **Warp buffer budgets (A2 sizing rules, GPU-measured):**
-  `naconmax` counts broadphase *candidates* pooled across ALL vmapped worlds
-  (~21/world at rest, ~89/world under random actions; 8192 envs asked for 167k total).
-  `njmax` is *per-world* constraint rows (~210 needed; scaling it by n_envs allocates a
-  dense efc Jacobian of njmax_total × nv_total ≈ 40 GiB at 1024 envs → OOM).
-  mj's CPU `ncon`/`nefc` probe under-predicts both. A2's autosizing must encode exactly
-  this: `naconmax ≈ 32·n_envs`, `njmax ≈ 320` flat.
-- [x] **Throughput table** — run 4, correct budgets (`naconmax=128·n_envs`, `njmax=320`),
-  zero overflow warnings, real `WojtekJoystick.step` (obs+reward included), 200-step scan
-  after warmup. Full log: `phase0-artifacts/spike-run4-4090.log`.
+- [x] **Closure and stability under warp: PASS.** No NaN. Standing is stable
+  (z 0.125 m to 0.119 m). All four feet read in contact. The spike printed FAIL because
+  its 2 mm closure gate applies a settled-pose tolerance to a running max over 2000
+  random-action steps, and warp's running max was 2.35 mm. The same protocol under jax
+  opens the loop to 18.1 mm and settles at 0.93 mm. Warp holds the closure about eight
+  times tighter than jax. If the spike runs again, recalibrate its gate against the jax
+  baseline.
+- [x] **DR batching under warp: PASS at 64 envs.** All five randomized fields batch
+  through the existing `tree_replace` path with correct leading dims. Workstream A keeps
+  the current randomizer.
+- [x] **Buffer budgets for A2.** `naconmax` counts broadphase candidates across all
+  vmapped worlds. This scene needs about 21 per world at rest and up to 89 under random
+  actions. `njmax` counts constraint rows per world. This scene needs about 210, and
+  dropped rows weaken the four-bar equality constraint. Scaling njmax by the batch
+  allocates a dense Jacobian of njmax times total dofs, which is 40 GiB at 1024 envs and
+  crashes. The CPU ncon/nefc probe under-predicts both budgets. A2 should size
+  `naconmax = 32 * n_envs` and `njmax = 320`.
+- [x] **Throughput: gate passed.** Run 4 used correct budgets, produced no overflow
+  warnings, and benchmarked the real `WojtekJoystick.step` with observations and rewards
+  over a 200-step scan after warmup. The full log is
+  `phase0-artifacts/spike-run4-4090.log`.
 
   | envs | jax steps/s | warp steps/s | speedup |
   |---|---|---|---|
@@ -81,31 +82,20 @@ no-CUDA symptom. mujoco-mjx 3.10.0 declares `Requires-Dist: warp-lang==1.13.0; e
   | 4096 | 108,395 | 652,252 | **6.02×** |
   | 8192 | 106,929 | 675,205 | 6.31× |
 
-  _Gate was ≥2× @ 4096 → passed at 6×._ jax plateaus ~110k steps/s regardless of batch
-  (solver-bound); warp keeps scaling. The mis-budgeted run 2 read 6.6× @ 4096 — dropped
-  contacts inflated it by ~10%, so budget correctness matters for honest numbers but not
-  for the go/no-go._
-- [ ] **Multi-device** — 2-GPU brax pmap smoke under warp: deferred to a cluster node,
-  explicitly non-blocking for G0.
-- [ ] **Golden-baseline guard** — fixed-seed 10M jax probe before/after the warp-lang
-  1.14→1.13 pin change: to run at the start of Workstream A (goldens + capture script are
-  already on this branch).
+  The gate was 2× at 4096 envs. jax stays near 110k steps/s at every batch size. Warp
+  keeps scaling. Run 2 read 6.6× at 4096 with overflowing budgets, so dropped contacts
+  inflate throughput by about 10%.
+- [ ] **Multi-device.** The 2-GPU pmap smoke waits for a cluster node. It does not block G0.
+- [ ] **Golden guard.** Run the fixed-seed jax probe across the warp-lang pin change at
+  the start of Workstream A. The goldens and their capture script are on this branch.
 
-## 5. Go/no-go — recommendation: **GO**
+## 5. Go/no-go: GO
 
-Every gate passed on hardware: physics stable (no NaN, standing, contacts), four-bar
-closure ~8× tighter than jax under the same abuse protocol, DR batches through the
-existing `tree_replace` path, and throughput at 6× the 2× gate. The single FAIL line in
-the spike output is a mis-calibrated spike gate (settled-pose tolerance applied to a
-random-action running max), disproven by the jax baseline in
-`phase0-artifacts/closure_jax.log`.
+Every hardware gate passed. The one FAIL line came from the spike's own gate calibration,
+and the jax baseline in `phase0-artifacts/closure_jax.log` disproves it. Workstream A
+takes three obligations from this spike:
 
-Workstream A carries three concrete obligations out of this spike:
-1. Pin `warp-lang==1.13.0` (mujoco-mjx 3.10.0's declared warp requirement; our 1.14.0
-   breaks the vendored glue with the `GraphMode`→`int` fallback).
-2. Encode the budget-sizing rules: `naconmax ≈ 32·n_envs` (total, broadphase candidates),
-   `njmax ≈ 320` (per-world) — do NOT scale njmax by batch (40 GiB OOM at 1024 envs).
-3. Run the golden-baseline guard (fixed-seed jax probe, goldens already on this branch)
-   across the warp-lang pin change before flipping any default.
-
-The 2-GPU cluster pmap smoke remains open and non-blocking, per the plan.
+1. Pin `warp-lang==1.13.0`.
+2. Size warp buffers as `naconmax = 32 * n_envs` and `njmax = 320`. Never scale njmax by
+   the batch.
+3. Run the golden guard across the pin change before flipping any default.

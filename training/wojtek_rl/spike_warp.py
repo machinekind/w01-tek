@@ -172,14 +172,13 @@ def _size_warp_budget(
 ) -> tuple[int, int]:
     """Per-world naconmax/njmax from the CPU probe, with a safety margin.
 
-    GPU-measured (4090, warp-lang 1.13.0, first spike run): mj's CPU probe
-    badly underestimates warp's budgets. This scene probes ncon=5/nefc=54,
-    but warp asked for naconmax≈21/world at rest (broadphase *candidates*,
-    not final contacts; up to ~89 under random actions) and njmax≈210/world
-    (dropped rows there open the four-bar equality constraint). Floors are
-    sized to those measurements with ~50% headroom. Budgets are TOTAL across
-    a vmapped batch — multiply by n_envs (step 5 does; A2's autosizing must
-    too).
+    The CPU probe under-predicts warp's budgets. This scene probes ncon=5
+    and nefc=54, but on the 4090 warp asked for about 21 contact candidates
+    per world at rest, up to 89 under random actions, and about 210
+    constraint rows per world. Dropped constraint rows weaken the four-bar
+    equality constraint. The floors below cover those measurements with 50%
+    headroom. naconmax is a total across a vmapped batch, so step 5
+    multiplies it by n_envs. njmax is per world.
     """
     max_ncon, max_nefc = _cpu_probe_ncon(m, steps=steps, seed=seed)
     naconmax = max(128, int(max_ncon * margin))
@@ -496,11 +495,10 @@ def step5_throughput(
     for n_envs in env_counts:
         jax_rate = _bench_real_env_step("jax", n_envs, steps, seed=seed)
         try:
-            # GPU-decoded semantics (runs 2-3): naconmax is TOTAL across all
-            # vmapped worlds (run 2 asked for 167k at 8192 envs against our
-            # 64), but njmax is PER-WORLD (run 2 asked ~210 at every env
-            # count; scaling it by n_envs allocated a 40GiB dense efc
-            # Jacobian and OOM'd in run 3). Scale naconmax only.
+            # naconmax is a total across all vmapped worlds: run 2 asked
+            # for 167k at 8192 envs against our 64. njmax is per world:
+            # run 2 asked for about 210 at every env count, and scaling it
+            # by n_envs allocated a 40 GiB dense efc Jacobian in run 3.
             warp_rate = _bench_real_env_step(
                 "warp", n_envs, steps, seed=seed,
                 naconmax=naconmax * n_envs, njmax=njmax,

@@ -4,7 +4,7 @@ Steps scene_mjx.xml (the exact physics the policy was trained on: position
 servos kp=20/kd=1, forcerange +/-6, dt=0.004) paced to wall clock and bridges
 it to ROS:
 
-  subscribes  /fbb/joint_targets (JointState, URDF convention)
+  subscribes  /wojtek/joint_targets (JointState, URDF convention)
   publishes   /joint_states (URDF convention, actuated + passive four-bar
               joints -> drives robot_state_publisher / RViz)
               /imu/data (orientation, gyro, accel of the base, base_link frame)
@@ -96,7 +96,7 @@ class MujocoSimNode(Node):
         self._reset()
 
         self.create_subscription(
-            JointState, "fbb/joint_targets", self._on_targets, 10
+            JointState, "wojtek/joint_targets", self._on_targets, 10
         )
         self._pub_js = self.create_publisher(JointState, "joint_states", 10)
         self._pub_imu = self.create_publisher(Imu, "imu/data", 10)

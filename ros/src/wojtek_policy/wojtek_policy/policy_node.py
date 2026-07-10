@@ -6,11 +6,11 @@ parameters differ:
   subscribes  /joint_states  (sensor_msgs/JointState, URDF convention, absolute)
               /imu/data      (sensor_msgs/Imu)
               /cmd_vel       (geometry_msgs/Twist)
-              /fbb/cmd_height (std_msgs/Float32; 4-D-command policies only,
+              /wojtek/cmd_height (std_msgs/Float32; 4-D-command policies only,
                                overrides the command_height parameter)
-  publishes   /fbb/joint_targets (sensor_msgs/JointState, URDF convention,
+  publishes   /wojtek/joint_targets (sensor_msgs/JointState, URDF convention,
                                   absolute; 12 actuated joints)
-  services    /fbb/enable (std_srvs/SetBool), /fbb/reset (std_srvs/Trigger)
+  services    /wojtek/enable (std_srvs/SetBool), /wojtek/reset (std_srvs/Trigger)
 
 The policy itself (wojtek_policy.policy.WojtekPolicy) works in the MuJoCo/training
 convention; this node converts on both edges using joint_map.yaml.
@@ -87,7 +87,7 @@ class PolicyNode(Node):
         self._gravity_base = None
         self._grav_filt = np.array([0.0, 0.0, -1.0])
         self._cmd = np.zeros(3)
-        self._cmd_height = None  # latest fbb/cmd_height, overrides the param
+        self._cmd_height = None  # latest wojtek/cmd_height, overrides the param
         self._joints_stamp = None
         self._imu_stamp = None
         self._enabled = self.get_parameter("auto_enable").value
@@ -97,10 +97,10 @@ class PolicyNode(Node):
         self.create_subscription(JointState, "joint_states", self._on_joints, 10)
         self.create_subscription(Imu, "imu/data", self._on_imu, 10)
         self.create_subscription(Twist, "cmd_vel", self._on_cmd, 10)
-        self.create_subscription(Float32, "fbb/cmd_height", self._on_height, 10)
-        self._pub = self.create_publisher(JointState, "fbb/joint_targets", 10)
-        self.create_service(SetBool, "fbb/enable", self._srv_enable)
-        self.create_service(Trigger, "fbb/reset", self._srv_reset)
+        self.create_subscription(Float32, "wojtek/cmd_height", self._on_height, 10)
+        self._pub = self.create_publisher(JointState, "wojtek/joint_targets", 10)
+        self.create_service(SetBool, "wojtek/enable", self._srv_enable)
+        self.create_service(Trigger, "wojtek/reset", self._srv_reset)
         self.create_timer(self.policy.ctrl_dt, self._tick)
         self.get_logger().info(
             f"policy {self.policy.meta['run_name']} loaded, "

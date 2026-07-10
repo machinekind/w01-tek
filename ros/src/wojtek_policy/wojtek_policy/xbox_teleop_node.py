@@ -1,9 +1,9 @@
-"""Xbox-controller teleop for the fbb policy.
+"""Xbox-controller teleop for the Wojtek policy.
 
   subscribes  /joy            (sensor_msgs/Joy, from the standard `joy` driver)
   publishes   /cmd_vel        (geometry_msgs/Twist)   left stick = vx/vy,
                                                       right stick X = wz
-              /fbb/cmd_height (std_msgs/Float32)      right stick Y slowly
+              /wojtek/cmd_height (std_msgs/Float32)      right stick Y slowly
                                                       raises/lowers the body
 
 The Bluetooth link itself is handled by the OS + the `joy` package
@@ -78,7 +78,7 @@ class XboxTeleopNode(Node):
 
         self.create_subscription(Joy, "joy", self._on_joy, 10)
         self._pub_vel = self.create_publisher(Twist, "cmd_vel", 10)
-        self._pub_height = self.create_publisher(Float32, "fbb/cmd_height", 10)
+        self._pub_height = self.create_publisher(Float32, "wojtek/cmd_height", 10)
         self._dt = 1.0 / self.get_parameter("rate_hz").value
         self.create_timer(self._dt, self._tick)
         self.get_logger().info(

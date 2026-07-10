@@ -15,13 +15,13 @@ Startup procedure:
   2. Physically pose the robot in the boot pose (default boot_pose:=home,
      the standing pose RViz shows; folded also available -- see real_io_node)
      and compare the real robot against RViz.
-  3. ros2 service call /fbb/zero std_srvs/srv/Trigger  -- declares "the robot
+  3. ros2 service call /wojtek/zero std_srvs/srv/Trigger  -- declares "the robot
      is in the boot pose NOW" and re-zeros the offsets. (Skippable only if
      the robot was already exactly in the boot pose at activation.)
-  4. ros2 service call /fbb/stand_up std_srvs/srv/Trigger  (slow ramp to the
+  4. ros2 service call /wojtek/stand_up std_srvs/srv/Trigger  (slow ramp to the
      home standing pose; skip if already standing in home)
-  5. ros2 service call /fbb/arm std_srvs/srv/SetBool '{data: true}'
-  6. When done: disarm, then /fbb/lie_down to ramp gently down to folded.
+  5. ros2 service call /wojtek/arm std_srvs/srv/SetBool '{data: true}'
+  6. When done: disarm, then /wojtek/lie_down to ramp gently down to folded.
 """
 
 import os
@@ -92,7 +92,7 @@ def generate_launch_description():
                 package="robot_state_publisher",
                 executable="robot_state_publisher",
                 parameters=[{"robot_description": robot_description}],
-                remappings=[("joint_states", "fbb/joint_states_abs")],
+                remappings=[("joint_states", "wojtek/joint_states_abs")],
             ),
             # wojtek.rviz uses odom as the fixed frame (the sim publishes ground
             # truth odom -> base_link); there is no odometry on the real robot
@@ -130,7 +130,7 @@ def generate_launch_description():
                     }
                 ],
                 remappings=[
-                    ("joint_states", "fbb/joint_states_abs"),
+                    ("joint_states", "wojtek/joint_states_abs"),
                     # ("imu/data", "imu_sensor_broadcaster/imu"),
                 ],
             ),

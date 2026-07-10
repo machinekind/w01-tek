@@ -5,31 +5,31 @@ controllers were activated in, and (since the write() fix in our fork) sends
 IMPEDANCE position commands in that same activation-relative frame. The
 policy works in absolute URDF angles, so this node shifts by an offset in
 both directions. The offset starts as "the robot was in the boot_pose at
-activation" and can be corrected at runtime with /fbb/zero.
+activation" and can be corrected at runtime with /wojtek/zero.
 
 The boot_pose parameter names the reference pose (the robot's position 0):
 
   boot_pose="home" (default): the home standing pose (policy_meta.json
-    home_ctrl, where /fbb/stand_up ends).
+    home_ctrl, where /wojtek/stand_up ends).
   boot_pose="folded": robot lying flat on its base, hips straight and knees
     folded against the mechanical stop (folded_knee_rad, policy convention --
     see wojtek_bringup.poses). Reproducible by hand without holding the
-    robot -- call /fbb/stand_up afterwards to ramp slowly into the home
-    standing pose, then /fbb/arm.
+    robot -- call /wojtek/stand_up afterwards to ramp slowly into the home
+    standing pose, then /wojtek/arm.
 
   subscribes  /joint_states           (boot-relative, from joint_state_broadcaster)
-              /fbb/joint_targets      (absolute URDF, from policy_node)
-  publishes   /fbb/joint_states_abs   (absolute URDF -> policy_node + RViz rsp;
+              /wojtek/joint_targets      (absolute URDF, from policy_node)
+  publishes   /wojtek/joint_states_abs   (absolute URDF -> policy_node + RViz rsp;
               the 12 actuated joints, plus a separate passive-joints-only
               message with the four-bar fourth/fifth joints computed from the
               knee angles -- robot_state_publisher merges by name, policy_node
               skips the partial message)
               /forward_position_controller/commands (Float64MultiArray,
               boot-relative positions, actuator order -> MD80 IMPEDANCE mode)
-  services    /fbb/arm      (std_srvs/SetBool)  -- gate actually sending commands
-              /fbb/stand_up (std_srvs/Trigger)  -- slow ramp current -> home
-              /fbb/lie_down (std_srvs/Trigger)  -- slow ramp current -> folded
-              /fbb/zero     (std_srvs/Trigger)  -- re-zero: declare that the
+  services    /wojtek/arm      (std_srvs/SetBool)  -- gate actually sending commands
+              /wojtek/stand_up (std_srvs/Trigger)  -- slow ramp current -> home
+              /wojtek/lie_down (std_srvs/Trigger)  -- slow ramp current -> folded
+              /wojtek/zero     (std_srvs/Trigger)  -- re-zero: declare that the
               robot is physically in the boot_pose RIGHT NOW and recompute
               the offset from the current measurement. Lets you power and
               activate the motors in any pose: launch, physically pose the
@@ -47,8 +47,8 @@ Safety:
 NOTE: md80_hardware_interface's write() used to send IMPEDANCE commands in
 the drive's raw frame while read() reported activation-relative states; our
 fork now shifts commands by the same activation offset, so both directions
-share one frame and /fbb/zero is exact. Still verify the first powered test
-with dry_run:=true + /fbb/arm false.
+share one frame and /wojtek/zero is exact. Still verify the first powered test
+with dry_run:=true + /wojtek/arm false.
 """
 
 import numpy as np
@@ -94,7 +94,7 @@ class RealIoNode(Node):
             raise ValueError(f"boot_pose must be 'folded' or 'home', got {boot_pose!r}")
         self.boot_urdf = self.folded_urdf if boot_pose == "folded" else self.home_urdf
         # Measured (activation-relative) -> absolute URDF. Starts assuming the
-        # robot was in the boot pose at activation; /fbb/zero recomputes it.
+        # robot was in the boot pose at activation; /wojtek/zero recomputes it.
         self._offset_urdf = self.boot_urdf.copy()
 
         # Passive four-bar joints for RViz: (name, poly coeffs, index of that
@@ -112,30 +112,30 @@ class RealIoNode(Node):
 
         self.create_subscription(JointState, "joint_states", self._on_joints, 10)
         self.create_subscription(
-            JointState, "fbb/joint_targets", self._on_targets, 10
+            JointState, "wojtek/joint_targets", self._on_targets, 10
         )
-        self._pub_abs = self.create_publisher(JointState, "fbb/joint_states_abs", 10)
+        self._pub_abs = self.create_publisher(JointState, "wojtek/joint_states_abs", 10)
         self._pub_cmd = self.create_publisher(
             Float64MultiArray, "forward_position_controller/commands", 10
         )
-        self.create_service(SetBool, "fbb/arm", self._srv_arm)
+        self.create_service(SetBool, "wojtek/arm", self._srv_arm)
         self.create_service(
-            Trigger, "fbb/stand_up", lambda req, res: self._srv_ramp(
+            Trigger, "wojtek/stand_up", lambda req, res: self._srv_ramp(
                 res, self.home_urdf, "stand_up"
             )
         )
         self.create_service(
-            Trigger, "fbb/lie_down", lambda req, res: self._srv_ramp(
+            Trigger, "wojtek/lie_down", lambda req, res: self._srv_ramp(
                 res, self.folded_urdf, "lie_down"
             )
         )
-        self.create_service(Trigger, "fbb/zero", self._srv_zero)
+        self.create_service(Trigger, "wojtek/zero", self._srv_zero)
         self.get_logger().info(
             f"real io up, DISARMED, boot_pose={boot_pose}. Assuming the robot "
             f"was in the {boot_pose} pose at activation; if not, pose it there "
-            "now and call: ros2 service call /fbb/zero std_srvs/srv/Trigger. "
-            "Then /fbb/stand_up if lying, and arm with: ros2 service call "
-            "/fbb/arm std_srvs/srv/SetBool '{data: true}'"
+            "now and call: ros2 service call /wojtek/zero std_srvs/srv/Trigger. "
+            "Then /wojtek/stand_up if lying, and arm with: ros2 service call "
+            "/wojtek/arm std_srvs/srv/SetBool '{data: true}'"
         )
 
     def _on_joints(self, msg):
@@ -270,7 +270,7 @@ class RealIoNode(Node):
             res.message = (
                 f"joint displacement from home pose up to {np.max(jump):.3f} rad "
                 f"> {limit} -- robot is not standing in the home pose, refusing "
-                "to arm (run /fbb/stand_up first)"
+                "to arm (run /wojtek/stand_up first)"
             )
             return res
         self._armed = True

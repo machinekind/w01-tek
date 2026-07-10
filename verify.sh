@@ -44,6 +44,11 @@ ok(){ local d="$1"; shift; if "$@" >/dev/null 2>&1; then pass "$d"; else fail "$
 absent(){ local d="$1" p="$2"; shift 2; local hit; if hit="$(git grep -nE "$p" -- "$@" ':(exclude)verify.sh' ':(exclude)NEXT-STEP-WOJTEK.md' 2>/dev/null)"; then fail "$d" "$hit"; else pass "$d"; fi; }
 # same DESC REF_A:PATH_A REF_B:PATH_B  -> pass iff the two committed blobs are byte-identical
 same(){ local d="$1" a="$2" b="$3"; if diff <(git show "$a" 2>/dev/null) <(git show "$b" 2>/dev/null) >/dev/null 2>&1; then pass "$d"; else fail "$d" "differ: $a  vs  $b"; fi; }
+# same_norm DESC REF_A:PATH_A REF_B:PATH_B SED_EXPR  -> pass iff blob A is byte-
+# identical to (blob B piped through `sed SED_EXPR`). Proves equivalence "modulo"
+# an intentional mechanical rename (the four_bar_bot -> wojtek model-name rename)
+# while still catching ANY other content drift from the baseline.
+same_norm(){ local d="$1" a="$2" b="$3" s="$4"; if diff <(git show "$a" 2>/dev/null) <(git show "$b" 2>/dev/null | sed "$s") >/dev/null 2>&1; then pass "$d"; else fail "$d" "differ beyond rename: $a  vs  $b"; fi; }
 run_tier(){ local n="$1"; [ -n "$ONLY_TIER" ] && { [ "$ONLY_TIER" = "$n" ]; return; }; [ "$n" -le "$MAX_TIER" ]; }
 
 PY="training/.venv/bin/python"
@@ -107,13 +112,18 @@ t0(){
   if git rev-parse --verify -q "$BASE_REF" >/dev/null; then
     local QB="$BASE_REF:quadruped_ros2_original/four_bar_bot_description/mujoco"
     local RH="HEAD:ros/src/wojtek_description/mujoco"
-    # robot MJCFs are leaf files (no includes) -> renamed to wojtek*.xml = pure moves, still byte-identical to upstream
-    same "model source wojtek.xml == baseline (upstream four_bar_bot.xml)" "$QB/four_bar_bot.xml" "$RH/wojtek.xml"
-    same "model wojtek_mjx.xml == baseline (upstream four_bar_bot_mjx.xml)" "$QB/four_bar_bot_mjx.xml" "$RH/wojtek_mjx.xml"
-    # scene_mjx.xml differs from baseline by EXACTLY the include rename (four_bar_bot_mjx.xml -> wojtek_mjx.xml); normalize then compare
-    if diff <(git show "$QB/scene_mjx.xml") <(git show "$RH/scene_mjx.xml" | sed 's/wojtek_mjx\.xml/four_bar_bot_mjx.xml/') >/dev/null 2>&1; then
-      pass "model scene_mjx.xml == baseline (modulo include rename)"
-    else fail "model scene_mjx.xml differs beyond include rename" "$(diff <(git show "$QB/scene_mjx.xml") <(git show "$RH/scene_mjx.xml") 2>/dev/null)"; fi
+    # robot MJCFs are leaf files (no includes). They stay byte-identical to the
+    # upstream four_bar_bot baseline EXCEPT the intentional model-name rename
+    # (model="four_bar_bot" -> model="wojtek"); normalize that token, then
+    # require exact equality so any other physics drift still fails.
+    local NAME_SED='s/model="wojtek"/model="four_bar_bot"/'
+    same_norm "model source wojtek.xml == baseline (modulo model-name rename)" "$QB/four_bar_bot.xml" "$RH/wojtek.xml" "$NAME_SED"
+    same_norm "model wojtek_mjx.xml == baseline (modulo model-name rename)" "$QB/four_bar_bot_mjx.xml" "$RH/wojtek_mjx.xml" "$NAME_SED"
+    # scene_mjx.xml differs from baseline by the include rename (four_bar_bot_mjx.xml
+    # -> wojtek_mjx.xml) AND the scene model-name rename; normalize both, then compare.
+    if diff <(git show "$QB/scene_mjx.xml") <(git show "$RH/scene_mjx.xml" | sed 's/wojtek_mjx\.xml/four_bar_bot_mjx.xml/; s/model="wojtek_mjx_scene"/model="four_bar_bot_mjx_scene"/') >/dev/null 2>&1; then
+      pass "model scene_mjx.xml == baseline (modulo include + model-name rename)"
+    else fail "model scene_mjx.xml differs beyond renames" "$(diff <(git show "$QB/scene_mjx.xml") <(git show "$RH/scene_mjx.xml") 2>/dev/null)"; fi
     # no unexpected large content introduced (renames reuse blobs; only tiny edits are new)
     local big
     big="$(git rev-list --objects HEAD --not "$BASE_REF" 2>/dev/null | awk '{print $1}' \

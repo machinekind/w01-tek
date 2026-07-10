@@ -1,4 +1,4 @@
-"""Build the MJX-ready four_bar_bot model from the original MJCF.
+"""Build the MJX-ready Wojtek model from the original MJCF.
 
 Reads the original wojtek.xml, applies the training edits from the
 spec, and writes wojtek_mjx.xml plus scene_mjx.xml next to it. The
@@ -63,7 +63,7 @@ LEG_COLLISION = {
 }
 
 
-SCENE_XML_TEXT = """<mujoco model="four_bar_bot_mjx_scene">
+SCENE_XML_TEXT = """<mujoco model="wojtek_mjx_scene">
   <include file="wojtek_mjx.xml"/>
   <statistic center="0 0 0.15" extent="0.8"/>
   <visual>

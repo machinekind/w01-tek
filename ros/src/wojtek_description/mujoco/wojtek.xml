@@ -1,4 +1,4 @@
-<mujoco model="four_bar_bot">
+<mujoco model="wojtek">
   <compiler angle="radian" autolimits="true" eulerseq="zyx" meshdir="../meshes"/>
 
   <default>

@@ -1,4 +1,4 @@
-<mujoco model="four_bar_bot_mjx_scene">
+<mujoco model="wojtek_mjx_scene">
   <include file="wojtek_mjx.xml"/>
   <statistic center="0 0 0.15" extent="0.8"/>
   <visual>

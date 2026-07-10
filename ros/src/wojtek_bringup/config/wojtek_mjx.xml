@@ -1,4 +1,4 @@
-<mujoco model="four_bar_bot">
+<mujoco model="wojtek">
   <compiler angle="radian" meshdir="../meshes/"/>
 
   <option timestep="0.004" iterations="2" ls_iterations="5"/>

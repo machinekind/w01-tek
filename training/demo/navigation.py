@@ -1,7 +1,7 @@
 """Go-to-point navigation on top of the joystick (velocity-tracking) policy.
 
 Ported verbatim from 3_jaxpot_robotics/jaxpot_robotics/navigation.py -- robot
-agnostic, so it works unchanged for four_bar_bot's [vx, vy, wz] joystick
+agnostic, so it works unchanged for Wojtek's [vx, vy, wz] joystick
 command.
 
 The trained policy tracks a *body-frame* velocity command

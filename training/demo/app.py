@@ -1,4 +1,4 @@
-"""Click-to-walk web app: click a point, the trained four_bar_bot walks to it.
+"""Click-to-walk web app: click a point, the trained Wojtek walks to it.
 
 Ported from 3_jaxpot_robotics/jaxpot_robotics/app.py, trimmed to the single
 WojtekJoystick robot (wojtek_rl isn't in the mujoco_playground registry, so
@@ -44,8 +44,8 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
-ROBOT_KEY = "fbb"
-ROBOT_LABEL = "four_bar_bot"
+ROBOT_KEY = "wojtek"
+ROBOT_LABEL = "Wojtek"
 DEFAULT_RUN_DIR = os.environ.get("WOJTEK_RUN_DIR", "policies/fbb_v3")
 
 # Chase-cam + nav profile tuned for this robot's scale (standing height ~0.10 m,
@@ -196,7 +196,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-app = FastAPI(title="four_bar_bot click-to-walk")
+app = FastAPI(title="Wojtek click-to-walk")
 _STATIC = Path(__file__).resolve().parent / "static"
 app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
 
@@ -287,7 +287,7 @@ def main(argv=None):
 
     import uvicorn
 
-    logger.info(f"serving four_bar_bot click-to-walk on http://{args.host}:{args.port}")
+    logger.info(f"serving Wojtek click-to-walk on http://{args.host}:{args.port}")
     # wsproto backend: uvicorn's default "websockets" impl uses the legacy API
     # removed in websockets>=14, which breaks the WS handshake.
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning", ws="wsproto")

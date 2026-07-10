@@ -21,6 +21,11 @@ For this repository: module `wojtek_rl`, launcher `training/run.sh`, safe proces
 
 ## Provision
 
+- Prefer EU offers over US ones. US hosts have repeatedly returned `"success": false` contracts
+  that sit in "loading" forever; EU boxes schedule reliably. A `success: false` create never
+  recovers — destroy it and pick another host immediately.
+- Require host reliability ≥ 99.9% (`reliability>0.999` in the offer query). The few cents/hour
+  saved on a flakier host are not worth a mid-run recycle.
 - Prefer a driver family already proven with the pinned JAX/CUDA wheel; verify GPU compute
   capability before touching dependency versions. ~40 GB disk is the current project's starting
   point, not a universal minimum.

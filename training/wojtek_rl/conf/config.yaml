@@ -10,6 +10,19 @@ smoke: false # tiny CPU-sized run for a pipeline check
 restore: null # checkpoint dir to warm-start from
 domain_rand: true
 
+# Per-field DR taxonomy (randomize.py). Each block individually toggled;
+# all `enable: false` (the default) reproduces the original 5-field DR
+# (floor friction, base/link mass, single gain/kd scale) bitwise.
+dr:
+  com_offset: { enable: false, xy: 0.02, z: 0.01 } # body_ipos on root, +-m
+  joint_gains: { enable: false, gain_pct: 0.2, kd_pct: 0.2 } # per-joint, else single scalar
+  dof: # multiplicative ranges
+    enable: false
+    damping: [0.9, 1.1]
+    armature: [0.9, 1.1]
+    frictionloss: [0.9, 1.1]
+  foot_friction: { enable: false, range: [0.8, 1.2] } # per-foot-geom, multiplicative
+
 wandb:
   enable: true
   project: fbb-locomotion

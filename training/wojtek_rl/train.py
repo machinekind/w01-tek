@@ -135,7 +135,10 @@ def main(cfg: DictConfig) -> None:
         ppo_networks.make_ppo_networks, **network_factory_cfg
     )
     if cfg.domain_rand:
-        training_params["randomization_fn"] = make_domain_randomize(env.mj_model)
+        dr_cfg = OmegaConf.to_container(cfg.dr, resolve=True)
+        training_params["randomization_fn"] = make_domain_randomize(
+            env.mj_model, dr_cfg
+        )
 
     wb = None
     if cfg.wandb.enable:

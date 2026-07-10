@@ -74,17 +74,10 @@ def power_percentiles(actuator_force, joint_vel) -> dict:
     }
 
 
-# Documented foot-force PROXY: this env's rollouts have no direct
-# ground-reaction-force read (no contact-force sensor is defined in
-# build_model.py; the battery's contact/slip metrics use the geom-height
-# heuristic in base.py._foot_contact instead). The base carries a real IMU
-# accelerometer (`linear-acceleration` sensor, base.py._sensor_adr) though,
-# and hard footfalls show up as vertical inertial spikes at the base: the
-# peak baseline-subtracted |a_z| (baseline = standing 1g) scaled by total
-# robot mass (F = m*a) is a first-order, DIRECTIONALLY-correct stand-in for
-# peak impact loading -- it is NOT a calibrated ground-reaction-force
-# measurement (it captures base-frame inertial spikes, not the force at the
-# foot itself, and ignores the leg's own inertia).
+# Foot-force proxy. The env has no ground-reaction-force sensor, so this uses
+# the base IMU: peak baseline-subtracted vertical acceleration times total
+# mass (F = m*a). It tracks impact loading in relative terms; it is not a
+# calibrated force at the foot.
 def foot_force_proxy(base_accel_z, total_mass: float, gravity: float = 9.81) -> dict:
     """Peak proxy force from base vertical-acceleration spikes. See the
     module-level note above for what this is (and isn't) measuring."""

@@ -9,6 +9,9 @@ dependencies = [
     "jax==0.9.2; sys_platform == 'darwin'",
     "mujoco>=3.2.0",
     "mujoco-mjx>=3.2.0",
+    # mujoco-mjx 3.10.0 vendors MJWarp and requires exactly this warp-lang.
+    # 1.14 removed warp._src.jax_experimental and breaks put_model(impl="warp").
+    "warp-lang==1.13.0",
     "brax>=0.12.1",
     "playground>=0.0.4",
     "ml-collections>=0.1.1",

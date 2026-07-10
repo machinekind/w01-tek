@@ -11,6 +11,7 @@ case "${1:-}" in
   smoke) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.train smoke=true wandb.enable=false "$@" ;;
   eval)  shift; MUJOCO_GL="${MUJOCO_GL:-egl}" "$PY" -m wojtek_rl.eval "$@" ;;
   battery) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.battery "$@" ;;
+  report) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.report "$@" ;;
   export) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.export_policy "$@" ;;
   app)   shift; MUJOCO_GL="${MUJOCO_GL:-egl}" "$PY" -m demo.app "$@" ;;
   test)  shift; "$PY" -m pytest tests -q "$@" ;;

@@ -45,10 +45,14 @@ def check_static() -> bool:
     return ok
 
 
-def _bench(mjx, jax, jp, mjx_model, qpos0, nenv, nsteps) -> float:
-    def init(_):
-        d = mjx.make_data(mjx_model)
-        return d.replace(qpos=jp.array(qpos0))
+def _bench(mjx, jax, jp, mjx_model, qpos0, nenv, nsteps, init_data=None) -> float:
+    def default_init(_):
+        return mjx.make_data(mjx_model)
+
+    make = init_data or default_init
+
+    def init(i):
+        return make(i).replace(qpos=jp.array(qpos0))
 
     data = jax.vmap(init)(jp.arange(nenv))
     step = jax.vmap(lambda d: mjx.step(mjx_model, d))
@@ -68,16 +72,23 @@ def _bench(mjx, jax, jp, mjx_model, qpos0, nenv, nsteps) -> float:
     return nenv * nsteps / dt
 
 
-def check_gpu(nenv: int, nsteps: int) -> bool:
+def check_gpu(nenv: int, nsteps: int, backend: str = "jax") -> bool:
     import jax
     import jax.numpy as jp
     from mujoco import mjx
+
     from mujoco_playground import registry
 
+    from wojtek_rl.base import make_data_fn
+
     m = mujoco.MjModel.from_xml_path(str(paths.SCENE_XML))
-    wojtek_model = mjx.put_model(m, impl="jax")
-    wojtek_rate = _bench(mjx, jax, jp, wojtek_model, m.key("home").qpos, nenv, nsteps)
-    print(f"wojtek : {wojtek_rate:,.0f} steps/s ({nenv} envs)")
+    wojtek_model = mjx.put_model(m, impl=backend)
+    data_fn = make_data_fn(backend, m, wojtek_model, 32, 320, nenv)
+    wojtek_rate = _bench(
+        mjx, jax, jp, wojtek_model, m.key("home").qpos, nenv, nsteps,
+        init_data=lambda _: data_fn(),
+    )
+    print(f"wojtek ({backend}): {wojtek_rate:,.0f} steps/s ({nenv} envs)")
 
     go1_env = registry.load("Go1JoystickFlatTerrain", config_overrides={"impl": "jax"})
     g = go1_env.mj_model
@@ -92,6 +103,7 @@ def check_gpu(nenv: int, nsteps: int) -> bool:
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--gpu", action="store_true")
+    p.add_argument("--backend", choices=["jax", "warp", "auto"], default="jax")
     p.add_argument("--nenv", type=int, default=4096)
     p.add_argument("--nsteps", type=int, default=200)
     args = p.parse_args()
@@ -107,7 +119,9 @@ def main() -> None:
         _bench(mjx, jax, jp, mjx.put_model(m, impl="jax"), m.key("home").qpos, 2, 5)
         print("mjx: compiles and steps")
     if ok and args.gpu:
-        ok = check_gpu(args.nenv, args.nsteps)
+        from wojtek_rl.base import resolve_backend
+
+        ok = check_gpu(args.nenv, args.nsteps, resolve_backend(args.backend))
     print("GATE PASS" if ok else "GATE FAIL")
     sys.exit(0 if ok else 1)
 

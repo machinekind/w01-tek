@@ -23,6 +23,12 @@ def default_config() -> config_dict.ConfigDict:
     return config_dict.create(
         ctrl_dt=0.02,
         sim_dt=0.004,
+        # Physics backend. auto picks warp on a CUDA host and jax elsewhere.
+        # naconmax_per_env scales with the training batch; njmax is per
+        # world. See docs/plans/mjwarp-phase0-report.md section 4.
+        sim=config_dict.create(
+            backend="auto", naconmax_per_env=32, njmax=320, num_envs=1
+        ),
         episode_length=250,  # 5 s: stand, jump, land, recover
         action_scale=0.5,
         jump_at_steps=(50, 120),  # command arrives 1.0-2.4 s in
@@ -122,7 +128,7 @@ class WojtekJump(WojtekEnv):
         qpos = self._home_qpos.at[self._qadr].add(
             jax.random.uniform(r_pos, (12,), minval=-0.05, maxval=0.05)
         )
-        data = mjx.make_data(self._mjx_model)
+        data = self._make_data()
         data = data.replace(
             qpos=qpos, qvel=jp.zeros(self._mj_model.nv), ctrl=self._home_ctrl
         )

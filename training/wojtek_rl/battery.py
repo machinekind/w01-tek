@@ -43,57 +43,9 @@ def diag_corr(contacts):
     return 0.5 * (corr(c[:, 0], c[:, 2]) + corr(c[:, 1], c[:, 3]))
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--run", required=True)
-    ap.add_argument("--out", default=None)
-    args = ap.parse_args()
-
-    from wojtek_rl.build_model import FOOT_RADIUS
-    from wojtek_rl.policy_io import load_policy
-    from wojtek_rl.registry import make_env
-    from wojtek_rl.train import build_ppo_params
-
-    run = json.loads((Path(args.run) / "run.json").read_text())
-    # Measurement env: no random pushes (they contaminate vibration/slip/
-    # stand metrics; robustness is trained, not measured here).
-    env_cfg = dict(run.get("env_config") or {})
-    env_cfg["push"] = {**env_cfg.get("push", {}), "enable": False}
-    env = make_env(run.get("task", "joystick"), env_cfg)
-    ckpt_dir = Path(run["checkpoint_dir"])
-    if not ckpt_dir.exists():
-        ckpt_dir = (Path(args.run) / "checkpoints").resolve()
-    ckpt = max(
-        (p for p in ckpt_dir.iterdir() if p.name.isdigit()),
-        key=lambda p: int(p.name),
-    )
-    policy = load_policy(ckpt, env, build_ppo_params([], smoke=False))
-    reset, step, inf = jax.jit(env.reset), jax.jit(env.step), jax.jit(policy)
-
-    def rollout(cmd_at, n, seed=0):
-        rng = jax.random.PRNGKey(seed)
-        state = reset(rng)
-        rec = {"cmd_vx": [], "vx": [], "cmd_h": [], "h": [], "qvel": [], "contact": [], "slip": []}
-        fell_at = None
-        for i in range(n):
-            state.info["command"] = cmd_at(i)
-            rng, k = jax.random.split(rng)
-            act, _ = inf(state.obs, k)
-            state = step(state, act)
-            if float(state.done) and fell_at is None:
-                fell_at = i
-                break
-            d = state.data
-            c = np.asarray(d.geom_xpos)[env._foot_geom_ids][:, 2] < FOOT_RADIUS + 0.005
-            fv = np.asarray(d.sensordata)[np.asarray(env._foot_linvel_adr)]
-            rec["cmd_vx"].append(float(cmd_at(i)[0]))
-            rec["vx"].append(float(d.qvel[0]))
-            rec["cmd_h"].append(float(cmd_at(i)[3]))
-            rec["h"].append(float(d.qpos[2]))
-            rec["qvel"].append(np.asarray(d.qvel[env._vadr]))
-            rec["contact"].append(c)
-            rec["slip"].append(float((np.square(fv[:, :2]).sum(-1) * c).sum()))
-        return {k: np.array(v) for k, v in rec.items()}, fell_at
+def battery_scenarios():
+    """name -> (cmd_at(i), n_steps). Split out so report.py can reuse the
+    exact same battery scenarios for its extra metrics."""
 
     def ramp(h):
         def cmd(i):
@@ -101,7 +53,7 @@ def main():
             return jp.array([vx, 0.0, 0.0, h])
         return cmd, 750
 
-    scenarios = {
+    return {
         "ramp_mid": ramp(0.13),
         "ramp_low": ramp(0.10),
         "ramp_tall": ramp(0.165),
@@ -117,48 +69,157 @@ def main():
         ),
     }
 
-    results = {"run": run["run_name"], "checkpoint": ckpt.name}
-    for name, (cmd_at, n) in scenarios.items():
-        rec, fell_at = rollout(cmd_at, n)
-        r = {"fell_at": fell_at, "steps": len(rec["vx"])}
-        if len(rec["vx"]) > 50:
-            moving = rec["cmd_vx"] > 0.05
-            # velocity error by command band
-            for lo, hi, band in [(0.05, 0.3, "vlow"), (0.3, 0.6, "vmid"), (0.6, 1.01, "vhigh")]:
-                m = (rec["cmd_vx"] >= lo) & (rec["cmd_vx"] < hi)
-                if m.sum() > 10:
-                    r[f"vel_err_{band}"] = round(float((rec["cmd_vx"][m] - rec["vx"][m]).mean()), 3)
-            r["height_err_mean"] = round(float(np.abs(rec["cmd_h"] - rec["h"]).mean()), 4)
-            r["vibration"] = round(vibration_index(rec["qvel"], env.dt), 3)
-            # absolute motion scale: the vibration ratio is meaningless when
-            # nearly motionless (tiny numerator over tiny denominator)
-            r["qvel_rms"] = round(float(np.sqrt((rec["qvel"] ** 2).mean())), 3)
-            r["slip_mean"] = round(float(rec["slip"].mean()), 4)
-            if name == "walk_trot":
-                r["diag_corr_walk"] = round(diag_corr(rec["contact"][100:300]), 2)
-                r["diag_corr_trot"] = round(diag_corr(rec["contact"][350:]), 2)
-            if name == "stand_heights":
-                # Transitions are intentional motion; measure stillness only
-                # in hold windows (60+ steps after each height switch) and
-                # report settling separately. (The old all-steps qvel_rms
-                # sent two iterations chasing a phantom tremble.)
-                hold = np.zeros(len(rec["h"]), dtype=bool)
-                for s0 in (0, 150, 300):
-                    hold[s0 + 60 : s0 + 150] = True
-                hold = hold[: len(rec["h"])]
-                r["qvel_rms_hold"] = round(
-                    float(np.sqrt((rec["qvel"][hold] ** 2).mean())), 3
-                )
-                settle = []
-                for s0 in (150, 300):
-                    err = np.abs(rec["h"][s0:s0 + 150] - rec["cmd_h"][s0:s0 + 150])
-                    ok = np.where(err < 0.005)[0]
-                    settle.append(int(ok[0]) if len(ok) else 150)
-                r["settle_steps"] = settle
-            if moving.sum() > 100:
-                r["vel_err_overall"] = round(float((rec["cmd_vx"][moving] - rec["vx"][moving]).mean()), 3)
-        results[name] = r
 
+def load_checkpoint_policy(run_dir: Path):
+    """Load a run's measurement env + latest-checkpoint policy.
+
+    Shared by run_battery and report.py, so "which checkpoint is latest"
+    and "no random pushes while measuring" can't drift between the two.
+    Returns (run, env, ckpt, inf, foot_radius) where inf = jax.jit(policy).
+    """
+    from wojtek_rl.build_model import FOOT_RADIUS
+    from wojtek_rl.policy_io import load_policy
+    from wojtek_rl.registry import make_env
+    from wojtek_rl.train import build_ppo_params
+
+    run = json.loads((run_dir / "run.json").read_text())
+    # Measurement env: no random pushes (they contaminate vibration/slip/
+    # stand metrics; robustness is trained, not measured here).
+    env_cfg = dict(run.get("env_config") or {})
+    env_cfg["push"] = {**env_cfg.get("push", {}), "enable": False}
+    env = make_env(run.get("task", "joystick"), env_cfg)
+    ckpt_dir = Path(run["checkpoint_dir"])
+    if not ckpt_dir.exists():
+        ckpt_dir = (run_dir / "checkpoints").resolve()
+    ckpt = max(
+        (p for p in ckpt_dir.iterdir() if p.name.isdigit()),
+        key=lambda p: int(p.name),
+    )
+    policy = load_policy(ckpt, env, build_ppo_params([], smoke=False))
+    return run, env, ckpt, jax.jit(policy), FOOT_RADIUS
+
+
+def rollout(env, reset, step, inf, cmd_at, n, foot_radius, seed=0):
+    """Roll out `n` steps of `cmd_at` under `inf` in `env`.
+
+    `reset`/`step` are `jax.jit(env.reset)`/`jax.jit(env.step)` -- passed in
+    (rather than jitted here) so callers compile them once and reuse the
+    same jitted callables across every scenario, as the original battery
+    script did.
+
+    Records the signals the battery scenarios need (cmd/state tracking,
+    joint velocity, foot contact/slip) plus two extra per-step signals
+    report.py reduces into torque/power/foot-force metrics
+    (`actuator_force`, `base_accel`) -- harmless here since the battery's
+    own scenario summary below only reads the fields it always has.
+
+    Returns (rec, fell_at, term): `rec` maps signal name -> np.ndarray over
+    the steps taken before any fall; `fell_at` is the step index of
+    termination (None if the scenario completed); `term` is the state at
+    termination ({"height", "gravity_z"}, used to classify the fall
+    reason), or None if it never fell.
+    """
+    rng = jax.random.PRNGKey(seed)
+    state = reset(rng)
+    rec = {
+        "cmd_vx": [], "vx": [], "cmd_h": [], "h": [], "qvel": [],
+        "contact": [], "slip": [], "actuator_force": [], "base_accel": [],
+    }
+    fell_at = None
+    term = None
+    for i in range(n):
+        state.info["command"] = cmd_at(i)
+        rng, k = jax.random.split(rng)
+        act, _ = inf(state.obs, k)
+        state = step(state, act)
+        d = state.data
+        if float(state.done) and fell_at is None:
+            fell_at = i
+            term = {
+                "height": float(d.qpos[2]),
+                "gravity_z": float(env._gravity_body(d)[2]),
+            }
+            break
+        c = np.asarray(d.geom_xpos)[env._foot_geom_ids][:, 2] < foot_radius + 0.005
+        fv = np.asarray(d.sensordata)[np.asarray(env._foot_linvel_adr)]
+        adr = env._sensor_adr["linear-acceleration"]
+        rec["cmd_vx"].append(float(cmd_at(i)[0]))
+        rec["vx"].append(float(d.qvel[0]))
+        rec["cmd_h"].append(float(cmd_at(i)[3]))
+        rec["h"].append(float(d.qpos[2]))
+        rec["qvel"].append(np.asarray(d.qvel[env._vadr]))
+        rec["contact"].append(c)
+        rec["slip"].append(float((np.square(fv[:, :2]).sum(-1) * c).sum()))
+        rec["actuator_force"].append(np.asarray(d.actuator_force))
+        rec["base_accel"].append(np.asarray(d.sensordata[adr : adr + 3]))
+    return {k: np.array(v) for k, v in rec.items()}, fell_at, term
+
+
+def scenario_result(name, rec, fell_at, dt):
+    """One scenario's battery.json entry, computed from its rollout()."""
+    r = {"fell_at": fell_at, "steps": len(rec["vx"])}
+    if len(rec["vx"]) > 50:
+        moving = rec["cmd_vx"] > 0.05
+        # velocity error by command band
+        for lo, hi, band in [(0.05, 0.3, "vlow"), (0.3, 0.6, "vmid"), (0.6, 1.01, "vhigh")]:
+            m = (rec["cmd_vx"] >= lo) & (rec["cmd_vx"] < hi)
+            if m.sum() > 10:
+                r[f"vel_err_{band}"] = round(float((rec["cmd_vx"][m] - rec["vx"][m]).mean()), 3)
+        r["height_err_mean"] = round(float(np.abs(rec["cmd_h"] - rec["h"]).mean()), 4)
+        r["vibration"] = round(vibration_index(rec["qvel"], dt), 3)
+        # absolute motion scale: the vibration ratio is meaningless when
+        # nearly motionless (tiny numerator over tiny denominator)
+        r["qvel_rms"] = round(float(np.sqrt((rec["qvel"] ** 2).mean())), 3)
+        r["slip_mean"] = round(float(rec["slip"].mean()), 4)
+        if name == "walk_trot":
+            r["diag_corr_walk"] = round(diag_corr(rec["contact"][100:300]), 2)
+            r["diag_corr_trot"] = round(diag_corr(rec["contact"][350:]), 2)
+        if name == "stand_heights":
+            # Transitions are intentional motion; measure stillness only
+            # in hold windows (60+ steps after each height switch) and
+            # report settling separately. (The old all-steps qvel_rms
+            # sent two iterations chasing a phantom tremble.)
+            hold = np.zeros(len(rec["h"]), dtype=bool)
+            for s0 in (0, 150, 300):
+                hold[s0 + 60 : s0 + 150] = True
+            hold = hold[: len(rec["h"])]
+            r["qvel_rms_hold"] = round(
+                float(np.sqrt((rec["qvel"][hold] ** 2).mean())), 3
+            )
+            settle = []
+            for s0 in (150, 300):
+                err = np.abs(rec["h"][s0:s0 + 150] - rec["cmd_h"][s0:s0 + 150])
+                ok = np.where(err < 0.005)[0]
+                settle.append(int(ok[0]) if len(ok) else 150)
+            r["settle_steps"] = settle
+        if moving.sum() > 100:
+            r["vel_err_overall"] = round(float((rec["cmd_vx"][moving] - rec["vx"][moving]).mean()), 3)
+    return r
+
+
+def run_battery(run_dir: Path) -> dict:
+    """Run the fixed scenario battery against `run_dir`'s checkpoint.
+
+    Returns the same dict `main()` used to write (minus the `timestamp`
+    stamp main() adds at write time). report.py imports this for the
+    battery table half of eval_report.json.
+    """
+    run, env, ckpt, inf, foot_radius = load_checkpoint_policy(run_dir)
+    reset, step = jax.jit(env.reset), jax.jit(env.step)
+    results = {"run": run["run_name"], "checkpoint": ckpt.name}
+    for name, (cmd_at, n) in battery_scenarios().items():
+        rec, fell_at, _term = rollout(env, reset, step, inf, cmd_at, n, foot_radius)
+        results[name] = scenario_result(name, rec, fell_at, env.dt)
+    return results
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--run", required=True)
+    ap.add_argument("--out", default=None)
+    args = ap.parse_args()
+
+    results = run_battery(Path(args.run))
     out = Path(args.out) if args.out else Path(args.run) / "battery.json"
     stamped = dict(results, timestamp=datetime.now().isoformat(timespec="seconds"))
     out.write_text(json.dumps(stamped, indent=2))

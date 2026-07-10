@@ -92,10 +92,9 @@ class WojtekEnv(mjx_env.MjxEnv):
         self._mj_model = mujoco.MjModel.from_xml_path(str(paths.SCENE_XML))
         self._mj_model.opt.timestep = self.sim_dt
         self._customize_model(self._mj_model)
-        sim_cfg = self._config.get("sim")
-        self._backend = resolve_backend(sim_cfg.backend if sim_cfg else "jax")
-        self._mjx_model = mjx.put_model(self._mj_model, impl=self._backend)
         sim = self._config.sim
+        self._backend = resolve_backend(sim.backend)
+        self._mjx_model = mjx.put_model(self._mj_model, impl=self._backend)
         self._make_data_fn = make_data_fn(
             self._backend,
             self._mj_model,

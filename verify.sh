@@ -124,9 +124,12 @@ t0(){
     if diff <(git show "$QB/scene_mjx.xml") <(git show "$RH/scene_mjx.xml" | sed 's/wojtek_mjx\.xml/four_bar_bot_mjx.xml/; s/model="wojtek_mjx_scene"/model="four_bar_bot_mjx_scene"/') >/dev/null 2>&1; then
       pass "model scene_mjx.xml == baseline (modulo include + model-name rename)"
     else fail "model scene_mjx.xml differs beyond renames" "$(diff <(git show "$QB/scene_mjx.xml") <(git show "$RH/scene_mjx.xml") 2>/dev/null)"; fi
-    # no unexpected large content introduced (renames reuse blobs; only tiny edits are new)
+    # no unexpected large content introduced (renames reuse blobs; only tiny edits
+    # are new). Excludes training/uv.lock: it is a text lockfile that legitimately
+    # changed content (fbb-rl -> wojtek-rl regen), so it is no longer the pure-move
+    # blob it started as -- this guard is for moved model/mesh binaries, not the lock.
     local big
-    big="$(git rev-list --objects HEAD --not "$BASE_REF" 2>/dev/null | awk '{print $1}' \
+    big="$(git rev-list --objects HEAD --not "$BASE_REF" 2>/dev/null | awk '$2 != "training/uv.lock" {print $1}' \
            | git cat-file --batch-check='%(objecttype) %(objectsize) %(objectname)' 2>/dev/null \
            | awk '$1=="blob" && $2>65536 {print}')"
     if [ -z "$big" ]; then pass "no new blob >64KB vs baseline (no content bloat/corruption)"

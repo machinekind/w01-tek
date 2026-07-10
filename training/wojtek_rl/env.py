@@ -95,6 +95,17 @@ def default_config() -> config_dict.ConfigDict:
         # resolved delay is a static n_substeps-or-0 from action_delay
         # above, so this reproduces the legacy path bitwise (no rng spent).
         latency=config_dict.create(enable=False, min_substeps=0, max_substeps=5),
+        # Per-episode encoder-zero offset DR (Workstream C2): models a joint
+        # encoder miscalibrated by a per-joint constant epsilon (q~ = q +
+        # epsilon). Sim keeps true qpos untouched; epsilon only shifts the
+        # OBSERVED joint_pos (added) and the ctrl WRITTEN to physics
+        # (subtracted), reproducing the real driver's PD error t - q~ =
+        # (t - epsilon) - q. See env._obs_catalog / env.step. Never implement
+        # via joint ref/qpos0/body frames -- the four-bar connect
+        # constraints compile their anchor from the reference configuration
+        # and silently re-anchor ~8.5 cm open (documented lesson). Disabled
+        # by default: epsilon = 0, no rng spent, obs/ctrl unchanged.
+        encoder=config_dict.create(enable=False, range=0.02),
         # EMA low-pass on actions before the PD targets (0 = off). Kills the
         # noise-driven standing limit cycle structurally; mirror the same
         # one-liner on the robot when deploying a policy trained with it.
@@ -252,6 +263,17 @@ class WojtekJoystick(WojtekEnv):
             d = jp.clip(d, 0, self.n_substeps)
         else:
             d = self.n_substeps if self._config.action_delay > 0 else 0
+        # Per-episode encoder-zero offset (substeps-style guard: disabled
+        # path spends zero extra rng so the default trajectory is bitwise
+        # unchanged -- see default_config's encoder block docstring).
+        enc = self._config.encoder
+        if enc.enable:
+            rng, r_enc = jax.random.split(rng)  # only consumed when enabled
+            epsilon = jax.random.uniform(
+                r_enc, (12,), minval=-enc.range, maxval=enc.range
+            )
+        else:
+            epsilon = jp.zeros(12)
         info = {
             "rng": rng,
             "command": command,
@@ -265,6 +287,7 @@ class WojtekJoystick(WojtekEnv):
             "step_count": jp.array(0),
             "phase": jp.array(0.0),  # master clock; per-leg via _leg_phases
             "ctrl_delay": jp.int32(d),
+            "encoder_offset": epsilon,
         }
         metrics = {f"reward/{k}": jp.zeros(()) for k in self._config.reward.scales}
         obs = self._get_obs(data, info)
@@ -297,11 +320,15 @@ class WojtekJoystick(WojtekEnv):
             qvel = data.qvel.at[:2].add(jp.where(push_now, push, jp.zeros(2)))
             data = data.replace(qvel=qvel)
 
+        # Encoder-zero offset (Workstream C2): shift the ctrl-frame targets
+        # by -epsilon so the sim PD error (t - epsilon) - q matches the real
+        # driver reading q~ = q + epsilon. epsilon=0 when disabled -> no-op.
+        eps = info["encoder_offset"]
         if self._config.latency.enable:
             # Substeps < ctrl_delay apply last step's targets, >= apply the
             # new ones (see WojtekEnv._step_with_latency).
             data = self._step_with_latency(
-                data, info["motor_targets"], motor_targets, info["ctrl_delay"]
+                data, info["motor_targets"] - eps, motor_targets - eps, info["ctrl_delay"]
             )
         else:
             # Legacy path (byte-identical to pre-latency code): the whole
@@ -314,7 +341,9 @@ class WojtekJoystick(WojtekEnv):
                 info["motor_targets"] if self._config.action_delay > 0
                 else motor_targets
             )
-            data = mjx_env.step(self._mjx_model, data, applied_targets, self.n_substeps)
+            data = mjx_env.step(
+                self._mjx_model, data, applied_targets - eps, self.n_substeps
+            )
 
         contact = self._foot_contact(data)
         contact_filt = contact | info["last_contact"]
@@ -357,6 +386,10 @@ class WojtekJoystick(WojtekEnv):
     # -- observations -------------------------------------------------------
     def _obs_catalog(self, data, info):
         catalog = super()._obs_catalog(data, info)
+        # Encoder-zero offset: the real encoder reads q~ = q + epsilon, so
+        # the OBSERVED joint_pos gets epsilon added (true qpos/model stay
+        # untouched). epsilon=0 when disabled -> no-op.
+        catalog["joint_pos"] = catalog["joint_pos"] + info["encoder_offset"]
         catalog["command"] = info["command"]
         leg_phase = self._leg_phases(info)
         catalog["phase"] = jp.concatenate([jp.cos(leg_phase), jp.sin(leg_phase)])

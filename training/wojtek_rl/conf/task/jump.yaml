@@ -1,0 +1,29 @@
+name: jump
+
+env:
+  # Observations, in order. state = actor (real sensors + the jump
+  # command signal), privileged = critic. Catalog: gyro, gravity,
+  # joint_pos, joint_vel, last_act, jump_signal, linvel, base_height,
+  # actuator_force, foot_contact.
+  obs:
+    state:
+      - gyro
+      - gravity
+      - joint_pos
+      - joint_vel
+      - last_act
+      - jump_signal
+    privileged:
+      - gyro
+      - gravity
+      - joint_pos
+      - joint_vel
+      - last_act
+      - jump_signal
+      - linvel
+      - base_height
+      - actuator_force
+      - foot_contact
+
+ppo:
+  num_timesteps: 150000000

@@ -1,0 +1,168 @@
+"""Shared plumbing for four_bar_bot MJX tasks.
+
+Model loading, actuator address tables and IMU/foot helpers, extracted from
+the joystick env so getup/jump tasks reuse them. Task envs subclass this and
+provide their own config, reset, step, observations and rewards.
+"""
+
+import jax
+import jax.numpy as jp
+import mujoco
+import numpy as np
+from brax import math as brax_math
+from mujoco import mjx
+from mujoco_playground._src import mjx_env
+
+from wojtek_rl import paths
+from wojtek_rl.build_model import FOOT_RADIUS
+
+# Actuator indices of the knee cranks (third joints), paths.LEGS order.
+KNEE_ACTUATORS = (2, 5, 8, 11)
+# The four-bar snaps through its singular branch past this third-joint angle
+# (the foot flips above the trunk). Recovery/jump policies must not command
+# targets on the far branch; crossing it under load can break the linkage.
+KNEE_SINGULARITY = 3.2
+
+
+class WojtekEnv(mjx_env.MjxEnv):
+    def __init__(self, config, config_overrides=None):
+        super().__init__(config, config_overrides)
+        self._mj_model = mujoco.MjModel.from_xml_path(str(paths.SCENE_XML))
+        self._mj_model.opt.timestep = self.sim_dt
+        self._customize_model(self._mj_model)
+        self._mjx_model = mjx.put_model(self._mj_model, impl="jax")
+
+        key = self._mj_model.key("home")
+        self._home_qpos = jp.array(key.qpos)
+        self._home_ctrl = jp.array(key.ctrl)
+
+        m = self._mj_model
+        self._qadr = jp.array(
+            [m.jnt_qposadr[m.actuator_trnid[i, 0]] for i in range(m.nu)]
+        )
+        self._vadr = jp.array(
+            [m.jnt_dofadr[m.actuator_trnid[i, 0]] for i in range(m.nu)]
+        )
+        self._ctrlrange = jp.array(m.actuator_ctrlrange)
+        self._foot_geom_ids = np.array(
+            [m.geom(f"{leg}_foot_sphere").id for leg in paths.LEGS]
+        )
+        self._sensor_adr = {
+            name: m.sensor(name).adr[0]
+            for name in ("orientation", "angular-velocity", "linear-acceleration")
+        }
+        self._foot_linvel_adr = jp.array(
+            [
+                [m.sensor(f"{leg}_foot_linvel").adr[0] + i for i in range(3)]
+                for leg in paths.LEGS
+            ]
+        )
+
+    def _customize_model(self, m: mujoco.MjModel) -> None:
+        """Task-specific tweaks applied before the model is put on device."""
+
+    # -- MjxEnv plumbing -------------------------------------------------
+    @property
+    def xml_path(self) -> str:
+        return str(paths.SCENE_XML)
+
+    @property
+    def action_size(self) -> int:
+        return self._mj_model.nu
+
+    @property
+    def mj_model(self) -> mujoco.MjModel:
+        return self._mj_model
+
+    @property
+    def mjx_model(self) -> mjx.Model:
+        return self._mjx_model
+
+    # -- helpers ----------------------------------------------------------
+    def _quat(self, data):
+        adr = self._sensor_adr["orientation"]
+        return data.sensordata[adr : adr + 4]
+
+    def _gyro(self, data):
+        adr = self._sensor_adr["angular-velocity"]
+        return data.sensordata[adr : adr + 3]
+
+    def _gravity_body(self, data):
+        return brax_math.rotate(
+            jp.array([0.0, 0.0, -1.0]), brax_math.quat_inv(self._quat(data))
+        )
+
+    def _local_linvel(self, data):
+        return brax_math.rotate(data.qvel[:3], brax_math.quat_inv(self._quat(data)))
+
+    def _foot_contact(self, data):
+        z = data.geom_xpos[self._foot_geom_ids][:, 2]
+        return z < FOOT_RADIUS + 0.005
+
+    def _noisy(self, rng, clean, scales):
+        noise = jax.random.uniform(rng, clean.shape, minval=-1.0, maxval=1.0)
+        return clean + noise * scales
+
+    def _obs_catalog(self, data, info):
+        """name -> observation vector. Task envs extend with their signals."""
+        return {
+            "gyro": self._gyro(data),
+            "gravity": self._gravity_body(data),
+            "joint_pos": data.qpos[self._qadr] - self._home_ctrl,
+            "joint_vel": data.qvel[self._vadr],
+            "last_act": info["last_act"],
+            # Sim-only signals, meant for the privileged critic list:
+            "linvel": self._local_linvel(data),
+            "base_height": data.qpos[2:3],
+            "actuator_force": data.actuator_force,
+            "foot_contact": self._foot_contact(data).astype(jp.float32),
+        }
+
+    @property
+    def actor_obs_names(self):
+        """Resolved actor observation list: the task's ordered obs.state,
+        filtered by the obs.include whitelist when one is set (sensor-suite
+        presets name what the robot HAS; task signals it doesn't list are
+        dropped too, so presets must include them explicitly)."""
+        include = self._config.obs.get("include", ())
+        names = list(self._config.obs.state)
+        if include:
+            names = [n for n in names if n in include]
+        if not names:
+            raise ValueError(
+                f"obs.include {list(include)} leaves no actor observations "
+                f"(task obs.state: {list(self._config.obs.state)})"
+            )
+        return names
+
+    def _build_obs(self, data, info, rng=None):
+        """Observations declared by the env config.
+
+        `obs.state` (actor: sensors the real robot exposes) and
+        `obs.privileged` (critic: anything the sim knows) are ordered lists
+        of catalog names. Actor noise scales come from `obs_noise` by
+        component name (no entry = noise-free).
+        """
+        catalog = self._obs_catalog(data, info)
+
+        def gather(names):
+            missing = [n for n in names if n not in catalog]
+            if missing:
+                raise KeyError(
+                    f"unknown obs component(s) {missing}; available: "
+                    f"{sorted(catalog)}"
+                )
+            return jp.concatenate([catalog[n] for n in names])
+
+        state_names = self.actor_obs_names
+        state = gather(state_names)
+        if rng is not None:
+            noise = self._config.obs_noise
+            scales = jp.concatenate(
+                [jp.full(catalog[n].shape, noise.get(n, 0.0)) for n in state_names]
+            )
+            state = self._noisy(rng, state, scales)
+        return {
+            "state": state,
+            "privileged_state": gather(self._config.obs.privileged),
+        }

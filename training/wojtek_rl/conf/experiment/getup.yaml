@@ -1,0 +1,6 @@
+# @package _global_
+# Safe fall recovery. Usage: ./run.sh train +experiment=getup
+defaults:
+  - override /task: getup
+
+run_name: fbb_getup_v1

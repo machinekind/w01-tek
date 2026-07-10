@@ -1,0 +1,61 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="wojtek_body">
+  <xacro:include filename="$(find wojtek_description)/urdf/inertia.urdf.xacro" />
+  <xacro:include filename="$(find wojtek_description)/urdf/leg.urdf.xacro" />
+
+  <!-- Mechanical assembly shared by every bringup of this robot: material,
+       base_link/body_link/imu_link, and the four legs. ros2_control/Gazebo
+       blocks are deliberately not part of this macro - callers add their
+       own on top (see wojtek.urdf.xacro for the stock example). -->
+  <xacro:macro name="wojtek_body">
+    <material name="grey">
+      <color rgba="0.5 0.5 0.5 1" />
+    </material>
+
+    <link name="base_link" />
+
+    <link name="body_link">
+      <visual>
+        <origin rpy="0 0 ${pi}" xyz="0.0 0 0" />
+        <geometry name="base_link">
+          <mesh filename="package://wojtek_description/meshes/base_link.dae" />
+        </geometry>
+
+        <xacro:grey_material />
+      </visual>
+      <collision>
+        <origin rpy="0 0 ${pi}" xyz="0.0 0 0" />
+        <geometry name="base_link">
+          <mesh filename="package://wojtek_description/meshes/base_link.dae" />
+        </geometry>
+      </collision>
+      <xacro:box_inertia m="50.0" w="0.59" h="0.225" d="0.1" xyz="0.01 0 0.06" />
+    </link>
+
+
+    <joint name="body_to_base_joint" type="fixed">
+      <parent link="base_link" />
+      <child link="body_link" />
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+    </joint>
+
+    <link name="imu_link" />
+    <joint name="imu_joint" type="fixed">
+      <parent link="base_link" />
+      <child link="imu_link" />
+      <origin xyz="0.0 0.0 0.1" rpy=" 0.0 ${pi} 0.0" />
+    </joint>
+
+    <xacro:leg prefix="rear_left" xyz="-0.131 0.06 0.06" rpy="0 0 ${pi}" first_joint_offset="${pi}"
+      third_joint_gear_correction_dir="-1.0" />
+    <xacro:leg prefix="rear_right" xyz="-0.131 -0.06 0.06" rpy="0 0 ${pi}" first_joint_offset="0.0"
+      third_joint_gear_correction_dir="1.0" />
+
+
+    <xacro:leg prefix="front_right" xyz="0.131 -0.06 0.06" rpy="0 0 0" first_joint_offset="${pi}"
+      third_joint_gear_correction_dir="-1.0" />
+    <xacro:leg prefix="front_left" xyz="0.131 0.06 0.06" rpy="0 0 0" first_joint_offset="0.0"
+      third_joint_gear_correction_dir="1.0"
+    />
+  </xacro:macro>
+</robot>

@@ -1,0 +1,10 @@
+<library path="bmi160_serial_hardware_interface">
+  <class name="bmi160_serial_hardware_interface/BMI160SerialHardwareInterface"
+         type="bmi160_serial_hardware_interface::BMI160SerialHardwareInterface"
+         base_class_type="hardware_interface::SensorInterface">
+    <description>
+      ros2_control hardware interface for a bare BMI160 (accel+gyro, no
+      magnetometer) IMU streamed over serial.
+    </description>
+  </class>
+</library>

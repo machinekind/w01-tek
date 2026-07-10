@@ -1,0 +1,19 @@
+# @package _global_
+# Walk + run in one joystick policy: extended command range and a faster
+# trot clock. Usage: ./run.sh train +experiment=run
+defaults:
+  - override /task: joystick
+
+task:
+  env:
+    command:
+      vx: [-0.8, 1.8]
+      vy: [-0.5, 0.5]
+      wz: [-1.0, 1.0]
+    gait:
+      freq: [2.0, 3.5]
+      swing_height: 0.04
+    push:
+      vel: 0.5
+
+run_name: fbb_run_v1

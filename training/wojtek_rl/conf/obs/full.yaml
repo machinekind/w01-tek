@@ -1,0 +1,13 @@
+# @package task.env.obs
+# Full sensor suite, explicitly: IMU (gyro + gravity/orientation), joint
+# encoders (position + velocity), the policy's own action history, and the
+# task command signals.
+include:
+  - gyro
+  - gravity
+  - joint_pos
+  - joint_vel
+  - last_act
+  - command # joystick
+  - phase # joystick
+  - jump_signal # jump

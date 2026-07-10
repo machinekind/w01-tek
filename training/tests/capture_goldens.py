@@ -38,13 +38,15 @@ def capture_latency_golden():
     reset = jax.jit(env.reset)
     step = jax.jit(env.step)
 
-    key = jax.random.PRNGKey(LATENCY_SEED)
-    key, reset_key, action_key = jax.random.split(key, 3)
+    # test_latency.py replays with reset(PRNGKey(GOLDEN["seed"])), so the
+    # capture must reset with that exact key; only the actions come from a
+    # derived key (they are stored verbatim in the npz).
+    _, _, action_key = jax.random.split(jax.random.PRNGKey(LATENCY_SEED), 3)
     actions = jax.random.uniform(
         action_key, (LATENCY_STEPS, env.action_size), minval=-1.0, maxval=1.0
     )
 
-    state = reset(reset_key)
+    state = reset(jax.random.PRNGKey(LATENCY_SEED))
     qpos, qvel = [], []
     for i in range(LATENCY_STEPS):
         state = step(state, actions[i])

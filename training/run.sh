@@ -12,9 +12,8 @@ case "${1:-}" in
   eval)  shift; MUJOCO_GL="${MUJOCO_GL:-egl}" "$PY" -m wojtek_rl.eval "$@" ;;
   battery) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.battery "$@" ;;
   report) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.report "$@" ;;
-  spike-warp) shift; "$PY" -m wojtek_rl.spike_warp "$@" ;;
   export) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.export_policy "$@" ;;
   app)   shift; MUJOCO_GL="${MUJOCO_GL:-egl}" "$PY" -m demo.app "$@" ;;
   test)  shift; "$PY" -m pytest tests -q "$@" ;;
-  *) echo "usage: run.sh {build|pose|check|train|smoke|eval|spike-warp|app|test} [args]"; exit 1 ;;
+  *) echo "usage: run.sh {build|pose|check|train|smoke|eval|app|test} [args]"; exit 1 ;;
 esac

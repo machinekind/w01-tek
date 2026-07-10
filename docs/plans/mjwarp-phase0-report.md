@@ -5,7 +5,7 @@ smoke remains open. It waits for a cluster node and does not block G0.
 **Date started:** 2026-07-10
 **Companion to:** `docs/plans/2026-07-10-mjwarp-migration.md` (gate **G0**).
 
-The spike script is `training/wojtek_rl/spike_warp.py`. Sections below marked _PENDING (GPU)_ get filled when it runs.
+The spike script lived at `training/wojtek_rl/spike_warp.py`. It was temporary by design and was deleted from this branch once Phase 0 closed; its output is preserved in `phase0-artifacts/`.
 
 ---
 

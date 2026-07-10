@@ -1,0 +1,18 @@
+# MJX + Brax PPO training project. Repo-wide patterns are in ../.gitignore.
+
+# Caches
+.jax_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Generated / large artifacts
+/runs/
+/videos/
+/pose_previews/
+/outputs/
+
+# Trained policies — published to HuggingFace, not tracked in git
+/policies/
+
+# Experiment tracking
+/wandb/

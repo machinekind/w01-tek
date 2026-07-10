@@ -1,0 +1,9 @@
+<library path="md80_hardware_interface">
+  <class name="md80_hardware_interface/MD80HardwareInterface"
+         type="md80_hardware_interface::MD80HardwareInterface"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      Hardware interface for MD80 BLDC motor
+    </description>
+  </class>
+</library>

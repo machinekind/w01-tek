@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<robot name="quadruped" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:include filename="$(find wojtek_description)/urdf/body.urdf.xacro" />
+  <xacro:include filename="$(find wojtek_description)/urdf/ros2_control.urdf.xacro" />
+  <xacro:include filename="$(find wojtek_description)/urdf/gazebo.urdf.xacro" />
+
+  <mujoco>
+    <compiler meshdir="$(find wojtek_description)/meshes" balanceinertia="true"
+      discardvisual="false" />
+  </mujoco>
+  <xacro:arg name="use_hardware" default="True" />
+  <xacro:arg name="use_sim" default="False" />
+
+  <xacro:wojtek_body />
+
+  <xacro:quadruperd_ros2_control use_hardware="$(arg use_hardware)" use_sim="$(arg use_sim)" />
+
+  <!-- <xacro:imu_ros2_control/> -->
+</robot>

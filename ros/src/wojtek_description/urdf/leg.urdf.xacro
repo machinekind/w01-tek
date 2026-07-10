@@ -1,0 +1,230 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="quadruped_robot">
+  <xacro:include filename="$(find wojtek_description)/urdf/inertia.urdf.xacro" />
+
+  <!-- Macro to define a leg -->
+  <xacro:macro name="leg"
+    params="prefix xyz rpy first_x:=0.1 first_joint_offset third_joint_gear_correction_dir ">
+
+    <xacro:property name="zero_angle_offset" value="0.17692153346630435" />
+    <!-- Define the thigh -->
+
+    <link name="${prefix}_leg_base_link" />
+
+    <!-- Define the joints -->
+    <joint
+      name="${prefix}_base_to_leg_joint" type="fixed">
+      <parent link="base_link" />
+      <child link="${prefix}_leg_base_link" />
+      <origin xyz="${xyz}" rpy="${rpy}" />
+    </joint>
+
+
+    <xacro:first_link
+      name="${prefix}_first_link" />
+
+    <joint
+      name="${prefix}_leg_base_to_first_link_joint" type="fixed">
+      <parent link="${prefix}_leg_base_link" />
+      <child link="${prefix}_first_link" />
+      <origin xyz="0.0 0.0 0.0" rpy="${-pi/2.0} 0.0 0.0" />
+    </joint>
+
+    <xacro:second_link
+      name="${prefix}_second_link" />
+
+
+    <joint name="${prefix}_first_joint"
+      type="revolute">
+      <parent link="${prefix}_first_link" />
+      <child link="${prefix}_second_link" />
+      <origin xyz="0.031 0.0 0.0" rpy="${first_joint_offset} 0.0 0.0" />
+      <axis xyz="1 0 0" />
+      <limit effort="100.0" lower="-3.1416" upper="3.1416" velocity="10.0" />
+      <dynamics damping="0.1" friction="0.1" />
+    </joint>
+
+    <xacro:third_link
+      name="${prefix}_third_link" />
+
+    <xacro:property name="gear_ratio" value="0.0" />
+    <!-- <xacro:property name="second_joint_gear_correction" value="${third_joint_gear_correction_dir*0.2793}" />
+    <xacro:property name="third_joint_gear_correction" value="${-1.117+pi}" /> -->
+
+    <xacro:property name="second_joint_gear_correction" value="${third_joint_gear_correction_dir*0.2793}" />
+    <xacro:property name="third_joint_gear_correction" value="${-1.117+pi}" />
+
+    <joint name="${prefix}_second_joint"
+      type="revolute">
+      <parent link="${prefix}_second_link" />
+      <child link="${prefix}_third_link" />
+      <origin xyz="0.064 0.0 0.023"
+        rpy="0.0 0.0 ${pi + second_joint_gear_correction} " />
+      <axis xyz="0 0 1" />
+      <limit effort="100.0" lower="1.57" upper="4.71" velocity="10.0" />
+      <dynamics damping="0.1" friction="0.1" />
+    </joint>
+
+    <xacro:fourth_link
+      name="${prefix}_fourth_link" />
+
+
+    <joint name="${prefix}_third_joint"
+      type="revolute">
+      <parent link="${prefix}_third_link" />
+      <child link="${prefix}_fourth_link" />
+      <origin xyz="0.0 0.0 0.0555"
+        rpy="0.0 0.0 ${third_joint_gear_correction_dir*third_joint_gear_correction}" />
+      <axis xyz="0 0 1" />
+      <limit effort="100.0" lower="0.425" upper="5.8" velocity="10.0" />
+      <dynamics damping="0.1" friction="0.1" />
+    </joint>
+
+    <xacro:fifth_link
+      name="${prefix}_fifth_link" />
+
+
+    <joint name="${prefix}_fourth_joint"
+      type="revolute">
+      <parent link="${prefix}_fourth_link" />
+      <child link="${prefix}_fifth_link" />
+      <origin xyz="0.125 0.0 0.0255" rpy="0.0 0.0 ${pi}" />
+      <axis xyz="0 0 -1" />
+      <limit effort="  2.0" lower="-0.8" upper="-2.9" velocity="10.0" />
+      <dynamics damping="0.1" friction="0.1" />
+    </joint>
+
+    <xacro:sixth_link
+      name="${prefix}_sixth_link" />
+
+
+    <joint name="${prefix}_fifth_joint"
+      type="revolute">
+      <parent link="${prefix}_third_link" />
+      <child link="${prefix}_sixth_link" />
+      <origin xyz="-0.125 0.0 0.058" rpy="0.0 0.0 0.0" />
+      <axis xyz="0 0 -1" />
+      <limit effort="100.0" lower="-3.14" upper="3.14" velocity="10.0" />
+      <dynamics damping="0.1" friction="0.1" />
+    </joint>
+
+
+
+  </xacro:macro>
+
+
+  <xacro:macro name="first_link" params="name">
+    <link name="${name}">
+      <visual>
+        <origin rpy="0 0 0" xyz="0.0 0 0.0" />
+        <geometry>
+          <mesh filename="package://wojtek_description/meshes/first_link.dae" />
+        </geometry>
+        <xacro:grey_material />
+      </visual>
+      <collision name="${name}_collision">
+        <origin rpy="0 0 0" xyz="0.0 0 0.0" />
+        <geometry>
+          <mesh filename="package://wojtek_description/meshes/first_link.dae" />
+        </geometry>
+      </collision>
+      <xacro:cylinder_inertia m="0.6" r="0.05" h="0.04" />
+    </link>
+  </xacro:macro>
+
+  <xacro:macro name="second_link" params="name">
+    <link name="${name}">
+      <visual>
+        <origin rpy="0 0 0" xyz="0.0 0 0.0" />
+        <geometry>
+          <mesh filename="package://wojtek_description/meshes/second_link.dae" />
+        </geometry>
+        <xacro:grey_material />
+      </visual>
+      <collision name="${name}_collision">
+        <origin rpy="0 0 0" xyz="0.0 0 0.0" />
+        <geometry>
+          <mesh filename="package://wojtek_description/meshes/second_link.dae" />
+        </geometry>
+      </collision>
+      <xacro:cylinder_inertia m="0.6" r="0.05" h="0.04" xyz="0.055 0  0" />
+    </link>
+  </xacro:macro>
+
+  <xacro:macro name="third_link" params="name">
+    <link name="${name}">
+      <visual>
+        <origin rpy="0 0 0" xyz="0.0 0 0.0" />
+        <geometry>
+          <mesh filename="package://wojtek_description/meshes/third_link.dae" />
+        </geometry>
+        <xacro:grey_material />
+      </visual>
+      <collision name="${name}_collision">
+        <origin rpy="0 0 0" xyz="0.0 0 0.0" />
+        <geometry>
+          <mesh filename="package://wojtek_description/meshes/third_link.dae" />
+        </geometry>
+      </collision>
+      <xacro:cylinder_inertia m="0.6" r="0.05" h="0.04" xyz="0.0 0  0.025" />
+    </link>
+  </xacro:macro>
+
+  <xacro:macro name="fourth_link" params="name">
+    <link name="${name}">
+      <visual>
+        <origin rpy="0 0 0" xyz="0.0 0 0.0" />
+        <geometry>
+          <mesh filename="package://wojtek_description/meshes/fourth_link.dae" />
+        </geometry>
+        <xacro:grey_material />
+      </visual>
+      <collision name="${name}_collision">
+        <origin rpy="0 0 0" xyz="0.0 0 0.0" />
+        <geometry>
+          <mesh filename="package://wojtek_description/meshes/fourth_link.dae" />
+        </geometry>
+      </collision>
+      <xacro:box_inertia m="0.04" w="0.175" h="0.025" d="0.0175" xyz="0.0625 0.0  0.015" />
+    </link>
+  </xacro:macro>
+
+  <xacro:macro name="fifth_link" params="name">
+    <link name="${name}">
+      <visual>
+        <origin rpy="0 0 0" xyz="0.0 0 0.0" />
+        <geometry>
+          <mesh filename="package://wojtek_description/meshes/fifth_link.dae" />
+        </geometry>
+        <xacro:grey_material />
+      </visual>
+      <collision name="${name}_collision">
+        <origin rpy="0 0 0" xyz="0.0 0 0.0" />
+        <geometry>
+          <mesh filename="package://wojtek_description/meshes/fifth_link.dae" />
+        </geometry>
+      </collision>
+      <xacro:box_inertia m="0.05" w="0.25" h="0.04" d="0.0175" xyz="0.105 0  0.0" />
+    </link>
+  </xacro:macro>
+
+  <xacro:macro name="sixth_link" params="name">
+    <link name="${name}">
+      <visual>
+        <origin rpy="0 0 0" xyz="0.0 0 0.0" />
+        <geometry>
+          <mesh filename="package://wojtek_description/meshes/sixth_link.dae" />
+        </geometry>
+        <xacro:grey_material />
+      </visual>
+      <collision name="${name}_collision">
+        <origin rpy="0 0 0" xyz="0.0 0 0.0" />
+        <geometry>
+          <mesh filename="package://wojtek_description/meshes/sixth_link.dae" />
+        </geometry>
+      </collision>
+      <xacro:box_inertia m="0.05" w="0.25" h="0.04" d="0.0175" xyz="0.105 0  0.0" />
+    </link>
+  </xacro:macro>
+
+</robot>

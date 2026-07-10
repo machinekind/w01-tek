@@ -1,0 +1,26 @@
+defaults:
+  - task: joystick
+  - network: default
+  - obs: full # sensor-suite preset: full / no_imu (subtracts from obs.state)
+  - _self_
+
+run_name: null # default: <task>_<timestamp>
+seed: 0
+smoke: false # tiny CPU-sized run for a pipeline check
+restore: null # checkpoint dir to warm-start from
+domain_rand: true
+
+wandb:
+  enable: true
+  project: fbb-locomotion
+
+# Free-form overrides applied onto the tuned playground Go1 PPO config,
+# after the task's own ppo block (so CLI ppo.foo=... wins).
+ppo: {}
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  job:
+    chdir: false

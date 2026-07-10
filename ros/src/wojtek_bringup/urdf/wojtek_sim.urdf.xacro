@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<!--
+  Visualization/sim URDF: the same mechanics as wojtek_description's
+  wojtek.urdf.xacro (base + imu + 4 legs) but without the ros2_control
+  and Gazebo blocks. Physics comes from the MuJoCo sim node; this model
+  only feeds robot_state_publisher / RViz.
+-->
+<robot name="quadruped" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:include filename="$(find wojtek_description)/urdf/body.urdf.xacro" />
+
+  <xacro:wojtek_body />
+</robot>

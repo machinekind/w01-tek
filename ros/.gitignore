@@ -1,0 +1,6 @@
+# ROS 2 colcon workspace. Repo-wide patterns are in ../.gitignore.
+
+# colcon build output
+/build/
+/install/
+/log/

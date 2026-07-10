@@ -1,0 +1,9 @@
+<library path="bmx160_serial_hardware_interface">
+  <class name="bmx160_serial_hardware_interface/BMX160SerialHardwareInterface"
+         type="bmx160_serial_hardware_interface::BMX160SerialHardwareInterface"
+         base_class_type="hardware_interface::SensorInterface">
+    <description>
+      ros2_control hardware interface.
+    </description>
+  </class>
+</library>

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<CycloneDDS xmlns="https://cdds.io/config" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+    <Domain Id="any">
+        <General>
+            <!-- No explicit NetworkInterface: let CycloneDDS auto-select one.
+                 A hardcoded name (e.g. "eth0") breaks every time this runs on
+                 a different machine - this dev laptop has enp67s0/wlp0s20f3,
+                 the robot will have its own name again. Auto-select works
+                 everywhere without per-machine edits. -->
+        </General>
+    </Domain>
+</CycloneDDS>

@@ -1,0 +1,28 @@
+name: joystick
+
+env:
+  # Observations, in order. state = actor (real sensors), privileged =
+  # critic (sim-only extras allowed). Catalog: gyro, gravity, joint_pos,
+  # joint_vel, last_act, linvel, base_height, actuator_force, foot_contact,
+  # command, phase.
+  obs:
+    state:
+      - gyro
+      - gravity
+      - joint_pos
+      - joint_vel
+      - last_act
+      - command
+      - phase
+    privileged:
+      - gyro
+      - gravity
+      - joint_pos
+      - joint_vel
+      - last_act
+      - command
+      - phase
+      - linvel
+      - foot_contact
+
+ppo: {}

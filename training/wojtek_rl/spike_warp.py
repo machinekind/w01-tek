@@ -496,12 +496,14 @@ def step5_throughput(
     for n_envs in env_counts:
         jax_rate = _bench_real_env_step("jax", n_envs, steps, seed=seed)
         try:
-            # naconmax/njmax are TOTAL across all vmapped worlds (first GPU
-            # run overflowed at 64 total for 8192 envs and silently dropped
-            # contacts/constraint rows) — scale the per-world budget.
+            # GPU-decoded semantics (runs 2-3): naconmax is TOTAL across all
+            # vmapped worlds (run 2 asked for 167k at 8192 envs against our
+            # 64), but njmax is PER-WORLD (run 2 asked ~210 at every env
+            # count; scaling it by n_envs allocated a 40GiB dense efc
+            # Jacobian and OOM'd in run 3). Scale naconmax only.
             warp_rate = _bench_real_env_step(
                 "warp", n_envs, steps, seed=seed,
-                naconmax=naconmax * n_envs, njmax=njmax * n_envs,
+                naconmax=naconmax * n_envs, njmax=njmax,
             )
         except Exception as e:
             warp_rate = None

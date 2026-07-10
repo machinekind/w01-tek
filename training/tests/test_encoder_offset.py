@@ -53,21 +53,12 @@ def test_ctrl_shifted_by_epsilon():
 
 
 def test_closure_residual_unchanged():
-    """Four-bar closure residual stays tight under a large encoder offset:
-    epsilon shifts obs/ctrl only, never the connect-constraint anchor.
+    """A large encoder offset does not move the four-bar connect anchor: the
+    closure residual stays tight because epsilon shifts obs and ctrl only.
 
-    Deviation from the literal brief: reset() injects independent +-0.05 rad
-    noise per actuated joint, which displaces the passive closing link away
-    from the manifold the equality constraint enforces; this is a soft
-    (Baumgarte-style) constraint that relaxes back over ~40 control steps
-    regardless of encoder DR (verified: identical transient with
-    encoder.enable=False). Asserting <=2e-3 m from step 0 would fail on the
-    reset transient alone, not on anything epsilon-related. So this test
-    settles first (zero action, encoder still enabled throughout so epsilon
-    is live the whole time), then measures under moderate random actions
-    (realistic policy-output magnitude) -- the invariant under test (no
-    re-anchoring) is exactly as well covered, just not confounded by the
-    unrelated reset-noise transient.
+    reset() adds +-0.05 rad noise to the actuated joints, which opens the
+    loop for ~40 steps (the same transient with the encoder off). So settle
+    under zero action first, then measure under moderate random actions.
     """
     env = wojtek_env.WojtekJoystick(_config(True, range_=0.05))
     state = jax.jit(env.reset)(jax.random.PRNGKey(1))

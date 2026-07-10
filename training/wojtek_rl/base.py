@@ -180,19 +180,13 @@ class WojtekEnv(mjx_env.MjxEnv):
         return clean + noise * scales
 
     def _step_with_latency(self, data, prev, new, d):
-        """Substep scan: ctrl = `prev` targets while substep index < d,
-        `new` targets from d onward. d=n_substeps holds `prev` the whole
-        period (today's action_delay=1); d=0 applies `new` immediately.
+        """Run n_substeps physics steps: ctrl is `prev` while the substep
+        index is below d, `new` from d onward. d=n_substeps holds `prev` for
+        the whole period; d=0 applies `new` immediately.
 
-        One per-substep `jp.where` covers every d in [0, n_substeps]. This
-        path is reached only when latency DR is deliberately enabled; the
-        disabled default stays on the stock mjx_env.step for the bitwise
-        golden guarantee, so a couple of float ULPs at the d=0/d=n_substeps
-        boundaries here are immaterial. A per-lane lax.cond would be wrong
-        anyway: under the training vmap `d` is batched, so cond runs *every*
-        branch and selects, tripling the substep physics for no benefit
-        (jaxpr-verified). `jp.where` on the input ctrl is an exact element
-        select, so no blending occurs -- boundaries apply prev/new exactly.
+        A single `jp.where` handles every d. A per-lane lax.cond would be
+        wrong under the training vmap: `d` is batched, so cond runs every
+        branch and selects, tripling the substep physics.
         """
 
         def _substep(data, i):

@@ -4,12 +4,10 @@ Modeled on mujoco_playground's Go1 randomize.py: a vmapped function builds
 per-environment copies of the physics fields, then tree_replace produces a
 batched model plus an in_axes template.
 
-The base 5-field DR (floor friction, base+link mass, single gain/kd scale)
-is the original behavior and MUST stay bitwise reproducible: r1..r5 =
-jax.random.split(rng, 5) is fixed forever. Every field added since (`dr_cfg`)
-draws its randomness from a fold_in'd sub-key instead, so it never perturbs
-r1..r5 -- with every new field disabled, output is bit-identical to the
-original 5-field code (see tests/test_dr_expansion.py).
+The original five fields (floor friction, base and link mass, one gain/kd
+scale) draw from `r1..r5 = jax.random.split(rng, 5)`. New fields draw from a
+folded-in sub-key so they leave `r1..r5` unchanged. With every new field
+disabled, the output matches the original code (tests/test_dr_expansion.py).
 """
 
 import jax
@@ -17,9 +15,8 @@ import jax.numpy as jnp
 
 from wojtek_rl import paths
 
-# dr_cfg keys and their defaults ("enable": False reproduces today's
-# behavior). Hydra's conf/config.yaml `dr:` block mirrors this shape;
-# missing keys/sub-keys here fall back to these defaults.
+# Defaults for each dr_cfg field. The conf/config.yaml `dr:` block mirrors
+# this shape; missing keys fall back to these values.
 _DEFAULT_DR = {
     "com_offset": {"enable": False, "xy": 0.02, "z": 0.01},
     "joint_gains": {"enable": False, "gain_pct": 0.2, "kd_pct": 0.2},
@@ -84,8 +81,8 @@ def make_domain_randomize(mj_model, dr_cfg=None):
                     rk, (model.nu,), minval=1 - kpct, maxval=1 + kpct
                 )
             else:
-                # Single scalar draw from r4/r5, broadcast to all joints --
-                # bitwise identical to the pre-expansion single-scale code.
+                # One scalar from r4/r5 broadcast to all joints, matching the
+                # original single-scale code.
                 gain_scale = jnp.full(
                     (model.nu,), jax.random.uniform(r4, minval=0.8, maxval=1.2)
                 )

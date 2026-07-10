@@ -90,21 +90,13 @@ def default_config() -> config_dict.ConfigDict:
         ),
         push=config_dict.create(enable=True, interval_steps=200, vel=0.4),
         action_delay=1,  # control steps of latency between policy and motors
-        # Randomized per-episode control latency at substep granularity
-        # (see WojtekEnv._step_with_latency). Disabled by default: the
-        # resolved delay is a static n_substeps-or-0 from action_delay
-        # above, so this reproduces the legacy path bitwise (no rng spent).
+        # Per-episode control latency at substep granularity, off by default
+        # (reproduces the action_delay path above). See _step_with_latency.
         latency=config_dict.create(enable=False, min_substeps=0, max_substeps=5),
-        # Per-episode encoder-zero offset DR (Workstream C2): models a joint
-        # encoder miscalibrated by a per-joint constant epsilon (q~ = q +
-        # epsilon). Sim keeps true qpos untouched; epsilon only shifts the
-        # OBSERVED joint_pos (added) and the ctrl WRITTEN to physics
-        # (subtracted), reproducing the real driver's PD error t - q~ =
-        # (t - epsilon) - q. See env._obs_catalog / env.step. Never implement
-        # via joint ref/qpos0/body frames -- the four-bar connect
-        # constraints compile their anchor from the reference configuration
-        # and silently re-anchor ~8.5 cm open (documented lesson). Disabled
-        # by default: epsilon = 0, no rng spent, obs/ctrl unchanged.
+        # Per-episode encoder miscalibration: a per-joint constant epsilon
+        # added to the observed joint angle and subtracted from the written
+        # target, so true qpos and the four-bar anchor stay untouched. Off
+        # by default (epsilon = 0).
         encoder=config_dict.create(enable=False, range=0.02),
         # EMA low-pass on actions before the PD targets (0 = off). Kills the
         # noise-driven standing limit cycle structurally; mirror the same
@@ -253,9 +245,8 @@ class WojtekJoystick(WojtekEnv):
         data = self._make_data()
         data = data.replace(qpos=qpos, qvel=jp.zeros(self._mj_model.nv), ctrl=anchor)
         data = mjx.forward(self._mjx_model, data)
-        # Per-episode ctrl delay (substeps). Disabled path is a static
-        # python int derived from action_delay -> zero extra rng spent,
-        # so the default trajectory matches pre-latency code bitwise.
+        # Per-episode control delay. The disabled branch draws no rng, so
+        # the default trajectory is unchanged.
         lat = self._config.latency
         if lat.enable:
             rng, r_delay = jax.random.split(rng)  # only consumed when enabled
@@ -263,9 +254,8 @@ class WojtekJoystick(WojtekEnv):
             d = jp.clip(d, 0, self.n_substeps)
         else:
             d = self.n_substeps if self._config.action_delay > 0 else 0
-        # Per-episode encoder-zero offset (substeps-style guard: disabled
-        # path spends zero extra rng so the default trajectory is bitwise
-        # unchanged -- see default_config's encoder block docstring).
+        # Per-joint encoder offset. The disabled branch draws no rng, so the
+        # default trajectory is unchanged.
         enc = self._config.encoder
         if enc.enable:
             rng, r_enc = jax.random.split(rng)  # only consumed when enabled
@@ -320,23 +310,19 @@ class WojtekJoystick(WojtekEnv):
             qvel = data.qvel.at[:2].add(jp.where(push_now, push, jp.zeros(2)))
             data = data.replace(qvel=qvel)
 
-        # Encoder-zero offset (Workstream C2): shift the ctrl-frame targets
-        # by -epsilon so the sim PD error (t - epsilon) - q matches the real
-        # driver reading q~ = q + epsilon. epsilon=0 when disabled -> no-op.
+        # Subtract the encoder offset from the written targets, matching the
+        # real driver's error against q~ = q + epsilon. Zero when disabled.
         eps = info["encoder_offset"]
         if self._config.latency.enable:
-            # Substeps < ctrl_delay apply last step's targets, >= apply the
-            # new ones (see WojtekEnv._step_with_latency).
+            # Substeps before ctrl_delay use the previous targets, the rest
+            # the new ones.
             data = self._step_with_latency(
                 data, info["motor_targets"] - eps, motor_targets - eps, info["ctrl_delay"]
             )
         else:
-            # Legacy path (byte-identical to pre-latency code): the whole
-            # control period uses one ctrl. `_step_with_latency`'s general
-            # branch is mathematically equivalent here but its per-substep
-            # `where` perturbs float32 output a couple ULPs (see that
-            # docstring), so the disabled default is kept on this exact,
-            # select-free code path to guarantee bitwise parity.
+            # Default path: one ctrl for the whole period. Kept on the stock
+            # mjx_env.step so the trajectory is unchanged; the where-scan
+            # above shifts the float output by a few ULPs.
             applied_targets = (
                 info["motor_targets"] if self._config.action_delay > 0
                 else motor_targets
@@ -386,9 +372,8 @@ class WojtekJoystick(WojtekEnv):
     # -- observations -------------------------------------------------------
     def _obs_catalog(self, data, info):
         catalog = super()._obs_catalog(data, info)
-        # Encoder-zero offset: the real encoder reads q~ = q + epsilon, so
-        # the OBSERVED joint_pos gets epsilon added (true qpos/model stay
-        # untouched). epsilon=0 when disabled -> no-op.
+        # Add the encoder offset to the observed joint angle (q~ = q +
+        # epsilon). Zero when disabled.
         catalog["joint_pos"] = catalog["joint_pos"] + info["encoder_offset"]
         catalog["command"] = info["command"]
         leg_phase = self._leg_phases(info)

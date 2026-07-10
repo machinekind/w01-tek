@@ -1,7 +1,7 @@
-"""Backend flag plumbing (Workstream A of the MJWarp migration).
+"""Tests for the sim.backend flag: resolution, budget kwargs and env wiring.
 
-The suite runs with JAX_PLATFORMS=cpu, so "auto" must resolve to jax here.
-Warp itself needs CUDA and is exercised on the GPU box, not in this suite.
+This suite runs with JAX_PLATFORMS=cpu, so "auto" must resolve to jax here.
+Warp needs CUDA, so its runtime behavior is validated on a GPU box instead.
 """
 
 import jax

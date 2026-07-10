@@ -79,17 +79,14 @@ def check_gpu(nenv: int, nsteps: int, backend: str = "jax") -> bool:
 
     from mujoco_playground import registry
 
-    from wojtek_rl.base import data_budget_kwargs
+    from wojtek_rl.base import make_data_fn
 
     m = mujoco.MjModel.from_xml_path(str(paths.SCENE_XML))
     wojtek_model = mjx.put_model(m, impl=backend)
-    init_data = None
-    if backend == "warp":
-        budgets = data_budget_kwargs("warp", 32, 320, nenv)
-        init_data = lambda _: mjx.make_data(m, impl="warp", **budgets)
+    data_fn = make_data_fn(backend, m, wojtek_model, 32, 320, nenv)
     wojtek_rate = _bench(
         mjx, jax, jp, wojtek_model, m.key("home").qpos, nenv, nsteps,
-        init_data=init_data,
+        init_data=lambda _: data_fn(),
     )
     print(f"wojtek ({backend}): {wojtek_rate:,.0f} steps/s ({nenv} envs)")
 

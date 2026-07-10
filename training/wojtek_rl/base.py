@@ -50,11 +50,20 @@ def data_budget_kwargs(
 ) -> dict:
     """make_data buffer kwargs for the resolved backend.
 
-    The jax backend sizes its own buffers, so it takes none. The warp
-    backend needs both budgets up front. naconmax counts contact candidates
-    across every vmapped world, so it scales with num_envs. njmax counts
-    constraint rows per world and never scales with the batch. The numbers
-    behind the defaults are in docs/plans/mjwarp-phase0-report.md §4.
+    Warp reserves fixed buffer space for contacts and constraints before the
+    simulation runs. The jax backend sizes its own buffers on the fly, so it
+    takes no kwargs.
+
+    naconmax sizes one shared contact pool for the whole batch of envs. It
+    is naconmax_per_env multiplied by num_envs.
+
+    njmax sizes the constraint rows for a single world. Every env in the
+    batch gets its own njmax rows, so this number never multiplies by
+    num_envs.
+
+    If a buffer is too small, warp drops the overflow silently instead of
+    raising an error. The measured numbers behind the defaults are in
+    docs/plans/mjwarp-phase0-report.md §4.
     """
     if backend != "warp":
         return {}
@@ -62,6 +71,19 @@ def data_budget_kwargs(
         "naconmax": int(naconmax_per_env) * int(num_envs),
         "njmax": int(njmax),
     }
+
+
+def make_data_fn(backend, mj_model, mjx_model, naconmax_per_env, njmax, num_envs):
+    """Return a zero-argument callable that builds a fresh mjx.Data on the backend.
+
+    The warp branch applies the buffer budgets from data_budget_kwargs. The
+    jax branch stays byte-for-byte the call the envs made before the backend
+    flag existed.
+    """
+    if backend == "warp":
+        kwargs = data_budget_kwargs("warp", naconmax_per_env, njmax, num_envs)
+        return lambda: mjx.make_data(mj_model, impl="warp", **kwargs)
+    return lambda: mjx.make_data(mjx_model)
 
 
 class WojtekEnv(mjx_env.MjxEnv):
@@ -73,6 +95,15 @@ class WojtekEnv(mjx_env.MjxEnv):
         sim_cfg = self._config.get("sim")
         self._backend = resolve_backend(sim_cfg.backend if sim_cfg else "jax")
         self._mjx_model = mjx.put_model(self._mj_model, impl=self._backend)
+        sim = self._config.sim
+        self._make_data_fn = make_data_fn(
+            self._backend,
+            self._mj_model,
+            self._mjx_model,
+            sim.naconmax_per_env,
+            sim.njmax,
+            sim.num_envs,
+        )
 
         key = self._mj_model.key("home")
         self._home_qpos = jp.array(key.qpos)
@@ -104,21 +135,8 @@ class WojtekEnv(mjx_env.MjxEnv):
         """Task-specific tweaks applied before the model is put on device."""
 
     def _make_data(self):
-        """mjx.make_data on the resolved backend, with warp budgets applied.
-
-        The jax path stays byte-for-byte the call the envs made before the
-        backend flag existed.
-        """
-        if self._backend == "warp":
-            sim = self._config.sim
-            return mjx.make_data(
-                self._mj_model,
-                impl="warp",
-                **data_budget_kwargs(
-                    "warp", sim.naconmax_per_env, sim.njmax, sim.num_envs
-                ),
-            )
-        return mjx.make_data(self._mjx_model)
+        """mjx.make_data on the resolved backend, with warp budgets applied."""
+        return self._make_data_fn()
 
     # -- MjxEnv plumbing -------------------------------------------------
     @property

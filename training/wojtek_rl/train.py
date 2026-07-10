@@ -99,7 +99,11 @@ def main(cfg: DictConfig) -> None:
     _apply_ppo_overrides(ppo_params, task_ppo_overrides)
     _apply_ppo_overrides(ppo_params, ppo_overrides)
 
-    env_overrides.setdefault("sim", {})["num_envs"] = int(ppo_params.num_envs)
+    # The eval wrapper vmaps num_eval_envs worlds through the same env, so
+    # the warp contact budget covers the larger of the two batches.
+    env_overrides.setdefault("sim", {})["num_envs"] = int(
+        max(ppo_params.num_envs, ppo_params.get("num_eval_envs", 0))
+    )
     env = make_env(task, env_overrides)
     eval_env = make_env(task, env_overrides)
     print(f"actor obs ({len(env.actor_obs_names)} components): {env.actor_obs_names}")

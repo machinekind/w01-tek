@@ -41,7 +41,7 @@ def default_config() -> config_dict.ConfigDict:
         # naconmax_per_env scales with the training batch; njmax is per
         # world. See docs/plans/mjwarp-phase0-report.md section 4.
         sim=config_dict.create(
-            backend="jax", naconmax_per_env=32, njmax=320, num_envs=1
+            backend="auto", naconmax_per_env=32, njmax=320, num_envs=1
         ),
         episode_length=1000,
         action_scale=0.5,

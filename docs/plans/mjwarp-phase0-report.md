@@ -93,9 +93,28 @@ pins `warp-lang==1.13.0`.
 
 Every hardware gate passed. The one FAIL line came from the spike's own gate calibration,
 and the jax baseline in `phase0-artifacts/closure_jax.log` disproves it. Workstream A
-takes three obligations from this spike:
+took three obligations from this spike, and all three are done:
 
-1. Pin `warp-lang==1.13.0`.
-2. Size warp buffers as `naconmax = 32 * n_envs` and `njmax = 320`. Never scale njmax by
-   the batch.
-3. Run the golden guard across the pin change before flipping any default.
+1. `warp-lang==1.13.0` is pinned in pyproject and the lock.
+2. `data_budget_kwargs` in base.py sizes warp buffers as `naconmax = 32 * n_envs` and
+   `njmax = 320`, and never scales njmax by the batch.
+3. The golden bitwise tests pass under the new lock, so the pin change left the jax
+   path untouched.
+
+## 6. Workstream A validation (RTX 4090, driver 580.126.09, 2026-07-10)
+
+The `sim.backend` flag went in with three allowed values. `jax` and `warp` force a
+backend. `auto` resolves to warp on a CUDA host with the vendored MJWarp importable, and
+to jax elsewhere. The default is `auto`, so GPU training runs on warp and every CPU
+consumer, including this test suite, stays on jax.
+
+Three checks ran on the box through the new flag, all green:
+
+- `./run.sh check --gpu --backend warp`: stand holds, settled closure 0.91 mm, bare
+  physics at 3.3M steps/s for 4096 envs, 0.65 of Go1's jax rate against a 0.20 gate.
+  Log: `phase0-artifacts/workstream-a-check-warp-4090.log`.
+- A warp smoke train (100k steps, 64 envs): reward −6.22 to +2.39, every metric finite,
+  full-length episodes, no overflow warnings.
+- A jax smoke train on the same box for comparison: reward −7.02 to +3.22. Both backends
+  learn to the same reward band. The warp run evaluated about four times faster at the
+  smoke batch size.

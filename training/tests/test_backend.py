@@ -39,7 +39,7 @@ def test_budget_kwargs_scale_naconmax_only():
 def test_every_task_config_has_the_sim_block():
     for mod in (wojtek_env, env_getup, env_jump):
         sim = mod.default_config().sim
-        assert sim.backend == "jax"
+        assert sim.backend == "auto"
         assert sim.naconmax_per_env == 32
         assert sim.njmax == 320
         assert sim.num_envs == 1

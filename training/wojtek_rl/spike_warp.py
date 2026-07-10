@@ -170,20 +170,20 @@ def _cpu_probe_ncon(m: mujoco.MjModel, steps: int = 200, seed: int = 0) -> tuple
 def _size_warp_budget(
     m: mujoco.MjModel, steps: int = 200, seed: int = 0, margin: float = 3.0
 ) -> tuple[int, int]:
-    """naconmax/njmax sized from the CPU probe above, with a safety margin.
+    """Per-world naconmax/njmax from the CPU probe, with a safety margin.
 
-    # TODO(orchestrator, verify on GPU): margin=3.0 and the njmax~nefc
-    # relationship are both untested guesses — MuJoCo's `nefc` (active
-    # constraint rows on CPU) is a reasonable proxy for warp's `njmax`
-    # (max constraints to allocate) but they aren't guaranteed to be the
-    # same quantity. If warp errors with a budget-exceeded message, bump
-    # `margin` here first; if it errors on a shape/meaning mismatch for
-    # njmax specifically, re-derive it from whatever warp actually reports
-    # needing (A2's autosizing helper is the real fix, this is a spike).
+    GPU-measured (4090, warp-lang 1.13.0, first spike run): mj's CPU probe
+    badly underestimates warp's budgets. This scene probes ncon=5/nefc=54,
+    but warp asked for naconmax≈21/world at rest (broadphase *candidates*,
+    not final contacts; up to ~89 under random actions) and njmax≈210/world
+    (dropped rows there open the four-bar equality constraint). Floors are
+    sized to those measurements with ~50% headroom. Budgets are TOTAL across
+    a vmapped batch — multiply by n_envs (step 5 does; A2's autosizing must
+    too).
     """
     max_ncon, max_nefc = _cpu_probe_ncon(m, steps=steps, seed=seed)
-    naconmax = max(64, int(max_ncon * margin))
-    njmax = max(64, int(max_nefc * margin))
+    naconmax = max(128, int(max_ncon * margin))
+    njmax = max(320, int(max_nefc * margin))
     print(
         f"  CPU probe: max ncon={max_ncon}, max nefc={max_nefc}  "
         f"-> naconmax={naconmax}, njmax={njmax} (margin={margin}x)"
@@ -496,8 +496,12 @@ def step5_throughput(
     for n_envs in env_counts:
         jax_rate = _bench_real_env_step("jax", n_envs, steps, seed=seed)
         try:
+            # naconmax/njmax are TOTAL across all vmapped worlds (first GPU
+            # run overflowed at 64 total for 8192 envs and silently dropped
+            # contacts/constraint rows) — scale the per-world budget.
             warp_rate = _bench_real_env_step(
-                "warp", n_envs, steps, seed=seed, naconmax=naconmax, njmax=njmax
+                "warp", n_envs, steps, seed=seed,
+                naconmax=naconmax * n_envs, njmax=njmax * n_envs,
             )
         except Exception as e:
             warp_rate = None

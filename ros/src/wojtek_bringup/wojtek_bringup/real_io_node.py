@@ -13,7 +13,7 @@ The boot_pose parameter names the reference pose (the robot's position 0):
     home_ctrl, where /wojtek/stand_up ends).
   boot_pose="folded": robot lying flat on its base, hips straight and knees
     folded against the mechanical stop (folded_knee_rad, policy convention --
-    see wojtek_bringup.poses). Reproducible by hand without holding the
+    see wojtek_policy.poses). Reproducible by hand without holding the
     robot -- call /wojtek/stand_up afterwards to ramp slowly into the home
     standing pose, then /wojtek/arm.
 
@@ -62,7 +62,7 @@ from std_srvs.srv import SetBool, Trigger
 from wojtek_policy.joint_map import JointMap
 from wojtek_policy.policy import WojtekPolicy
 
-from wojtek_bringup import poses
+from wojtek_policy import poses
 
 
 class RealIoNode(Node):

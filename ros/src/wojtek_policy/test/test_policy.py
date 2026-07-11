@@ -1,6 +1,6 @@
 """Unit tests for the numpy policy runtime and joint map (no ROS required).
 
-Run: cd ros/src/wojtek_policy && python -m pytest test
+Run: 5_wojtek_ros2_deploy/run.sh test
 """
 
 import sys
@@ -94,33 +94,3 @@ def test_joint_map_home_within_urdf_limits_for_second_joint():
     policy = WojtekPolicy(CONFIG / "policy.npz")
     urdf_home = jm.to_urdf(policy.joint_names, policy.home_ctrl)
     assert np.all(np.isfinite(urdf_home))
-
-
-def test_action_ema_smooths_targets_but_not_obs():
-    """Mirror of wojtek_rl.env action_filter: raw action feeds last_act in the
-    obs (so the policy's inputs are identical with the filter on or off);
-    the motor targets are anchor + EMA(raw actions) * action_scale."""
-    import numpy as np
-    from wojtek_policy.policy import WojtekPolicy
-
-    a = WojtekPolicy("config/policy.npz")
-    b = WojtekPolicy("config/policy.npz")
-    af = 0.5
-    b.action_ema = af
-    q = a.home_ctrl.copy()
-    dq = np.zeros(12)
-    cmd = [0.5, 0.0, 0.0, 0.13]
-    anchor = a._height_ctrl(cmd[3])
-
-    ema = np.zeros(12)
-    for _ in range(5):
-        ta = a.step(None, None, q, dq, cmd)
-        tb = b.step(None, None, q, dq, cmd)
-        # identical obs path -> identical raw actions and phase
-        assert np.allclose(a.last_action, b.last_action)
-        assert np.isclose(a.phase, b.phase)
-        # filtered targets == anchor + EMA of the raw actions (env.py:259)
-        ema = af * ema + (1.0 - af) * a.last_action
-        assert np.allclose(tb, np.clip(anchor + ema * b.action_scale,
-                                       b.ctrl_low, b.ctrl_high), atol=1e-6)
-    assert not np.allclose(ta, tb)

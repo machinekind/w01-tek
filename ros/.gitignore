@@ -4,3 +4,12 @@
 /build/
 /install/
 /log/
+
+# from wojtek_ws
+build/
+install/
+log/
+__pycache__/
+*.pyc
+.env
+deploy/rpi/cache/

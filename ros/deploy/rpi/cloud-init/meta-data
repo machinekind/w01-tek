@@ -1,0 +1,2 @@
+# Intentionally empty. cloud-init on the Ubuntu RPi image expects a meta-data
+# file on the system-boot partition next to user-data and network-config.

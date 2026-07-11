@@ -1,13 +1,13 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>wojtek_bringup</name>
+  <name>wojtek_viz</name>
   <version>0.1.0</version>
   <description>
-    Robot-side bringup for wojtek: launches wojtek_policy against the real
-    robot (MD80 + IMU through ros2_control). Deliberately free of GUI/sim
-    dependencies so the RPi build stays lean -- RViz/PlotJuggler/teleop/MuJoCo
-    live in wojtek_viz (PC-side).
+    Visualization, debugging and MuJoCo simulation for wojtek: RViz,
+    PlotJuggler and teleop for the live robot, plus the MuJoCo sim node.
+    PC-side only -- deliberately kept out of wojtek_bringup so the robot
+    (RPi) build never needs GUI/simulation dependencies.
   </description>
   <maintainer email="kchmielewski707@gmail.com">Jakub Chmielewski</maintainer>
   <license>MIT</license>
@@ -21,14 +21,14 @@
   <depend>python3-numpy</depend>
   <depend>wojtek_policy</depend>
   <depend>wojtek_description</depend>
-  <depend>md80_hardware_interface</depend>
-  <depend>bmx160_serial_hardware_interface</depend>
-  <depend>bmi160_serial_hardware_interface</depend>
 
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>xacro</exec_depend>
-  <exec_depend>controller_manager</exec_depend>
-  <exec_depend>ros2_controllers</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>plotjuggler</exec_depend>
+  <exec_depend>teleop_twist_keyboard</exec_depend>
+  <!-- mujoco is a pip package (no reliable rosdep key); installed via pip,
+       see docker/Dockerfile. Only mujoco_sim_node needs it. -->
 
   <test_depend>python3-pytest</test_depend>
 

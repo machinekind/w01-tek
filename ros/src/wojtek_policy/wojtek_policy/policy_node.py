@@ -6,8 +6,6 @@ parameters differ:
   subscribes  /joint_states  (sensor_msgs/JointState, URDF convention, absolute)
               /imu/data      (sensor_msgs/Imu)
               /cmd_vel       (geometry_msgs/Twist)
-              /wojtek/cmd_height (std_msgs/Float32; 4-D-command policies only,
-                               overrides the command_height parameter)
   publishes   /wojtek/joint_targets (sensor_msgs/JointState, URDF convention,
                                   absolute; 12 actuated joints)
   services    /wojtek/enable (std_srvs/SetBool), /wojtek/reset (std_srvs/Trigger)
@@ -22,17 +20,14 @@ from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from sensor_msgs.msg import Imu, JointState
-from std_msgs.msg import Float32
 from std_srvs.srv import SetBool, Trigger
 
 from wojtek_policy.joint_map import JointMap
 from wojtek_policy.policy import WojtekPolicy, gravity_from_quat
 
-# Training command ranges: never ask the policy for more than it was trained
-# to track. Fallback for metas without cmd_low/cmd_high (fbb_v3, env.py
-# default_config); newer exports carry their own ranges.
-CMD_LOW = np.array([-0.6, -0.4, -0.7])
-CMD_HIGH = np.array([0.6, 0.4, 0.7])
+# Training command ranges (env.py default_config): never ask the policy for
+# more than it was trained to track.
+CMD_LIMIT = np.array([0.6, 0.4, 0.7])
 
 
 def rpy_to_mat(r, p, y):
@@ -60,13 +55,6 @@ class PolicyNode(Node):
         # Use the accelerometer+gyro complementary filter instead of the IMU
         # orientation quaternion (for IMUs without usable fusion).
         self.declare_parameter("gravity_from_accel", False)
-        # Commanded standing height (m) for 4-D-command policies (v8+);
-        # live-settable: ros2 param set /wojtek_policy command_height 0.15
-        self.declare_parameter("command_height", 0.13)
-        # EMA low-pass on motor targets (wojtek_rl.env action_filter mirror);
-        # 0 = off. Anti-vibration knob, live-settable:
-        #   ros2 param set /wojtek_policy action_ema 0.3
-        self.declare_parameter("action_ema", 0.0)
 
         pdir = self.get_parameter("policy_dir").value
         self.policy = WojtekPolicy(
@@ -76,10 +64,6 @@ class PolicyNode(Node):
         self.jmap = JointMap(self.get_parameter("joint_map_yaml").value)
         self.joint_names = self.policy.joint_names  # policy actuator order
         self.imu_mount = rpy_to_mat(*self.get_parameter("imu_mount_rpy").value)
-        m = self.policy.meta
-        self._cmd_low = np.array(m.get("cmd_low", CMD_LOW), np.float64)
-        self._cmd_high = np.array(m.get("cmd_high", CMD_HIGH), np.float64)
-        self._height_range = m.get("cmd_height_range")
 
         self._q_urdf = None  # (12,) latest, actuator order
         self._dq_urdf = None
@@ -87,7 +71,6 @@ class PolicyNode(Node):
         self._gravity_base = None
         self._grav_filt = np.array([0.0, 0.0, -1.0])
         self._cmd = np.zeros(3)
-        self._cmd_height = None  # latest wojtek/cmd_height, overrides the param
         self._joints_stamp = None
         self._imu_stamp = None
         self._enabled = self.get_parameter("auto_enable").value
@@ -97,7 +80,6 @@ class PolicyNode(Node):
         self.create_subscription(JointState, "joint_states", self._on_joints, 10)
         self.create_subscription(Imu, "imu/data", self._on_imu, 10)
         self.create_subscription(Twist, "cmd_vel", self._on_cmd, 10)
-        self.create_subscription(Float32, "wojtek/cmd_height", self._on_height, 10)
         self._pub = self.create_publisher(JointState, "wojtek/joint_targets", 10)
         self.create_service(SetBool, "wojtek/enable", self._srv_enable)
         self.create_service(Trigger, "wojtek/reset", self._srv_reset)
@@ -157,21 +139,7 @@ class PolicyNode(Node):
 
     def _on_cmd(self, msg):
         cmd = np.array([msg.linear.x, msg.linear.y, msg.angular.z])
-        self._cmd = np.clip(cmd, self._cmd_low, self._cmd_high)
-
-    def _on_height(self, msg):
-        self._cmd_height = float(msg.data)
-
-    def _full_cmd(self):
-        """Velocity command plus, for 4-D-command policies, the height."""
-        if self.policy.cmd_dim < 4:
-            return self._cmd
-        h = self._cmd_height
-        if h is None:
-            h = self.get_parameter("command_height").value
-        if self._height_range is not None:
-            h = float(np.clip(h, self._height_range[0], self._height_range[1]))
-        return np.concatenate([self._cmd, [h]])
+        self._cmd = np.clip(cmd, -CMD_LIMIT, CMD_LIMIT)
 
     # -- services ------------------------------------------------------------
     def _srv_enable(self, req, res):
@@ -202,10 +170,7 @@ class PolicyNode(Node):
         if not self._enabled:
             self._was_running = False
             return
-        fresh = self._fresh(self._joints_stamp)
-        if self.policy.needs_imu:
-            fresh = fresh and self._fresh(self._imu_stamp)
-        if not fresh:
+        if not (self._fresh(self._joints_stamp) and self._fresh(self._imu_stamp)):
             if self._was_running:
                 self.get_logger().warning(
                     "sensor data stale -- holding (no targets published)",
@@ -217,12 +182,11 @@ class PolicyNode(Node):
         # (last_action feeds back into the observation), so treat non-finite
         # input like stale data: hold, and reset the policy state on
         # recovery via the _was_running edge. Seen in practice from the IMU
-        # broadcaster's NaN placeholders right after activation. IMU terms
-        # only exist (and only matter) for policies that observe them.
-        inputs = [self._q_urdf, self._dq_urdf, self._cmd]
-        if self.policy.needs_imu:
-            inputs = [self._gyro_base, self._gravity_base, *inputs]
-        inputs = np.concatenate(inputs)
+        # broadcaster's NaN placeholders right after activation.
+        inputs = np.concatenate(
+            [self._gyro_base, self._gravity_base, self._q_urdf, self._dq_urdf,
+             self._cmd]
+        )
         if not np.all(np.isfinite(inputs)):
             self.get_logger().warning(
                 "non-finite sensor input -- holding (no targets published)",
@@ -236,13 +200,10 @@ class PolicyNode(Node):
             self._enable_time = self.get_clock().now()
             self._was_running = True
 
-        self.policy.action_ema = float(
-            np.clip(self.get_parameter("action_ema").value, 0.0, 0.95)
-        )
         q_mjc = self.jmap.to_mjc(self.joint_names, self._q_urdf)
         dq_mjc = self.jmap.vel_to_mjc(self.joint_names, self._dq_urdf)
         targets_mjc = self.policy.step(
-            self._gyro_base, self._gravity_base, q_mjc, dq_mjc, self._full_cmd()
+            self._gyro_base, self._gravity_base, q_mjc, dq_mjc, self._cmd
         )
 
         # Soft start: blend from the measured pose to the policy output.

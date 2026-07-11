@@ -1,0 +1,13 @@
+# Pin all CPUs to the performance governor for RT determinism (no frequency
+# ramping latency in the control loop). Installed + enabled by install.sh.
+[Unit]
+Description=Set CPU governor to performance (RT determinism)
+After=multi-user.target
+
+[Service]
+Type=oneshot
+# Small sleep so cpufreq sysfs is up before we write the governors.
+ExecStart=/bin/bash -c "sleep 8; for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo performance > $g; done"
+
+[Install]
+WantedBy=multi-user.target

@@ -2,7 +2,7 @@ from glob import glob
 
 from setuptools import setup
 
-package_name = "wojtek_policy"
+package_name = "wojtek_viz"
 
 setup(
     name=package_name,
@@ -11,18 +11,19 @@ setup(
     data_files=[
         ("share/ament_index/resource_index/packages", [f"resource/{package_name}"]),
         (f"share/{package_name}", ["package.xml"]),
+        (f"share/{package_name}/launch", glob("launch/*.launch.py")),
         (f"share/{package_name}/config", glob("config/*")),
-        (f"share/{package_name}/rviz", glob("rviz/*.rviz")),
+        (f"share/{package_name}/urdf", glob("urdf/*.xacro")),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
-    maintainer="Michal Pogoda",
-    maintainer_email="michalpogoda@surferseo.com",
-    description="RL locomotion policy for wojtek (numpy runtime + ROS node).",
+    maintainer="Jakub Chmielewski",
+    maintainer_email="kchmielewski707@gmail.com",
+    description="PC-side viz/debug/sim (RViz, PlotJuggler, teleop, MuJoCo) for wojtek.",
     license="MIT",
     entry_points={
         "console_scripts": [
-            "policy_node = wojtek_policy.policy_node:main",
+            "mujoco_sim_node = wojtek_viz.mujoco_sim_node:main",
         ],
     },
 )

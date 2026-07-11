@@ -20,8 +20,9 @@ COPY ./src /ros2_ws/src/
 # and rebuild inside the container without reinstalling anything.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        ros-dev-tools udev git python3-pip setserial \
-        ros-${ROS_DISTRO}-rmw-cyclonedds-cpp && \
+        ros-dev-tools udev git python3-pip setserial openssh-client \
+        ros-${ROS_DISTRO}-rmw-cyclonedds-cpp \
+        ros-${ROS_DISTRO}-plotjuggler-ros && \
     rm -rf src/md80_hardware_interface/3rd_party/candle && \
     git clone https://github.com/mabrobotics/candle src/md80_hardware_interface/3rd_party/candle && \
     git -C src/md80_hardware_interface/3rd_party/candle checkout "$CANDLE_COMMIT" && \
@@ -33,7 +34,7 @@ RUN apt-get update && \
         colcon build --symlink-install \
             --packages-select wojtek_description md80_hardware_interface \
                 bmx160_serial_hardware_interface bmi160_serial_hardware_interface \
-                wojtek_policy wojtek_bringup \
+                wojtek_policy wojtek_bringup wojtek_viz \
             --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF" && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*

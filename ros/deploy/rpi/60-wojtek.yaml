@@ -1,0 +1,32 @@
+# RPi netplan for the two-machine link. Replaces the cloud-init default.
+# Install:
+#   sudo cp 60-wojtek.yaml /etc/netplan/60-wojtek.yaml
+#   sudo chmod 600 /etc/netplan/60-wojtek.yaml
+#   sudo rm /etc/netplan/50-cloud-init.yaml        # remove the DHCP/home-wifi default
+#   # stop cloud-init from regenerating the old file on reboot:
+#   echo 'network: {config: disabled}' | sudo tee /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
+#   sudo netplan try         # (or `netplan apply` once confirmed)
+#
+# eth0: STATIC 10.42.0.2 -- the RPi is a fixed anchor. Internet (apt, etc.)
+# flows via the PC's NAT (10.42.0.1) when the cable is docked. With the cable
+# out, eth0 has no carrier so its default route simply isn't installed.
+#
+# wlan0 is intentionally ABSENT: hostapd owns it for the AP (mobile) case,
+# and the wojtek-net switch (see wojtek-net-switch.sh) brings the AP up only
+# when eth0 is unplugged. Declaring wlan0 here would make networkd/wpa_supplicant
+# fight hostapd for the radio.
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    eth0:
+      optional: true
+      dhcp4: false
+      dhcp6: false
+      addresses: [10.42.0.2/24]
+      routes:
+        - to: default
+          via: 10.42.0.1
+          metric: 100
+      nameservers:
+        addresses: [10.42.0.1, 1.1.1.1]

@@ -21,7 +21,13 @@ services:
         hard: 102400
     volumes:
       - ../src:/ros2_ws/src
+      # Host SSH keys (read-only) so `ros2 run wojtek_bringup robot` can start
+      # the RPi's control stack over SSH from inside the container.
+      - ${HOME}/.ssh:/root/.ssh:ro
       - ./config/cyclonedds.xml:/config/cyclonedds.xml
+      # Unicast fallback profile (see cyclonedds_link.xml + the CYCLONEDDS_URI
+      # note under environment). Mounted so it can be switched on without a rebuild.
+      - ./config/cyclonedds_link.xml:/config/cyclonedds_link.xml
       # Full /dev instead of a static snapshot: the IMU's CP2102 drops off
       # the bus under a flaky cable and re-enumerates (sometimes as a new
       # ttyUSBx). A privileged container's tmpfs /dev is frozen at container
@@ -43,6 +49,13 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix
     environment:
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      # Must match the robot (RPi). Isolates our DDS traffic from any other
+      # ROS 2 on the link. Set the same value on the RPi (systemd unit / bashrc).
+      - ROS_DOMAIN_ID=42
+      # Default profile auto-selects the interface (works for single-host and
+      # usually over the PC hotspot's local bridge). If the RPi and PC don't
+      # discover each other over wifi, switch this to the unicast fallback:
+      #   CYCLONEDDS_URI=file:///config/cyclonedds_link.xml
       - CYCLONEDDS_URI=file:///config/cyclonedds.xml
       - DISPLAY=${DISPLAY}
     # No command: override here on purpose - the image's CMD (sleep infinity)

@@ -1,0 +1,44 @@
+# Robot control stack (ros2_control 400 Hz + policy) on the RPi.
+#
+# Install on the RPi:
+#   sudo cp ~/wojtek_ws/deploy/wojtek-robot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now wojtek-robot.service
+#
+# Prereqs (see plan Faza B):
+#   - ROS 2 Jazzy installed natively, workspace built at ~/wojtek_ws/install
+#   - /etc/security/limits.conf grants user rpi:  rtprio 99, memlock unlimited
+#   - /boot/firmware/cmdline.txt isolates cores 2,3 (isolcpus=2,3 nohz_full=2,3
+#     rcu_nocbs=2,3) so the control stack owns them exclusively
+#
+# The robot boots DISARMED (real_io_node) -- no torque reaches the motors until
+# /wojtek/arm is called, so auto-start on boot is safe.
+
+[Unit]
+Description=Wojtek robot control stack (ros2_control + wojtek_policy)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rpi
+# Allow the ros2_control update loop to run at real-time priority and lock its
+# memory (no page faults in the loop).
+LimitRTPRIO=99
+LimitMEMLOCK=infinity
+Environment=ROS_DOMAIN_ID=42
+Environment=RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+# If wifi multicast discovery is unreliable, point this at the unicast profile
+# (rsynced under src/../docker/config, or copy it locally):
+# Environment=CYCLONEDDS_URI=file:///home/rpi/wojtek_ws/cyclonedds_link.xml
+#
+# taskset pins the whole robot stack to the isolated cores 2,3 (spatial
+# isolation); the OS/wifi keep cores 0,1. ros2_control raises its own update
+# thread to RT internally (enabled by LimitRTPRIO above). If you need to force
+# the whole tree to SCHED_FIFO, prefix with: chrt -f 80
+ExecStart=/usr/bin/taskset -c 2,3 /bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/rpi/wojtek_ws/install/setup.bash && exec ros2 launch wojtek_bringup robot.launch.py'
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

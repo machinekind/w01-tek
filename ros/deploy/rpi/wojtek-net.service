@@ -1,0 +1,29 @@
+# Drives the eth-cable <-> wifi-AP failover on the RPi. Runs the switch once at
+# boot, then reacts to eth0 link changes via `ip monitor`.
+#
+# Install:
+#   sudo cp wojtek-net.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now wojtek-net.service
+#
+# hostapd/dnsmasq stay systemctl-DISABLED -- this service starts/stops them on
+# demand, so they must not auto-start on boot.
+
+[Unit]
+Description=Wojtek RPi net failover (eth cable <-> wlan0 AP)
+After=network-pre.target systemd-networkd.service
+Wants=network-pre.target
+
+[Service]
+Type=simple
+# Initial evaluation, then block on link events for eth0. A 1s settle debounces
+# carrier flaps; the switch is idempotent so duplicate events are harmless.
+ExecStart=/bin/bash -c '/usr/local/sbin/wojtek-net-switch.sh; \
+  stdbuf -oL ip monitor link dev eth0 | while read -r _; do \
+    sleep 1; /usr/local/sbin/wojtek-net-switch.sh; \
+  done'
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

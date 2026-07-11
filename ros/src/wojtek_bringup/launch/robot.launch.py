@@ -1,24 +1,20 @@
-"""Policy on the real robot: MD80 (IMPEDANCE) + IMU via ros2_control.
+"""Robot-side launch: MD80 (IMPEDANCE) + IMU via ros2_control + policy.
 
-    IMU is currently a loaner BMI160 (no magnetometer) -- see
-    bmi160_serial_hardware_interface and wojtek_real.urdf.xacro. Swap back to
-    wojtek_imu_ros2_control there once the real BMX160 is sourced.
+This is the canonical launch for the RPi. It starts only hardware/control
+nodes -- no RViz, no GUI. Run visualization/debug on the PC separately:
+    ros2 launch wojtek_viz viz.launch.py
 
-    ros2 launch wojtek_bringup real.launch.py [max_torque:=2.0] [dry_run:=true]
-                                              [boot_pose:=home|folded]
+    ros2 launch wojtek_bringup robot.launch.py [max_torque:=2.0] [dry_run:=true]
+                                               [boot_pose:=home|folded]
 
-Startup procedure:
+Startup/arming procedure is unchanged from real.launch.py:
   1. Power the motors and launch this file (any robot pose is fine). The
      policy runs immediately but real_io_node starts DISARMED -- no commands
      reach the motors.
-  2. Physically pose the robot in the boot pose (default boot_pose:=home,
-     the standing pose RViz shows; folded also available -- see real_io_node)
-     and compare the real robot against RViz.
-  3. ros2 service call /wojtek/zero std_srvs/srv/Trigger  -- declares "the robot
-     is in the boot pose NOW" and re-zeros the offsets. (Skippable only if
-     the robot was already exactly in the boot pose at activation.)
-  4. ros2 service call /wojtek/stand_up std_srvs/srv/Trigger  (slow ramp to the
-     home standing pose; skip if already standing in home)
+  2. Physically pose the robot in the boot pose (default boot_pose:=home)
+     and compare against RViz on the PC.
+  3. ros2 service call /wojtek/zero std_srvs/srv/Trigger
+  4. ros2 service call /wojtek/stand_up std_srvs/srv/Trigger
   5. ros2 service call /wojtek/arm std_srvs/srv/SetBool '{data: true}'
   6. When done: disarm, then /wojtek/lie_down to ramp gently down to folded.
 """
@@ -28,7 +24,6 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.conditions import IfCondition
 from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -36,7 +31,6 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 def generate_launch_description():
     share = get_package_share_directory("wojtek_bringup")
-    policy_share = get_package_share_directory("wojtek_policy")
     xacro_file = os.path.join(share, "urdf", "wojtek_real.urdf.xacro")
     max_torque = LaunchConfiguration("max_torque")
     imu_port = LaunchConfiguration("imu_port")
@@ -64,7 +58,6 @@ def generate_launch_description():
                 ),
             ),
             DeclareLaunchArgument("dry_run", default_value="false"),
-            DeclareLaunchArgument("rviz", default_value="false"),
             # Pose the robot is in when the motors activate / zero. "home"
             # (standing, position 0) by default; "folded" only if the drives'
             # raw zero matches the folded pose -- see real_io_node.
@@ -128,12 +121,6 @@ def generate_launch_description():
                     ("joint_states", "wojtek/joint_states_abs"),
                     ("imu/data", "imu_sensor_broadcaster/imu"),
                 ],
-            ),
-            Node(
-                package="rviz2",
-                executable="rviz2",
-                arguments=["-d", os.path.join(policy_share, "rviz", "wojtek.rviz")],
-                condition=IfCondition(LaunchConfiguration("rviz")),
             ),
         ]
     )

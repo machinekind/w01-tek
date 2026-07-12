@@ -170,10 +170,9 @@ PR #15 also adds randomized control latency (0–5 substeps, sampled per env,
 off by default). Enable it in place of the fixed one-step action delay. A
 policy trained against variable latency cannot rely on exact actuation timing,
 and that robustness is a standard sim-to-real tool. PR #19 carries a second
-latency mechanism: per-step loop-timing jitter of ±1 control step on both
-actions and sensors, and spin_posture trained with it on. The two model
-different errors (a fixed per-env offset versus per-step jitter) and can
-compose. Enable #19's jitter first, since a trained policy validates it.
+latency mechanism, per-step loop-timing jitter. Owner decision (2026-07-12):
+#15's randomization is the project's approach, so the jitter was not ported.
+Revisit only if hardware evidence asks for it after #19 merges.
 
 Tier-2 terms, each added only when the battery shows its symptom:
 
@@ -236,13 +235,16 @@ and the walk gait.
 ## Implementation order
 
 1. Battery additions (turn scenario, splay and saturation metrics).
-2. Wait for PR #15 and PR #19 to merge. Together they already carry most of
-   the machinery as default-off knobs (vector action scale, torque cap,
-   torque_rate, high_step, stand_feet_down, command exposure, loop jitter,
-   encoder offset). The redesign then shrinks to one experiment preset plus
-   four small code changes: the abduction ctrlrange clamp, the knee ctrl
-   clip, the `torque_limit` hinge, and the decoupled forcerange DR field.
-   The height command stays in the code and gets pinned by config
+2. Done on this branch (2026-07-12). PR #15 merged into main, the branch is
+   rebased onto it, and the necessary subset of PR #19 is ported here as a
+   credited commit: torque_rate, high_step, stand_feet_down, the air-time
+   cap, the max_torque clamp, vector action_scale, and the pure-spin/strafe
+   command sampling, all default-off, 69/69 tests green. The loop-jitter,
+   obs-delay, displacement, and height-EMA machinery stayed in #19, because
+   #15's randomization is the project's approach. Remaining code: the
+   abduction ctrlrange clamp, the knee ctrl clip, the `torque_limit` hinge,
+   and the decoupled forcerange DR field, plus the experiment preset. The
+   height command stays in the code and gets pinned by config
    (`height: [0.125, 0.125]`, `height_tracking: 0`), which is cheaper than
    deleting the plumbing.
 3. Two-phase training run, scored against the extended battery.

@@ -13,3 +13,7 @@ __pycache__/
 *.pyc
 .env
 deploy/rpi/cache/
+
+# Per-run rosbags recorded by the launch files (bag_dir default is ~/wojtek_bags,
+# but dev.sh's container mounts them here -- see docker/compose.yaml).
+/bags/

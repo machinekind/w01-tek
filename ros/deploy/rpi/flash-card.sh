@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Flash a fresh RPi card end-to-end, from the PC: download + verify the pinned
-# Ubuntu image, write it to the card, and drop our cloud-init on the boot
-# partition with your SSH key injected. After this the Pi boots reachable at
-# 10.42.0.2 -- then `./deploy.sh --provision` finishes the job.
+# Ubuntu image, unmount any auto-mounted partitions on the card, write the image,
+# and drop our cloud-init on the boot partition with your SSH key injected. After
+# this the Pi boots reachable at 10.42.0.2 -- then `./deploy.sh --provision`
+# finishes the job.
 #
 #   ./deploy/rpi/flash-card.sh /dev/sdX
 #   ./deploy/rpi/flash-card.sh /dev/sdX --key ~/.ssh/id_ed25519.pub
@@ -68,6 +69,17 @@ if [ "${DRY_RUN}" != 1 ] && [ "${ASSUME_YES}" != 1 ]; then
     [ "${ans}" = "${DEVICE}" ] || { echo "mismatch -- aborting."; exit 1; }
 fi
 
+# --- unmount the card --------------------------------------------------------
+# A freshly-inserted card is usually auto-mounted (e.g. /media/...). dd onto a
+# device with mounted partitions risks a "busy"/inconsistent write and trips up
+# the cloud-init mount below, so free every partition of DEVICE first. Unmount
+# by node (spaces in mountpoints don't matter); umount failing (busy) aborts.
+while read -r name mnt; do
+    [ -n "${mnt}" ] || continue
+    say "unmounting /dev/${name} (${mnt})"
+    run "sudo umount '/dev/${name}'"
+done < <(lsblk -nro NAME,MOUNTPOINT "${DEVICE}")
+
 # --- obtain + verify image ---------------------------------------------------
 if [ -z "${IMAGE}" ]; then
     mkdir -p "${CACHE}"
@@ -125,6 +137,14 @@ else
     sync
     sudo umount "${MNT}"; rmdir "${MNT}"; trap - EXIT
 fi
+
+# --- forget the old host key -------------------------------------------------
+# The reflashed Pi regenerates its SSH host keys on first boot, so the fixed
+# anchor IP presents a new identity and strict checking would block the next
+# ssh/deploy.sh/`ros2 run ... robot`. Drop the stale known_hosts entry now
+# (idempotent -- a no-op if absent); the next connect trusts the new key once.
+ANCHOR_IP="10.42.0.2"
+run "ssh-keygen -f '${HOME}/.ssh/known_hosts' -R '${ANCHOR_IP}' 2>/dev/null || true"
 
 say "Done."
 cat <<EOF

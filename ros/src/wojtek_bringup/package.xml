@@ -29,6 +29,10 @@
   <exec_depend>xacro</exec_depend>
   <exec_depend>controller_manager</exec_depend>
   <exec_depend>ros2_controllers</exec_depend>
+  <!-- Each run records a full rosbag (ros2 bag record -a); see robot.launch.py. -->
+  <exec_depend>ros2bag</exec_depend>
+  <exec_depend>rosbag2_transport</exec_depend>
+  <exec_depend>rosbag2_storage_default_plugins</exec_depend>
 
   <test_depend>python3-pytest</test_depend>
 

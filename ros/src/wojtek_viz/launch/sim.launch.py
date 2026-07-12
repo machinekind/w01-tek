@@ -1,6 +1,6 @@
 """MuJoCo sim + policy + RViz.
 
-    ros2 launch wojtek_bringup sim.launch.py [rviz:=false] [initial_pose:=folded]
+    ros2 launch wojtek_viz sim.launch.py [rviz:=false] [initial_pose:=folded]
 
 initial_pose:=folded spawns the robot in the real robot's boot/zeroing pose
 (lying flat, knees folded -- see real_io_node) instead of standing at home.
@@ -38,7 +38,7 @@ def generate_launch_description():
                 parameters=[{"robot_description": robot_description}],
             ),
             Node(
-                package="wojtek_bringup",
+                package="wojtek_viz",
                 executable="mujoco_sim_node",
                 output="screen",
                 parameters=[{"initial_pose": LaunchConfiguration("initial_pose")}],

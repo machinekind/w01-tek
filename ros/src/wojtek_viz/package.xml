@@ -27,6 +27,10 @@
   <exec_depend>rviz2</exec_depend>
   <exec_depend>plotjuggler</exec_depend>
   <exec_depend>teleop_twist_keyboard</exec_depend>
+  <!-- viz.launch.py records the whole run (ros2 bag record -a) from the PC. -->
+  <exec_depend>ros2bag</exec_depend>
+  <exec_depend>rosbag2_transport</exec_depend>
+  <exec_depend>rosbag2_storage_default_plugins</exec_depend>
   <!-- mujoco is a pip package (no reliable rosdep key); installed via pip,
        see docker/Dockerfile. Only mujoco_sim_node needs it. -->
 

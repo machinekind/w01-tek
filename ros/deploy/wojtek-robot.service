@@ -36,6 +36,11 @@ Environment=RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 # isolation); the OS/wifi keep cores 0,1. ros2_control raises its own update
 # thread to RT internally (enabled by LimitRTPRIO above). If you need to force
 # the whole tree to SCHED_FIFO, prefix with: chrt -f 80
+#
+# Runs are recorded from the PC (wojtek_viz viz.launch.py) over DDS, so on-robot
+# recording is off here. For a lossless localhost capture on untethered runs,
+# append: bag:=true bag_cpus:=0,1  (bag_cpus re-affinitizes the recorder back to
+# the non-isolated cores 0,1, keeping its disk I/O off the RT cores).
 ExecStart=/usr/bin/taskset -c 2,3 /bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/rpi/wojtek_ws/install/setup.bash && exec ros2 launch wojtek_bringup robot.launch.py'
 Restart=on-failure
 RestartSec=2

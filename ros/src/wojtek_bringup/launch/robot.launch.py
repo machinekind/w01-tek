@@ -5,7 +5,14 @@ nodes -- no RViz, no GUI. Run visualization/debug on the PC separately:
     ros2 launch wojtek_viz viz.launch.py
 
     ros2 launch wojtek_bringup robot.launch.py [max_torque:=2.0] [dry_run:=true]
-                                               [boot_pose:=home|folded]
+                                               [boot_pose:=home|folded] [bag:=true]
+
+Recording note: the PC's viz.launch.py already records the whole run over
+DDS (all RPi topics are visible there), so on-robot recording is OFF by
+default here. Enable it -- bag:=true bag_cpus:=0,1 -- for a guaranteed
+lossless capture (localhost, no wifi loss), e.g. untethered runs where the
+PC's bag would drop samples. Bags go to bag_dir/run_<timestamp>
+(bag_dir defaults to ~/wojtek_bags).
 
 Startup/arming procedure is unchanged from real.launch.py:
   1. Power the motors and launch this file (any robot pose is fine). The
@@ -19,12 +26,19 @@ Startup/arming procedure is unchanged from real.launch.py:
   6. When done: disarm, then /wojtek/lie_down to ramp gently down to folded.
 """
 
+import datetime
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
-from launch.substitutions import Command, LaunchConfiguration
+from launch.actions import DeclareLaunchArgument, ExecuteProcess
+from launch.conditions import IfCondition
+from launch.substitutions import (
+    Command,
+    LaunchConfiguration,
+    PathJoinSubstitution,
+    TextSubstitution,
+)
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -40,6 +54,16 @@ def generate_launch_description():
              " imu_port:=", imu_port]
         ),
         value_type=str,
+    )
+
+    # One rosbag per run: a fresh timestamped subdirectory under bag_dir, named
+    # when the launch is generated (each `ros2 launch` / service (re)start gets
+    # its own bag). We collect little data, so recording everything (-a) as a
+    # per-run log is cheap and worth having.
+    default_bag_dir = os.path.join(os.path.expanduser("~"), "wojtek_bags")
+    bag_stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    bag_output = PathJoinSubstitution(
+        [LaunchConfiguration("bag_dir"), TextSubstitution(text=f"run_{bag_stamp}")]
     )
 
     return LaunchDescription(
@@ -62,6 +86,17 @@ def generate_launch_description():
             # (standing, position 0) by default; "folded" only if the drives'
             # raw zero matches the folded pose -- see real_io_node.
             DeclareLaunchArgument("boot_pose", default_value="home"),
+            # On-robot recording is OFF by default: the PC's viz.launch.py
+            # records the run over DDS. Enable (bag:=true, ideally with
+            # bag_cpus:=0,1) for a lossless localhost capture -- see the module
+            # docstring. bag_dir:=/some/path relocates the output.
+            DeclareLaunchArgument("bag", default_value="false"),
+            DeclareLaunchArgument("bag_dir", default_value=default_bag_dir),
+            # Optional CPU affinity for the recorder (comma list, e.g. "0,1").
+            # Empty = inherit. The RPi service wraps the whole launch in
+            # `taskset -c 2,3` (the isolated RT cores); it sets bag_cpus:=0,1 to
+            # keep the recorder's disk I/O off the control loop's cores.
+            DeclareLaunchArgument("bag_cpus", default_value=""),
             Node(
                 package="controller_manager",
                 executable="ros2_control_node",
@@ -121,6 +156,26 @@ def generate_launch_description():
                     ("joint_states", "wojtek/joint_states_abs"),
                     ("imu/data", "imu_sensor_broadcaster/imu"),
                 ],
+            ),
+            # bash -c: mkdir the parent (rosbag2 creates the bag dir itself but
+            # not missing parents), then exec the recorder -- optionally under
+            # taskset when bag_cpus is set. Paths/cpus are passed as argv ($1..$3),
+            # not spliced into the script, so values with spaces are safe.
+            ExecuteProcess(
+                condition=IfCondition(LaunchConfiguration("bag")),
+                cmd=[
+                    "bash", "-c",
+                    'mkdir -p "$1"\n'
+                    'if [ -n "$3" ]; then\n'
+                    '  exec taskset -c "$3" ros2 bag record -a -o "$2"\n'
+                    'fi\n'
+                    'exec ros2 bag record -a -o "$2"\n',
+                    "wojtek_bag_record",  # $0 (shell name in messages)
+                    LaunchConfiguration("bag_dir"),  # $1
+                    bag_output,  # $2
+                    LaunchConfiguration("bag_cpus"),  # $3
+                ],
+                output="screen",
             ),
         ]
     )

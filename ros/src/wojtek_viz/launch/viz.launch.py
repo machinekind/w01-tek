@@ -1,12 +1,23 @@
 """PC-side visualization/debug for the LIVE robot (running on the RPi).
 
     ros2 launch wojtek_viz viz.launch.py [rviz:=true] [plotjuggler:=false]
+                                         [bag:=false]
 
 This starts no hardware and no robot_state_publisher -- those run on the
 robot (wojtek_bringup robot.launch.py on the RPi). Over the shared DDS link
 this machine only consumes what the robot publishes:
   - RViz reads /robot_description (latched by the robot's RSP) and /tf.
   - PlotJuggler subscribes to the robot's topics for live plotting.
+
+Because DDS makes every RPi-published topic visible here, `bag:=true`
+(the default) records the WHOLE run from the PC -- one bag, all topics,
+on the machine with disk to spare and no RT budget to protect. Caveat:
+this bag is only as complete as the link. Over ethernet (docked) it is
+effectively lossless; over wifi -- especially once the robot is on its
+own AP and moving -- best-effort topics can drop samples and a dropped
+link leaves a gap. For a guaranteed lossless on-robot capture, record
+there instead: robot.launch.py bag:=true (see its bag_cpus note).
+Bags land in bag_dir/run_<timestamp> (bag_dir defaults to ~/wojtek_bags).
 
 Teleop needs its own terminal (it reads the keyboard on stdin), so run it
 separately rather than from here:
@@ -15,23 +26,41 @@ separately rather than from here:
 Make sure ROS_DOMAIN_ID and RMW match the robot (see docker/compose.yaml).
 """
 
+import datetime
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, ExecuteProcess
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import (
+    LaunchConfiguration,
+    PathJoinSubstitution,
+    TextSubstitution,
+)
 from launch_ros.actions import Node
 
 
 def generate_launch_description():
     policy_share = get_package_share_directory("wojtek_policy")
 
+    # One rosbag per run, recorded from the PC: DDS makes every RPi-published
+    # topic visible here, so `ros2 bag record -a` captures the whole run. Fresh
+    # timestamped subdir under bag_dir per `ros2 launch` invocation.
+    default_bag_dir = os.path.join(os.path.expanduser("~"), "wojtek_bags")
+    bag_stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    bag_output = PathJoinSubstitution(
+        [LaunchConfiguration("bag_dir"), TextSubstitution(text=f"run_{bag_stamp}")]
+    )
+
     return LaunchDescription(
         [
             DeclareLaunchArgument("rviz", default_value="true"),
             DeclareLaunchArgument("plotjuggler", default_value="false"),
+            # Record the whole run (all topics, over DDS) by default; bag:=false
+            # to skip, bag_dir:=/some/path to relocate.
+            DeclareLaunchArgument("bag", default_value="true"),
+            DeclareLaunchArgument("bag_dir", default_value=default_bag_dir),
             Node(
                 package="rviz2",
                 executable="rviz2",
@@ -42,6 +71,21 @@ def generate_launch_description():
                 package="plotjuggler",
                 executable="plotjuggler",
                 condition=IfCondition(LaunchConfiguration("plotjuggler")),
+            ),
+            # bash -c: mkdir the parent (rosbag2 creates the bag dir itself but
+            # not missing parents), then exec the recorder. bag_dir/bag_output
+            # are passed as argv ($1/$2), not spliced into the script.
+            ExecuteProcess(
+                condition=IfCondition(LaunchConfiguration("bag")),
+                cmd=[
+                    "bash", "-c",
+                    'mkdir -p "$1"\n'
+                    'exec ros2 bag record -a -o "$2"\n',
+                    "wojtek_bag_record",  # $0 (shell name in messages)
+                    LaunchConfiguration("bag_dir"),  # $1
+                    bag_output,  # $2
+                ],
+                output="screen",
             ),
         ]
     )

@@ -224,6 +224,15 @@ The battery cannot yet see the new goals:
   phase A as well, so a stand-still collapse or a degenerate gait is caught
   before phase B spends the second run.
 
+Videos, one MP4 per scenario under `videos/<run_name>/`, per trained variant:
+`stand_to_trot_ramp` (the fast section shows whether stride-rhythm bounce
+emerges), `turn` (the pure-spin hold shows whether feet reposition fast
+enough to rotate in place), `strafe`, and `walk_to_stop` (the direct visual
+check on planted feet, the thing the trunk-fine drop puts at risk). The v8-era
+set shrinks accordingly: the three per-height ramps collapse into the one
+ramp, and `stand_heights` and `walk_to_trot` go away with the height command
+and the walk gait.
+
 ## Implementation order
 
 1. Battery additions (turn scenario, splay and saturation metrics).

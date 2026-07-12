@@ -1,4 +1,5 @@
 import jax
+import jax.numpy as jnp
 import mujoco
 import numpy as np
 import pytest
@@ -100,6 +101,65 @@ def test_foot_friction_varies_when_enabled(mj_model, mjx_model, rng):
     baseline = np.array(mjx_model.geom_friction[foot_ids, 0])
     assert not np.allclose(friction[0], baseline)
     assert in_axes.geom_friction == 0
+
+    # Foot geoms get contact priority (unbatched: same for every env), so
+    # their friction wins the contact regardless of the floor's draw.
+    # geom_priority is a static (non-pytree) field in mjx.Model, so
+    # tree_map(lambda x: None, model) never visits it and in_axes.geom_priority
+    # can't literally become None; check the property that actually matters
+    # for "unbatched" instead: no leading env axis was added.
+    assert model_v.geom_priority.shape == mjx_model.geom_priority.shape
+    priority = np.array(model_v.geom_priority)
+    assert np.all(priority[foot_ids] == 1)
+    other_ids = np.setdiff1d(np.arange(priority.shape[0]), foot_ids)
+    np.testing.assert_array_equal(
+        priority[other_ids], np.array(mjx_model.geom_priority)[other_ids]
+    )
+
+
+def test_foot_friction_reaches_contact(mj_model, mjx_model):
+    """Priority fix, end to end: a foot's friction draw below the floor's
+    fixed friction still shows up on the floor-foot contact instead of being
+    masked by MuJoCo's element-wise-max combination rule."""
+    dr_cfg = {**ALL_DISABLED, "foot_friction": {"enable": True, "range": [0.5, 0.6]}}
+    randomize = make_domain_randomize(mj_model, dr_cfg)
+
+    key = jax.random.split(jax.random.PRNGKey(0), 1)
+    model_v, _ = randomize(mjx_model, key)
+
+    foot_ids = [mj_model.geom(f"{leg}_foot_sphere").id for leg in paths.LEGS]
+    floor_id = mj_model.geom("floor").id
+
+    geom_friction = model_v.geom_friction[0]
+    foot_friction_vals = np.array(geom_friction[foot_ids, 0])
+    assert np.all(foot_friction_vals < 0.7)  # well below the floor's 0.9
+
+    m = mjx_model.tree_replace(
+        {"geom_friction": geom_friction, "geom_priority": model_v.geom_priority}
+    )
+
+    keyframe = mj_model.key("home")
+    data = mjx.make_data(m)
+    data = data.replace(qpos=jnp.array(keyframe.qpos), ctrl=jnp.array(keyframe.ctrl))
+    data = mjx.forward(m, data)
+
+    # data.contact is deprecated on this mjx version; the underlying array
+    # lives on data._impl.contact.
+    contact = data._impl.contact
+    found = 0
+    for i in range(contact.geom.shape[0]):
+        g1, g2 = int(contact.geom[i, 0]), int(contact.geom[i, 1])
+        if float(contact.dist[i]) >= 0 or floor_id not in (g1, g2):
+            continue
+        foot_geom = g2 if g1 == floor_id else g1
+        if foot_geom not in foot_ids:
+            continue
+        idx = foot_ids.index(foot_geom)
+        np.testing.assert_allclose(
+            float(contact.friction[i, 0]), foot_friction_vals[idx], atol=1e-5
+        )
+        found += 1
+    assert found == len(foot_ids)  # all four feet touching at "home"
 
 
 def test_joint_gains_independent_when_enabled(mj_model, mjx_model, rng):

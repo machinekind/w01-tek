@@ -20,7 +20,10 @@ dr:
     damping: [0.9, 1.1]
     armature: [0.9, 1.1]
     frictionloss: [0.9, 1.1]
-  foot_friction: { enable: false, range: [0.8, 1.2] } # per-foot-geom, multiplicative
+  # Per-foot-geom, multiplicative. Also gives the foot geoms contact
+  # priority, so the foot's draw is the contact friction and the floor's
+  # (including its DR draw) no longer affects foot contacts.
+  foot_friction: { enable: false, range: [0.8, 1.2] }
 
 wandb:
   enable: true

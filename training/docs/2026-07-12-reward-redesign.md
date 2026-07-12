@@ -25,15 +25,26 @@ any reward that pins body height or punishes vertical velocity suppresses
 exactly that bounce. Standing height still comes out fixed, because `stand_still`
 anchors the joints to the home pose (~0.125 m) whenever the command is zero.
 
-**The walk gait.** The 4-beat walk offsets, the duty blend, and the `trot_band`
-exist only to serve a gait outside the goals. One trot clock remains: diagonal
-pairs in antiphase, duty 0.5, frequency scaled 1.4→3.0 Hz with commanded speed,
-frozen at zero command.
+**The gait clock, entirely.** The 4-beat walk offsets, the duty blend, the
+`trot_band`, the frequency schedule, and the trot clock itself all go, and the
+8 phase observations go with them. The clock hard-codes cadence and duty. The
+argument that unpins height applies to gait timing too: the optimizer should
+find the cadence that minimizes torque. Clock-free gait shaping is the
+canonical legged_gym approach and runs on real hardware (ANYmal, Go1, Barkour).
+The one clock-free failure in this project's history is fbb_v2, which skated
+instead of stepping. That run used the underdamped kd=0.5 actuator model, and
+the kd=1.0 fix removed the resonance it exploited. Deployment also gets
+simpler, because the robot no longer needs a phase generator.
+
+The known risk: with no contact schedule, the gait can degenerate into skating,
+pronking, or pacing. The battery's duty-factor and diagonal-correlation checks
+detect all three. The fallback is reintroducing the trot clock with the current
+env's `contact_match` and `feet_phase` terms.
 
 The command becomes (vx, vy, wz): vx ∈ [−0.6, 1.0], vy ∈ [−0.3, 0.3],
 wz ∈ [−0.7, 0.7], zeroed with probability 0.25 for stand training.
 
-## Core reward: 12 terms
+## Core reward: 11 terms
 
 Weights are in the current env frame (total reward is multiplied by dt).
 "moving" means commanded speed > 0.05 m/s. "standing" is its complement.
@@ -44,8 +55,7 @@ Weights are in the current env frame (total reward is multiplied by dt).
 | tracking_ang_vel | exp(−(cmd_wz − ω_z)² / 0.25) | +1.0 | — |
 | orientation | ‖g_xy‖² | −5.0 | — |
 | pose | Σ wⱼ (qⱼ − q_home,ⱼ)², w = [1.0, 0.1, 0.1] per leg | −1.0 | — |
-| contact_match | mean(contact == stance schedule) | +1.0 | moving |
-| feet_phase | exp(−Σ (z_foot − z_target)² / 0.002) | +1.0 | moving |
+| feet_air_time | Σ (t_air − 0.2) · first_contact | +2.0 | moving |
 | feet_slip | Σ v²_xy,foot · contact | −0.3 | moving |
 | torques | Σ τ² | −2e-4 | — |
 | torque_limit | Σ max(\|τ\| − 0.85 · τ_max, 0) | −0.1 | — |
@@ -54,15 +64,19 @@ Weights are in the current env frame (total reward is multiplied by dt).
 | termination | 1[fall] | −1.0 | — |
 
 Terms dropped from the current set: `height_tracking` (command removed),
-`feet_air_time` (the clock's `contact_match` already forces swing),
-`lin_vel_z`, `ang_vel_xy`, `energy`, `action_accel` (all moved to tier 2).
+`contact_match` and `feet_phase` (they need the clock, and they return only as
+the degeneration fallback), and `lin_vel_z`, `ang_vel_xy`, `energy`,
+`action_accel` (moved to tier 2).
 
 The tracking form and σ² = 0.25 appear verbatim in legged_gym, MuJoCo
 Playground, Walk These Ways, and CaT. The torque coefficient −2e-4 is where
 Playground, Barkour, and Unitree's shipped Go2 config independently landed. The
 academic default −1e-5 proved ~20× too weak on hardware. The pose weights copy
 the Playground Go1 pattern of anchoring the hip an order of magnitude harder
-than the joints that swing the leg.
+than the joints that swing the leg. The air-time threshold sets the cadence
+floor and is the main gait knob. legged_gym uses 0.5 s on ANYmal, Playground
+uses 0.1 s on Go1, and the closest small-robot precedent (quiet-walking aibo)
+uses 0.2 s. We start at 0.2 s.
 
 ## Anti-splay package
 
@@ -115,6 +129,7 @@ Tier-2 terms, each added only when the battery shows its symptom:
 | lin_vel_z | −1.0 | trot bounces destructively (knowingly trades away springiness) |
 | ang_vel_xy | −0.05 | base rocks |
 | energy (Σ \|q̇\| · \|τ\|) | −2e-3 | torque percentiles fine but power draw high |
+| feet_clearance (Playground form) | −2.0 | feet scuff during swing |
 
 A Lipschitz gradient penalty on the policy (λ ≈ 0.002,
 [arXiv:2410.11825](https://arxiv.org/abs/2410.11825)) is the strongest
@@ -129,6 +144,8 @@ The battery cannot yet see the new goals:
   scored on angular-velocity error and falls.
 - No splay metric exists. Add p95 |q_abduction| and the fraction of steps with
   |τ| above 85% of the cap, per joint group.
+- Diagonal correlation alone cannot catch skating. Add per-foot duty factor
+  (the fbb_v2 failure read as duty ~1.0).
 - The vibration index, hold-window qvel, and torque percentiles already cover
   the jitter goals and stay as they are.
 
@@ -136,7 +153,7 @@ The battery cannot yet see the new goals:
 
 1. Battery additions (turn scenario, splay and saturation metrics).
 2. Model changes (ctrlrange clamp, action scales, knee clip, randomization).
-3. Reward rewrite (trot-only clock, 12-term core).
+3. Reward rewrite (clock-free, 11-term core).
 4. Two-phase training run, scored against the extended battery.
 
 ## Sources

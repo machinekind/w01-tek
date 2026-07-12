@@ -2,8 +2,14 @@
 
 Run: ./run.sh eval --run runs/<name> --x-vel 0.3 --out walk.mp4
 
-A bare --out filename lands in videos/<run_name>/<timestamp>/ (gitignored);
-pass a path containing a directory to override.
+Or run one of the battery's fixed command scripts instead of a constant
+command (--x-vel/--y-vel/--yaw-vel/--height/--steps are ignored when set):
+
+    ./run.sh eval --run runs/<name> --scenario turn
+
+Default output name is <scenario>.mp4 unless --out overrides it. A bare
+--out filename lands in videos/<run_name>/<timestamp>/ (gitignored); pass a
+path containing a directory to override.
 """
 
 import os
@@ -22,6 +28,7 @@ import jax.numpy as jp
 import numpy as np
 
 from wojtek_rl import paths
+from wojtek_rl.battery import battery_scenarios
 
 
 def _latest_checkpoint(ckpt_dir: Path) -> Path:
@@ -37,7 +44,14 @@ def main() -> None:
     ap.add_argument("--yaw-vel", type=float, default=0.0)
     ap.add_argument("--height", type=float, default=0.125)
     ap.add_argument("--steps", type=int, default=500)
-    ap.add_argument("--out", default="walk.mp4")
+    ap.add_argument(
+        "--scenario",
+        choices=sorted(battery_scenarios().keys()),
+        default=None,
+        help="run one of the battery's fixed command scripts instead of "
+        "--x-vel/--y-vel/--yaw-vel/--height/--steps (all ignored when set)",
+    )
+    ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
     # Imported lazily: wojtek_rl.env and wojtek_rl.train pull in brax/mjx and may
@@ -56,7 +70,8 @@ def main() -> None:
     if isinstance(stored, dict) and isinstance(stored.get("network_factory"), dict):
         _apply_ppo_overrides(ppo_params.network_factory, stored["network_factory"])
 
-    out = Path(args.out)
+    out_name = args.out or (f"{args.scenario}.mp4" if args.scenario else "walk.mp4")
+    out = Path(out_name)
     if out.parent == Path("."):
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         out = paths.PROJECT_DIR / "videos" / run["run_name"] / stamp / out.name
@@ -74,7 +89,12 @@ def main() -> None:
     ckpt = _latest_checkpoint(ckpt_dir)
     policy = load_policy(ckpt, env, ppo_params)
 
-    command = jp.array([args.x_vel, args.y_vel, args.yaw_vel, args.height])
+    if args.scenario:
+        cmd_at, n_steps = battery_scenarios()[args.scenario]
+    else:
+        command = jp.array([args.x_vel, args.y_vel, args.yaw_vel, args.height])
+        cmd_at, n_steps = (lambda i: command), args.steps
+
     reset = jax.jit(env.reset)
     step = jax.jit(env.step)
     inference = jax.jit(policy)
@@ -90,9 +110,9 @@ def main() -> None:
     mj_model = env.mj_model
     data = mujoco.MjData(mj_model)
     with mujoco.Renderer(mj_model, height=480, width=640) as renderer:
-        for i in range(args.steps):
+        for i in range(n_steps):
             if task == "joystick":
-                state.info["command"] = command
+                state.info["command"] = cmd_at(i)
             rng, act_rng = jax.random.split(rng)
             action, _ = inference(state.obs, act_rng)
             state = step(state, action)
@@ -118,7 +138,10 @@ def main() -> None:
         mediapy.set_ffmpeg(imageio_ffmpeg.get_ffmpeg_exe())
 
     mediapy.write_video(args.out, frames, fps=fps)
-    print(f"commanded vx {args.x_vel:+.2f}  achieved vx {np.mean(vels):+.2f}")
+    if args.scenario:
+        print(f"scenario {args.scenario}  mean vx {np.mean(vels):+.2f}")
+    else:
+        print(f"commanded vx {args.x_vel:+.2f}  achieved vx {np.mean(vels):+.2f}")
     print(f"wrote {args.out} ({len(frames)} frames)")
 
 

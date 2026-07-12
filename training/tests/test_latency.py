@@ -6,6 +6,7 @@ latency.enable=False) still reproduces pre-refactor trajectories bitwise.
 """
 
 import jax
+import jax.numpy as jp
 import numpy as np
 
 from wojtek_rl import env as wojtek_env
@@ -126,6 +127,31 @@ def test_ctrl_delay_always_present_disabled():
     state = jax.jit(env.reset)(jax.random.PRNGKey(0))
     assert "ctrl_delay" in state.info
     assert int(state.info["ctrl_delay"]) == env.n_substeps  # action_delay=1
+
+
+def test_vmapped_step_with_latency_enabled():
+    """Vmapped reset + step mirrors the batched shape the training loop
+    actually runs: per-env ctrl_delay varies, and the where-scan in
+    _step_with_latency must select correctly per-lane with `d` batched
+    (the reason it's a jp.where scan and not a per-lane lax.cond, per the
+    comment on _step_with_latency). No existing test runs step() under
+    vmap with latency enabled."""
+    env = wojtek_env.WojtekJoystick(_config(True, 0, 5))
+    rngs = jax.random.split(jax.random.PRNGKey(0), 8)
+    state = jax.jit(jax.vmap(env.reset))(rngs)
+    d = np.array(state.info["ctrl_delay"])
+    assert len(np.unique(d)) > 1
+
+    step = jax.jit(jax.vmap(env.step))
+    for v in (0.0, 0.2, -0.2):
+        action = jp.full((8, 12), v)
+        state = step(state, action)
+        qpos = np.array(state.data.qpos)
+        qvel = np.array(state.data.qvel)
+        assert qpos.shape[0] == 8
+        assert qvel.shape[0] == 8
+        assert np.all(np.isfinite(qpos))
+        assert np.all(np.isfinite(qvel))
 
 
 def test_disabled_reset_consumes_no_extra_rng():

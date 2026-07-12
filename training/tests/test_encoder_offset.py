@@ -86,6 +86,51 @@ def test_closure_residual_unchanged():
         assert residual <= 2e-3, f"step {i}: closure residual {residual} m"
 
 
+def test_latency_and_encoder_combined():
+    """Both domain-randomization features on at once: the ctrl actually
+    written to physics must reflect BOTH the latency where-scan and the
+    encoder subtraction. Neither test_latency.py nor the rest of this file
+    exercises that combined branch of step() (encoder.enable and
+    latency.enable both True) -- this is the only one that does.
+
+    latency min_substeps=max_substeps=2 fixes d=2 < n_substeps=5, so the
+    where-scan runs the PREV segment (substeps 0-1) then the NEW segment
+    (substeps 2-4). The scan's last substep sets data.ctrl to the new
+    targets minus epsilon, which is what should remain after the step.
+    """
+    cfg = wojtek_env.default_config()
+    cfg.encoder.enable = True
+    cfg.encoder.range = 0.02
+    cfg.latency.enable = True
+    cfg.latency.min_substeps = 2
+    cfg.latency.max_substeps = 2
+    assert cfg.action_filter == 0.0  # test assumes filtered action == action
+
+    env = wojtek_env.WojtekJoystick(cfg)
+    state = jax.jit(env.reset)(jax.random.PRNGKey(0))
+    eps = np.array(state.info["encoder_offset"])
+    assert eps.shape == (12,)
+    assert np.any(eps != 0.0)
+
+    action = jp.full(12, 0.3)
+    next_state = jax.jit(env.step)(state, action)
+
+    # Same computation as step(): with action_filter=0, filtered action ==
+    # action, so this is the new motor target for the step just taken.
+    cmd = state.info["command"]
+    new_targets = jp.clip(
+        env._height_ctrl(cmd[3]) + action * env._config.action_scale,
+        env._ctrlrange[:, 0],
+        env._ctrlrange[:, 1],
+    )
+    expected_ctrl = np.array(new_targets) - eps
+    np.testing.assert_allclose(
+        np.array(next_state.data.ctrl), expected_ctrl, atol=1e-6
+    )
+    assert np.all(np.isfinite(np.array(next_state.data.qpos)))
+    assert np.all(np.isfinite(np.array(next_state.data.qvel)))
+
+
 def test_disabled_off_is_zero_and_no_rng():
     """Default env (encoder off): epsilon is exactly zero and no extra rng
     is spent, same guarantee as test_latency's disabled-path test."""

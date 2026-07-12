@@ -25,14 +25,23 @@ env:
       - linvel
       - foot_contact
 
-  # Randomized per-episode control latency at substep granularity. Off by
-  # default: action_delay (see env.py default_config) drives a static
+  # Randomized control latency at substep granularity. Off by default:
+  # action_delay (see env.py default_config) drives a static
   # ctrl_delay=n_substeps, i.e. today's fixed one-control-step latency.
-  # Enable to sample d ~ U[min_substeps, max_substeps] per env per episode;
+  # Enable to sample d ~ U[min_substeps, max_substeps] per env at reset;
   # d=0 = no delay, d=n_substeps(=5 at ctrl_dt=0.02/sim_dt=0.004) = today.
+  # Under the brax training auto-reset wrapper, auto-reset restores a cached
+  # state without re-running reset, so d is fixed per env for the whole
+  # training run, not resampled per episode.
   latency:
     enable: false
     min_substeps: 0
     max_substeps: 5
+
+  # Per-joint encoder-zero offset in rad, added to the observed joint angle
+  # and subtracted from the written targets. Off by default.
+  encoder:
+    enable: false
+    range: 0.02
 
 ppo: {}

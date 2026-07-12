@@ -90,6 +90,19 @@ def default_config() -> config_dict.ConfigDict:
         ),
         push=config_dict.create(enable=True, interval_steps=200, vel=0.4),
         action_delay=1,  # control steps of latency between policy and motors
+        # Control latency at substep granularity, off by default (reproduces
+        # the action_delay path above). See _step_with_latency. Sampled at
+        # reset. Under the brax training auto-reset wrapper, auto-reset
+        # restores a cached state without re-running reset, so this value is
+        # fixed per env for the whole training run, not resampled per episode.
+        latency=config_dict.create(enable=False, min_substeps=0, max_substeps=5),
+        # Encoder miscalibration: a per-joint constant epsilon added to the
+        # observed joint angle and subtracted from the written target, so
+        # true qpos and the four-bar anchor stay untouched. Off by default
+        # (epsilon = 0). Sampled at reset; under the brax training auto-reset
+        # wrapper it is fixed per env for the whole run, for the same reason
+        # as latency above.
+        encoder=config_dict.create(enable=False, range=0.02),
         # EMA low-pass on actions before the PD targets (0 = off). Kills the
         # noise-driven standing limit cycle structurally; mirror the same
         # one-liner on the robot when deploying a policy trained with it.
@@ -148,6 +161,20 @@ def default_config() -> config_dict.ConfigDict:
 class WojtekJoystick(WojtekEnv):
     def __init__(self, config=None, config_overrides=None):
         super().__init__(config or default_config(), config_overrides)
+        # latency.min/max_substeps and n_substeps are static Python ints at
+        # this point (config, not traced arrays), so plain Python checks are
+        # safe here and run once outside jit.
+        lat = self._config.latency
+        if lat.min_substeps > lat.max_substeps:
+            raise ValueError(
+                f"latency.min_substeps ({lat.min_substeps}) must be <= "
+                f"latency.max_substeps ({lat.max_substeps})"
+            )
+        if lat.max_substeps > self.n_substeps:
+            raise ValueError(
+                f"latency.max_substeps ({lat.max_substeps}) must be <= "
+                f"n_substeps ({self.n_substeps})"
+            )
 
     def _sample_command(self, rng):
         """(vx, vy, wz, height). Zeroing (stand training) keeps the height."""
@@ -237,6 +264,28 @@ class WojtekJoystick(WojtekEnv):
         data = self._make_data()
         data = data.replace(qpos=qpos, qvel=jp.zeros(self._mj_model.nv), ctrl=anchor)
         data = mjx.forward(self._mjx_model, data)
+        # Control delay, sampled at reset (fixed per env for the whole
+        # training run under auto-reset; see default_config). The disabled
+        # branch draws no rng, so the default trajectory is unchanged.
+        lat = self._config.latency
+        if lat.enable:
+            rng, r_delay = jax.random.split(rng)  # only consumed when enabled
+            d = jax.random.randint(r_delay, (), lat.min_substeps, lat.max_substeps + 1)
+            d = jp.clip(d, 0, self.n_substeps)
+        else:
+            d = self.n_substeps if self._config.action_delay > 0 else 0
+        # Per-joint encoder offset, sampled at reset (fixed per env for the
+        # whole training run under auto-reset; see default_config). The
+        # disabled branch draws no rng, so the default trajectory is
+        # unchanged.
+        enc = self._config.encoder
+        if enc.enable:
+            rng, r_enc = jax.random.split(rng)  # only consumed when enabled
+            epsilon = jax.random.uniform(
+                r_enc, (12,), minval=-enc.range, maxval=enc.range
+            )
+        else:
+            epsilon = jp.zeros(12)
         info = {
             "rng": rng,
             "command": command,
@@ -249,6 +298,8 @@ class WojtekJoystick(WojtekEnv):
             "motor_targets": anchor,
             "step_count": jp.array(0),
             "phase": jp.array(0.0),  # master clock; per-leg via _leg_phases
+            "ctrl_delay": jp.int32(d),
+            "encoder_offset": epsilon,
         }
         metrics = {f"reward/{k}": jp.zeros(()) for k in self._config.reward.scales}
         obs = self._get_obs(data, info)
@@ -270,10 +321,6 @@ class WojtekJoystick(WojtekEnv):
             self._ctrlrange[:, 0],
             self._ctrlrange[:, 1],
         )
-        # one control step of latency: the motors receive last step's targets
-        applied_targets = (
-            info["motor_targets"] if self._config.action_delay > 0 else motor_targets
-        )
         data = state.data
         # random horizontal push, every push.interval_steps
         if self._config.push.enable:
@@ -285,7 +332,26 @@ class WojtekJoystick(WojtekEnv):
             qvel = data.qvel.at[:2].add(jp.where(push_now, push, jp.zeros(2)))
             data = data.replace(qvel=qvel)
 
-        data = mjx_env.step(self._mjx_model, data, applied_targets, self.n_substeps)
+        # Subtract the encoder offset from the written targets, matching the
+        # real driver's error against q~ = q + epsilon. Zero when disabled.
+        eps = info["encoder_offset"]
+        if self._config.latency.enable:
+            # Substeps before ctrl_delay use the previous targets, the rest
+            # the new ones.
+            data = self._step_with_latency(
+                data, info["motor_targets"] - eps, motor_targets - eps, info["ctrl_delay"]
+            )
+        else:
+            # Default path: one ctrl for the whole period. Kept on the stock
+            # mjx_env.step so the trajectory is unchanged; the where-scan
+            # above shifts the float output by a few ULPs.
+            applied_targets = (
+                info["motor_targets"] if self._config.action_delay > 0
+                else motor_targets
+            )
+            data = mjx_env.step(
+                self._mjx_model, data, applied_targets - eps, self.n_substeps
+            )
 
         contact = self._foot_contact(data)
         contact_filt = contact | info["last_contact"]
@@ -328,6 +394,9 @@ class WojtekJoystick(WojtekEnv):
     # -- observations -------------------------------------------------------
     def _obs_catalog(self, data, info):
         catalog = super()._obs_catalog(data, info)
+        # Add the encoder offset to the observed joint angle (q~ = q +
+        # epsilon). Zero when disabled.
+        catalog["joint_pos"] = catalog["joint_pos"] + info["encoder_offset"]
         catalog["command"] = info["command"]
         leg_phase = self._leg_phases(info)
         catalog["phase"] = jp.concatenate([jp.cos(leg_phase), jp.sin(leg_phase)])

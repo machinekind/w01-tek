@@ -46,11 +46,13 @@ pronking, or pacing. spin_posture already crossed this gap, and its recipe
 diagonal-correlation checks still guard it. The fallback is reintroducing the
 trot clock with the current env's `contact_match` and `feet_phase` terms.
 
-The command becomes (vx, vy, wz): vx ∈ [−0.6, 1.0], vy ∈ [−0.3, 0.3],
-wz ∈ [−0.7, 0.7], zeroed with probability 0.25 for stand training. Adopt
-spin_posture's exposure fixes on top: with probability 0.25 the command keeps
-only wz (pure spin) and with probability 0.2 only vy (pure strafe). Uniform
-box sampling almost never draws those, and turning is a stated goal.
+The command becomes (vx, vy, wz), at spin_posture's trained ranges since the
+inherited weights were calibrated under them: vx ∈ [−0.8, 1.2],
+vy ∈ [−0.5, 0.5], wz ∈ [−1.0, 1.0], zeroed with probability 0.25 for stand
+training. Adopt spin_posture's exposure fixes on top: with probability 0.25
+the command keeps only wz (pure spin) and with probability 0.2 only vy (pure
+strafe). Uniform box sampling almost never draws those, so turning and
+side-stepping stay undertrained without the fix, and both are goals here.
 
 ## Core reward: 14 terms
 
@@ -192,8 +194,10 @@ loss, so it is a later experiment. The v5 lesson stands: no EMA action filter.
 
 The battery cannot yet see the new goals:
 
-- No turning scenario exists. Add one (e.g. vx = 0.4 with a ±0.7 wz sweep),
-  scored on angular-velocity error and falls.
+- No turning or side-stepping scenario exists. Add a turn scenario (vx = 0.4
+  with a ±0.8 wz sweep, plus a pure-spin hold at wz = 0.8) scored on
+  angular-velocity error and falls, and a strafe scenario (pure vy at ±0.4)
+  scored on lateral-velocity error and falls.
 - No splay metric exists. Add p95 |q_abduction| and the fraction of steps with
   |τ| above 85% of the cap, per joint group.
 - Diagonal correlation alone cannot catch skating, and it cannot tell a pace

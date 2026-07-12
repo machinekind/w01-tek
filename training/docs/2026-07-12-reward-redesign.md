@@ -196,10 +196,29 @@ The battery cannot yet see the new goals:
   scored on angular-velocity error and falls.
 - No splay metric exists. Add p95 |q_abduction| and the fraction of steps with
   |τ| above 85% of the cap, per joint group.
-- Diagonal correlation alone cannot catch skating. Add per-foot duty factor
-  (the fbb_v2 failure read as duty ~1.0).
+- Diagonal correlation alone cannot catch skating, and it cannot tell a pace
+  or a pronk from noise. Add per-foot duty factor (the fbb_v2 failure read as
+  duty ~1.0) and lateral-pair contact correlation next to the diagonal one
+  (trot: diagonal high; pace: lateral high; pronk: both high).
+- No walk→stop scenario exists. Add one (command 0.5 m/s, then zero, hold
+  300 steps), scored on time until all four feet plant and max foot clearance
+  during the hold. This is spin_posture's headline win (−0.6 mm foot-up vs
+  60–108 mm fleet-wide), and it is the direct test of whether dropping the
+  trunk fines cost us stance quality.
+- Nothing verifies that springiness actually emerges once it is allowed. Add
+  base-height peak-to-peak amplitude and its spectral power in the 2–4 Hz
+  stride band during steady trot. "Bounce allowed but unused" and "bounce
+  used" should be distinguishable in the report, or the experiment tests
+  nothing.
+- Torque comparisons must be speed-fair. A policy that tracks velocity worse
+  is effectively slower and gets cheap torque numbers for free (spin_posture
+  vel err 0.142 vs v8 0.080 makes this a live hazard). Score torque p90/p99
+  binned by achieved speed, not commanded speed, and run spin_posture through
+  this same extended battery as the baseline row.
 - The vibration index, hold-window qvel, and torque percentiles already cover
-  the jitter goals and stay as they are.
+  the jitter goals and stay as they are. Run the full battery after curriculum
+  phase A as well, so a stand-still collapse or a degenerate gait is caught
+  before phase B spends the second run.
 
 ## Implementation order
 

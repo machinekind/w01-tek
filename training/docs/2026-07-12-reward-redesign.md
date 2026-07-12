@@ -84,6 +84,21 @@ likely source of its planted stops and quiet stance, and they also fight the
 springy vertical motion this design wants. Dropping them is the experiment,
 and they are the first tier-2 pulls if stance quality disappoints.
 
+Why springiness is the bet (owner decision, 2026-07-12). A rigid trunk must
+kill the body's vertical momentum in a short leg travel at every touchdown,
+so force rises sharply. A compliant stance spreads the same momentum change
+over a longer stroke, so peaks drop. Peaks are the scarce resource under the
+6 Nm cap, and touchdown saturation is how weak-motor robots fall. Rigidity
+also has a speed ceiling under a torque cap, because faster gaits bring more
+momentum per step. `torque_rate` guards the failure mode springiness opens:
+torque waves at the 2–3 Hz stride rhythm change little between 20 ms control
+steps and pay almost nothing, while resonance buzzing (the old fbb_v2 7 Hz
+exploit) pays heavily. One caveat stays on record: the motors store no energy
+the way tendons do, so springiness buys lower peaks and smoother profiles,
+not necessarily less battery. The verdict is cheap to get: compare torque
+p90/p99 and the vibration index at matched speed between this core and the
+tier-2 trunk fines.
+
 Twelve of the fourteen weights match spin_posture's trained config (including
 the env defaults it kept active), so they start calibrated instead of guessed.
 The two others are this design's anti-splay additions: `pose`, whose weights

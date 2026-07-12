@@ -92,13 +92,18 @@ package is mostly structural:
 3. **The `torque_limit` hinge** (core table) fires at 85% of the sim torque
    cap, so the policy never learns postures that live near saturation. The
    getup env already uses this pattern.
-4. **Weak-motor domain randomization.** Today one sample scales kp, kd, and
-   forcerange together, so a weak-motor world also feels soft, which reads as
-   compliance instead of saturation. Sample forcerange separately, scaled
-   0.5–1.1. The weak-side skew is our inference from the failure mode. Published
-   ranges are symmetric ±10–20%.
-5. **Joint-zero offset randomization, ±0.05 rad.** The motors have relative
-   encoders, so every boot can be slightly mis-zeroed.
+4. **Weak-motor domain randomization.**
+   [PR #15](https://github.com/machinekind/wojtek/pull/15) rebuilds the
+   DR module into per-field toggles, but forcerange still rides the same
+   random sample as the kp gain scale, so a weak-motor world also feels soft,
+   which reads as compliance instead of saturation. Add a separate forcerange
+   field to that taxonomy, scaled 0.5–1.1. The weak-side skew is our inference
+   from the failure mode. Published ranges are symmetric ±10–20%.
+5. **Joint-zero offset randomization.** The motors have relative encoders, so
+   every boot can be slightly mis-zeroed. PR #15 already implements this as
+   `encoder.enable` (a per-joint constant offset, added to the observed angle
+   and subtracted from the written target, off by default, ±0.02 rad knob).
+   Enable it. Walk These Ways ships ±0.05 rad, so widening is on the table.
 6. **Clip knee ctrl at 3.15 rad**, under the 3.2 four-bar singularity, as the
    jump env already does. The joystick env currently has no guard.
 
@@ -120,6 +125,11 @@ torque penalties from step 0 collapse training into standing still
 result is the mild version. So training runs in two phases: phase A with
 `action_rate`, `torques`, and `torque_limit` at 0.3× weight, phase B at full
 weight via checkpoint restore. Runs cost ~15 minutes, so two phases are cheap.
+
+PR #15 also adds randomized control latency (0–5 substeps, sampled per env,
+off by default). Enable it in place of the fixed one-step action delay. A
+policy trained against variable latency cannot rely on exact actuation timing,
+and that robustness is a standard sim-to-real tool.
 
 Tier-2 terms, each added only when the battery shows its symptom:
 
@@ -152,7 +162,9 @@ The battery cannot yet see the new goals:
 ## Implementation order
 
 1. Battery additions (turn scenario, splay and saturation metrics).
-2. Model changes (ctrlrange clamp, action scales, knee clip, randomization).
+2. Model and DR changes, after PR #15 merges: ctrlrange clamp, action scales,
+   knee clip, the decoupled forcerange field, and enabling PR #15's encoder
+   offset and latency randomization.
 3. Reward rewrite (clock-free, 11-term core).
 4. Two-phase training run, scored against the extended battery.
 

@@ -1,0 +1,24 @@
+# @package _global_
+# Springy locomotion, phase A: springy_phase_b's full recipe at a 0.3x
+# smoothness/torque penalty curriculum. Two independent sources (quiet
+# walking, aibo; 15-minute humanoid) report full-strength action_rate and
+# torques from step 0 collapsing training into standing still; phase A trains
+# the gait first, phase B (restored from phase A's checkpoint, full weight)
+# tightens it. torque_rate stays at phase B's -0.02 — it is already below its
+# measured -0.06 freeze cliff, so there is no cliff here to curriculum away
+# from. Usage: ./run.sh train +experiment=springy_phase_a
+defaults:
+  - springy_phase_b
+
+task:
+  env:
+    reward:
+      scales:
+        action_rate: -0.075
+        torques: -1.8e-4
+        torque_limit: -0.03
+
+ppo:
+  num_timesteps: 100000000
+
+run_name: wojtek_springy_a

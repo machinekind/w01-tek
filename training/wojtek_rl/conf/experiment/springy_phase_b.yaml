@@ -1,0 +1,82 @@
+# @package _global_
+# Springy locomotion, phase B (full penalty weight). Restarts from the
+# 2026-07-12 reward redesign: no gait clock (feet_phase/contact_match 0;
+# air_time+high_step+slip keep it stepping) and no height command (height
+# pinned by config, not by a reward — the policy picks its own operating
+# height so the legs work as springs, not struts). 12 of 14 core weights are
+# spin_posture's trained config verbatim (PR #19); `pose` and `torque_limit`
+# are this design's anti-splay additions on top. spin_posture's
+# trunk-rigidity terms (lin_vel_z -5, ang_vel_xy -0.5, height-EMA tracking)
+# are deliberately dropped — that drop is the experiment, not an oversight.
+# Anti-splay package: abduction ctrlrange clamped to +-0.44 rad, abduction
+# action_scale halved (0.25 vs 0.5), a 6 Nm torque cap with the torque_limit
+# hinge at 85% of it, weak-skewed motor-strength DR, and a knee ctrl clip
+# under the four-bar singularity. The full design is
+# training/docs/2026-07-12-reward-redesign.md. Phase B is launched with
+# `restore=<phase-A checkpoint>` at train time; this preset does not set
+# restore.
+# Usage: ./run.sh train +experiment=springy_phase_b restore=runs/<phase_a>/checkpoints/<step>
+defaults:
+  - override /task: joystick
+
+task:
+  env:
+    action_scale: [0.25, 0.5, 0.5]
+    max_torque: 6.0
+    abduction_ctrl_limit: 0.44
+    knee_target_max: 3.15
+    latency:
+      enable: true
+    encoder:
+      enable: true
+    obs:
+      include:
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+    command:
+      vx: [-0.8, 1.2]
+      vy: [-0.5, 0.5]
+      wz: [-1.0, 1.0]
+      height: [0.125, 0.125]
+      zero_prob: 0.25
+      pure_wz_prob: 0.25
+      pure_vy_prob: 0.2
+    push:
+      vel: 0.8
+    gait:
+      swing_height: 0.08
+      air_time_cap: 0.35
+    reward:
+      pose_leg_weight: 0.1
+      scales:
+        tracking_lin_vel: 4.0
+        tracking_ang_vel: 1.6
+        height_tracking: 0.0
+        lin_vel_z: 0.0
+        ang_vel_xy: 0.0
+        orientation: -5.0
+        torques: -6.0e-4
+        torque_rate: -0.02
+        torque_limit: -0.1
+        action_rate: -0.25
+        action_accel: 0.0
+        energy: 0.0
+        pose: -1.0
+        feet_air_time: 4.0
+        feet_slip: -0.35
+        feet_phase: 0.0
+        contact_match: 0.0
+        high_step: 4.0
+        stand_still: -2.5
+        stand_feet_down: -30.0
+        termination: -1.0
+
+dr:
+  motor_strength: { enable: true, range: [0.5, 1.1] }
+
+ppo:
+  num_timesteps: 200000000
+
+run_name: wojtek_springy_b

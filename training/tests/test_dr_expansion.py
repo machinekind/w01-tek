@@ -190,6 +190,45 @@ def test_joint_gains_disabled_matches_single_scalar_broadcast(mj_model, mjx_mode
     assert np.allclose(gain_col, gain_col[0])
 
 
+def test_motor_strength_disabled_matches_golden(mj_model, mjx_model, rng, golden):
+    """Explicit motor_strength: {enable: false} stays on the coupled
+    (gain_scale-riding) forcerange path, bitwise identical to the golden."""
+    dr_cfg = {**ALL_DISABLED, "motor_strength": {"enable": False}}
+    randomize = make_domain_randomize(mj_model, dr_cfg)
+    model_v, _ = randomize(mjx_model, rng)
+    _assert_matches_golden(model_v, golden)
+
+
+def test_motor_strength_enabled_decouples_forcerange_from_gain(mj_model, mjx_model, rng):
+    """Enabled: forcerange draws its own per-actuator sample instead of
+    riding joint_gains' gain_scale, so a weak-motor world no longer reads as
+    a soft one. gainprm/biasprm are unaffected (still the ALL_DISABLED
+    single-scalar-broadcast path)."""
+    dr_cfg = {**ALL_DISABLED, "motor_strength": {"enable": True, "range": [0.5, 1.1]}}
+    randomize = make_domain_randomize(mj_model, dr_cfg)
+    model_v, in_axes = randomize(mjx_model, rng)
+
+    forcerange_hi = np.array(model_v.actuator_forcerange[:, :, 1])
+    assert not np.allclose(forcerange_hi[0], forcerange_hi[1])
+    baseline_hi = np.array(mjx_model.actuator_forcerange[:, 1])
+    assert np.all(forcerange_hi <= baseline_hi[None, :] * 1.1 + 1e-6)
+    assert np.all(forcerange_hi >= baseline_hi[None, :] * 0.5 - 1e-6)
+    assert in_axes.actuator_forcerange == 0
+
+    # gainprm is still the ALL_DISABLED single-scalar broadcast: unaffected
+    # by motor_strength being on.
+    gain_col = np.array(model_v.actuator_gainprm[0, :, 0])
+    assert np.allclose(gain_col, gain_col[0])
+
+    # The coupled (motor_strength disabled) path from the SAME rng produces
+    # a different forcerange: decoupling is a real behavior change, not a
+    # no-op relabeling.
+    coupled_randomize = make_domain_randomize(mj_model, ALL_DISABLED)
+    coupled_model, _ = coupled_randomize(mjx_model, rng)
+    coupled_hi = np.array(coupled_model.actuator_forcerange[:, :, 1])
+    assert not np.allclose(forcerange_hi, coupled_hi)
+
+
 def test_in_axes_marks_only_randomized_fields(mj_model, mjx_model, rng):
     randomize = make_domain_randomize(mj_model)
     model_v, in_axes = randomize(mjx_model, rng)

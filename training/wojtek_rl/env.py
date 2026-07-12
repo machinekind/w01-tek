@@ -12,7 +12,7 @@ from ml_collections import config_dict
 from mujoco import mjx
 from mujoco_playground._src import mjx_env
 
-from wojtek_rl.base import WojtekEnv
+from wojtek_rl.base import ABDUCTION_ACTUATORS, KNEE_ACTUATORS, WojtekEnv
 from wojtek_rl.build_model import FOOT_RADIUS
 
 # 3 gyro + 3 gravity + 12 qpos + 12 qvel + 12 last_act + 4 cmd + 8 phase
@@ -53,6 +53,16 @@ def default_config() -> config_dict.ConfigDict:
         # spikes; deploy MUST match (real.launch.py max_torque). Ported from
         # PR #19.
         max_torque=0.0,
+        # Clamp the 4 abduction actuators' ctrlrange to +-this many rad
+        # (0 = keep the model's +-pi). The mechanical hip travel exceeds this,
+        # so once set the software clamp is the binding limit, not the joint
+        # stop; deploy MUST match.
+        abduction_ctrl_limit=0.0,
+        # Upper bound on the knee (third-joint) motor target, rad (0 = keep
+        # the model's ctrlrange). A guard under KNEE_SINGULARITY: the model's
+        # ctrlrange upper bound reaches past the singularity on its own, so
+        # this is a real clamp, not a no-op, whenever it is below that bound.
+        knee_target_max=0.0,
         obs_noise=config_dict.create(
             gyro=0.2, gravity=0.05, joint_pos=0.01, joint_vel=1.5
         ),
@@ -156,6 +166,11 @@ def default_config() -> config_dict.ConfigDict:
             # Pose anchors to the commanded-height stance; leg joints get a
             # lighter weight than abduction so the gait may flex around it.
             pose_leg_weight=0.25,
+            # torque_limit hinge fires above this fraction of each
+            # actuator's forcerange cap (the max_torque-customized one, when
+            # set), so the policy never learns postures that live near
+            # saturation.
+            torque_limit_frac=0.85,
             scales=config_dict.create(
                 tracking_lin_vel=1.5,
                 tracking_ang_vel=0.8,
@@ -188,6 +203,10 @@ def default_config() -> config_dict.ConfigDict:
                 # PR #19.
                 stand_feet_down=0.0,
                 termination=-1.0,
+                # Actuator-saturation hinge: 0 well inside the cap, positive
+                # above torque_limit_frac of it. Complements the max_torque
+                # clamp (the model's absolute ceiling) with a soft margin.
+                torque_limit=0.0,
             ),
         ),
     )
@@ -210,6 +229,22 @@ class WojtekJoystick(WojtekEnv):
                 f"latency.max_substeps ({lat.max_substeps}) must be <= "
                 f"n_substeps ({self.n_substeps})"
             )
+        # Per-actuator motor-target bounds for the step() clip. knee_target_max
+        # lowers the knee actuators' upper bound below the model's ctrlrange;
+        # 0 keeps self._ctrlrange as-is (mirrors env_jump.py's _target_lo/
+        # _target_hi precompute).
+        knee_idx = jp.array(KNEE_ACTUATORS)
+        self._target_lo = self._ctrlrange[:, 0]
+        ktm = self._config.get("knee_target_max", 0.0)
+        if ktm:
+            self._target_hi = self._ctrlrange[:, 1].at[knee_idx].set(
+                jp.minimum(self._ctrlrange[knee_idx, 1], ktm)
+            )
+        else:
+            self._target_hi = self._ctrlrange[:, 1]
+        # Per-actuator torque cap for the torque_limit hinge, read after
+        # _customize_model ran so max_torque (when set) is the cap.
+        self._torque_cap = jp.array(self._mj_model.actuator_forcerange[:, 1])
 
     def _customize_model(self, m):
         # Ported from PR #19.
@@ -217,6 +252,15 @@ class WojtekJoystick(WojtekEnv):
         if mt:
             m.actuator_forcerange[:, 0] = -mt
             m.actuator_forcerange[:, 1] = mt
+        limit = self._config.get("abduction_ctrl_limit", 0.0)
+        if limit:
+            idx = np.array(ABDUCTION_ACTUATORS)
+            m.actuator_ctrlrange[idx, 0] = np.maximum(
+                m.actuator_ctrlrange[idx, 0], -limit
+            )
+            m.actuator_ctrlrange[idx, 1] = np.minimum(
+                m.actuator_ctrlrange[idx, 1], limit
+            )
 
     def _sample_command(self, rng):
         """(vx, vy, wz, height). Zeroing (stand training) keeps the height."""
@@ -368,8 +412,8 @@ class WojtekJoystick(WojtekEnv):
         scale = jp.tile(scale, 4) if scale.ndim > 0 and scale.size == 3 else scale
         motor_targets = jp.clip(
             self._height_ctrl(info["command"][3]) + filt * scale,
-            self._ctrlrange[:, 0],
-            self._ctrlrange[:, 1],
+            self._target_lo,
+            self._target_hi,
         )
         data = state.data
         # random horizontal push, every push.interval_steps
@@ -550,5 +594,12 @@ class WojtekJoystick(WojtekEnv):
             "stand_feet_down": jp.sum(jp.clip(foot_clearance, 0.0, None))
             * (~moving),
             "termination": fall.astype(jp.float32),
+            "torque_limit": jp.sum(
+                jp.maximum(
+                    jp.abs(data.actuator_force)
+                    - self._config.reward.torque_limit_frac * self._torque_cap,
+                    0.0,
+                )
+            ),
         }
         return rewards, fall

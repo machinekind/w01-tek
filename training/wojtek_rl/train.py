@@ -134,11 +134,21 @@ def main(cfg: DictConfig) -> None:
     network_factory = functools.partial(
         ppo_networks.make_ppo_networks, **network_factory_cfg
     )
+    dr_cfg = OmegaConf.to_container(cfg.dr, resolve=True)
     if cfg.domain_rand:
-        dr_cfg = OmegaConf.to_container(cfg.dr, resolve=True)
         training_params["randomization_fn"] = make_domain_randomize(
             env.mj_model, dr_cfg
         )
+    else:
+        enabled = [
+            k for k, v in dr_cfg.items() if isinstance(v, dict) and v.get("enable")
+        ]
+        if enabled:
+            raise ValueError(
+                f"domain_rand=false disables the whole dr block, but "
+                f"cfg.dr fields {enabled} have enable=true; either set "
+                f"domain_rand=true or disable those fields too"
+            )
 
     wb = None
     if cfg.wandb.enable:

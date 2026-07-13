@@ -31,8 +31,10 @@ task:
 dr:
   motor_strength: { enable: true, range: [0.9, 1.1] }
 
-# Half of phase B's iteration count; see the budget note in springy_phase_b.
+# Sized from evidence, not symmetry: at 400M (job NNNNNNN) the policy
+# walked and turned but was still mid-climb (reward 45 and rising) with
+# the ramp's fast end unlearned. Iteration math in springy_phase_b.
 ppo:
-  num_timesteps: 400000000
+  num_timesteps: 1200000000
 
 run_name: wojtek_springy_a

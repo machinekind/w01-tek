@@ -49,6 +49,11 @@ task:
       swing_height: 0.08
       air_time_cap: 0.35
     reward:
+      # 0.25 (code default) is too flat for this robot: a policy standing
+      # still under a 0.5 m/s command keeps ~40% of the tracking reward,
+      # and both 20260713 phase-A runs converged to exactly that stander
+      # (reward probe, PR #20). 0.1 drops standing-under-command to ~8%.
+      tracking_sigma: 0.1
       pose_leg_weight: 0.1
       scales:
         tracking_lin_vel: 4.0

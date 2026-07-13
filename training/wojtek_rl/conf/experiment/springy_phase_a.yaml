@@ -18,7 +18,8 @@ task:
         torques: -1.8e-4
         torque_limit: -0.03
 
+# Half of phase B's iteration count; see the budget note in springy_phase_b.
 ppo:
-  num_timesteps: 100000000
+  num_timesteps: 400000000
 
 run_name: wojtek_springy_a

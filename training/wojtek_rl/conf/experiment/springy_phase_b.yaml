@@ -76,7 +76,13 @@ task:
 dr:
   motor_strength: { enable: true, range: [0.5, 1.1] }
 
+# The budget is in env steps, but PPO improves per iteration, and one
+# iteration consumes batch_size * num_minibatches * unroll_length steps.
+# The 4-GPU pipeline runs batch_size=1024, so an iteration costs 655k
+# steps — 200M bought only ~305 iterations, and phase A's 100M produced a
+# policy that stood still (job NNNNNNN). 800M at batch 1024 restores the
+# ~1200 iterations this budget meant at the default batch of 256.
 ppo:
-  num_timesteps: 200000000
+  num_timesteps: 800000000
 
 run_name: wojtek_springy_b

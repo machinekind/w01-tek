@@ -31,6 +31,71 @@ from wojtek_rl import paths
 from wojtek_rl.battery import battery_scenarios
 
 
+def _torque_strip(times, torques, names, torque_cap, width, height=240):
+    """Full-episode torque traces as an RGB strip, plus a t -> pixel map.
+
+    One color per leg (three joints share a hue), dashed lines at the
+    +-torque_cap clamp — the deploy-critical limit should be visible in
+    every video (M's format, Discord 2026-07-10).
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    legs = ["rear_left", "rear_right", "front_right", "front_left"]
+    colors = plt.get_cmap("tab10").colors
+    dpi = 100
+    fig, ax = plt.subplots(figsize=(width / dpi, height / dpi), dpi=dpi)
+    for j, name in enumerate(names):
+        leg = next((i for i, l in enumerate(legs) if name.startswith(l)), 0)
+        ax.plot(times, torques[:, j], color=colors[leg], linewidth=0.6,
+                label=legs[leg] if name.endswith("first_joint") else None)
+    if torque_cap:
+        ax.axhline(torque_cap, color="red", linestyle="--", linewidth=0.7)
+        ax.axhline(-torque_cap, color="red", linestyle="--", linewidth=0.7)
+        ax.set_ylim(-1.3 * torque_cap, 1.3 * torque_cap)
+    ax.set_xlim(times[0], times[-1])
+    ax.set_xlabel("t [s]", fontsize=8)
+    ax.set_ylabel("torque [N·m]", fontsize=8)
+    ax.tick_params(labelsize=7)
+    ax.legend(loc="upper right", fontsize=6, ncol=4, framealpha=0.5)
+    fig.tight_layout(pad=0.4)
+    fig.canvas.draw()
+    base = np.asarray(fig.canvas.buffer_rgba())[:, :, :3].copy()
+    # Map episode time to pixel column inside the axes for the cursor.
+    x0, x1 = ax.get_window_extent().x0, ax.get_window_extent().x1
+    plt.close(fig)
+
+    def frame_at(t):
+        img = base.copy()
+        frac = (t - times[0]) / max(times[-1] - times[0], 1e-9)
+        col = int(x0 + frac * (x1 - x0))
+        img[:, max(col - 1, 0):col + 1] = (220, 40, 40)
+        return img
+
+    return frame_at
+
+
+def _label_bar(command, width, height=36):
+    """Current command as a text bar above the render (cached per command)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    vx, vy, wz = float(command[0]), float(command[1]), float(command[2])
+    text = ("stand" if max(abs(vx), abs(vy), abs(wz)) < 0.05
+            else f"vx {vx:+.2f}  vy {vy:+.2f}  wz {wz:+.2f}")
+    dpi = 100
+    fig = plt.figure(figsize=(width / dpi, height / dpi), dpi=dpi)
+    fig.patch.set_facecolor("black")
+    fig.text(0.02, 0.5, text, color="white", fontsize=10,
+             va="center", family="monospace")
+    fig.canvas.draw()
+    img = np.asarray(fig.canvas.buffer_rgba())[:, :, :3].copy()
+    plt.close(fig)
+    return img
+
+
 def _latest_checkpoint(ckpt_dir: Path) -> Path:
     steps = [p for p in ckpt_dir.iterdir() if p.name.isdigit()]
     return max(steps, key=lambda p: int(p.name))
@@ -52,6 +117,11 @@ def main() -> None:
         "--x-vel/--y-vel/--yaw-vel/--height/--steps (all ignored when set)",
     )
     ap.add_argument("--out", default=None)
+    ap.add_argument(
+        "--no-plots",
+        action="store_true",
+        help="plain video without the torque strip and command label",
+    )
     args = ap.parse_args()
 
     # Imported lazily: wojtek_rl.env and wojtek_rl.train pull in brax/mjx and may
@@ -101,7 +171,7 @@ def main() -> None:
 
     rng = jax.random.PRNGKey(0)
     state = reset(rng)
-    frames, vels = [], []
+    frames, vels, torques, frame_meta = [], [], [], []
     render_every = max(1, round(1 / (30 * env.dt)))
     fps = 1.0 / (env.dt * render_every)  # keeps video speed real-time
 
@@ -117,6 +187,7 @@ def main() -> None:
             action, _ = inference(state.obs, act_rng)
             state = step(state, action)
             vels.append(float(state.data.qvel[0]))
+            torques.append(np.asarray(state.data.actuator_force))
             if float(state.done):
                 print(f"fell at step {i}")
                 break
@@ -125,6 +196,26 @@ def main() -> None:
                 mujoco.mj_forward(mj_model, data)
                 renderer.update_scene(data, camera="track")
                 frames.append(renderer.render())
+                frame_meta.append(
+                    (i * env.dt, np.asarray(state.info["command"]))
+                )
+
+    if not args.no_plots and frames:
+        names = [
+            mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, i)
+            for i in range(mj_model.nu)
+        ]
+        times = np.arange(len(torques)) * env.dt
+        strip_at = _torque_strip(
+            times, np.stack(torques), names,
+            float(env._config.get("max_torque", 0) or 0), frames[0].shape[1],
+        )
+        labels = {}
+        for k, (t, cmd) in enumerate(frame_meta):
+            key = tuple(np.round(cmd[:3], 2))
+            if key not in labels:
+                labels[key] = _label_bar(cmd, frames[0].shape[1])
+            frames[k] = np.vstack([labels[key], frames[k], strip_at(t)])
 
     import shutil
 

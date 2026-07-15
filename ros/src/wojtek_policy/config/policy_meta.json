@@ -1,16 +1,13 @@
 {
-  "run_name": "wojtek_v3",
-  "checkpoint": "/home/M/github/machinekind/wojtek/4_wojtek_rl/policies/wojtek_v3/checkpoints/000206438400",
-  "obs_size": 53,
+  "run_name": "wojtek_springy_b_20260713_1827",
+  "checkpoint": "LOCAL_PATH
+  "obs_size": 40,
   "action_size": 12,
   "obs_layout": [
-    "gyro:3",
-    "gravity:3",
-    "qpos-home:12",
-    "qvel:12",
+    "joint_pos:12",
+    "joint_vel:12",
     "last_act:12",
-    "command:3",
-    "phase_cos_sin:8"
+    "command:4"
   ],
   "actuator_names": [
     "rear_left_first_joint",
@@ -68,7 +65,11 @@
     3.14,
     5.8
   ],
-  "action_scale": 0.5,
+  "action_scale": [
+    0.25,
+    0.5,
+    0.5
+  ],
   "ctrl_dt": 0.02,
   "trot_phase": [
     0.0,
@@ -76,6 +77,14 @@
     0.0,
     3.141592653589793
   ],
-  "gait_freq_hz": 2.0,
-  "knee_singularity": 3.2
+  "gait_freq_hz": 2.2,
+  "knee_singularity": 3.2,
+  "deploy": {
+    "_note": "Hand-added from the run's run.json env_config: the command box and ctrl clamps the policy trained under, which export_policy.py does not emit yet. Everything above is the verbatim exporter output (also on HF: <HF_ORGANIZATION>/wojtek-springy-locomotion).",
+    "command_height": 0.125,
+    "command_low": [-0.8, -0.5, -1.0],
+    "command_high": [1.2, 0.5, 1.0],
+    "abduction_ctrl_limit": 0.44,
+    "knee_target_max": 3.15
+  }
 }

@@ -25,10 +25,6 @@ from std_srvs.srv import SetBool, Trigger
 from wojtek_policy.joint_map import JointMap
 from wojtek_policy.policy import WojtekPolicy, gravity_from_quat
 
-# Training command ranges (env.py default_config): never ask the policy for
-# more than it was trained to track.
-CMD_LIMIT = np.array([0.6, 0.4, 0.7])
-
 
 def rpy_to_mat(r, p, y):
     cr, sr, cp, sp, cy, sy = np.cos(r), np.sin(r), np.cos(p), np.sin(p), np.cos(y), np.sin(y)
@@ -138,8 +134,10 @@ class PolicyNode(Node):
         self._imu_stamp = self.get_clock().now()
 
     def _on_cmd(self, msg):
+        # Clip to the command box the policy trained on: never ask it to
+        # track more than it has seen (ranges come from policy_meta.json).
         cmd = np.array([msg.linear.x, msg.linear.y, msg.angular.z])
-        self._cmd = np.clip(cmd, -CMD_LIMIT, CMD_LIMIT)
+        self._cmd = np.clip(cmd, self.policy.command_low, self.policy.command_high)
 
     # -- services ------------------------------------------------------------
     def _srv_enable(self, req, res):
@@ -170,7 +168,13 @@ class PolicyNode(Node):
         if not self._enabled:
             self._was_running = False
             return
-        if not (self._fresh(self._joints_stamp) and self._fresh(self._imu_stamp)):
+        # Require fresh data for every sensor the policy observes -- and only
+        # those: an IMU-blind policy (springy obs layout) keeps running
+        # through an IMU dropout.
+        fresh = self._fresh(self._joints_stamp)
+        if self.policy.uses_imu:
+            fresh = fresh and self._fresh(self._imu_stamp)
+        if not fresh:
             if self._was_running:
                 self.get_logger().warning(
                     "sensor data stale -- holding (no targets published)",
@@ -183,11 +187,10 @@ class PolicyNode(Node):
         # input like stale data: hold, and reset the policy state on
         # recovery via the _was_running edge. Seen in practice from the IMU
         # broadcaster's NaN placeholders right after activation.
-        inputs = np.concatenate(
-            [self._gyro_base, self._gravity_base, self._q_urdf, self._dq_urdf,
-             self._cmd]
-        )
-        if not np.all(np.isfinite(inputs)):
+        inputs = [self._q_urdf, self._dq_urdf, self._cmd]
+        if self.policy.uses_imu:
+            inputs += [self._gyro_base, self._gravity_base]
+        if not np.all(np.isfinite(np.concatenate(inputs))):
             self.get_logger().warning(
                 "non-finite sensor input -- holding (no targets published)",
                 throttle_duration_sec=1.0,
@@ -202,9 +205,12 @@ class PolicyNode(Node):
 
         q_mjc = self.jmap.to_mjc(self.joint_names, self._q_urdf)
         dq_mjc = self.jmap.vel_to_mjc(self.joint_names, self._dq_urdf)
-        targets_mjc = self.policy.step(
-            self._gyro_base, self._gravity_base, q_mjc, dq_mjc, self._cmd
+        gyro = self._gyro_base if self._gyro_base is not None else np.zeros(3)
+        gravity = (
+            self._gravity_base if self._gravity_base is not None
+            else np.array([0.0, 0.0, -1.0])
         )
+        targets_mjc = self.policy.step(gyro, gravity, q_mjc, dq_mjc, self._cmd)
 
         # Soft start: blend from the measured pose to the policy output.
         soft = self.get_parameter("soft_start_s").value

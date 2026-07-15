@@ -31,6 +31,38 @@ from wojtek_rl import paths
 from wojtek_rl.battery import battery_scenarios
 
 
+def _leg_of(name):
+    return next(
+        (i for i, leg in enumerate(paths.LEGS) if name.startswith(leg)), 0
+    )
+
+
+def _cursor_strip(fig, axes, times):
+    """Render `fig` once and return frame_at(t): the strip as an RGB array
+    with a moving time cursor drawn inside each of `axes`."""
+    import matplotlib.pyplot as plt
+
+    fig.canvas.draw()
+    base = np.asarray(fig.canvas.buffer_rgba())[:, :, :3].copy()
+    h = base.shape[0]
+    # Window extents are bottom-up; image rows are top-down.
+    spans = [
+        (e.x0, e.x1, int(h - e.y1), int(h - e.y0))
+        for e in (ax.get_window_extent() for ax in axes)
+    ]
+    plt.close(fig)
+
+    def frame_at(t):
+        img = base.copy()
+        frac = (t - times[0]) / max(times[-1] - times[0], 1e-9)
+        for x0, x1, r0, r1 in spans:
+            col = int(x0 + frac * (x1 - x0))
+            img[r0:r1, max(col - 1, 0):col + 1] = (220, 40, 40)
+        return img
+
+    return frame_at
+
+
 def _torque_strip(times, torques, names, torque_cap, width, height=240):
     """Full-episode torque traces as an RGB strip, plus a t -> pixel map.
 
@@ -42,14 +74,13 @@ def _torque_strip(times, torques, names, torque_cap, width, height=240):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    legs = ["rear_left", "rear_right", "front_right", "front_left"]
     colors = plt.get_cmap("tab10").colors
     dpi = 100
     fig, ax = plt.subplots(figsize=(width / dpi, height / dpi), dpi=dpi)
     for j, name in enumerate(names):
-        leg = next((i for i, l in enumerate(legs) if name.startswith(l)), 0)
+        leg = _leg_of(name)
         ax.plot(times, torques[:, j], color=colors[leg], linewidth=0.6,
-                label=legs[leg] if name.endswith("first_joint") else None)
+                label=paths.LEGS[leg] if name.endswith("first_joint") else None)
     if torque_cap:
         ax.axhline(torque_cap, color="red", linestyle="--", linewidth=0.7)
         ax.axhline(-torque_cap, color="red", linestyle="--", linewidth=0.7)
@@ -60,20 +91,51 @@ def _torque_strip(times, torques, names, torque_cap, width, height=240):
     ax.tick_params(labelsize=7)
     ax.legend(loc="upper right", fontsize=6, ncol=4, framealpha=0.5)
     fig.tight_layout(pad=0.4)
-    fig.canvas.draw()
-    base = np.asarray(fig.canvas.buffer_rgba())[:, :, :3].copy()
-    # Map episode time to pixel column inside the axes for the cursor.
-    x0, x1 = ax.get_window_extent().x0, ax.get_window_extent().x1
-    plt.close(fig)
+    return _cursor_strip(fig, [ax], times)
 
-    def frame_at(t):
-        img = base.copy()
-        frac = (t - times[0]) / max(times[-1] - times[0], 1e-9)
-        col = int(x0 + frac * (x1 - x0))
-        img[:, max(col - 1, 0):col + 1] = (220, 40, 40)
-        return img
 
-    return frame_at
+def _joint_grid(times, targets, joints, names, width, height=360):
+    """Per-joint target-vs-state traces as an RGB strip with a time cursor.
+
+    Rows are the leg joints (abduction, hip, knee), columns the four legs;
+    achieved qpos is solid in the leg's torque-strip color, the policy's
+    motor target dashed black. Rows share a y-range so left/right asymmetry
+    is visible at a glance.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    row_names = ("abduction", "hip", "knee")
+
+    def row_of(n):
+        return 0 if "first" in n else (1 if "second" in n else 2)
+
+    colors = plt.get_cmap("tab10").colors
+    dpi = 100
+    fig, axes = plt.subplots(
+        len(row_names), len(paths.LEGS),
+        figsize=(width / dpi, height / dpi), dpi=dpi,
+        sharex=True, sharey="row",
+    )
+    for j, name in enumerate(names):
+        leg, row = _leg_of(name), row_of(name)
+        ax = axes[row][leg]
+        ax.plot(times, joints[:, j], color=colors[leg], linewidth=0.6,
+                label="state")
+        ax.plot(times, targets[:, j], color="black", linewidth=0.5,
+                linestyle="--", label="target")
+        ax.tick_params(labelsize=5)
+    for leg, name in enumerate(paths.LEGS):
+        axes[0][leg].set_title(
+            "".join(w[0] for w in name.split("_")).upper(), fontsize=7
+        )
+    for row, r in enumerate(row_names):
+        axes[row][0].set_ylabel(f"{r} [rad]", fontsize=6)
+    axes[0][0].set_xlim(times[0], times[-1])
+    axes[0][0].legend(loc="upper right", fontsize=5, framealpha=0.5)
+    fig.tight_layout(pad=0.3)
+    return _cursor_strip(fig, [ax for r in axes for ax in r], times)
 
 
 def _label_bar(command, width, height=36):
@@ -120,7 +182,8 @@ def main() -> None:
     ap.add_argument(
         "--no-plots",
         action="store_true",
-        help="plain video without the torque strip and command label",
+        help="plain video without the command label, torque strip, and "
+        "per-joint target-vs-state grid",
     )
     args = ap.parse_args()
 
@@ -171,7 +234,8 @@ def main() -> None:
 
     rng = jax.random.PRNGKey(0)
     state = reset(rng)
-    frames, vels, torques, frame_meta = [], [], [], []
+    frames, vels, torques, targets, joints, frame_meta = [], [], [], [], [], []
+    qadr = np.asarray(env._qadr)
     render_every = max(1, round(1 / (30 * env.dt)))
     fps = 1.0 / (env.dt * render_every)  # keeps video speed real-time
 
@@ -188,6 +252,13 @@ def main() -> None:
             state = step(state, action)
             vels.append(float(state.data.qvel[0]))
             torques.append(np.asarray(state.data.actuator_force))
+            # The joystick env applies ctrl one step late (action_delay);
+            # info holds the target the policy just issued, which is the
+            # deploy-relevant signal. getup/jump apply targets directly.
+            targets.append(np.asarray(
+                state.info.get("motor_targets", state.data.ctrl)
+            ))
+            joints.append(np.asarray(state.data.qpos)[qadr])
             if float(state.done):
                 print(f"fell at step {i}")
                 break
@@ -210,12 +281,18 @@ def main() -> None:
             times, np.stack(torques), names,
             float(env._config.get("max_torque", 0) or 0), frames[0].shape[1],
         )
+        grid_at = _joint_grid(
+            times, np.stack(targets), np.stack(joints), names,
+            frames[0].shape[1],
+        )
         labels = {}
         for k, (t, cmd) in enumerate(frame_meta):
             key = tuple(np.round(cmd[:3], 2))
             if key not in labels:
                 labels[key] = _label_bar(cmd, frames[0].shape[1])
-            frames[k] = np.vstack([labels[key], frames[k], strip_at(t)])
+            frames[k] = np.vstack(
+                [labels[key], frames[k], strip_at(t), grid_at(t)]
+            )
 
     import shutil
 

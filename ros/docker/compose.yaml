@@ -30,6 +30,14 @@ services:
       # Host SSH keys (read-only) so `ros2 run wojtek_bringup robot` can start
       # the RPi's control stack over SSH from inside the container.
       - ${HOME}/.ssh:/root/.ssh:ro
+      # Host SSH agent socket. The RPi key (id_ed25519) is passphrase-protected,
+      # so mounting ~/.ssh alone is NOT enough: without the agent, ssh inside the
+      # container can't decrypt the key and silently falls back to password auth
+      # (the "asks for the host password every time" bug). Forwarding the agent
+      # lets the container reuse the already-unlocked, already-RPi-authorized key.
+      # dev.sh loads the key into the host agent before starting this. Falls back
+      # to /dev/null when no agent is running (ssh just warns and moves on).
+      - ${SSH_AUTH_SOCK:-/dev/null}:/ssh-agent
       - ./config/cyclonedds.xml:/config/cyclonedds.xml
       # Unicast fallback profile (see cyclonedds_link.xml + the CYCLONEDDS_URI
       # note under environment). Mounted so it can be switched on without a rebuild.
@@ -64,6 +72,8 @@ services:
       #   CYCLONEDDS_URI=file:///config/cyclonedds_link.xml
       - CYCLONEDDS_URI=file:///config/cyclonedds.xml
       - DISPLAY=${DISPLAY}
+      # Point ssh at the forwarded host agent socket (mounted above).
+      - SSH_AUTH_SOCK=/ssh-agent
     # No command: override here on purpose - the image's CMD (sleep infinity)
     # just keeps this standing as a dev environment. Use ../dev.sh to start
     # this and get a shell in one step; edit src/ on the host as normal,

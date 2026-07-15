@@ -32,6 +32,17 @@ REMOTE_WS = os.environ.get("REMOTE_WS", "wojtek_ws")
 ROS_DISTRO = os.environ.get("ROS_DISTRO", "jazzy")
 SERVICE = "wojtek-robot.service"
 
+# Taken from this container so both ends of the link always agree. An ssh
+# command runs non-interactively and the RPi's profile sets nothing for ROS, so
+# without this the remote launch comes up on domain 0 with the default RMW --
+# healthy on the robot, but invisible to the viz started here (seen for real:
+# motors ran, the PC saw no topics). The service path carries these in its unit;
+# --dry-run has to pass them itself.
+REMOTE_DDS_ENV = (
+    f"export ROS_DOMAIN_ID={os.environ.get('ROS_DOMAIN_ID', '42')} "
+    f"RMW_IMPLEMENTATION={os.environ.get('RMW_IMPLEMENTATION', 'rmw_cyclonedds_cpp')}"
+)
+
 _SSH_OPTS = ["-o", "StrictHostKeyChecking=no",
              "-o", "UserKnownHostsFile=/dev/null",
              "-o", "LogLevel=ERROR"]
@@ -78,6 +89,7 @@ def main():
         print(f">> [BENCH] launching on {RPI_HOST} WITHOUT RT, no torque")
         remote = (f"source /opt/ros/{ROS_DISTRO}/setup.bash && "
                   f"source ~/{REMOTE_WS}/install/setup.bash && "
+                  f"{REMOTE_DDS_ENV} && "
                   f"ros2 launch wojtek_bringup robot.launch.py dry_run:=true")
         spawn(SSH_TTY + [remote])
         stop_remote = lambda: subprocess.run(SSH + ["pkill -f robot.launch.py"])

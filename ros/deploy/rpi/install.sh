@@ -60,7 +60,11 @@ provision_packages() {
     fi
     run "sudo apt-get update -qq"
     local ros_pkgs="ros-${ROS_DISTRO}-ros-base ros-${ROS_DISTRO}-ros2-control ros-${ROS_DISTRO}-ros2-controllers ros-${ROS_DISTRO}-rmw-cyclonedds-cpp ros-${ROS_DISTRO}-xacro ros-${ROS_DISTRO}-robot-state-publisher ros-${ROS_DISTRO}-realtime-tools"
-    local tools="python3-colcon-common-extensions python3-rosdep build-essential git"
+    # setserial: candle runs `setserial <port> low_latency` on the CANdle's
+    # ttyACM at startup; without it the driver falls back to "low-speed mode"
+    # (see md80 bring-up logs), adding latency to the 400 Hz loop. The PC image
+    # already ships it (docker/Dockerfile) -- the RPi is where it actually matters.
+    local tools="python3-colcon-common-extensions python3-rosdep build-essential git setserial"
     local ap="iw hostapd dnsmasq rfkill"
     run "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ${ros_pkgs} ${tools} ${ap}"
     if [ ! -f /etc/ros/rosdep/sources.list.d/20-default.list ]; then

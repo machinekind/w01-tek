@@ -16,7 +16,9 @@
 
 #include "md80_hardware_interface/md80_hardware_interface.hpp"
 
+#include <chrono>
 #include <limits>
+#include <thread>
 #include <vector>
 
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
@@ -24,6 +26,14 @@
 
 namespace md80_hardware_interface
 {
+
+// A single dropped USB transaction to the CANdle fails one addMd80(), which
+// used to abort the whole bring-up. Measured on the real robot: ~5% of calls
+// time out, hitting a different drive every run (observed on ids 11, 22, 30,
+// 41, 42), so roughly every second launch died with a healthy robot. Retrying
+// is safe -- Candle::addMd80 returns true for an id already on its update list.
+constexpr int ADD_MD80_ATTEMPTS = 3;
+constexpr auto ADD_MD80_RETRY_DELAY = std::chrono::milliseconds(50);
 hardware_interface::CallbackReturn MD80HardwareInterface::on_init(
   const hardware_interface::HardwareInfo & info)
 {
@@ -246,7 +256,6 @@ void MD80HardwareInterface::add_candle_instances()
 
 void MD80HardwareInterface::try_to_initialize_motors()
 {
-  unsigned int not_found_devices = 0;
   unsigned int found_devices = 0;
   for (const auto & joint_info : info_.joints) {
     int can_id = -1;
@@ -261,21 +270,34 @@ void MD80HardwareInterface::try_to_initialize_motors()
 
     RCLCPP_INFO_STREAM(rclcpp::get_logger(get_name()), "Check connection for can_id: " << can_id);
 
-    for (auto & candle : candle_instances) {
-      if (candle->addMd80(can_id, false)) {
-        RCLCPP_INFO_STREAM(
+    bool added = false;
+    for (int attempt = 1; attempt <= ADD_MD80_ATTEMPTS && !added; ++attempt) {
+      for (auto & candle : candle_instances) {
+        if (candle->addMd80(can_id, false)) {
+          parse_urdf_joint_info(std::ref(md80_info_[found_devices]), joint_info);
+          found_devices++;
+          added = true;
+          break;
+        }
+      }
+      if (!added && attempt < ADD_MD80_ATTEMPTS) {
+        RCLCPP_WARN_STREAM(
           rclcpp::get_logger(get_name()),
-          "Found device at f: " << found_devices << " but id " << md80_info_[found_devices].can_id);
-
-        parse_urdf_joint_info(std::ref(md80_info_[found_devices]), joint_info);
-
-        found_devices++;
-      } else
-        not_found_devices++;
+          "No answer from can_id " << can_id << " (attempt " << attempt << "/"
+                                   << ADD_MD80_ATTEMPTS << ") -- retrying");
+        std::this_thread::sleep_for(ADD_MD80_RETRY_DELAY);
+      }
     }
 
-    if (not_found_devices == candle_instances.size()) {
-      throw std::runtime_error("Cannot find device on ID: " + std::to_string(can_id) + "!");
+    if (!added) {
+      // Deliberately not "cannot find device": addMd80 also returns false when
+      // the USB link to the CANdle times out, and the old wording sent everyone
+      // hunting a drive that was fine. Name both possibilities.
+      throw std::runtime_error(
+        "No answer from CAN id " + std::to_string(can_id) + " after " +
+        std::to_string(ADD_MD80_ATTEMPTS) +
+        " attempts: the drive is absent/unpowered, or the USB link to the CANdle "
+        "timed out (look for '[USB] Did not receive response' above).");
     }
 
     RCLCPP_INFO_STREAM(rclcpp::get_logger(get_name()), "Initialized motor at can_id: " << can_id);

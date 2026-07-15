@@ -37,6 +37,35 @@
     <img id="cam" alt="robot view" />
   </div>
 
+  <div class="panel" id="egoPanel" style="display:none">
+    <h2>Ego camera (VLM view)</h2>
+    <img id="ego" alt="onboard view" style="display:block;width:480px;height:360px;background:#000;border-radius:6px;" />
+    <div class="bar">
+      <input id="cmdText" type="text" placeholder="turn_left 30 | forward 0.5 | stop"
+             style="flex:1;min-width:200px;background:#0b0e13;color:var(--ink);border:1px solid #30363d;border-radius:6px;padding:7px 10px;font-size:13px;" />
+      <button id="cmdSend">Send</button>
+    </div>
+    <div class="bar">
+      <button class="quick" data-cmd="turn_left 15">⟲ 15°</button>
+      <button class="quick" data-cmd="turn_right 15">⟳ 15°</button>
+      <button class="quick" data-cmd="forward 0.5">↑ 0.5 m</button>
+      <button class="quick" data-cmd="backward 0.3">↓ 0.3 m</button>
+      <button class="quick" data-cmd="stop">stop</button>
+      <span class="stat">exec <b id="execStat">idle</b></span>
+    </div>
+    <div class="bar">
+      <input id="goalText" type="text" placeholder="VLM goal: go to the bed"
+             style="flex:1;min-width:200px;background:#0b0e13;color:var(--ink);border:1px solid #30363d;border-radius:6px;padding:7px 10px;font-size:13px;" />
+      <button id="goalStart">Go</button>
+      <button id="goalCancel">Cancel</button>
+    </div>
+    <div class="bar">
+      <span class="stat">vlm <b id="vlmState">idle</b></span>
+      <span class="stat">step <b id="vlmStep">–</b></span>
+    </div>
+    <div class="stat" id="vlmReason" style="margin-top:6px;font-size:12px;max-width:480px;"></div>
+  </div>
+
   <div class="panel">
     <h2>Top-down map — click to set target</h2>
     <canvas id="map" width="380" height="380"></canvas>
@@ -121,7 +150,36 @@ function connect() {
   ws.onclose = () => { setConn(false); setTimeout(connect, 1000); };
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
+    if (m.type === 'error') {
+      document.getElementById('connTxt').textContent = m.error;
+      return;
+    }
+    if (m.type === 'command_ack') {
+      document.getElementById('execStat').textContent = m.ok ? ('queued: ' + m.command) : ('error: ' + m.error);
+      return;
+    }
+    if (m.type === 'goal_ack') {
+      if (!m.ok) document.getElementById('vlmState').textContent = 'error: ' + m.error;
+      return;
+    }
+    if (m.type === 'vlm_status') {
+      document.getElementById('vlmState').textContent =
+        m.state + (m.reason ? ' (' + m.reason + ')' : '') + (m.error ? ': ' + m.error : '');
+      document.getElementById('vlmStep').textContent = m.step + '/' + m.max_steps;
+      if (m.last) document.getElementById('vlmReason').textContent =
+        m.last.action + (m.last.amount != null ? ' ' + m.last.amount : '') + ' — ' + m.last.reasoning;
+      return;
+    }
     if (m.frame) cam.src = 'data:image/jpeg;base64,' + m.frame;
+    if (m.ego) {
+      document.getElementById('egoPanel').style.display = '';
+      document.getElementById('ego').src = 'data:image/jpeg;base64,' + m.ego;
+    }
+    if (m.exec) {
+      const e = m.exec;
+      document.getElementById('execStat').textContent =
+        e.active ? (e.active + ' (' + e.remaining + ' left, ' + e.queued + ' queued)') : (m.mode || 'idle');
+    }
     state = m;
     trail.push([m.x, m.y]); if (trail.length > 600) trail.shift();
     document.getElementById('dist').textContent = m.tx===null ? '–' : m.dist.toFixed(2);
@@ -139,6 +197,26 @@ map.addEventListener('click', (e) => {
 });
 document.getElementById('reset').onclick = () => { trail = []; ws && ws.send(JSON.stringify({ type:'reset' })); };
 document.getElementById('clear').onclick = () => { ws && ws.send(JSON.stringify({ type:'reset' })); trail = []; };
+
+const sendCommand = (text) => {
+  if (!text || !(ws && ws.readyState === 1)) return;
+  ws.send(JSON.stringify({ type:'command', text }));
+};
+document.getElementById('cmdSend').onclick = () => sendCommand(document.getElementById('cmdText').value);
+document.getElementById('cmdText').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') sendCommand(e.target.value);
+});
+document.querySelectorAll('.quick').forEach(b => b.onclick = () => sendCommand(b.dataset.cmd));
+
+const sendGoal = (text) => {
+  if (!text || !(ws && ws.readyState === 1)) return;
+  ws.send(JSON.stringify({ type:'goal', text }));
+};
+document.getElementById('goalStart').onclick = () => sendGoal(document.getElementById('goalText').value);
+document.getElementById('goalText').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') sendGoal(e.target.value);
+});
+document.getElementById('goalCancel').onclick = () => { ws && ws.send(JSON.stringify({ type:'goal_cancel' })); };
 draw();
 </script>
 </body>

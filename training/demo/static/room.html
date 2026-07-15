@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wojtek — talk to the dog</title>
+<style>
+  :root {
+    --bg: #14161c; --panel: #1c1f27; --line: #2e323d; --ink: #e8e6df;
+    --dim: #9aa0ad; --amber: #e8a33d; --cyan: #5fc4cf; --green: #5aa871;
+    --rust: #c96f5e; --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink); height: 100vh;
+    display: flex; flex-direction: column; overflow: hidden;
+    font: 14px/1.5 "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 14px; padding: 10px 18px;
+    border-bottom: 1px solid var(--line); flex: 0 0 auto;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: 0.02em; }
+  header .model { font-family: var(--mono); font-size: 11px; color: var(--dim); }
+  .chip {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em;
+    text-transform: uppercase; padding: 3px 10px; border-radius: 20px;
+    border: 1px solid var(--line); color: var(--dim); transition: all 0.2s;
+  }
+  .chip.listening { color: #fff; background: var(--rust); border-color: var(--rust); animation: pulse 1.2s infinite; }
+  .chip.thinking { color: #14161c; background: var(--amber); border-color: var(--amber); }
+  .chip.walking { color: #fff; background: var(--green); border-color: var(--green); }
+  .chip.done { color: var(--green); border-color: var(--green); }
+  .chip.error { color: var(--rust); border-color: var(--rust); }
+  @keyframes pulse { 50% { opacity: 0.55; } }
+  header .spacer { flex: 1; }
+  button {
+    background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 6px; padding: 7px 14px; font: inherit; cursor: pointer;
+  }
+  button:hover { border-color: var(--dim); }
+
+  main { flex: 1; display: grid; grid-template-columns: 1.5fr 1fr; gap: 10px; padding: 10px 14px; min-height: 0; }
+  /* small windows: stack and let the page scroll instead of crushing the grid */
+  @media (max-width: 900px), (max-height: 560px) {
+    body { height: auto; overflow: auto; }
+    main { grid-template-columns: 1fr; }
+    .cam { min-height: 260px; }
+    .think { min-height: 180px; }
+    footer { flex-wrap: wrap; }
+    #goalbox { flex: 1 1 100%; }
+  }
+  .col { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+  .cam { position: relative; background: #000; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; flex: 1; min-height: 0; }
+  .cam img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .cam .tag {
+    position: absolute; top: 8px; left: 10px; font-family: var(--mono);
+    font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: rgba(240,240,235,0.85); background: rgba(10,11,14,0.55);
+    padding: 2px 8px; border-radius: 4px;
+  }
+  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; flex: 1; min-height: 0; }
+  .duo .cam { flex: none; height: 100%; }
+
+  /* thinking timeline */
+  .think {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    flex: 1; min-height: 0; display: flex; flex-direction: column;
+  }
+  .think h2 {
+    margin: 0; padding: 8px 12px; font-size: 11px; font-family: var(--mono);
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim);
+    border-bottom: 1px solid var(--line);
+  }
+  #timeline { overflow-y: auto; padding: 8px 12px; flex: 1; display: flex; flex-direction: column; gap: 6px; }
+  .step { font-size: 12.5px; line-height: 1.45; }
+  .step .act {
+    font-family: var(--mono); font-size: 11px; color: var(--amber);
+    background: rgba(232,163,61,0.12); padding: 1px 7px; border-radius: 4px; margin-right: 6px;
+  }
+  .step .why { color: var(--dim); }
+  .step .res { font-family: var(--mono); font-size: 10.5px; margin-left: 6px; }
+  .step .res.ok { color: var(--green); }
+  .step .res.bad { color: var(--rust); }
+  .step.now .why { color: var(--ink); }
+
+  footer {
+    flex: 0 0 auto; display: flex; gap: 12px; align-items: center;
+    padding: 12px 18px; border-top: 1px solid var(--line);
+  }
+  #mic {
+    width: 54px; height: 54px; border-radius: 50%; font-size: 22px; flex: 0 0 auto;
+    border: 2px solid var(--line); background: var(--panel);
+  }
+  #mic.rec { background: var(--rust); border-color: var(--rust); animation: pulse 1.2s infinite; }
+  .heard { flex: 1; min-width: 0; }
+  .heard .label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim); }
+  #transcript { font-size: 16px; min-height: 22px; }
+  #transcript .q { color: var(--cyan); }
+  #goalbox { display: flex; gap: 8px; flex: 0 0 340px; }
+  #goal { flex: 1; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; color: var(--ink); padding: 8px 10px; font: inherit; }
+  #cancel { color: var(--rust); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Wojtek</h1>
+  <span id="status" class="chip">connecting</span>
+  <span class="model" id="model"></span>
+  <span class="spacer"></span>
+  <span class="model" id="exec"></span>
+  <button id="reset">Reset robot</button>
+</header>
+<main>
+  <div class="col">
+    <div class="cam"><img id="chase" alt="chase camera"><span class="tag">chase cam — live physics</span></div>
+  </div>
+  <div class="col">
+    <div class="duo">
+      <div class="cam"><img id="ego" alt="ego camera"><span class="tag">what the dog sees (VLM input)</span></div>
+      <div class="cam"><img id="map" alt="agent map" style="cursor: crosshair"><span class="tag">self-built map — click to walk</span></div>
+    </div>
+    <div class="think">
+      <h2>Robot thinking</h2>
+      <div id="timeline"></div>
+    </div>
+  </div>
+</main>
+<footer>
+  <button id="mic" title="click to talk, click again to stop">🎙️</button>
+  <div class="heard">
+    <div class="label">the dog heard</div>
+    <div id="transcript"><span class="q">press the mic and tell Wojtek what to do…</span></div>
+  </div>
+  <div id="goalbox">
+    <input id="goal" placeholder='or type: "go to the bed"'>
+    <button id="send">Go</button>
+    <button id="cancel">Stop</button>
+  </div>
+</footer>
+
+<script>
+const $ = id => document.getElementById(id);
+let ws, info = null, lastState = "idle", stepSeen = 0;
+
+// ---- websocket ------------------------------------------------------------
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onmessage = e => {
+    const m = JSON.parse(e.data);
+    if (m.type === "state") {
+      if (m.frame) $("chase").src = "data:image/jpeg;base64," + m.frame;
+      if (m.ego) $("ego").src = "data:image/jpeg;base64," + m.ego;
+      if (m.map) $("map").src = "data:image/jpeg;base64," + m.map;
+      $("exec").textContent = m.mode === "idle" ? "" :
+        `${m.mode}${m.exec && m.exec.active ? " · " + m.exec.active + " (" + m.exec.remaining + " left)" : ""}`;
+      if (lastState !== "listening" && lastState !== "thinking")
+        setChip(m.mode === "idle" ? lastVlmChip() : "walking");
+    } else if (m.type === "vlm_status") {
+      renderVlm(m);
+    } else if (m.type === "goal_ack" && !m.ok) {
+      setChip("error", "error: " + m.error);
+      addStep({cmd: "goal rejected", result: m.error}, true);
+    } else if (m.type === "error") {
+      setChip("error", m.error);
+    }
+  };
+  ws.onclose = () => { setChip("error", "disconnected — retrying"); setTimeout(connect, 1500); };
+  ws.onopen = () => setChip("idle");
+}
+fetch("/api/info").then(r => r.json()).then(j => {
+  info = j;
+  const label = j.vlm_backend === "futurenav"
+    ? "FutureNav-4B @ " + (j.vlm_url || "action server")
+    : j.vlm_backend === "anthropic"
+      ? (j.vlm_model || "Claude")
+      : "on-device " + (j.vlm_model || "Qwen3-VL-30B (mlx)");
+  $("model").textContent = label;
+});
+connect();
+
+// ---- status chip ------------------------------------------------------------
+let vlmState = "idle";
+function lastVlmChip() { return vlmState === "thinking" ? "thinking" : (vlmState === "done" ? "done" : "idle"); }
+function setChip(kind, text) {
+  const c = $("status");
+  c.className = "chip " + kind;
+  c.textContent = text || kind;
+}
+
+// ---- thinking timeline ------------------------------------------------------
+function addStep(h, bad) {
+  const el = document.createElement("div");
+  el.className = "step now";
+  const m = /^([a-z_]+ ?[\d.]*)\s*(?:\((.*)\))?$/.exec(h.cmd) || [null, h.cmd, ""];
+  const ok = /completed/.test(h.result);
+  el.innerHTML = `<span class="act">${m[1] || h.cmd}</span>` +
+    (m[2] ? `<span class="why">${m[2]}</span>` : "") +
+    `<span class="res ${ok && !bad ? "ok" : "bad"}">${h.result}</span>`;
+  document.querySelectorAll(".step.now").forEach(s => s.classList.remove("now"));
+  $("timeline").appendChild(el);
+  $("timeline").scrollTop = $("timeline").scrollHeight;
+}
+function renderVlm(m) {
+  vlmState = m.state;
+  if (m.state === "thinking") setChip("thinking", `thinking — step ${m.step}/${m.max_steps}`);
+  else if (m.state === "executing") setChip("walking", "walking");
+  else if (m.state === "done") setChip("done", "done — " + (m.reason || ""));
+  else if (m.state === "error") setChip("error", "error: " + (m.error || ""));
+  const hist = m.history || [];
+  while (stepSeen < hist.length) addStep(hist[stepSeen++], false);
+  // live "reasoning" of the CURRENT step before it lands in history
+  if (m.last && m.state === "executing") {
+    const now = document.querySelector(".step.now .why");
+    if (!now || now.textContent !== m.last.reasoning) { /* shown when history lands */ }
+  }
+}
+
+// ---- goal submission -------------------------------------------------------
+function sendGoal(text) {
+  if (!text.trim()) return;
+  stepSeen = 0;
+  $("timeline").innerHTML = "";
+  ws.send(JSON.stringify({type: "goal", text: text.trim()}));
+}
+$("send").onclick = () => sendGoal($("goal").value);
+$("goal").addEventListener("keydown", e => { if (e.key === "Enter") sendGoal($("goal").value); });
+$("cancel").onclick = () => ws.send(JSON.stringify({type: "goal_cancel"}));
+$("reset").onclick = () => ws.send(JSON.stringify({type: "reset"}));
+
+// ---- mic -> /api/hear -------------------------------------------------------
+let rec = null, chunks = [];
+$("mic").onclick = async () => {
+  if (rec && rec.state === "recording") { rec.stop(); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+    chunks = [];
+    rec = new MediaRecorder(stream, {mimeType: "audio/webm"});
+    rec.ondataavailable = e => chunks.push(e.data);
+    rec.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      $("mic").classList.remove("rec");
+      setChip("thinking", "transcribing…");
+      const blob = new Blob(chunks, {type: "audio/webm"});
+      const r = await fetch("/api/hear", {method: "POST", body: blob});
+      const j = await r.json();
+      if (!j.ok) { setChip("error", j.error); return; }
+      $("transcript").innerHTML = `<span class="q">&ldquo;${j.transcript}&rdquo;</span>`;
+      $("goal").value = j.transcript;
+      lastState = "idle";
+      sendGoal(j.transcript);
+    };
+    rec.start();
+    $("mic").classList.add("rec");
+    lastState = "listening";
+    setChip("listening", "listening…");
+  } catch (err) { setChip("error", "mic: " + err.message); }
+};
+
+// ---- click-to-walk on the agent map -----------------------------------------
+$("map").onclick = e => {
+  if (!info || !info.map_geom) return;
+  const img = $("map");
+  const g = info.map_geom, [H, W] = g.shape;
+  const scale = Math.min(img.clientWidth / W, img.clientHeight / H) *
+                (Math.max(H, W) / Math.max(img.naturalHeight, img.naturalWidth) *
+                 Math.max(img.naturalHeight, img.naturalWidth) / Math.max(H, W));
+  // object-fit: contain -> compute displayed image box
+  const arImg = img.naturalWidth / img.naturalHeight;
+  const arBox = img.clientWidth / img.clientHeight;
+  let dw, dh, ox, oy;
+  if (arImg > arBox) { dw = img.clientWidth; dh = dw / arImg; ox = 0; oy = (img.clientHeight - dh) / 2; }
+  else { dh = img.clientHeight; dw = dh * arImg; oy = 0; ox = (img.clientWidth - dw) / 2; }
+  const r = img.getBoundingClientRect();
+  const u = (e.clientX - r.left - ox) / dw, v = (e.clientY - r.top - oy) / dh;
+  if (u < 0 || u > 1 || v < 0 || v > 1) return;
+  const x = g.origin[0] + u * W * g.res;
+  const y = g.origin[1] + (1 - v) * H * g.res;
+  ws.send(JSON.stringify({type: "target", x, y}));
+};
+</script>
+</body>
+</html>

@@ -36,6 +36,43 @@ FORCERANGE = 9.0
 # Base collision box half-sizes, eyeballed from the mesh footprint.
 BASE_BOX_HALFSIZE = (0.17, 0.08, 0.05)
 
+# Onboard forward camera (the future VLM's eyes): just past the base box's
+# front face, optical axis along body +x pitched ~15 deg down, wide FOV.
+# xyaxes follow the MJCF convention (camera right, camera up).
+EGO_CAM = dict(
+    name="ego",
+    # Ahead of the front legs and above the hips, else the view is mostly
+    # the robot's own linkage (tuned by rendering, 2026-07-09).
+    pos=[0.30, 0.0, 0.10],
+    fovy=100.0,
+    xyaxes=[0.0, -1.0, 0.0, 0.1736, 0.0, 0.9848],  # ~10 deg down
+)
+
+# Benchmark camera: matches the VLN-CE agent camera (1.25 m above the floor,
+# level, 90 deg HFOV) so VLN-trained policies see a view like their training
+# distribution instead of the ego cam's floor-level view. Rides an invisible
+# mast on the trunk (z is relative to the base, which sits ~0.14 m up at the
+# home keyframe). fovy is vertical: 90 deg HFOV at the 4:3 render = 73.74 deg.
+BENCH_CAM = dict(
+    name="bench",
+    pos=[0.05, 0.0, 1.11],
+    fovy=73.74,
+    xyaxes=[0.0, -1.0, 0.0, 0.0, 0.0, 1.0],  # level, facing body +x
+)
+
+
+def _xyaxes_to_quat(xyaxes) -> np.ndarray:
+    """MJCF xyaxes (right, up) -> wxyz quaternion, for MjSpec cameras."""
+    x = np.array(xyaxes[:3], dtype=float)
+    y = np.array(xyaxes[3:], dtype=float)
+    x /= np.linalg.norm(x)
+    y -= x * (y @ x)
+    y /= np.linalg.norm(y)
+    z = np.cross(x, y)
+    quat = np.zeros(4)
+    mujoco.mju_mat2Quat(quat, np.column_stack([x, y, z]).flatten())
+    return quat
+
 # Leg collision primitives, sized from the link mesh AABBs. Needed for the
 # getup task: without them a fallen robot's legs sink through the floor
 # (only the feet and the base box collide). contype=2 / conaffinity=0 pairs
@@ -152,6 +189,15 @@ def build_spec(
         conaffinity=15,
         group=3,
     )
+
+    # 3b. Onboard cameras (physics-inert; rendered by room_app / eval).
+    for cam in (EGO_CAM, BENCH_CAM):
+        root.add_camera(
+            name=cam["name"],
+            pos=cam["pos"],
+            fovy=cam["fovy"],
+            quat=_xyaxes_to_quat(cam["xyaxes"]),
+        )
 
     # 4. Explicit base inertial. Box formula over the collision box dims.
     base_mass = float(total_mass - non_base_mass)

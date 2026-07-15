@@ -89,7 +89,7 @@ class Sim:
         from mujoco import mjx
 
         from wojtek_rl import env as wojtek_env
-        from demo.navigation import NavConfig
+        from wojtek_rl.navigation import NavConfig
         from wojtek_rl.policy_io import load_policy
         from wojtek_rl.train import build_ppo_params
 
@@ -134,7 +134,7 @@ class Sim:
         self.target = (float(x), float(y))
 
     def pose(self) -> tuple[float, float, float]:
-        from demo.navigation import quat_to_yaw
+        from wojtek_rl.navigation import quat_to_yaw
 
         q = np.asarray(self.state.data.qpos[:7])
         return float(q[0]), float(q[1]), quat_to_yaw(float(q[3]), float(q[4]), float(q[5]), float(q[6]))
@@ -143,7 +143,7 @@ class Sim:
         """Advance one control step toward the target; return a state dict."""
         import jax.numpy as jp
 
-        from demo.navigation import command_to_target
+        from wojtek_rl.navigation import command_to_target
 
         x, y, yaw = self.pose()
         reached = False
@@ -285,7 +285,15 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--host", default=os.environ.get("HOST", "127.0.0.1"))
     p.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8010")))
+    p.add_argument(
+        "--run-dir",
+        default=DEFAULT_RUN_DIR,
+        help="policy run dir (run.json or checkpoint root); also FBB_RUN_DIR",
+    )
     args = p.parse_args(argv)
+
+    global DEFAULT_RUN_DIR
+    DEFAULT_RUN_DIR = args.run_dir
 
     import uvicorn
 

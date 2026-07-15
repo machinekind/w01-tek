@@ -1,0 +1,15 @@
+# FutureNav-4B action server — GPU host dependencies.
+# transformers MUST stay on 4.57.x: 5.x changes the tied-weights API and the
+# FutureNav custom model class no longer loads.
+torch
+torchvision
+transformers==4.57.1
+accelerate
+qwen-vl-utils
+einops
+bitsandbytes
+pillow
+numpy
+huggingface_hub
+fastapi
+uvicorn[standard]

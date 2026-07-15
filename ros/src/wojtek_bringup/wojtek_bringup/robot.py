@@ -39,12 +39,13 @@ SSH = ["ssh"] + _SSH_OPTS + [RPI_HOST]              # non-interactive
 SSH_TTY = ["ssh", "-tt"] + _SSH_OPTS + [RPI_HOST]   # foreground w/ signal propagation
 
 ARMING_HINT = """
->> Stack is up and DISARMED. Pose the robot in the boot pose (home), check it
-   matches RViz, then arm (another shell in this container):
+>> Stack is up and DISARMED. Use the operator console (opens with this command,
+   unless --no-console): pose the robot in the boot pose (home), check it matches
+   RViz, then Zero -> Stand up -> ARM with its buttons; the XY pad drives it.
+   Raw service calls still work as a fallback:
      ros2 service call /wojtek/zero      std_srvs/srv/Trigger
      ros2 service call /wojtek/stand_up  std_srvs/srv/Trigger
      ros2 service call /wojtek/arm       std_srvs/srv/SetBool "{data: true}"
-   Drive:  ros2 run teleop_twist_keyboard teleop_twist_keyboard
    Stop:   disarm, then /wojtek/lie_down -- or Ctrl-C here to tear everything down.
 """
 
@@ -56,6 +57,8 @@ def main():
                     help="BENCH: launch on the RPi WITHOUT RT, no torque (testing)")
     ap.add_argument("--sim", action="store_true", help="MuJoCo sim locally; no RPi, no SSH")
     ap.add_argument("--no-viz", action="store_true", help="skip RViz/PlotJuggler")
+    ap.add_argument("--no-console", action="store_true",
+                    help="skip the operator console GUI (arm/pose/jog/drive)")
     ap.add_argument("--plotjuggler", action="store_true", help="also open PlotJuggler")
     args = ap.parse_args()
 
@@ -91,6 +94,14 @@ def main():
         pj = str(args.plotjuggler).lower()
         print(f">> launching visualization (rviz, plotjuggler={pj})")
         spawn(["ros2", "launch", "wojtek_viz", "viz.launch.py", f"plotjuggler:={pj}"])
+
+    # ---- operator console (local GUI: arm/pose/jog/drive) ------------------
+    # The manual-control surface for this session; comes up alongside viz so the
+    # operator never types raw `ros2 service call`. GUI, so it needs the X mount
+    # ../dev.sh sets up -- same as RViz.
+    if not args.no_console:
+        print(">> launching operator console (ros2 run wojtek_viz console)")
+        spawn(["ros2", "run", "wojtek_viz", "console"])
 
     if not args.sim:
         print(ARMING_HINT)

@@ -24,6 +24,7 @@ setup(
     entry_points={
         "console_scripts": [
             "mujoco_sim_node = wojtek_viz.mujoco_sim_node:main",
+            "console = wojtek_viz.operator_console:main",
         ],
     },
 )

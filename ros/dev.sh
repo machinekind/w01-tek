@@ -19,5 +19,19 @@ if [ -n "${DISPLAY:-}" ] && command -v xhost >/dev/null 2>&1; then
   xhost +local:docker >/dev/null 2>&1 || true
 fi
 
+# Make sure the RPi SSH key is unlocked in the host agent before the container
+# starts. The key (id_ed25519) has a passphrase; the container forwards this
+# agent (compose.yaml) so `ros2 run wojtek_bringup robot` / deploy.sh can ssh to
+# the RPi without a password. Without a loaded key ssh silently falls back to
+# password auth. One passphrase prompt here, then none inside the container.
+if [ -n "${SSH_AUTH_SOCK:-}" ] && command -v ssh-add >/dev/null 2>&1; then
+  if ! ssh-add -l >/dev/null 2>&1; then
+    echo ">> no keys in the SSH agent -- loading ~/.ssh/id_ed25519 for RPi access"
+    ssh-add ~/.ssh/id_ed25519 || echo "!! ssh-add failed; SSH to the RPi may prompt for a password"
+  fi
+else
+  echo "!! no SSH agent ($SSH_AUTH_SOCK) -- SSH to the RPi will prompt for a password"
+fi
+
 docker compose up -d
 exec docker exec -it wojtek_robot bash

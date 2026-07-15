@@ -8,6 +8,12 @@ The original five fields (floor friction, base and link mass, one gain/kd
 scale) draw from `r1..r5 = jax.random.split(rng, 5)`. New fields draw from a
 folded-in sub-key so they leave `r1..r5` unchanged. With every new field
 disabled, the output matches the original code (tests/test_dr_expansion.py).
+
+Fold-in index taxonomy (jax.random.fold_in(rng, i)): 1 joint_gains, 2
+com_offset, 3 dof, 4 foot_friction, 5 motor_strength. motor_strength decouples
+forcerange from joint_gains' gain_scale: disabled, forcerange keeps riding
+gain_scale bitwise (a weak-motor world also reads as soft); enabled, it draws
+its own per-actuator sample, so weak and soft are no longer the same draw.
 """
 
 import jax
@@ -27,6 +33,9 @@ _DEFAULT_DR = {
         "frictionloss": [0.9, 1.1],
     },
     "foot_friction": {"enable": False, "range": [0.8, 1.2]},
+    # Weak-skewed: the failure mode this guards is motors too weak to pull
+    # the hips back under the body, not a symmetric strength spread.
+    "motor_strength": {"enable": False, "range": [0.5, 1.1]},
 }
 
 
@@ -47,6 +56,7 @@ def make_domain_randomize(mj_model, dr_cfg=None):
     joint_cfg = _field_cfg(dr_cfg, "joint_gains")
     dof_cfg = _field_cfg(dr_cfg, "dof")
     foot_cfg = _field_cfg(dr_cfg, "foot_friction")
+    motor_cfg = _field_cfg(dr_cfg, "motor_strength")
 
     floor_id = mj_model.geom("floor").id
     root_id = mj_model.body("root").id
@@ -93,7 +103,18 @@ def make_domain_randomize(mj_model, dr_cfg=None):
             gainprm = model.actuator_gainprm.at[:, 0].multiply(gain_scale)
             biasprm = model.actuator_biasprm.at[:, 1].multiply(gain_scale)
             biasprm = biasprm.at[:, 2].multiply(kd_scale)
-            forcerange = model.actuator_forcerange * gain_scale[:, None]
+
+            if motor_cfg["enable"]:
+                rm = jax.random.fold_in(rng, 5)
+                mlo, mhi = motor_cfg["range"]
+                motor_scale = jax.random.uniform(
+                    rm, (model.nu,), minval=mlo, maxval=mhi
+                )
+            else:
+                # Coupled to the gain draw, matching the original code: a
+                # weak-motor world also reads as a soft one.
+                motor_scale = gain_scale
+            forcerange = model.actuator_forcerange * motor_scale[:, None]
 
             out = {
                 "geom_friction": geom_friction,

@@ -1,0 +1,40 @@
+# @package _global_
+# Springy locomotion, phase A: springy_phase_b's recipe with the penalties
+# at 0.3x AND the difficulty stack eased. Two independent sources (quiet
+# walking, aibo; 15-minute humanoid) report full-strength action_rate and
+# torques from step 0 collapsing training into standing still; phase A trains
+# the gait first, phase B (restored from phase A's checkpoint, full weight)
+# tightens it. torque_rate stays at phase B's -0.02 — it is already below its
+# measured -0.06 freeze cliff, so there is no cliff here to curriculum away
+# from.
+# The difficulty relief exists for the same reason as the penalty
+# curriculum: jobs NNNNNNN/NNNNNNN collapsed into standing with weak-motor
+# DR (0.5x), latency, and encoder offsets active from step 0 — risks that
+# make stepping a bad bet before stepping competence exists. spin_posture,
+# the walking reference, trained with none of them. Phase B restores the
+# full stack. Usage: ./run.sh train +experiment=springy_phase_a
+defaults:
+  - springy_phase_b
+
+task:
+  env:
+    latency:
+      enable: false
+    encoder:
+      enable: false
+    reward:
+      scales:
+        action_rate: -0.075
+        torques: -1.8e-4
+        torque_limit: -0.03
+
+dr:
+  motor_strength: { enable: true, range: [0.9, 1.1] }
+
+# Sized from evidence, not symmetry: at 400M (job NNNNNNN) the policy
+# walked and turned but was still mid-climb (reward 45 and rising) with
+# the ramp's fast end unlearned. Iteration math in springy_phase_b.
+ppo:
+  num_timesteps: 1200000000
+
+run_name: wojtek_springy_a

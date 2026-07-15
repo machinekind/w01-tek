@@ -6,9 +6,14 @@ Run: ./run.sh report --run runs/<name>
 Writes runs/<name>/eval_report.json (everything downstream diffs against
 this) and runs/<name>/eval_report.md (human-readable table). Reuses
 battery.py's scenario rollouts -- report.py reduces the same per-step
-signals (`actuator_force`, `qvel`, `base_accel`) that rollout() already
-records, so `./run.sh report` costs about the same wall-clock as
-`./run.sh battery`, not double.
+signals (`actuator_force`, `qvel`, `base_accel`, `vx_local`, `vy_local`)
+that rollout() already records, so `./run.sh report` costs about the same
+wall-clock as `./run.sh battery`, not double.
+
+torque_by_speed bins pooled |actuator_force| by ACHIEVED planar speed
+(hypot(vx_local, vy_local), not the commanded speed): a policy with worse
+velocity tracking is effectively slower and would otherwise get cheap
+torque numbers for free.
 
 Foot-force proxy: this env has no direct contact-force read (the battery's
 own foot_contact/slip metrics use a geom-height heuristic, see
@@ -29,6 +34,7 @@ from wojtek_rl.battery import (
     load_checkpoint_policy,
     rollout,
     scenario_result,
+    torque_cap_of,
 )
 
 # -- pure metric functions ---------------------------------------------
@@ -49,6 +55,36 @@ def torque_percentiles(actuator_force) -> dict:
         "p99": float(np.percentile(a, 99)),
         "max": float(a.max()),
     }
+
+
+# Bin edges (m/s) for achieved-speed-binned torque. inf catches everything
+# at or above 1.0 rather than dropping fast steps silently.
+SPEED_BIN_EDGES = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0, float("inf"))
+
+
+def torque_by_speed(vx_local, vy_local, actuator_force) -> dict:
+    """Per-speed-bin p90/p99 of |actuator_force| (N*m), pooled over joints,
+    binned by ACHIEVED planar speed hypot(vx_local, vy_local) -- see the
+    module docstring for why achieved (not commanded) speed is the fair
+    axis for a torque comparison. Bin label -> {"p90", "p99", "n"}; `n` is
+    the pooled (step, not step*joint) sample count in that bin."""
+    speed = np.hypot(np.asarray(vx_local, dtype=float), np.asarray(vy_local, dtype=float))
+    force = np.abs(np.asarray(actuator_force, dtype=float))
+    out = {}
+    for lo, hi in zip(SPEED_BIN_EDGES[:-1], SPEED_BIN_EDGES[1:]):
+        label = f"{lo:.1f}-{hi:.1f}" if np.isfinite(hi) else f"{lo:.1f}+"
+        m = (speed >= lo) & (speed < hi)
+        n = int(m.sum())
+        if n == 0:
+            out[label] = {"p90": None, "p99": None, "n": 0}
+            continue
+        flat = force[m].ravel()
+        out[label] = {
+            "p90": float(np.percentile(flat, 90)),
+            "p99": float(np.percentile(flat, 99)),
+            "n": n,
+        }
+    return out
 
 
 def power_percentiles(actuator_force, joint_vel) -> dict:
@@ -141,11 +177,12 @@ def assemble_report(
     power: dict,
     foot_force: dict,
     termination: dict,
+    torque_by_speed: dict | None = None,
     timestamp: str | None = None,
 ) -> dict:
     """Merge the computed sections into the documented eval_report.json
     schema: run, checkpoint, battery, torque, power, foot_force_proxy,
-    termination, timestamp."""
+    termination, torque_by_speed, timestamp."""
     return {
         "run": run_name,
         "checkpoint": checkpoint,
@@ -154,6 +191,7 @@ def assemble_report(
         "power": power,
         "foot_force_proxy": foot_force,
         "termination": termination,
+        "torque_by_speed": torque_by_speed or {},
         "timestamp": timestamp or datetime.now().isoformat(timespec="seconds"),
     }
 
@@ -164,23 +202,27 @@ def assemble_report(
 def build_report(run_dir: Path) -> dict:
     """Run the battery once, reducing its rollouts into the full report:
     battery table + torque/power percentiles + foot-force proxy +
-    termination summary."""
+    termination summary + speed-binned torque."""
     run, env, ckpt, inf, foot_radius = load_checkpoint_policy(run_dir)
     reset, step = jax.jit(env.reset), jax.jit(env.step)
     fall_cfg = env._config.fall
     total_mass = float(env.mj_model.body_mass.sum())
     gravity_mag = float(abs(env.mj_model.opt.gravity[2]))
+    torque_cap = torque_cap_of(env)
 
     battery = {"run": run["run_name"], "checkpoint": ckpt.name}
     force_chunks, vel_chunks, accel_z_chunks = [], [], []
+    vx_local_chunks, vy_local_chunks = [], []
     term_events = []
     for name, (cmd_at, n) in battery_scenarios().items():
         rec, fell_at, term = rollout(env, reset, step, inf, cmd_at, n, foot_radius)
-        battery[name] = scenario_result(name, rec, fell_at, env.dt)
+        battery[name] = scenario_result(name, rec, fell_at, env.dt, torque_cap)
         if rec["actuator_force"].size:
             force_chunks.append(rec["actuator_force"])
             vel_chunks.append(rec["qvel"])
             accel_z_chunks.append(rec["base_accel"][:, 2])
+            vx_local_chunks.append(rec["vx_local"])
+            vy_local_chunks.append(rec["vy_local"])
         term_events.append(
             {
                 "scenario": name,
@@ -195,6 +237,8 @@ def build_report(run_dir: Path) -> dict:
     all_force = np.concatenate(force_chunks, axis=0) if force_chunks else np.zeros((0, 12))
     all_vel = np.concatenate(vel_chunks, axis=0) if vel_chunks else np.zeros((0, 12))
     all_accel_z = np.concatenate(accel_z_chunks, axis=0) if accel_z_chunks else np.zeros((0,))
+    all_vx_local = np.concatenate(vx_local_chunks, axis=0) if vx_local_chunks else np.zeros((0,))
+    all_vy_local = np.concatenate(vy_local_chunks, axis=0) if vy_local_chunks else np.zeros((0,))
 
     return assemble_report(
         run_name=run["run_name"],
@@ -204,6 +248,7 @@ def build_report(run_dir: Path) -> dict:
         power=power_percentiles(all_force, all_vel),
         foot_force=foot_force_proxy(all_accel_z, total_mass, gravity_mag),
         termination=termination_summary(term_events),
+        torque_by_speed=torque_by_speed(all_vx_local, all_vy_local, all_force),
     )
 
 
@@ -246,6 +291,16 @@ def render_markdown(report: dict) -> str:
         "|---|---|---|---|",
         f"| {_fmt(t['p50'])} | {_fmt(t['p90'])} | {_fmt(t['p99'])} | {_fmt(t['max'])} |",
     ]
+
+    lines += [
+        "",
+        "## Torque by achieved speed (|actuator_force|, N*m)",
+        "",
+        "| speed (m/s) | p90 | p99 | n |",
+        "|---|---|---|---|",
+    ]
+    for label, v in (report.get("torque_by_speed") or {}).items():
+        lines.append(f"| {label} | {_fmt(v.get('p90'))} | {_fmt(v.get('p99'))} | {v.get('n', 0)} |")
 
     p = report["power"]
     lines += [

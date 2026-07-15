@@ -24,6 +24,10 @@ dr:
   # priority, so the foot's draw is the contact friction and the floor's
   # (including its DR draw) no longer affects foot contacts.
   foot_friction: { enable: false, range: [0.8, 1.2] }
+  # Per-actuator forcerange scale, decoupled from joint_gains' gain draw;
+  # weak-skewed because the real failure is motors too weak to pull the hips
+  # back under the body, not a symmetric strength spread.
+  motor_strength: { enable: false, range: [0.5, 1.1] }
 
 wandb:
   enable: true

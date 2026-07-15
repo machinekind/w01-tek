@@ -1,0 +1,77 @@
+# @package _global_
+# springy_v1 — the keeper policy of the 2026-07-13 springy reward-redesign
+# runs (PR #20), FROZEN from the trained run wojtek_springy_b_20260713_1827
+# so it stays reproducible while the springy_phase_* presets evolve. What it
+# is: clock-free joystick locomotion with no height command (the policy
+# picks its own operating height; legs work as springs) and the anti-splay
+# package for the weak abduction motors. Battery: turn vel_err 0.049,
+# walk_to_stop 0.069 with a 6-step plant and hold qvel 0.006, ramp 0.108,
+# zero falls; splay p95 8.5-13.5 deg inside the +-25 deg clamp.
+# Trained as the two-phase pipeline (training/hpc/springy_two_phase.slurm)
+# at commit 4c4047c, seed 1, ++ppo.num_envs=32768 ++ppo.batch_size=1024:
+# phase A 1.2B steps with penalties at 0.3x and eased difficulty, phase B
+# (this config) 800M steps restored from A's final checkpoint.
+# Artifacts: https://huggingface.co/<HF_ORGANIZATION>/wojtek-springy-locomotion
+# Usage: ./run.sh train +experiment=locomotion_springy_v1
+defaults:
+  - override /task: joystick
+
+task:
+  env:
+    action_scale: [0.25, 0.5, 0.5]
+    max_torque: 6.0
+    abduction_ctrl_limit: 0.44
+    knee_target_max: 3.15
+    latency:
+      enable: true
+    encoder:
+      enable: true
+    obs:
+      include:
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+    command:
+      vx: [-0.8, 1.2]
+      vy: [-0.5, 0.5]
+      wz: [-1.0, 1.0]
+      height: [0.125, 0.125]
+      zero_prob: 0.25
+      pure_wz_prob: 0.25
+      pure_vy_prob: 0.2
+    push:
+      vel: 0.8
+    gait:
+      swing_height: 0.08
+      air_time_cap: 0.35
+    reward:
+      tracking_sigma: 0.1
+      pose_leg_weight: 0.1
+      scales:
+        tracking_lin_vel: 4.0
+        tracking_ang_vel: 1.6
+        height_tracking: 0.0
+        lin_vel_z: 0.0
+        ang_vel_xy: 0.0
+        orientation: -5.0
+        torques: -6.0e-4
+        torque_rate: -0.02
+        torque_limit: -0.1
+        action_rate: -0.25
+        action_accel: 0.0
+        energy: 0.0
+        pose: -1.0
+        feet_air_time: 4.0
+        feet_slip: -0.35
+        feet_phase: 0.0
+        contact_match: 0.0
+        high_step: 4.0
+        stand_still: -2.5
+        stand_feet_down: -30.0
+        termination: -1.0
+
+dr:
+  motor_strength: { enable: true, range: [0.5, 1.1] }
+
+run_name: wojtek_loco_springy_v1

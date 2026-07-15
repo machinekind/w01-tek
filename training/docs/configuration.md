@@ -128,7 +128,7 @@ All three tasks support these paths through their `default_config()`:
 | `task.env.sim.njmax` | `320` | Warp constraint-row budget per world. |
 | `task.env.sim.num_envs` | `1` | Do not set for training: `train.py` replaces it with `max(ppo.num_envs, ppo.num_eval_envs)`. Set `++ppo.num_envs` instead. |
 | `task.env.episode_length` | task-specific | Explicitly override only when PPO's `episode_length` is also understood; absent PPO override, the trainer mirrors this value. |
-| `task.env.action_scale` | `0.5` rad | Scales policy action to motor-target displacement. |
+| `task.env.action_scale` | `0.5` rad | Scales policy action to motor-target displacement. `joystick` additionally accepts a 3-vector `[abduction, hip, knee]` tiled over the 4 legs, giving joints different command authority (e.g. `'task.env.action_scale=[0.25,0.5,0.5]'`); `getup` and `jump` take the scalar only. |
 | `task.env.obs_noise.gyro` | `0.2` | Uniform actor gyro noise scale. |
 | `task.env.obs_noise.gravity` | `0.05` | Uniform actor gravity-vector noise scale. |
 | `task.env.obs_noise.joint_pos` | `0.01` rad | Uniform actor joint-position noise scale. |
@@ -161,9 +161,14 @@ Default actor observations are `gyro`, `gravity`, `joint_pos`, `joint_vel`,
 | `task.env.command.height` | `[0.09, 0.17]` m | Sampled stance-height range. |
 | `task.env.command.resample_steps` | `250` | Command refresh period (5 s at default control timing). |
 | `task.env.command.zero_prob` | `0.15` | Probability of zeroing velocity commands while keeping the height command live. |
+| `task.env.command.pure_wz_prob` | `0.0` | Probability of keeping only the yaw command (vx/vy zeroed): dedicated spin-in-place training. Uniform box sampling almost never draws pure rotation, so turning stays undertrained without it. |
+| `task.env.command.pure_vy_prob` | `0.0` | Probability of keeping only the lateral command (vx/wz zeroed): dedicated pure-strafe training, the same exposure fix as `pure_wz_prob`. |
 | `task.env.push.enable` | `true` | Enable random horizontal pushes. |
 | `task.env.push.interval_steps` | `200` | Push interval. |
 | `task.env.push.vel` | `0.4` m/s | Velocity impulse magnitude. |
+| `task.env.max_torque` | `0.0` Nm (off) | Clamps every actuator's forcerange to `±max_torque` (the model's default is ±9). A binding cap forces compliant leg use over torque spikes; deployment must apply the same cap (`real.launch.py` max torque). |
+| `task.env.abduction_ctrl_limit` | `0.0` rad (off) | Intersects the 4 abduction actuators' ctrlrange with `±limit` in `_customize_model`; the mechanical hip travel is looser, so a nonzero value becomes the binding limit. Deploy must match. |
+| `task.env.knee_target_max` | `0.0` rad (off) | Upper bound on the knee (third-joint) motor target in `step()`. The knee ctrlrange upper bound is 5.8 rad, past `KNEE_SINGULARITY` (3.2), so a nonzero value is a real clamp, not a no-op. |
 | `task.env.action_delay` | `1` | Legacy fixed control-period delay. Set `0` for no fixed delay when latency randomization is off. |
 | `task.env.latency.enable` | `false` | Sample a delay in substeps at reset; see [Latency and encoder randomization](#latency-and-encoder-randomization). |
 | `task.env.latency.min_substeps` | `0` | Inclusive randomized-delay lower bound. |
@@ -177,10 +182,12 @@ Default actor observations are `gyro`, `gravity`, `joint_pos`, `joint_vel`,
 | `task.env.gait.swing_height` | `0.03` m | Target swing-foot clearance. |
 | `task.env.gait.trot_band` | `[0.35, 0.55]` m/s | Planar-speed range that blends walk into trot. |
 | `task.env.gait.duty` | `[0.7, 0.5]` | Walk/trot stance fractions. |
+| `task.env.gait.air_time_cap` | `0.0` s (uncapped) | Cap on the swing time `feet_air_time` pays for. An anti-runaway bound on the swing reward, not a cadence target. |
 | `task.env.reward.tracking_sigma` | `0.25` | Velocity-tracking reward width. |
 | `task.env.reward.phase_sigma` | `0.002` | Gait-phase reward width. |
 | `task.env.reward.height_sigma` | `0.001` m² | Height-tracking reward width. |
 | `task.env.reward.pose_leg_weight` | `0.25` | Relative leg-joint weight in the pose anchor. |
+| `task.env.reward.torque_limit_frac` | `0.85` | Fraction of each actuator's forcerange cap (post `max_torque`, when set) above which the `torque_limit` hinge starts paying. |
 
 Joystick reward-scale defaults:
 
@@ -189,12 +196,21 @@ Joystick reward-scale defaults:
 | `tracking_lin_vel` | `1.5` | `tracking_ang_vel` | `0.8` |
 | `height_tracking` | `1.0` | `lin_vel_z` | `-2.0` |
 | `ang_vel_xy` | `-0.05` | `orientation` | `-5.0` |
-| `torques` | `-0.0002` | `action_rate` | `-0.25` |
-| `action_accel` | `-0.1` | `energy` | `-0.002` |
-| `pose` | `-0.5` | `feet_air_time` | `2.0` |
-| `feet_slip` | `-0.25` | `feet_phase` | `1.0` |
-| `contact_match` | `1.0` | `stand_still` | `-0.5` |
-| `termination` | `-1.0` |  |  |
+| `torques` | `-0.0002` | `torque_rate` | `0.0` |
+| `action_rate` | `-0.25` | `action_accel` | `-0.1` |
+| `energy` | `-0.002` | `pose` | `-0.5` |
+| `feet_air_time` | `2.0` | `feet_slip` | `-0.25` |
+| `feet_phase` | `1.0` | `contact_match` | `1.0` |
+| `high_step` | `0.0` | `stand_still` | `-0.5` |
+| `stand_feet_down` | `0.0` | `termination` | `-1.0` |
+| `torque_limit` | `0.0` |  |  |
+
+The zero-default terms are dormant until a preset or override enables them:
+`torque_rate` penalizes step-to-step change in actuator torque (bang-bang
+motor commands the policy-side `action_rate` cannot see), `high_step`
+rewards swing-foot clearance up to `gait.swing_height` while moving,
+`stand_feet_down` penalizes total foot clearance at zero command, and
+`torque_limit` is the saturation hinge described above.
 
 Example custom joystick distribution:
 
@@ -296,6 +312,7 @@ all require `domain_rand=true`.
 | Per-joint gains/KD | `dr.joint_gains.enable=true` | `dr.joint_gains.gain_pct=0.2`, `dr.joint_gains.kd_pct=0.2` | Replaces the legacy shared scalar with independent 12-joint ±fraction draws. |
 | DOF properties | `dr.dof.enable=true` | `dr.dof.damping`, `dr.dof.armature`, `dr.dof.frictionloss` ranges | Jointly randomizes all three multiplicative DOF properties. |
 | Per-foot friction | `dr.foot_friction.enable=true` | `dr.foot_friction.range=[0.8,1.2]` | Independent multiplicative draw for each foot; foot contact priority makes the foot draw take effect. |
+| Motor strength | `dr.motor_strength.enable=true` | `dr.motor_strength.range=[0.5,1.1]` | Independent per-actuator forcerange scale, decoupled from `joint_gains`' gain draw. Weak-skewed by default: disabled, forcerange keeps riding the gain scale (a weak-motor world also reads as soft); enabled, it draws its own sample. |
 
 Example enabling every expanded model randomization:
 
@@ -304,7 +321,8 @@ Example enabling every expanded model randomization:
   dr.com_offset.enable=true dr.joint_gains.enable=true \
   dr.dof.enable=true 'dr.dof.damping=[0.9,1.1]' \
   'dr.dof.armature=[0.9,1.1]' 'dr.dof.frictionloss=[0.9,1.1]' \
-  dr.foot_friction.enable=true 'dr.foot_friction.range=[0.8,1.2]'
+  dr.foot_friction.enable=true 'dr.foot_friction.range=[0.8,1.2]' \
+  dr.motor_strength.enable=true 'dr.motor_strength.range=[0.5,1.1]'
 ```
 
 ### Latency and encoder randomization
@@ -397,6 +415,8 @@ so command-line values can still override it.
 | `locomotion_v2` … `locomotion_v8` | locomotion | Recorded locomotion iteration recipes. |
 | `run` | joystick | Extended command range / faster gait for running. |
 | `run_v2` | joystick | Running iteration that includes a warm-start path. |
+| `springy_phase_b` | joystick | 2026-07-12 reward redesign: clock-free, height-command-free springy locomotion with the anti-splay package, full penalty weight. Self-contained; does not inherit `locomotion`. |
+| `springy_phase_a` | springy_phase_b | Same recipe at a 0.3x smoothness/torque penalty curriculum; phase B restores from its checkpoint. |
 
 Read the matching file in [`conf/experiment`](../wojtek_rl/conf/experiment)
 before choosing a historical version: the comments explain its intended
@@ -427,6 +447,8 @@ than infer them from a historical run name:
 | `locomotion_v8` | `fbb_loco_v8` | v6 fields + `task.env.reward.scales.height_tracking=2.5`, `task.env.reward.scales.tracking_lin_vel=2.5`, `task.env.reward.scales.feet_slip=-0.35`. |
 | `run` | `fbb_run_v1` | `task.env.command.{vx,vy,wz}={[-0.8,1.8],[-0.5,0.5],[-1,1]}`, `task.env.gait.{freq,swing_height}={[2,3.5],0.04}`, `task.env.push.vel=0.5`. |
 | `run_v2` | `fbb_run_v2` | `task.env.command.{vx,vy,wz}={[-0.8,1.8],[-0.5,0.5],[-1,1]}`, `task.env.gait.{freq,swing_height}={[1.8,4.5],0.04}`, `task.env.push.vel=0.5`, historical `restore=runs/fbb_run_v1/checkpoints/000206438400`. |
+| `springy_phase_b` | `wojtek_springy_b` | Self-contained joystick preset (no `locomotion` inheritance). `task.env.{action_scale,max_torque,abduction_ctrl_limit,knee_target_max}={[0.25,0.5,0.5],6.0,0.44,3.15}`; `task.env.{latency,encoder}.enable=true`; `task.env.obs.include=[joint_pos,joint_vel,last_act,command]` (drops gyro/gravity/phase from the actor, critic list unchanged); `task.env.command.{vx,vy,wz,height,zero_prob,pure_wz_prob,pure_vy_prob}={[-0.8,1.2],[-0.5,0.5],[-1,1],[0.125,0.125],0.25,0.25,0.2}` (height pinned, not removed); `task.env.push.vel=0.8`; `task.env.gait.{swing_height,air_time_cap}={0.08,0.35}`; `task.env.reward.pose_leg_weight=0.1`; `task.env.reward.scales.{tracking_lin_vel,tracking_ang_vel,height_tracking,lin_vel_z,ang_vel_xy,orientation,torques,torque_rate,torque_limit,action_rate,action_accel,energy,pose,feet_air_time,feet_slip,feet_phase,contact_match,high_step,stand_still,stand_feet_down,termination}={4.0,1.6,0.0,0.0,0.0,-5.0,-6e-4,-0.02,-0.1,-0.25,0.0,0.0,-1.0,4.0,-0.35,0.0,0.0,4.0,-2.5,-30.0,-1.0}`; `dr.motor_strength.enable=true` (`range=[0.5,1.1]`); `ppo.num_timesteps=200000000`. |
+| `springy_phase_a` | `wojtek_springy_a` | Inherits `springy_phase_b`, overrides only the penalty curriculum: `task.env.reward.scales.{action_rate,torques,torque_limit}={-0.075,-1.8e-4,-0.03}` (0.3x of phase B; `torque_rate` stays `-0.02`, already below its measured `-0.06` freeze cliff); `ppo.num_timesteps=100000000`. Launch phase B afterward with `restore=<phase-A checkpoint>`; the preset itself does not set `restore`. |
 
 `run_v2`'s restore path is an artifact dependency, not a guaranteed portable
 starting point. Its config comments note that the historical checkpoint no
@@ -510,5 +532,5 @@ way a command runs:
 |---|---|
 | `train` | Sets `XLA_FLAGS=--xla_gpu_triton_gemm_any=true` and `XLA_PYTHON_CLIENT_MEM_FRACTION=0.9` only when those variables are not already set. |
 | `smoke`, `battery`, `report`, `export` | `run.sh` sets `JAX_PLATFORMS=cpu`; `sim.backend=auto` therefore resolves to the MJX/JAX backend. |
-| `eval`, `app` | `run.sh` defaults `MUJOCO_GL=egl`; set it explicitly (for example `MUJOCO_GL=cgl` on macOS) if necessary. |
+| `eval`, `app` | `run.sh` defaults `MUJOCO_GL=egl` on Linux only; macOS leaves it unset so mujoco picks its native GL. Set it explicitly to override. |
 | `app` | Defaults `WOJTEK_RUN_DIR=policies/fbb_v3`, `HOST=127.0.0.1`, and `PORT=8010`. The demo is a joystick-specific presentation layer, not a generic evaluator for arbitrary task/configuration shapes. |

@@ -27,6 +27,12 @@ def _apply_overrides(cfg: config_dict.ConfigDict, overrides: dict) -> None:
             value = tuple(value)
         if isinstance(current, float) and isinstance(value, int):
             value = float(value)
+        # scalar defaults may be overridden with per-element vectors
+        # (e.g. action_scale: [0.2, 0.5, 0.5]); bypass the type lock
+        if isinstance(current, float) and isinstance(value, (list, tuple)):
+            with cfg.ignore_type():
+                setattr(cfg, key, tuple(float(v) for v in value))
+            continue
         setattr(cfg, key, value)
 
 

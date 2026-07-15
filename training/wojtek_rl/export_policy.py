@@ -57,6 +57,10 @@ def main() -> None:
     ckpt_root = Path(run["checkpoint_dir"])
     if not ckpt_root.is_absolute():
         ckpt_root = paths.PROJECT_DIR / ckpt_root
+    if not ckpt_root.exists():
+        # run.json may carry the training host's absolute checkpoint path
+        # (cluster runs); fall back to the run dir itself.
+        ckpt_root = (run_dir / "checkpoints").resolve()
     ckpt = max(
         (p for p in ckpt_root.iterdir() if p.name.isdigit()),
         key=lambda p: int(p.name),
@@ -143,7 +147,9 @@ def main() -> None:
         "home_ctrl": np.asarray(key_home.ctrl).tolist(),
         "ctrl_low": mj.actuator_ctrlrange[:, 0].tolist(),
         "ctrl_high": mj.actuator_ctrlrange[:, 1].tolist(),
-        "action_scale": float(env_cfg.get("action_scale", 0.5)),
+        # Scalar or per-joint-type [abduction, hip, knee] vector; the deploy
+        # loop must apply whichever form the policy trained with.
+        "action_scale": np.asarray(env_cfg.get("action_scale", 0.5)).tolist(),
         "ctrl_dt": float(env_cfg.get("ctrl_dt", 0.02)),
         "trot_phase": [0.0, np.pi, 0.0, np.pi],
         "gait_freq_hz": float(np.mean(gait_freq)),

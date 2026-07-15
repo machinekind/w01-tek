@@ -18,6 +18,8 @@ from wojtek_rl.build_model import FOOT_RADIUS
 
 # Actuator indices of the knee cranks (third joints), paths.LEGS order.
 KNEE_ACTUATORS = (2, 5, 8, 11)
+# Actuator indices of the abduction joints (first joints), paths.LEGS order.
+ABDUCTION_ACTUATORS = (0, 3, 6, 9)
 # The four-bar snaps through its singular branch past this third-joint angle
 # (the foot flips above the trunk). Recovery/jump policies must not command
 # targets on the far branch; crossing it under load can break the linkage.

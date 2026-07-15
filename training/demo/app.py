@@ -21,8 +21,10 @@ from __future__ import annotations
 
 # Headless GPU rendering backend; must precede any mujoco import.
 import os
+import sys
 
-os.environ.setdefault("MUJOCO_GL", "egl")
+if sys.platform == "linux":  # headless GPU boxes; macOS uses its default GL
+    os.environ.setdefault("MUJOCO_GL", "egl")
 os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.5")
 
 # Persistent XLA compilation cache: the first run populates it (~30-40s of

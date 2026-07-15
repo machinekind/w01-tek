@@ -6,6 +6,7 @@ from wojtek_rl.report import (
     power_percentiles,
     render_markdown,
     termination_summary,
+    torque_by_speed,
     torque_percentiles,
 )
 
@@ -62,7 +63,7 @@ def test_foot_force_proxy_empty():
 def test_termination_summary_known_fell_and_survived_set():
     events = [
         {
-            "scenario": "ramp_mid",
+            "scenario": "stand_to_trot_ramp",
             "fell_at": None,
             "height": None,
             "gravity_z": None,
@@ -70,7 +71,7 @@ def test_termination_summary_known_fell_and_survived_set():
             "max_tilt_gz": -0.4,
         },
         {
-            "scenario": "ramp_low",
+            "scenario": "turn",
             "fell_at": 42,
             "height": 0.03,  # below min_height -> height fall
             "gravity_z": -0.9,  # not over max_tilt_gz -> not tilt
@@ -78,7 +79,7 @@ def test_termination_summary_known_fell_and_survived_set():
             "max_tilt_gz": -0.4,
         },
         {
-            "scenario": "ramp_tall",
+            "scenario": "strafe",
             "fell_at": 100,
             "height": 0.10,  # above min_height -> not height
             "gravity_z": -0.1,  # over max_tilt_gz -> tilt fall
@@ -86,7 +87,7 @@ def test_termination_summary_known_fell_and_survived_set():
             "max_tilt_gz": -0.4,
         },
         {
-            "scenario": "walk_trot",
+            "scenario": "walk_to_stop",
             "fell_at": 7,
             "height": 0.02,  # both conditions trip
             "gravity_z": 0.0,
@@ -98,11 +99,11 @@ def test_termination_summary_known_fell_and_survived_set():
     assert s["scenarios_run"] == 4
     assert s["fall_count"] == 3
     assert s["fall_reason_counts"] == {"height": 1, "tilt": 1, "both": 1, "unknown": 0}
-    assert s["per_scenario"]["ramp_mid"] == {"fell": False, "fell_at": None, "reason": None}
-    assert s["per_scenario"]["ramp_low"]["reason"] == "height"
-    assert s["per_scenario"]["ramp_tall"]["reason"] == "tilt"
-    assert s["per_scenario"]["walk_trot"]["reason"] == "both"
-    assert s["per_scenario"]["ramp_low"]["fell_at"] == 42
+    assert s["per_scenario"]["stand_to_trot_ramp"] == {"fell": False, "fell_at": None, "reason": None}
+    assert s["per_scenario"]["turn"]["reason"] == "height"
+    assert s["per_scenario"]["strafe"]["reason"] == "tilt"
+    assert s["per_scenario"]["walk_to_stop"]["reason"] == "both"
+    assert s["per_scenario"]["turn"]["fell_at"] == 42
 
 
 def test_termination_summary_all_survived():
@@ -121,17 +122,18 @@ def test_assemble_report_schema_keys():
     report = assemble_report(
         run_name="probe",
         checkpoint="1000",
-        battery={"run": "probe", "checkpoint": "1000", "ramp_mid": {"fell_at": None}},
+        battery={"run": "probe", "checkpoint": "1000", "stand_to_trot_ramp": {"fell_at": None}},
         torque={"p50": 1.0, "p90": 2.0, "p99": 3.0, "max": 4.0},
         power={"p50": 1.0, "p90": 2.0, "p99": 3.0, "mean_total": 4.0},
         foot_force={"peak_accel_mps2": 1.0, "peak_force_n": 10.0},
         termination={"scenarios_run": 1, "fall_count": 0,
                      "fall_reason_counts": {}, "per_scenario": {}},
+        torque_by_speed={"0.0-0.2": {"p90": 1.0, "p99": 2.0, "n": 5}},
         timestamp="2026-07-10T00:00:00",
     )
     assert set(report.keys()) == {
         "run", "checkpoint", "battery", "torque", "power",
-        "foot_force_proxy", "termination", "timestamp",
+        "foot_force_proxy", "termination", "torque_by_speed", "timestamp",
     }
     assert report["run"] == "probe"
     assert report["checkpoint"] == "1000"
@@ -153,22 +155,70 @@ def test_render_markdown_smoke():
         battery={
             "run": "probe",
             "checkpoint": "1000",
-            "ramp_mid": {"fell_at": None, "steps": 750, "vibration": 0.1},
+            "stand_to_trot_ramp": {"fell_at": None, "steps": 750, "vibration": 0.1},
         },
         torque={"p50": 1.0, "p90": 2.0, "p99": 3.0, "max": 4.0},
         power={"p50": 1.0, "p90": 2.0, "p99": 3.0, "mean_total": 4.0},
         foot_force={"peak_accel_mps2": 1.234, "peak_force_n": 12.3},
         termination=termination_summary(
-            [{"scenario": "ramp_mid", "fell_at": None, "height": None,
+            [{"scenario": "stand_to_trot_ramp", "fell_at": None, "height": None,
               "gravity_z": None, "min_height": 0.06, "max_tilt_gz": -0.4}]
         ),
+        torque_by_speed={"0.0-0.2": {"p90": 1.0, "p99": 2.0, "n": 5}},
         timestamp="2026-07-10T00:00:00",
     )
     md = render_markdown(report)
     assert "# Eval report: probe" in md
     assert "## Battery" in md
     assert "## Torque" in md
+    assert "## Torque by achieved speed" in md
     assert "## Power" in md
     assert "## Foot-force proxy" in md
     assert "## Termination" in md
-    assert "ramp_mid" in md
+    assert "stand_to_trot_ramp" in md
+    assert "0.0-0.2" in md
+
+
+# -- torque_by_speed ----------------------------------------------------------
+
+
+def test_torque_by_speed_known_values():
+    # 4 steps, 2 joints. speed = hypot(vx_local, vy_local):
+    #   step0: hypot(0.1, 0.0) = 0.1  -> bin [0.0, 0.2)
+    #   step1: hypot(0.3, 0.0) = 0.3  -> bin [0.2, 0.4)
+    #   step2: hypot(0.3, 0.4) = 0.5  -> bin [0.4, 0.6)
+    #   step3: hypot(0.6, 0.8) = 1.0  -> bin [1.0, inf)  (>= edge)
+    vx_local = np.array([0.1, 0.3, 0.3, 0.6])
+    vy_local = np.array([0.0, 0.0, 0.4, 0.8])
+    force = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]])
+    r = torque_by_speed(vx_local, vy_local, force)
+    assert r["0.0-0.2"] == {
+        "p90": float(np.percentile([1.0, 2.0], 90)),
+        "p99": float(np.percentile([1.0, 2.0], 99)),
+        "n": 1,
+    }
+    assert r["0.2-0.4"] == {
+        "p90": float(np.percentile([3.0, 4.0], 90)),
+        "p99": float(np.percentile([3.0, 4.0], 99)),
+        "n": 1,
+    }
+    assert r["0.4-0.6"] == {
+        "p90": float(np.percentile([5.0, 6.0], 90)),
+        "p99": float(np.percentile([5.0, 6.0], 99)),
+        "n": 1,
+    }
+    assert r["0.6-0.8"] == {"p90": None, "p99": None, "n": 0}
+    assert r["0.8-1.0"] == {"p90": None, "p99": None, "n": 0}
+    assert r["1.0+"] == {
+        "p90": float(np.percentile([7.0, 8.0], 90)),
+        "p99": float(np.percentile([7.0, 8.0], 99)),
+        "n": 1,
+    }
+
+
+def test_torque_by_speed_empty():
+    r = torque_by_speed(np.zeros(0), np.zeros(0), np.zeros((0, 12)))
+    assert all(v == {"p90": None, "p99": None, "n": 0} for v in r.values())
+    assert set(r.keys()) == {
+        "0.0-0.2", "0.2-0.4", "0.4-0.6", "0.6-0.8", "0.8-1.0", "1.0+",
+    }

@@ -12,7 +12,7 @@ from ml_collections import config_dict
 from mujoco import mjx
 from mujoco_playground._src import mjx_env
 
-from wojtek_rl.base import WojtekEnv
+from wojtek_rl.base import ABDUCTION_ACTUATORS, KNEE_ACTUATORS, WojtekEnv
 from wojtek_rl.build_model import FOOT_RADIUS
 
 # 3 gyro + 3 gravity + 12 qpos + 12 qvel + 12 last_act + 4 cmd + 8 phase
@@ -44,7 +44,25 @@ def default_config() -> config_dict.ConfigDict:
             backend="auto", naconmax_per_env=32, njmax=320, num_envs=1
         ),
         episode_length=1000,
+        # Scalar, or a 3-tuple (per joint within a leg: first/abduction,
+        # second, third — tiled over the 4 legs) to give joints different
+        # command authority around the anchor. Ported from PR #19.
         action_scale=0.5,
+        # Clamp actuator forcerange to +-this many N*m (0 = keep the model's
+        # +-9). A binding cap forces compliant leg use instead of torque
+        # spikes; deploy MUST match (real.launch.py max_torque). Ported from
+        # PR #19.
+        max_torque=0.0,
+        # Clamp the 4 abduction actuators' ctrlrange to +-this many rad
+        # (0 = keep the model's +-pi). The mechanical hip travel exceeds this,
+        # so once set the software clamp is the binding limit, not the joint
+        # stop; deploy MUST match.
+        abduction_ctrl_limit=0.0,
+        # Upper bound on the knee (third-joint) motor target, rad (0 = keep
+        # the model's ctrlrange). A guard under KNEE_SINGULARITY: the model's
+        # ctrlrange upper bound reaches past the singularity on its own, so
+        # this is a real clamp, not a no-op, whenever it is below that bound.
+        knee_target_max=0.0,
         obs_noise=config_dict.create(
             gyro=0.2, gravity=0.05, joint_pos=0.01, joint_vel=1.5
         ),
@@ -87,6 +105,15 @@ def default_config() -> config_dict.ConfigDict:
             # Velocity part zeroes with this prob (stand training); the
             # height command stays live so the robot stands AT the height.
             zero_prob=0.15,
+            # With this prob the linear part zeroes but wz stays: dedicated
+            # spin-in-place training (uniform box sampling almost never
+            # produces pure rotation, so policies can't turn on the spot).
+            # Ported from PR #19.
+            pure_wz_prob=0.0,
+            # With this prob keep vy, zero vx and wz: dedicated pure-strafe
+            # training. Same fix as pure_wz_prob — the uniform box almost
+            # never draws pure lateral, so strafing stays undertrained.
+            pure_vy_prob=0.0,
         ),
         push=config_dict.create(enable=True, interval_steps=200, vel=0.4),
         action_delay=1,  # control steps of latency between policy and motors
@@ -127,6 +154,10 @@ def default_config() -> config_dict.ConfigDict:
             # band. 50% duty at walking speeds reads as a soft trot (v1:
             # diag-corr 0.82 in the walk band); a real walk is ~70% stance.
             duty=(0.7, 0.5),
+            # Cap on the swing time the feet_air_time reward pays for, in
+            # seconds (0 = uncapped). Anti-runaway bound on the swing reward;
+            # NOT a cadence target. Ported from PR #19.
+            air_time_cap=0.0,
         ),
         reward=config_dict.create(
             tracking_sigma=0.25,
@@ -135,6 +166,11 @@ def default_config() -> config_dict.ConfigDict:
             # Pose anchors to the commanded-height stance; leg joints get a
             # lighter weight than abduction so the gait may flex around it.
             pose_leg_weight=0.25,
+            # torque_limit hinge fires above this fraction of each
+            # actuator's forcerange cap (the max_torque-customized one, when
+            # set), so the policy never learns postures that live near
+            # saturation.
+            torque_limit_frac=0.85,
             scales=config_dict.create(
                 tracking_lin_vel=1.5,
                 tracking_ang_vel=0.8,
@@ -143,6 +179,11 @@ def default_config() -> config_dict.ConfigDict:
                 ang_vel_xy=-0.05,
                 orientation=-5.0,
                 torques=-2e-4,
+                # Step-to-step torque change: penalizes bang-bang motor
+                # commands directly at the actuator (action_rate only sees
+                # the policy output, not what the PD loop does with it).
+                # Ported from PR #19.
+                torque_rate=0.0,
                 action_rate=-0.25,
                 action_accel=-0.1,
                 energy=-2e-3,
@@ -151,8 +192,21 @@ def default_config() -> config_dict.ConfigDict:
                 feet_slip=-0.25,
                 feet_phase=1.0,
                 contact_match=1.0,
+                # High-step shaping (clock-free presets): reward swing-foot
+                # clearance up to gait.swing_height whenever moving. Ported
+                # from PR #19.
+                high_step=0.0,
                 stand_still=-0.5,
+                # Feet planted while standing: penalize total foot CLEARANCE
+                # (continuous height above the floor) at zero command, so a
+                # tucked leg is pushed down from any height. Ported from
+                # PR #19.
+                stand_feet_down=0.0,
                 termination=-1.0,
+                # Actuator-saturation hinge: 0 well inside the cap, positive
+                # above torque_limit_frac of it. Complements the max_torque
+                # clamp (the model's absolute ceiling) with a soft margin.
+                torque_limit=0.0,
             ),
         ),
     )
@@ -175,10 +229,42 @@ class WojtekJoystick(WojtekEnv):
                 f"latency.max_substeps ({lat.max_substeps}) must be <= "
                 f"n_substeps ({self.n_substeps})"
             )
+        # Per-actuator motor-target bounds for the step() clip. knee_target_max
+        # lowers the knee actuators' upper bound below the model's ctrlrange;
+        # 0 keeps self._ctrlrange as-is (mirrors env_jump.py's _target_lo/
+        # _target_hi precompute).
+        knee_idx = jp.array(KNEE_ACTUATORS)
+        self._target_lo = self._ctrlrange[:, 0]
+        ktm = self._config.get("knee_target_max", 0.0)
+        if ktm:
+            self._target_hi = self._ctrlrange[:, 1].at[knee_idx].set(
+                jp.minimum(self._ctrlrange[knee_idx, 1], ktm)
+            )
+        else:
+            self._target_hi = self._ctrlrange[:, 1]
+        # Per-actuator torque cap for the torque_limit hinge, read after
+        # _customize_model ran so max_torque (when set) is the cap.
+        self._torque_cap = jp.array(self._mj_model.actuator_forcerange[:, 1])
+
+    def _customize_model(self, m):
+        # Ported from PR #19.
+        mt = self._config.get("max_torque", 0.0)
+        if mt:
+            m.actuator_forcerange[:, 0] = -mt
+            m.actuator_forcerange[:, 1] = mt
+        limit = self._config.get("abduction_ctrl_limit", 0.0)
+        if limit:
+            idx = np.array(ABDUCTION_ACTUATORS)
+            m.actuator_ctrlrange[idx, 0] = np.maximum(
+                m.actuator_ctrlrange[idx, 0], -limit
+            )
+            m.actuator_ctrlrange[idx, 1] = np.minimum(
+                m.actuator_ctrlrange[idx, 1], limit
+            )
 
     def _sample_command(self, rng):
         """(vx, vy, wz, height). Zeroing (stand training) keeps the height."""
-        r1, r2, r3, r4, r5 = jax.random.split(rng, 5)
+        r1, r2, r3, r4, r5, r6, r7 = jax.random.split(rng, 7)
         c = self._config.command
         vel = jp.array(
             [
@@ -187,6 +273,12 @@ class WojtekJoystick(WojtekEnv):
                 jax.random.uniform(r3, minval=c.wz[0], maxval=c.wz[1]),
             ]
         )
+        # spin-in-place training: keep wz, zero the linear part
+        pure_wz = jax.random.bernoulli(r6, c.get("pure_wz_prob", 0.0))
+        vel = jp.where(pure_wz, vel.at[:2].set(0.0), vel)
+        # pure-strafe training: keep vy, zero vx and wz
+        pure_vy = jax.random.bernoulli(r7, c.get("pure_vy_prob", 0.0))
+        vel = jp.where(pure_vy, jp.array([0.0, vel[1], 0.0]), vel)
         zero = jax.random.bernoulli(r4, c.zero_prob)
         vel = jp.where(zero, jp.zeros(3), vel)
         height = jax.random.uniform(r5, minval=c.height[0], maxval=c.height[1])
@@ -295,6 +387,7 @@ class WojtekJoystick(WojtekEnv):
             "steps_since_cmd": jp.array(0),
             "feet_air_time": jp.zeros(4),
             "last_contact": jp.zeros(4, dtype=bool),
+            "last_torque": jp.zeros(12),
             "motor_targets": anchor,
             "step_count": jp.array(0),
             "phase": jp.array(0.0),  # master clock; per-leg via _leg_phases
@@ -315,11 +408,12 @@ class WojtekJoystick(WojtekEnv):
         af = self._config.action_filter
         filt = af * info["filtered_act"] + (1.0 - af) * action
         info["filtered_act"] = filt
+        scale = jp.asarray(self._config.action_scale)
+        scale = jp.tile(scale, 4) if scale.ndim > 0 and scale.size == 3 else scale
         motor_targets = jp.clip(
-            self._height_ctrl(info["command"][3])
-            + filt * self._config.action_scale,
-            self._ctrlrange[:, 0],
-            self._ctrlrange[:, 1],
+            self._height_ctrl(info["command"][3]) + filt * scale,
+            self._target_lo,
+            self._target_hi,
         )
         data = state.data
         # random horizontal push, every push.interval_steps
@@ -365,6 +459,7 @@ class WojtekJoystick(WojtekEnv):
         info["last_contact"] = contact
         info["last_last_act"] = info["last_act"]
         info["last_act"] = action
+        info["last_torque"] = data.actuator_force
         info["motor_targets"] = motor_targets
         # Master clock advances at the speed the CURRENT command asks for
         # (frozen when standing); per-leg phases come from _leg_phases.
@@ -437,6 +532,14 @@ class WojtekJoystick(WojtekEnv):
         feet_vel = data.sensordata[self._foot_linvel_adr]
         slip = jp.sum(jp.sum(jp.square(feet_vel[:, :2]), axis=-1) * contact)
 
+        # High-step shaping (ported from PR #19): swing feet earn clearance
+        # up to the swing_height target.
+        swing = ~contact
+        high_step = jp.mean(
+            jp.clip(foot_clearance / self._config.gait.swing_height, 0.0, 1.0)
+            * swing
+        )
+
         qvel = data.qvel[self._vadr]
 
         rewards = {
@@ -452,6 +555,9 @@ class WojtekJoystick(WojtekEnv):
             "ang_vel_xy": jp.sum(jp.square(gyro[:2])),
             "orientation": jp.sum(jp.square(gravity[:2])),
             "torques": jp.sum(jp.square(data.actuator_force)),
+            "torque_rate": jp.sum(
+                jp.square(data.actuator_force - info["last_torque"])
+            ),
             "action_rate": jp.sum(jp.square(action - info["last_act"])),
             "action_accel": jp.sum(
                 jp.square(action - 2 * info["last_act"] + info["last_last_act"])
@@ -459,12 +565,24 @@ class WojtekJoystick(WojtekEnv):
             "energy": jp.sum(jp.abs(qvel) * jp.abs(data.actuator_force)),
             "pose": jp.sum(pose_w * jp.square(data.qpos[self._qadr] - anchor)),
             "feet_air_time": jp.sum(
-                (info["feet_air_time"] - 0.1) * first_contact
+                (
+                    (
+                        jp.minimum(
+                            info["feet_air_time"],
+                            self._config.gait.air_time_cap,
+                        )
+                        if self._config.gait.air_time_cap > 0
+                        else info["feet_air_time"]
+                    )
+                    - 0.1
+                )
+                * first_contact
             )
             * moving,
             "feet_slip": slip * moving,
             "feet_phase": jp.exp(-phase_err / self._config.reward.phase_sigma)
             * moving,
+            "high_step": high_step * moving,
             "contact_match": contact_match * moving,
             # Position pull to the anchor plus velocity damping: L1 position
             # alone caused bang-bang fidgeting around the anchor (v2).
@@ -473,6 +591,15 @@ class WojtekJoystick(WojtekEnv):
                 + 0.2 * jp.sum(jp.abs(qvel))
             )
             * (~moving),
+            "stand_feet_down": jp.sum(jp.clip(foot_clearance, 0.0, None))
+            * (~moving),
             "termination": fall.astype(jp.float32),
+            "torque_limit": jp.sum(
+                jp.maximum(
+                    jp.abs(data.actuator_force)
+                    - self._config.reward.torque_limit_frac * self._torque_cap,
+                    0.0,
+                )
+            ),
         }
         return rewards, fall

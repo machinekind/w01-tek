@@ -94,6 +94,30 @@ def _torque_strip(times, torques, names, torque_cap, width, height=240):
     return _cursor_strip(fig, [ax], times)
 
 
+def _joint_plot(times, target, state, name, width, height=300):
+    """One joint's target-vs-state trace, full width and readable — the
+    zoomed-in alternative to _joint_grid, selected with --joint."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    colors = plt.get_cmap("tab10").colors
+    dpi = 100
+    fig, ax = plt.subplots(figsize=(width / dpi, height / dpi), dpi=dpi)
+    ax.plot(times, state, color=colors[_leg_of(name)], linewidth=1.2,
+            label="state")
+    ax.plot(times, target, color="black", linewidth=0.9, linestyle="--",
+            label="target")
+    ax.set_xlim(times[0], times[-1])
+    ax.set_xlabel("t [s]", fontsize=9)
+    ax.set_ylabel(f"{name} [rad]", fontsize=9)
+    ax.tick_params(labelsize=8)
+    ax.grid(alpha=0.3, linewidth=0.4)
+    ax.legend(loc="upper right", fontsize=8, framealpha=0.5)
+    fig.tight_layout(pad=0.4)
+    return _cursor_strip(fig, [ax], times)
+
+
 def _joint_grid(times, targets, joints, names, width, height=360):
     """Per-joint target-vs-state traces as an RGB strip with a time cursor.
 
@@ -185,6 +209,19 @@ def main() -> None:
         help="plain video without the command label, torque strip, and "
         "per-joint target-vs-state grid",
     )
+    ap.add_argument(
+        "--joint",
+        default=None,
+        help="plot target-vs-state for just this actuator as one full-width "
+        "readable panel instead of the 3x4 grid, "
+        "e.g. front_left_first_joint",
+    )
+    ap.add_argument(
+        "--push",
+        action="store_true",
+        help="keep the training env's random pushes; default is push-free, "
+        "matching the battery's measurement convention",
+    )
     args = ap.parse_args()
 
     # Imported lazily: wojtek_rl.env and wojtek_rl.train pull in brax/mjx and may
@@ -212,8 +249,13 @@ def main() -> None:
     args.out = str(out)
 
     # Rebuild the exact training env: run.json stores the full env config,
-    # which make_env re-applies over the task defaults.
-    env = make_env(task, run.get("env_config"))
+    # which make_env re-applies over the task defaults. Random pushes are
+    # off unless --push: a mid-video kick reads as a policy failure
+    # (battery.py disables them for the same reason).
+    env_cfg = dict(run.get("env_config") or {})
+    if not args.push:
+        env_cfg["push"] = {**env_cfg.get("push", {}), "enable": False}
+    env = make_env(task, env_cfg)
     # run.json may carry the training host's absolute checkpoint path
     # (cluster runs); fall back to the run dir itself.
     ckpt_dir = Path(run["checkpoint_dir"])
@@ -281,10 +323,19 @@ def main() -> None:
             times, np.stack(torques), names,
             float(env._config.get("max_torque", 0) or 0), frames[0].shape[1],
         )
-        grid_at = _joint_grid(
-            times, np.stack(targets), np.stack(joints), names,
-            frames[0].shape[1],
-        )
+        if args.joint:
+            if args.joint not in names:
+                sys.exit(f"unknown --joint {args.joint!r}; one of {names}")
+            j = names.index(args.joint)
+            grid_at = _joint_plot(
+                times, np.stack(targets)[:, j], np.stack(joints)[:, j],
+                args.joint, frames[0].shape[1],
+            )
+        else:
+            grid_at = _joint_grid(
+                times, np.stack(targets), np.stack(joints), names,
+                frames[0].shape[1],
+            )
         labels = {}
         for k, (t, cmd) in enumerate(frame_meta):
             key = tuple(np.round(cmd[:3], 2))

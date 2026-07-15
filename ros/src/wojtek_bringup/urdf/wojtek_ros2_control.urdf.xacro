@@ -63,7 +63,9 @@
     </ros2_control>
   </xacro:macro>
 
-  <xacro:macro name="wojtek_imu_ros2_control" params="port baud_rate:=9600">
+  <!-- baud_rate must match the firmware's Serial.begin(), i.e. 115200 in
+       bmx160_serial_hardware_interface/firmware/main/main.ino. -->
+  <xacro:macro name="wojtek_imu_ros2_control" params="port baud_rate:=115200">
     <ros2_control name="imu" type="sensor">
       <hardware>
         <plugin>bmx160_serial_hardware_interface/BMX160SerialHardwareInterface</plugin>

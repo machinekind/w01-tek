@@ -1,0 +1,10 @@
+{
+  "comment": "Hand-annotated from coordinate-grid top-down renders. Van Gogh's Arles bedroom: qualified chair names because 'chair' alone is ambiguous.",
+  "objects": [
+    {"name": "bed", "aliases": ["red bed", "bed with the red blanket"], "pos": [-1.55, 1.15], "radius": 1.4},
+    {"name": "washstand", "aliases": ["small table", "table with the jug"], "pos": [-1.9, -1.35], "radius": 1.2},
+    {"name": "chair next to the bed", "aliases": ["chair by the window"], "pos": [-2.05, -0.05], "radius": 1.0},
+    {"name": "chair by the door", "aliases": ["chair at the back"], "pos": [-0.35, -1.5], "radius": 1.0},
+    {"name": "back door", "aliases": ["door at the back of the room"], "pos": [0.25, 2.1], "radius": 1.2}
+  ]
+}

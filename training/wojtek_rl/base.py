@@ -18,6 +18,8 @@ from wojtek_rl.build_model import FOOT_RADIUS
 
 # Actuator indices of the knee cranks (third joints), paths.LEGS order.
 KNEE_ACTUATORS = (2, 5, 8, 11)
+# Actuator indices of the abduction joints (first joints), paths.LEGS order.
+ABDUCTION_ACTUATORS = (0, 3, 6, 9)
 # The four-bar snaps through its singular branch past this third-joint angle
 # (the foot flips above the trunk). Recovery/jump policies must not command
 # targets on the far branch; crossing it under load can break the linkage.
@@ -178,6 +180,23 @@ class WojtekEnv(mjx_env.MjxEnv):
     def _noisy(self, rng, clean, scales):
         noise = jax.random.uniform(rng, clean.shape, minval=-1.0, maxval=1.0)
         return clean + noise * scales
+
+    def _step_with_latency(self, data, prev, new, d):
+        """Run n_substeps physics steps: ctrl is `prev` while the substep
+        index is below d, `new` from d onward. d=n_substeps holds `prev` for
+        the whole period; d=0 applies `new` immediately.
+
+        A single `jp.where` handles every d. A per-lane lax.cond would be
+        wrong under the training vmap: `d` is batched, so cond runs every
+        branch and selects, tripling the substep physics.
+        """
+
+        def _substep(data, i):
+            ctrl = jp.where(i < d, prev, new)
+            data = data.replace(ctrl=ctrl)
+            return mjx.step(self._mjx_model, data), None
+
+        return jax.lax.scan(_substep, data, jp.arange(self.n_substeps))[0]
 
     def _obs_catalog(self, data, info):
         """name -> observation vector. Task envs extend with their signals."""

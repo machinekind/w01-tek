@@ -54,3 +54,18 @@ def test_collision_geoms_are_primitives_only():
 def test_timestep():
     m = _compiled()
     assert np.isclose(m.opt.timestep, 0.004)
+
+
+def test_ego_camera():
+    m = _compiled()
+    cam_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_CAMERA, "ego")
+    assert cam_id >= 0
+    assert m.cam_bodyid[cam_id] == m.body("root").id
+    assert np.isclose(m.cam_fovy[cam_id], build_model.EGO_CAM["fovy"])
+    # Optical axis (-z column of the camera frame) points along body +x,
+    # pitched slightly down.
+    mat = np.zeros(9)
+    mujoco.mju_quat2Mat(mat, m.cam_quat[cam_id])
+    optical_axis = -mat.reshape(3, 3)[:, 2]
+    assert optical_axis @ np.array([1.0, 0.0, 0.0]) > 0.9
+    assert optical_axis[2] < 0.0

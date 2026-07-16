@@ -1,10 +1,12 @@
 # cluster HPC workflow for fbb-rl (see training/hpc/ and
-# .claude/skills/cluster-hpc). Personal remote dir: ~/M/wojtek
-# (the shared account hosts other people's work elsewhere).
+# .claude/skills/cluster-hpc). The account is shared: every person works in
+# their own namespace dir under $HOME (HPC_NS). ~/M/... belongs to
+# Michal — never rsync or submit into someone else's namespace.
 
 HPC_USER ?= ACCOUNT
+HPC_NS   ?= USER
 HPC      = $(HPC_USER)@ui.cluster.example
-REMOTE   = /home/$(HPC_USER)/M/wojtek
+REMOTE   = /home/$(HPC_USER)/$(HPC_NS)/wojtek
 EXCLUDE  = --exclude='.git/' --exclude='__pycache__/' --exclude='*.pyc' \
            --exclude='.venv*/' --exclude='venv/' --exclude='logs/' \
            --exclude='runs/' --exclude='videos/' --exclude='.jax_cache/' \

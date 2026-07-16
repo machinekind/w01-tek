@@ -1,0 +1,10 @@
+{
+  "comment": "Hand-annotated from coordinate-grid top-down renders (see docs/vlm-nav-roadmap.md). pos is world XY of the object centroid; radius is the success distance: object footprint + ~0.9 m approach.",
+  "objects": [
+    {"name": "white sofa", "aliases": ["couch", "sofa", "white couch"], "pos": [0.6, 4.3], "radius": 1.5},
+    {"name": "coffee table", "aliases": ["potted plant", "coffee table with the plant"], "pos": [-0.05, 2.75], "radius": 1.2},
+    {"name": "dining table", "aliases": ["table with chairs", "dinner table"], "pos": [1.35, -2.3], "radius": 1.6},
+    {"name": "bar cabinet", "aliases": ["cabinet with bottles", "sideboard"], "pos": [1.3, -5.1], "radius": 1.4},
+    {"name": "painting", "aliases": ["picture on the wall", "framed picture"], "pos": [-4.35, 3.2], "radius": 1.5}
+  ]
+}

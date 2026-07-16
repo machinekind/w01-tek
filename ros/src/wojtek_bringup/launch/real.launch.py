@@ -152,7 +152,6 @@ def generate_launch_description():
                 ],
                 remappings=[
                     ("joint_states", "wojtek/joint_states_abs"),
-                    ("imu/data", "imu_sensor_broadcaster/imu"),
                 ],
             ),
             Node(

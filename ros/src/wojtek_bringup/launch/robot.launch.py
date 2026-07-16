@@ -153,9 +153,10 @@ def generate_launch_description():
                         "watchdog_timeout_s": 0.2,
                     }
                 ],
+                # IMU needs no remap: policy_node subscribes the broadcaster's
+                # topic name directly (the sim publishes the same name).
                 remappings=[
                     ("joint_states", "wojtek/joint_states_abs"),
-                    ("imu/data", "imu_sensor_broadcaster/imu"),
                 ],
             ),
             # bash -c: mkdir the parent (rosbag2 creates the bag dir itself but
@@ -167,6 +168,7 @@ def generate_launch_description():
                 cmd=[
                     "bash", "-c",
                     'mkdir -p "$1"\n'
+                    'echo ">> rosbag: recording to $2"\n'
                     'if [ -n "$3" ]; then\n'
                     '  exec taskset -c "$3" ros2 bag record -a -o "$2"\n'
                     'fi\n'

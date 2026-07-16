@@ -4,7 +4,7 @@ Identical for simulation and the real robot -- only topic remaps and
 parameters differ:
 
   subscribes  /joint_states  (sensor_msgs/JointState, URDF convention, absolute)
-              /imu/data      (sensor_msgs/Imu)
+              /imu_sensor_broadcaster/imu (sensor_msgs/Imu)
               /cmd_vel       (geometry_msgs/Twist)
   publishes   /wojtek/joint_targets (sensor_msgs/JointState, URDF convention,
                                   absolute; 12 actuated joints)
@@ -51,6 +51,9 @@ class PolicyNode(Node):
         # Use the accelerometer+gyro complementary filter instead of the IMU
         # orientation quaternion (for IMUs without usable fusion).
         self.declare_parameter("gravity_from_accel", False)
+        # Complementary filter blend: trust in the gyro-propagated gravity vs
+        # the accelerometer measurement. Read per message, so tunable live.
+        self.declare_parameter("grav_filter_alpha", 0.98)
 
         pdir = self.get_parameter("policy_dir").value
         self.policy = WojtekPolicy(
@@ -74,7 +77,9 @@ class PolicyNode(Node):
         self._was_running = False
 
         self.create_subscription(JointState, "joint_states", self._on_joints, 10)
-        self.create_subscription(Imu, "imu/data", self._on_imu, 10)
+        # Canonical IMU topic = what the real robot's broadcaster publishes;
+        # the sim publishes the same name, so no remaps anywhere.
+        self.create_subscription(Imu, "imu_sensor_broadcaster/imu", self._on_imu, 10)
         self.create_subscription(Twist, "cmd_vel", self._on_cmd, 10)
         self._pub = self.create_publisher(JointState, "wojtek/joint_targets", 10)
         self.create_service(SetBool, "wojtek/enable", self._srv_enable)
@@ -128,7 +133,8 @@ class PolicyNode(Node):
             g = g - self.policy.ctrl_dt * np.cross(gyro, g)
             if np.linalg.norm(acc) > 1e-3:
                 g_meas = -acc / np.linalg.norm(acc)
-                g = 0.98 * g + 0.02 * g_meas
+                alpha = self.get_parameter("grav_filter_alpha").value
+                g = alpha * g + (1.0 - alpha) * g_meas
             self._grav_filt = g / np.linalg.norm(g)
             self._gravity_base = self.imu_mount @ self._grav_filt
         self._imu_stamp = self.get_clock().now()

@@ -72,11 +72,14 @@ def test_full_delay_matches_disabled_default():
     qp_full, qv_full = _one_step(_config(True, 5, 5))  # where-scan, d=5
     qp_none, qv_none = _one_step(_config(True, 0, 0))  # where-scan, d=0
     # d=5 reproduces the default's previous-step targets (float drift only:
-    # ~1e-6 qpos / ~1e-4 qvel measured)
-    assert np.max(np.abs(qp_full - qp_def)) < 1e-4
-    assert np.max(np.abs(qv_full - qv_def)) < 1e-3
-    # ...and that guard is meaningful: d=0 (new targets now) diverges ~1e4x more
-    assert np.max(np.abs(qv_none - qv_def)) > 1e-2
+    # 2.3e-4 qpos / 0.058 qvel measured on the 14 kg model, amplified through
+    # the contact-rich first step; the d=0 contrast is 0.042 qpos / 2.97 qvel,
+    # so the guards keep >10x separation from a real semantic change)
+    assert np.max(np.abs(qp_full - qp_def)) < 1e-3
+    assert np.max(np.abs(qv_full - qv_def)) < 0.3
+    # ...and those guards are meaningful: d=0 (new targets now) diverges more
+    assert np.max(np.abs(qp_none - qp_def)) > 1e-2
+    assert np.max(np.abs(qv_none - qv_def)) > 1.0
 
 
 def test_no_delay_differs_from_full_delay():

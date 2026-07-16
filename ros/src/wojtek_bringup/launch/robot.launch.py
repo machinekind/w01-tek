@@ -68,8 +68,9 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
-            # Start with a low torque cap for the first tests; the policy was
-            # trained with 6 Nm available.
+            # The policy was trained with 6 Nm available. This launch always
+            # passes max_torque on to xacro, so THIS default is the effective
+            # one -- the arg in wojtek_real.urdf.xacro never gets a say.
             DeclareLaunchArgument("max_torque", default_value="6.0"),
             # Default (empty) keeps the xacro's by-id path for the CP2102;
             # override with e.g. imu_port:=/dev/ttyUSB0 if the adapter is

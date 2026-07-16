@@ -39,9 +39,8 @@ section(){ printf "\n${B}%s${Z}\n" "$1"; }
 # ok DESC CMD...   -> pass iff cmd exits 0
 ok(){ local d="$1"; shift; if "$@" >/dev/null 2>&1; then pass "$d"; else fail "$d"; fi; }
 # absent DESC PATTERN PATHSPEC...  -> pass iff git grep finds NO match (breakage guard).
-# Excludes this harness (it literally contains every guard pattern) and the temp
-# handoff doc (it intentionally names the old dirs).
-absent(){ local d="$1" p="$2"; shift 2; local hit; if hit="$(git grep -nE "$p" -- "$@" ':(exclude)verify.sh' ':(exclude)NEXT-STEP-WOJTEK.md' 2>/dev/null)"; then fail "$d" "$hit"; else pass "$d"; fi; }
+# Excludes this harness (it literally contains every guard pattern).
+absent(){ local d="$1" p="$2"; shift 2; local hit; if hit="$(git grep -nE "$p" -- "$@" ':(exclude)verify.sh' 2>/dev/null)"; then fail "$d" "$hit"; else pass "$d"; fi; }
 # same DESC REF_A:PATH_A REF_B:PATH_B  -> pass iff the two committed blobs are byte-identical
 same(){ local d="$1" a="$2" b="$3"; if diff <(git show "$a" 2>/dev/null) <(git show "$b" 2>/dev/null) >/dev/null 2>&1; then pass "$d"; else fail "$d" "differ: $a  vs  $b"; fi; }
 # same_norm DESC REF_A:PATH_A REF_B:PATH_B SED_EXPR  -> pass iff blob A is byte-

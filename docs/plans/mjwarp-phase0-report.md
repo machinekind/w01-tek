@@ -5,7 +5,7 @@ smoke remains open. It waits for a cluster node and does not block G0.
 **Date started:** 2026-07-10
 **Companion to:** `docs/plans/2026-07-10-mjwarp-migration.md` (gate **G0**).
 
-The spike script lived at `training/wojtek_rl/spike_warp.py`. It was temporary by design and was deleted from this branch once Phase 0 closed; its output is preserved in `phase0-artifacts/`.
+The spike script lived at `training/wojtek_rl/spike_warp.py`. It was temporary by design and was deleted from this branch once Phase 0 closed. Its run logs were never committed (`*.log` is gitignored repo-wide), so the numbers quoted below are the record. `phase0-artifacts/` keeps only the closure baseline script.
 
 ---
 
@@ -73,8 +73,7 @@ pins `warp-lang==1.13.0`.
   `naconmax = 32 * n_envs` and `njmax = 320`.
 - [x] **Throughput: gate passed.** Run 4 used correct budgets, produced no overflow
   warnings, and benchmarked the real `WojtekJoystick.step` with observations and rewards
-  over a 200-step scan after warmup. The full log is
-  `phase0-artifacts/spike-run4-4090.log`.
+  over a 200-step scan after warmup.
 
   | envs | jax steps/s | warp steps/s | speedup |
   |---|---|---|---|
@@ -92,7 +91,8 @@ pins `warp-lang==1.13.0`.
 ## 5. Go/no-go: GO
 
 Every hardware gate passed. The one FAIL line came from the spike's own gate calibration,
-and the jax baseline in `phase0-artifacts/closure_jax.log` disproves it. Workstream A
+and the jax baseline disproves it (reproduce with `phase0-artifacts/closure_jax_baseline.py`).
+Workstream A
 took three obligations from this spike, and all three are done:
 
 1. `warp-lang==1.13.0` is pinned in pyproject and the lock.
@@ -112,7 +112,6 @@ Three checks ran on the box through the new flag, all green:
 
 - `./run.sh check --gpu --backend warp`: stand holds, settled closure 0.91 mm, bare
   physics at 3.3M steps/s for 4096 envs, 0.65 of Go1's jax rate against a 0.20 gate.
-  Log: `phase0-artifacts/workstream-a-check-warp-4090.log`.
 - A warp smoke train (100k steps, 64 envs): reward −6.22 to +2.39, every metric finite,
   full-length episodes, no overflow warnings.
 - A jax smoke train on the same box for comparison: reward −7.02 to +3.22. Both backends

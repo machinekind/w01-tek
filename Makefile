@@ -12,7 +12,7 @@ EXCLUDE  = --exclude='.git/' --exclude='__pycache__/' --exclude='*.pyc' \
            --exclude='runs/' --exclude='videos/' --exclude='.jax_cache/' \
            --exclude='.claude/' \
            --exclude='docs/' --exclude='*.mp4' --exclude='wandb/' \
-           --exclude='superpowers/' --exclude='outputs/'
+           --exclude='outputs/'
 
 .PHONY: hpc-push hpc-train hpc-status hpc-logs hpc-pull verify verify-quick verify-static
 

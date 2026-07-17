@@ -171,6 +171,10 @@ def move_cams(pos, quat):
 
 # ---- policy + physics parity ------------------------------------------------
 pol = WojtekPolicy(os.path.expanduser("~/wojtek_asset/policy/policy.npz"))
+# height packed into the 4-dim command: fbb runtime exposed default_height,
+# the springy runtime renamed it command_height.
+POLICY_HEIGHT = float(getattr(pol, "command_height",
+                              getattr(pol, "default_height", 0.125)))
 dof_names = list(robot.dof_names); ndof = robot.num_dof
 act_map = np.array([dof_names.index(n) for n in pol.joint_names])
 ctrl = robot.get_articulation_controller()
@@ -430,7 +434,7 @@ while True:
     else:
         cmd_now = (0.0, 0.0, 0.0)
 
-    cmd4 = np.array([*cmd_now, pol.default_height], np.float32)
+    cmd4 = np.array([*cmd_now, POLICY_HEIGHT], np.float32)
     jp = robot.get_joint_positions()[act_map]
     jv = robot.get_joint_velocities()[act_map]
     targets_q = pol.step(None, None, jp, jv, cmd4)

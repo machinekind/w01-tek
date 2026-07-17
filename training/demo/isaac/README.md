@@ -1,10 +1,18 @@
 # Wojtek Isaac Sim demo
 
 Isaac Sim port of the MuJoCo click-to-walk demo (`training/demo/app.py`).
-Runs the exported `fbb_loco_v8` joystick policy on a photoreal RTX warehouse
+Runs the exported joystick locomotion policy on a photoreal RTX warehouse
 scene and serves the same browser protocol: click-to-walk minimap, discrete
 VLM commands (`turn_left 15 | forward 0.5 | stop`), chase + ego camera
 streams over a websocket.
+
+The policy is loaded from `POLICY_DIR` (below), not vendored here, so the
+demo tracks whatever `ros/src/wojtek_policy/config` ships. Current policy is
+`wojtek_springy_b_20260713_1827` (IMU-blind 40-dim obs, no gait clock, 4-dim
+command with a pinned 0.125 m height). The numpy `WojtekPolicy` runtime also
+loads the older `fbb_loco_v8` (48-dim, gait clock) unchanged — the server
+reads the standing height via `getattr(pol, "command_height",
+getattr(pol, "default_height", ...))`, covering both runtimes.
 
 ## Files
 

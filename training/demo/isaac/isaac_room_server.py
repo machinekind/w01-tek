@@ -14,7 +14,7 @@ import os, sys, json, math, time, queue, threading, base64
 import numpy as np
 
 from isaacsim import SimulationApp
-CONFIG = {"headless": True, "renderer": "RayTracedLighting", "width": 960, "height": 540}
+CONFIG = {"headless": True, "renderer": "RayTracedLighting", "width": 1152, "height": 648}
 sim = SimulationApp(CONFIG)
 
 import cv2
@@ -33,7 +33,7 @@ from navigation import NavConfig, command_to_target, quat_to_yaw
 
 USD = os.path.expanduser("~/wojtek_asset/wojtek_mjx.usd")
 ART_ROOT = "/World/Wojtek/root/root"
-W, H = 640, 360           # chase stream resolution (native, no resize)
+W, H = 896, 504           # chase/orbit stream resolution (native, no resize)
 SPAWN = np.array([0.0, 0.0, 0.135])
 CAM_OFF = np.array([1.6, 1.6, 0.9])
 FOOT_RADIUS = 0.046
@@ -131,7 +131,7 @@ chase_t.Set(Gf.Vec3d(*(SPAWN + CAM_OFF))); chase_o.Set(look_at_quat(SPAWN + CAM_
 
 chase_rp = rep.create.render_product("/World/ChaseCam", (W, H))
 chase_rgb = rep.AnnotatorRegistry.get_annotator("rgb"); chase_rgb.attach(chase_rp)
-bench_rp = rep.create.render_product("/World/BenchCam", (640, 480))
+bench_rp = rep.create.render_product("/World/BenchCam", (800, 600))
 bench_rgb = rep.AnnotatorRegistry.get_annotator("rgb"); bench_rgb.attach(bench_rp)
 
 # NOTE: gating the bench product via hydra_texture.set_updates_enabled starves
@@ -139,12 +139,27 @@ bench_rgb = rep.AnnotatorRegistry.get_annotator("rgb"); bench_rgb.attach(bench_r
 # measurements showed no fps gain from gating. Keep it always-on; only the
 # ENCODE runs at 5 Hz.
 
-CHASE_DIST = 2.4      # camera sits this far behind the robot, along -heading
-CHASE_HEIGHT = 0.6
+CHASE_DIST = 2.4      # orbit radius (m) from the robot base
+CHASE_PITCH = 0.26    # elevation angle (rad); ~15deg above horizontal, behind
 CHASE_LOOK_Z = 0.25   # aim above the base: flatter angle keeps the horizon in frame
 CHASE_YAW_ALPHA = 0.08  # heading EMA — slower than position; turns are sharp
+# orbit limits
+DIST_MIN, DIST_MAX = 1.3, 6.0
+PITCH_MIN, PITCH_MAX = -0.12, 1.35
 
 _cam_smooth = {"p": None, "hd": None}
+# user-controllable orbit around the robot; yaw is an offset from "behind".
+_orbit = {"yaw": 0.0, "pitch": CHASE_PITCH, "dist": CHASE_DIST}
+
+def reset_orbit():
+    _orbit["yaw"] = 0.0; _orbit["pitch"] = CHASE_PITCH; _orbit["dist"] = CHASE_DIST
+
+def apply_orbit(msg):
+    if msg.get("reset"):
+        reset_orbit(); return
+    _orbit["yaw"] += float(msg.get("dyaw", 0.0))
+    _orbit["pitch"] = min(PITCH_MAX, max(PITCH_MIN, _orbit["pitch"] + float(msg.get("dpitch", 0.0))))
+    _orbit["dist"] = min(DIST_MAX, max(DIST_MIN, _orbit["dist"] * float(msg.get("zoom", 1.0))))
 
 def move_cams(pos, quat):
     p = np.asarray(pos, float)
@@ -162,7 +177,13 @@ def move_cams(pos, quat):
     hd = h_now if hd is None else (1.0 - CHASE_YAW_ALPHA) * hd + CHASE_YAW_ALPHA * h_now
     hd /= max(np.linalg.norm(hd), 1e-9)
     _cam_smooth["hd"] = hd
-    eye = sp + np.array([-CHASE_DIST * hd[0], -CHASE_DIST * hd[1], CHASE_HEIGHT])
+    # orbit around the base: azimuth = behind the heading + user yaw offset.
+    az = math.atan2(hd[1], hd[0]) + math.pi + _orbit["yaw"]
+    pit, dist = _orbit["pitch"], _orbit["dist"]
+    horiz = dist * math.cos(pit)
+    eye = sp + np.array([horiz * math.cos(az), horiz * math.sin(az),
+                         dist * math.sin(pit)])
+    eye[2] = max(eye[2], 0.12)  # never dip below the floor
     chase_t.Set(Gf.Vec3d(*eye))
     chase_o.Set(look_at_quat(eye, sp + np.array([0.0, 0.0, CHASE_LOOK_Z])))
     eye = np.array([p[0], p[1], 1.25])
@@ -403,6 +424,8 @@ while True:
                 else:
                     target = None
                     exec_queue.append(c)
+            elif t == "cam":
+                apply_orbit(msg)
         except Exception as e:
             print("HANDLE_ERR", e, flush=True)
 
@@ -469,11 +492,11 @@ while True:
     if do_render:
         data = chase_rgb.get_data()
         if data is not None and np.asarray(data).size:
-            submit_encode("frame", data, 65)
+            submit_encode("frame", data, 80)
         if want_ego:         # ego (VLM view) at ~5 Hz is plenty
             data = bench_rgb.get_data()
             if data is not None and np.asarray(data).size:
-                submit_encode("ego", data, 70)
+                submit_encode("ego", data, 80)
                 last_ego_tick = tick
 
     if tick % 500 == 0:

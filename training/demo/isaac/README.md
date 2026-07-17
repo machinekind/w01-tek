@@ -19,7 +19,7 @@ getattr(pol, "default_height", ...))`, covering both runtimes.
 | File | Purpose |
 |------|---------|
 | `isaac_room_server.py` | Headless Isaac Sim server: physics + policy loop on the main thread, uvicorn (`/`, `/api/info`, `/ws`) in a daemon thread. Port via `WOJTEK_PORT` (default 8200). |
-| `isaac_room.html` | Browser GUI (industrial-editorial design matching the Wojtek site): chase-cam hero, command console, ego cam, dark tactical map. Served per request — UI edits need no server restart. |
+| `isaac_room.html` | Browser GUI (industrial-editorial design matching the Wojtek site): ego (VLM) hero + command console on the left, orbit camera + dark tactical map on the right. Served per request — UI edits need no server restart. |
 | `wojtek_mjcf2usd.py` | One-off MJCF → USD conversion of `wojtek_mjx.xml` via `isaacsim.asset.importer.mjcf`. |
 | `body_masses.json` | Per-body masses exported from MuJoCo; overwrites Isaac's importer masses (importer drift: 22.2 kg vs 16.04 kg). |
 | `home_qpos.json` | Loop-consistent home configuration settled in MuJoCo; required because teleporting closed-chain legs to arbitrary q makes PhysX NaN. |
@@ -48,9 +48,16 @@ NVIDIA's asset server (needs internet). Open `http://<host>:8200/`.
   training contact model (foot spheres r=0.046 + friction material, base box).
 - Importer applies a spurious `ArticulationRootAPI` on the massless
   `worldBody`; it must be removed or PhysX init fails.
-- Chase camera follows the robot's smoothed heading (EMA on the unit heading
-  vector, alpha 0.08) 2.4 m behind, 0.6 m up; position EMA 0.88/0.12 —
-  a hard-locked camera turns trot oscillation into shake.
+- Orbit camera: drag to rotate around the robot, scroll to zoom, double-click
+  to reset. The server keeps an orbit state (yaw offset from "behind" the
+  smoothed heading, pitch, distance) and rebuilds the eye each render; the
+  heading is EMA-smoothed on the unit vector (alpha 0.08) and position on
+  0.88/0.12 — a hard-locked camera turns trot oscillation into shake. Browser
+  sends `{"type":"cam", dyaw|dpitch|zoom|reset}`.
 - Sync rendering + DLAA + even frame pacing (render every 2nd tick of the
-  50 Hz loop) are what make the stream smooth; resolution and mesh detail
-  were never the bottleneck.
+  50 Hz loop) are what make the stream smooth.
+- Render resolution ceiling on this GPU (RTX 4090 Laptop 16 GB): internal
+  1280×720 renders at rtf 1.0 but the process dies deterministically ~5 min in
+  (tick 15000) — not OOM (15 GB free), an RTX-pipeline limit. 1152×648 internal
+  / chase 896×504 / ego 800×600 is stable and still sharper than the old
+  960×540 / 640×360. Raise cautiously and watch for the timed crash.

@@ -84,8 +84,14 @@
   }
   @keyframes blink { 50%{opacity:.35} }
 
-  #ego { max-height:36vh; }
-  #cam { max-height:56vh; }
+  #ego { max-height:58vh; }
+  #cam { max-height:34vh; cursor:grab; }
+  #cam:active { cursor:grabbing; }
+  .feed .hint {
+    position:absolute; bottom:0; left:0; font:600 9.5px var(--font-m);
+    color:var(--ink-inv); background:rgba(16,16,16,.82); padding:4px 10px;
+    letter-spacing:.12em; pointer-events:none; text-transform:uppercase;
+  }
   /* map = dark data section, like the spec table on the site */
   .map-panel { background:var(--panel-dark); border-color:var(--panel-dark); }
   .map-panel h2 { color:var(--ink-inv); }
@@ -128,17 +134,16 @@
 <body>
 <header>
   <h1>WOJTEK<span> / ISAAC SIM</span></h1>
-  <p>Platforma robotyczna / symulacja &middot; polityka PPO <b>fbb_loco_v8</b> &middot; <b>kliknij mapę</b> — robot tam dojdzie.</p>
+  <p>Platforma robotyczna / symulacja &middot; polityka PPO <b>springy</b> &middot; <b>kliknij mapę</b> — robot tam dojdzie.</p>
   <div class="sysline">Prototyp / 01 &middot; RTX WARP</div>
 </header>
 
 <div class="wrap">
-  <div class="panel">
-    <h2>Kamera pościgowa</h2>
+  <div class="panel" id="egoPanel">
+    <h2>Kamera ego — podgląd VLM</h2>
     <div class="feed">
-      <img id="cam" alt="robot view" />
-      <span class="c3"></span><span class="c4"></span>
-      <span class="tag">CAM-01 · CHASE</span><span class="rec">● REC</span>
+      <img id="ego" alt="onboard view" />
+      <span class="tag">CAM-01 · EGO 90°</span><span class="rec">● REC</span>
     </div>
     <div class="spacer"></div>
     <h2 style="margin-top:14px">Konsola komend</h2>
@@ -165,12 +170,12 @@
   </div>
 
   <div class="col">
-    <div class="panel" id="egoPanel">
-      <h2>Kamera ego — podgląd VLM</h2>
+    <div class="panel">
+      <h2>Kamera pościgowa / orbit</h2>
       <div class="feed">
-        <img id="ego" alt="onboard view" />
-        <span class="c3"></span><span class="c4"></span>
-        <span class="tag">CAM-02 · EGO 90°</span><span class="rec">● REC</span>
+        <img id="cam" alt="robot view" />
+        <span class="tag">CAM-02 · ORBIT</span><span class="rec">● REC</span>
+        <span class="hint">przeciągnij ↺ · scroll zoom · 2×klik reset</span>
       </div>
     </div>
 
@@ -333,6 +338,24 @@ document.getElementById('goalText').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') sendGoal(e.target.value);
 });
 document.getElementById('goalCancel').onclick = () => { ws && ws.send(JSON.stringify({ type:'goal_cancel' })); };
+
+// --- orbit camera control: drag to rotate around Wojtek, scroll to zoom ---
+const camImg = document.getElementById('cam');
+const sendCam = (o) => ws && ws.readyState === 1 && ws.send(JSON.stringify(Object.assign({ type:'cam' }, o)));
+let camDrag = null;
+camImg.addEventListener('mousedown', (e) => { camDrag = { x:e.clientX, y:e.clientY }; e.preventDefault(); });
+window.addEventListener('mouseup', () => { camDrag = null; });
+window.addEventListener('mousemove', (e) => {
+  if (!camDrag) return;
+  const dx = e.clientX - camDrag.x, dy = e.clientY - camDrag.y;
+  camDrag = { x:e.clientX, y:e.clientY };
+  sendCam({ dyaw: -dx * 0.006, dpitch: dy * 0.006 });
+});
+camImg.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  sendCam({ zoom: e.deltaY > 0 ? 1.06 : 0.945 });
+}, { passive:false });
+camImg.addEventListener('dblclick', () => sendCam({ reset:true }));
 draw();
 </script>
 </body>

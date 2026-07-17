@@ -4,8 +4,10 @@
   <name>wojtek_bringup</name>
   <version>0.1.0</version>
   <description>
-    Bringup for Wojtek: launches wojtek_policy against the real robot
-    (MD80 + BMX160 through ros2_control) or against a MuJoCo simulation.
+    Robot-side bringup for wojtek: launches wojtek_policy against the real
+    robot (MD80 + IMU through ros2_control). Deliberately free of GUI/sim
+    dependencies so the RPi build stays lean -- RViz/PlotJuggler/teleop/MuJoCo
+    live in wojtek_viz (PC-side).
   </description>
   <maintainer email="kchmielewski707@gmail.com">Jakub Chmielewski</maintainer>
   <license>MIT</license>
@@ -27,8 +29,10 @@
   <exec_depend>xacro</exec_depend>
   <exec_depend>controller_manager</exec_depend>
   <exec_depend>ros2_controllers</exec_depend>
-  <exec_depend>rviz2</exec_depend>
-  <exec_depend>teleop_twist_keyboard</exec_depend>
+  <!-- Each run records a full rosbag (ros2 bag record -a); see robot.launch.py. -->
+  <exec_depend>ros2bag</exec_depend>
+  <exec_depend>rosbag2_transport</exec_depend>
+  <exec_depend>rosbag2_storage_default_plugins</exec_depend>
 
   <test_depend>python3-pytest</test_depend>
 

@@ -1,0 +1,33 @@
+#cloud-config
+# First-boot config for the robot RPi. Copy to the FAT `system-boot` partition
+# of a freshly flashed Ubuntu 24.04 arm64 image (alongside network-config and an
+# empty meta-data). Gives the Pi its hostname + your SSH key so `deploy.sh
+# --provision` can take over. Everything else (ROS, RT kernel, AP stack) is done
+# by deploy/rpi/install.sh -- NOT here -- to keep one source of truth.
+#
+# NOTE: no secrets here (no Pro token) -- the RT kernel is enabled later by
+# install.sh from .env, so this file is safe to commit.
+
+hostname: rpi
+manage_etc_hosts: true
+
+users:
+  - name: rpi
+    # Passwordless sudo, matching the existing setup. Key-only SSH.
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    groups: [adm, dialout, sudo, plugdev, netdev, gpio, i2c, spi]
+    shell: /bin/bash
+    lock_passwd: false
+    ssh_authorized_keys:
+      # >>> PASTE THE PC's SSH PUBLIC KEY HERE (contents of ~/.ssh/id_*.pub) <<<
+      - ssh-ed25519 AAAA...REPLACE_ME... user@pc
+
+# Optional: set a login password for console access (SSH stays key-only above).
+chpasswd:
+  expire: false
+  users:
+    - name: rpi
+      password: rpi
+      type: text
+
+ssh_pwauth: false

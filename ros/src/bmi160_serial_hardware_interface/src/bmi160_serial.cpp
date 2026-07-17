@@ -25,6 +25,39 @@
 #include <regex>
 #include <sstream>
 
+namespace
+{
+// termios speaks in speed_t constants (B115200 == 4098), not in bit rates:
+// cfsetospeed(&tty, 115200) returns -1/EINVAL and leaves the port's speed
+// untouched. Ignoring that return left the port at its 9600 default while the
+// firmware streamed at 115200 -- the reader saw only noise, every field stayed
+// NaN, and the stack reported "incomplete IMU read" forever. Map the URDF's
+// plain integer onto the constant instead; 0 means "unsupported".
+speed_t to_speed_constant(int baud)
+{
+  switch (baud) {
+    case 9600:
+      return B9600;
+    case 19200:
+      return B19200;
+    case 38400:
+      return B38400;
+    case 57600:
+      return B57600;
+    case 115200:
+      return B115200;
+    case 230400:
+      return B230400;
+    case 460800:
+      return B460800;
+    case 921600:
+      return B921600;
+    default:
+      return 0;
+  }
+}
+}  // namespace
+
 BMI160Serial::BMI160Serial(const std::string & port_name, int baud_rate)
 : port_name_{port_name}, baud_rate_{baud_rate}
 {
@@ -47,8 +80,16 @@ bool BMI160Serial::initialize()
     return false;
   }
 
-  cfsetospeed(&tty, baud_rate_);
-  cfsetispeed(&tty, baud_rate_);
+  const speed_t speed = to_speed_constant(baud_rate_);
+  if (speed == 0) {
+    std::cerr << "Unsupported baud rate " << baud_rate_ << " for " << port_name_ << std::endl;
+    return false;
+  }
+  if (cfsetospeed(&tty, speed) != 0 || cfsetispeed(&tty, speed) != 0) {
+    std::cerr << "Error setting baud rate " << baud_rate_ << " on " << port_name_ << ": "
+              << strerror(errno) << std::endl;
+    return false;
+  }
 
   tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8;
   tty.c_iflag &= ~IGNBRK;

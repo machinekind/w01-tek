@@ -19,12 +19,14 @@ setup(
     zip_safe=True,
     maintainer="Jakub Chmielewski",
     maintainer_email="kchmielewski707@gmail.com",
-    description="Bringup (real + MuJoCo sim) for Wojtek / wojtek_policy.",
+    description="Robot-side bringup (MD80 + IMU via ros2_control) for wojtek / wojtek_policy.",
     license="MIT",
     entry_points={
         "console_scripts": [
-            "mujoco_sim_node = wojtek_bringup.mujoco_sim_node:main",
             "real_io_node = wojtek_bringup.real_io_node:main",
+            # One-command robot bring-up from the PC dev container:
+            #   ros2 run wojtek_bringup robot
+            "robot = wojtek_bringup.robot:main",
         ],
     },
 )

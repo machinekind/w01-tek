@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sanity check for the four_bar_bot MuJoCo model.
+"""Sanity check for the wojtek MuJoCo model.
 
 Loads scene.xml, verifies the model structure (actuators, equality
 constraints), simulates 2 s with zero control, and verifies the robot

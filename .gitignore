@@ -20,3 +20,5 @@ MUJOCO_LOG.TXT
 .claude/
 .agents/
 
+#notatki i praca lokalna
+notes/

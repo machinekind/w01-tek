@@ -5,6 +5,19 @@
 /install/
 /log/
 
+# from wojtek_ws
+build/
+install/
+log/
+__pycache__/
+*.pyc
+.env
+deploy/rpi/cache/
+
+# Per-run rosbags recorded by the launch files (bag_dir default is ~/wojtek_bags,
+# but dev.sh's container mounts them here -- see docker/compose.yaml).
+/bags/
+
 # Generated room scene (training: ./run.sh build-room)
 /src/wojtek_description/mujoco/scene_room.xml
 /src/wojtek_description/mujoco/scene_apartment.xml

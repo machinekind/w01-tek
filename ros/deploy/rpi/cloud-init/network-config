@@ -1,0 +1,20 @@
+# First-boot network for the robot RPi. Copy to the FAT `system-boot` partition
+# next to user-data. Brings eth0 up as the static anchor 10.42.0.2 so the PC
+# (10.42.0.1, wojtek-eth shared) can reach it immediately over the cable.
+#
+# This is the MINIMUM to be reachable. deploy/rpi/install.sh replaces this with
+# /etc/netplan/60-wojtek.yaml and adds the wlan0 AP failover -- so wlan0 is left
+# untouched here on purpose.
+version: 2
+ethernets:
+  eth0:
+    dhcp4: false
+    dhcp6: false
+    optional: true
+    addresses: [10.42.0.2/24]
+    routes:
+      - to: default
+        via: 10.42.0.1
+        metric: 100
+    nameservers:
+      addresses: [10.42.0.1, 1.1.1.1]

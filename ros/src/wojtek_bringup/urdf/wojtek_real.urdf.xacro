@@ -33,9 +33,5 @@
 
   <xacro:wojtek_ros2_control kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)"
     usb_port="$(arg usb_port)" />
-  <!-- IMU disabled: flaky BMI160 and fbb_loco_v8 doesn't observe it.
-       Re-enable (with the imu_sensor_broadcaster in real_controllers.yaml
-       and real.launch.py) before running an IMU-observing policy.
   <xacro:wojtek_bmi160_imu_ros2_control port="$(arg imu_port)" />
-  -->
 </robot>

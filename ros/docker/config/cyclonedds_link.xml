@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- UNICAST FALLBACK profile for the two-machine setup.
+
+     Use this ONLY if the RPi and the PC do not discover each other with the
+     default (multicast) profile. Activate by pointing CYCLONEDDS_URI at this
+     file on BOTH machines:
+       PC  (docker/compose.yaml): CYCLONEDDS_URI=file:///config/cyclonedds_link.xml
+       RPi (systemd unit / ~/.bashrc): export CYCLONEDDS_URI=.../cyclonedds_link.xml
+
+     Topology (see deploy/rpi/README.md): the RPi is the fixed anchor at
+     10.42.0.2. This unicast profile targets the CABLE case, where the PC is
+     10.42.0.1 (NM shared) and the RPi 10.42.0.2 on the 10.42.0.0/24 link.
+     On the wifi path the RPi is the AP and the PC gets a DHCP lease
+     (.10-.50), so multicast is the right choice there -- don't force this
+     profile when mobile. Adjust the two peers below if your subnet differs. -->
+<CycloneDDS xmlns="https://cdds.io/config" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+    <Domain Id="any">
+        <General>
+            <!-- Force DDS onto the link interface. The PC also has a wifi NIC
+                 (its home/internet uplink) that auto-select might wrongly grab;
+                 unicast peers on 10.42.0.x keep traffic on the PC<->RPi link.
+                 If auto-select still picks the wrong NIC, set an explicit
+                 <NetworkInterface address="<this machine's link IP>"/> here
+                 (PC: 10.42.0.1, RPi: 10.42.0.2). -->
+            <AllowMulticast>false</AllowMulticast>
+        </General>
+        <Discovery>
+            <ParticipantIndex>auto</ParticipantIndex>
+            <Peers>
+                <Peer Address="10.42.0.1"/>
+                <Peer Address="10.42.0.2"/>
+            </Peers>
+        </Discovery>
+    </Domain>
+</CycloneDDS>

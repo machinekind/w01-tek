@@ -18,12 +18,11 @@ setup(
     zip_safe=True,
     maintainer="Michal Pogoda",
     maintainer_email="michalpogoda@surferseo.com",
-    description="RL locomotion policy for Wojtek (numpy runtime + ROS node).",
+    description="RL locomotion policy for wojtek (numpy runtime + ROS node).",
     license="MIT",
     entry_points={
         "console_scripts": [
             "policy_node = wojtek_policy.policy_node:main",
-            "xbox_teleop_node = wojtek_policy.xbox_teleop_node:main",
         ],
     },
 )

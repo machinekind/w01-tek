@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the ros/ workspace Docker image. Only needs Docker on the host - see
+# Build the wojtek_ws Docker image. Only needs Docker on the host - see
 # docker/Dockerfile for what's inside (ROS 2 Jazzy + rosdep-resolved deps,
 # built once at image-build time).
 set -eo pipefail

@@ -42,6 +42,45 @@ OMNI_KIT_ACCEPT_EULA=YES WOJTEK_PORT=8200 python -u isaac_room_server.py
 First boot compiles shaders (~100 s) and streams warehouse assets from
 NVIDIA's asset server (needs internet). Open `http://<host>:8200/`.
 
+## Running on a remote GPU host
+
+The server needs an RTX GPU and a full Isaac Sim install, so it usually runs
+on a separate machine while you drive it from a laptop. Nothing below is tied
+to a specific host — set `GPU_HOST` to your `user@host` (or an SSH config
+alias) and reach the UI over whatever network gives you the box (LAN, VPN,
+Tailscale, or an SSH tunnel).
+
+```bash
+GPU_HOST=user@gpu-box          # your SSH target
+# copy the demo + assets over (first time / after edits)
+scp isaac_room_server.py isaac_room.html "$GPU_HOST":~/
+
+# launch detached so it survives the SSH session; redirect stdin from
+# /dev/null or the SSH channel blocks until the process exits
+ssh "$GPU_HOST" 'setsid nohup env OMNI_KIT_ACCEPT_EULA=YES WOJTEK_PORT=8200 \
+    python -u ~/isaac_room_server.py </dev/null >~/isaac_room.log 2>&1 &'
+
+# watch it come up (first boot ~100 s); "SERVER_START :8200" = ready
+ssh "$GPU_HOST" 'tail -f ~/isaac_room.log'
+```
+
+Then open `http://<gpu-host-address>:8200/` in a browser, or forward it:
+`ssh -L 8200:localhost:8200 "$GPU_HOST"` and use `http://localhost:8200/`.
+
+Operational notes:
+
+- **`isaac_room.html` is read per request** — re-`scp` it and refresh the
+  browser (hard-refresh to beat the cache); no server restart needed. Only
+  `isaac_room_server.py` changes require a restart.
+- **Restart by PID, not `pkill -f`** — a `pkill -f isaac_room_server` run over
+  SSH also matches the shell running it and kills its own session (exit 255),
+  so the relaunch never fires. Instead: `pgrep -f 'isaac_room_server[.]py'`,
+  `kill -9 <pid>`, confirm `pgrep` is empty, then relaunch. Stale orphaned
+  launchers can keep the old log file open, so relaunch to a fresh log path
+  when a restart looks stuck.
+- If the host is password-only SSH, keep the password in an env var
+  (`SSHPASS`) and use `sshpass -e ssh …`; never hard-code it in scripts.
+
 ## Physics/rendering notes (hard-won)
 
 - MJCF importer drops **all** collision geoms — the server recreates the

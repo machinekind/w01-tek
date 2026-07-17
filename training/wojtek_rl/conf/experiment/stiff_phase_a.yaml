@@ -1,0 +1,22 @@
+# @package _global_
+# Phase A of the kp40 stiffness winner (probe ranking, job NNNNNNN: kp40
+# kept baseline-level velocity tracking while cutting track_err_rms
+# 0.146 -> 0.094, a 36% reduction; kp60 collapsed into standing, ramp
+# vel_err 0.61). kd=1.4 matches the probe for curriculum continuity.
+# Usage: ./training/run.sh train +experiment=stiff_phase_a
+defaults:
+  - springy_phase_a
+
+task:
+  env:
+    pd_kp: 40.0
+    pd_kd: 1.4
+    max_torque: 9.0
+
+dr:
+  joint_gains: { enable: true, gain_pct: 0.2, kd_pct: 0.2 }
+
+ppo:
+  num_timesteps: 1200000000
+
+run_name: wojtek_stiff_a

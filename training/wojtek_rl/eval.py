@@ -2,10 +2,12 @@
 
 Run: ./run.sh eval --run runs/<name> --x-vel 0.3 --out walk.mp4
 
-Or run one of the battery's fixed command scripts instead of a constant
-command (--x-vel/--y-vel/--yaw-vel/--height/--steps are ignored when set):
+Or run one of the battery's fixed command scripts, or the eval-only
+demo_sequence, instead of a constant command (--x-vel/--y-vel/--yaw-vel/
+--height/--steps are ignored when set):
 
     ./run.sh eval --run runs/<name> --scenario turn
+    ./run.sh eval --run runs/<name> --scenario demo_sequence
 
 Default output name is <scenario>.mp4 unless --out overrides it. A bare
 --out filename lands in videos/<run_name>/<timestamp>/ (gitignored); pass a
@@ -29,6 +31,37 @@ import numpy as np
 
 from wojtek_rl import paths
 from wojtek_rl.battery import battery_scenarios
+
+
+def _demo_sequence(i):
+    """EVAL-ONLY, not part of battery.py's fixed comparison battery: one
+    continuous rollout for --scenario demo_sequence -- stand, trot forward,
+    turn in place, trot forward, stand -- at ctrl_dt=0.02 (50 steps/s).
+    Command transitions are steps, not ramps, matching how the trained
+    policy actually receives commands. Height pinned at 0.125, same anchor
+    value battery_scenarios() uses."""
+    H = 0.125
+    if i < 150:  # 0-3s: stand
+        vx, wz = 0.0, 0.0
+    elif i < 450:  # 3-9s: trot forward
+        vx, wz = 0.5, 0.0
+    elif i < 750:  # 9-15s: turn in place
+        vx, wz = 0.0, 0.7
+    elif i < 1050:  # 15-21s: trot forward
+        vx, wz = 0.5, 0.0
+    else:  # 21-24s: stand
+        vx, wz = 0.0, 0.0
+    return jp.array([vx, 0.0, wz, H])
+
+
+def eval_scenarios():
+    """battery_scenarios() plus eval-only scenarios that --scenario accepts
+    but battery.py does not run: the battery's scenario set is a fixed
+    comparison battery and must not change for a video-only addition like
+    demo_sequence."""
+    scenarios = dict(battery_scenarios())
+    scenarios["demo_sequence"] = (_demo_sequence, 1200)
+    return scenarios
 
 
 def _leg_of(name):
@@ -197,10 +230,11 @@ def main() -> None:
     ap.add_argument("--steps", type=int, default=500)
     ap.add_argument(
         "--scenario",
-        choices=sorted(battery_scenarios().keys()),
+        choices=sorted(eval_scenarios().keys()),
         default=None,
-        help="run one of the battery's fixed command scripts instead of "
-        "--x-vel/--y-vel/--yaw-vel/--height/--steps (all ignored when set)",
+        help="run one of the battery's fixed command scripts, or the "
+        "eval-only demo_sequence, instead of --x-vel/--y-vel/--yaw-vel/"
+        "--height/--steps (all ignored when set)",
     )
     ap.add_argument("--out", default=None)
     ap.add_argument(
@@ -265,7 +299,7 @@ def main() -> None:
     policy = load_policy(ckpt, env, ppo_params)
 
     if args.scenario:
-        cmd_at, n_steps = battery_scenarios()[args.scenario]
+        cmd_at, n_steps = eval_scenarios()[args.scenario]
     else:
         command = jp.array([args.x_vel, args.y_vel, args.yaw_vel, args.height])
         cmd_at, n_steps = (lambda i: command), args.steps

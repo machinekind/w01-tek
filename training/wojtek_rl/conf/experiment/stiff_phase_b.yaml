@@ -1,0 +1,31 @@
+# @package _global_
+# Phase B of the kp40 stiffness winner, restored from stiff_phase_a's
+# checkpoint. kd bumped 1.4 -> 1.6 (above the probe's value): the probe's
+# vibration metric (>5 Hz power) came out above the kp20 baseline on 3 of
+# 4 scenarios, so phase B carries extra damping margin into the
+# latency/encoder stack it turns on. kd=1.6 puts the damping ratio at
+# ~1.13x the kp20/kd=1.0 reference — inside the +-20% kd DR band the
+# phase-A checkpoint already trained under, so restoring it here lands on
+# an in-distribution plant, not an unseen one. max_torque overrides
+# springy_phase_b's 6.0 back to 9.0 (same as phase A / the probes).
+# DEPLOYMENT MUST MATCH PHASE B: kp=40 / kd=1.6 / 9 Nm in
+# wojtek_real.urdf.xacro when this becomes a keeper.
+# Launched with restore=<phase-A checkpoint>; this preset does not set
+# restore.
+# Usage: ./training/run.sh train +experiment=stiff_phase_b restore=runs/<stiff_phase_a>/checkpoints/<step>
+defaults:
+  - springy_phase_b
+
+task:
+  env:
+    pd_kp: 40.0
+    pd_kd: 1.6
+    max_torque: 9.0
+
+dr:
+  joint_gains: { enable: true, gain_pct: 0.2, kd_pct: 0.2 }
+
+ppo:
+  num_timesteps: 800000000
+
+run_name: wojtek_stiff_b

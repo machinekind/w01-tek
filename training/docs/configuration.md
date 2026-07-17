@@ -421,6 +421,8 @@ so command-line values can still override it.
 | `springy_phase_a` | springy_phase_b | Same recipe at a 0.3x smoothness/torque penalty curriculum; phase B restores from its checkpoint. |
 | `stiff_probe_kp40` | springy_phase_a | Stiffness-arm ranking probe: `pd_kp=40`/`pd_kd=1.4`. |
 | `stiff_probe_kp60` | springy_phase_a | Stiffness-arm ranking probe: `pd_kp=60`/`pd_kd=1.73`. |
+| `stiff_phase_a` | springy_phase_a | Phase A of the kp40 probe winner's full two-phase run: `pd_kp=40`/`pd_kd=1.4`. |
+| `stiff_phase_b` | springy_phase_b | Phase B of the kp40 probe winner: `pd_kp=40`/`pd_kd=1.6` (bumped for damping margin), restored from phase A. |
 
 Read the matching file in [`conf/experiment`](../wojtek_rl/conf/experiment)
 before choosing a historical version: the comments explain its intended
@@ -455,6 +457,8 @@ than infer them from a historical run name:
 | `springy_phase_a` | `wojtek_springy_a` | Inherits `springy_phase_b`, overrides only the penalty curriculum: `task.env.reward.scales.{action_rate,torques,torque_limit}={-0.075,-1.8e-4,-0.03}` (0.3x of phase B; `torque_rate` stays `-0.02`, already below its measured `-0.06` freeze cliff); `ppo.num_timesteps=100000000`. Launch phase B afterward with `restore=<phase-A checkpoint>`; the preset itself does not set `restore`. |
 | `stiff_probe_kp40` | `wojtek_stiff40_probe` | Inherits `springy_phase_a`. Stiffness-arm ranking probe: `task.env.{pd_kp,pd_kd,max_torque}={40.0,1.4,9.0}` (gains patched onto the model at load; `max_torque` widened from phase A's `6.0` to the XML's own `±9` forcerange for transient headroom); enables `dr.joint_gains` (`gain_pct=0.2`, `kd_pct=0.2`, per-joint); `ppo.num_timesteps=300000000`. |
 | `stiff_probe_kp60` | `wojtek_stiff60_probe` | Inherits `springy_phase_a`. Stiffness-arm ranking probe: `task.env.{pd_kp,pd_kd,max_torque}={60.0,1.73,9.0}` (gains patched onto the model at load; `max_torque` widened from phase A's `6.0` to the XML's own `±9` forcerange for transient headroom); enables `dr.joint_gains` (`gain_pct=0.2`, `kd_pct=0.2`, per-joint); `ppo.num_timesteps=300000000`. |
+| `stiff_phase_a` | `wojtek_stiff_a` | Inherits `springy_phase_a`. Phase A of the kp40 probe winner's (job NNNNNNN) full two-phase run: `task.env.{pd_kp,pd_kd,max_torque}={40.0,1.4,9.0}` (kd matches the probe for curriculum continuity; `max_torque` widened to the XML's `±9` forcerange as in the probes); enables `dr.joint_gains` (`gain_pct=0.2`, `kd_pct=0.2`, per-joint); `ppo.num_timesteps=1200000000`. |
+| `stiff_phase_b` | `wojtek_stiff_b` | Inherits `springy_phase_b`. Phase B of the kp40 probe winner: `task.env.{pd_kp,pd_kd,max_torque}={40.0,1.6,9.0}` (`pd_kd` bumped from the probe's `1.4` for damping margin — its >5 Hz vibration metric exceeded the kp20 baseline on 3 of 4 scenarios — putting the damping ratio at ~1.13x the kp20/kd=1.0 reference, inside the ±20% kd DR band phase A already trained under; `max_torque` overrides phase B's `6.0` back to `9.0`); enables `dr.joint_gains` (`gain_pct=0.2`, `kd_pct=0.2`, per-joint); `ppo.num_timesteps=800000000`. Launched with `restore=<stiff_phase_a checkpoint>`; the preset itself does not set `restore`. **Deployment must match phase B** (`pd_kp=40`/`pd_kd=1.6`/`max_torque=9.0` in `wojtek_real.urdf.xacro`) if this becomes a keeper. |
 
 `run_v2`'s restore path is an artifact dependency, not a guaranteed portable
 starting point. Its config comments note that the historical checkpoint no

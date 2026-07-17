@@ -32,7 +32,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import (
     Command,
     LaunchConfiguration,
@@ -49,10 +49,14 @@ def generate_launch_description():
     xacro_file = os.path.join(share, "urdf", "wojtek_real.urdf.xacro")
     max_torque = LaunchConfiguration("max_torque")
     imu_port = LaunchConfiguration("imu_port")
+    bus = LaunchConfiguration("bus")
+    can_baud = LaunchConfiguration("can_baud")
+    use_imu = LaunchConfiguration("use_imu")
     robot_description = ParameterValue(
         Command(
             ["xacro ", xacro_file, " max_torque:=", max_torque,
-             " imu_port:=", imu_port]
+             " use_imu:=", use_imu, " imu_port:=", imu_port,
+             " bus:=", bus, " can_baud:=", can_baud]
         ),
         value_type=str,
     )
@@ -72,6 +76,17 @@ def generate_launch_description():
             # Start with a low torque cap for the first tests; the policy was
             # trained with 6 Nm available.
             DeclareLaunchArgument("max_torque", default_value="6.0"),
+            # CAN link to the drives: CANdle HAT over SPI at 8M by default
+            # (the drives' flashed baudrate since 2026-07-17). bus:=usb
+            # can_baud:=1 = the legacy USB dongle, only after flashing the
+            # drives back to 1M (ros/hw_tests: candle_bus_test baud).
+            DeclareLaunchArgument("bus", default_value="spi"),
+            DeclareLaunchArgument("can_baud", default_value="8"),
+            # The serial IMU was retired for the I2C Adafruit 5543 (interface
+            # TBD); with the hardware gone, its ros2_control component aborts
+            # the whole ros2_control_node, hence off by default. use_imu:=true
+            # only with the CP2102 stack physically reconnected.
+            DeclareLaunchArgument("use_imu", default_value="false"),
             # Default (empty) keeps the xacro's by-id path for the CP2102;
             # override with e.g. imu_port:=/dev/ttyUSB0 if the adapter is
             # ever swapped for one with a different by-id name.
@@ -109,6 +124,14 @@ def generate_launch_description():
                 executable="spawner",
                 arguments=["joint_state_broadcaster", "imu_sensor_broadcaster",
                            "forward_position_controller"],
+                condition=IfCondition(use_imu),
+            ),
+            Node(
+                package="controller_manager",
+                executable="spawner",
+                arguments=["joint_state_broadcaster",
+                           "forward_position_controller"],
+                condition=UnlessCondition(use_imu),
             ),
             # RViz/robot_state_publisher use ABSOLUTE joint angles.
             Node(

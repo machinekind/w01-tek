@@ -165,6 +165,15 @@ int run_baud(mab::Candle & candle, const Args & a)
     std::cerr << "FAIL: configMd80Can" << std::endl;
     return 1;
   }
+  // The drive switches to the new baudrate immediately, so the save command
+  // must be sent at the NEW rate -- retune the CANdle side first, or the save
+  // silently never reaches the drive (baud changed in RAM, lost on power cycle).
+  if (a.to != a.baud &&
+      !candle.configCandleBaudrate(static_cast<mab::CANdleBaudrate_E>(a.to))) {
+    std::cerr << "FAIL: configCandleBaudrate(" << a.to
+              << ") -- baud changed in RAM but NOT saved to flash" << std::endl;
+    return 1;
+  }
   if (!candle.configMd80Save(id)) {
     std::cerr << "FAIL: configMd80Save (baud changed but NOT saved to flash)"
               << std::endl;

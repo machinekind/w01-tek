@@ -234,23 +234,42 @@ std::shared_ptr<mab::Candle> MD80HardwareInterface::find_candle_by_motor_can_id(
 
 void MD80HardwareInterface::add_candle_instances()
 {
-  mab::BusType_E bus = mab::BusType_E::USB;
-  const mab::CANdleBaudrate_E baud = mab::CAN_BAUD_1M;
+  // Bus + baud come from the URDF <hardware> params (bus: usb|spi, can_baud:
+  // Mbps as 1|2|5|8). The drives' configured baudrate must match can_baud --
+  // as of 2026-07-17 they are flashed to 8M for the CANdle HAT (SPI); the
+  // legacy USB dongle path expects 1M unless the drives are flashed back.
+  const auto & params = info_.hardware_parameters;
+  const std::string bus_name = params.count("bus") ? params.at("bus") : "usb";
 
-  auto usb_port = info_.hardware_parameters.at("usb_port");
+  mab::BusType_E bus;
+  std::string device;  // empty -> candle's per-bus default (SPI: /dev/spidev0.0)
+  if (bus_name == "spi") {
+    bus = mab::BusType_E::SPI;
+    if (params.count("spi_device")) device = params.at("spi_device");
+  } else if (bus_name == "usb") {
+    bus = mab::BusType_E::USB;
+    device = params.at("usb_port");
+  } else {
+    throw std::runtime_error("Unsupported bus type '" + bus_name + "' (usb|spi)");
+  }
 
+  const std::string baud_str = params.count("can_baud") ? params.at("can_baud") : "1";
+  if (baud_str != "1" && baud_str != "2" && baud_str != "5" && baud_str != "8") {
+    throw std::runtime_error("Unsupported can_baud '" + baud_str + "' (1|2|5|8 Mbps)");
+  }
+  const auto baud = static_cast<mab::CANdleBaudrate_E>(std::stoi(baud_str));
+
+  const std::string where =
+    bus_name + (device.empty() ? std::string(" (default device)") : " " + device) +
+    " @ " + baud_str + "M";
   try {
-    candle_instances.emplace_back(
-
-      std::make_shared<mab::Candle>(baud, true, bus, usb_port));
+    candle_instances.emplace_back(std::make_shared<mab::Candle>(baud, true, bus, device));
 
     RCLCPP_INFO_STREAM(
-
       rclcpp::get_logger(get_name()),
-
-      "Found CANdle with ID: " << candle_instances.back()->getDeviceId() << " at " << usb_port);
+      "Found CANdle with ID: " << candle_instances.back()->getDeviceId() << " at " << where);
   } catch (const char * eMsg) {
-    throw std::runtime_error(std::string(eMsg) + " at " + usb_port);
+    throw std::runtime_error(std::string(eMsg) + " at " + where);
   }
 }
 
@@ -291,13 +310,16 @@ void MD80HardwareInterface::try_to_initialize_motors()
 
     if (!added) {
       // Deliberately not "cannot find device": addMd80 also returns false when
-      // the USB link to the CANdle times out, and the old wording sent everyone
-      // hunting a drive that was fine. Name both possibilities.
+      // the link to the CANdle times out, and the old wording sent everyone
+      // hunting a drive that was fine. Name both possibilities. A third one
+      // since the 8M migration: the drive's flashed baudrate does not match
+      // the stack's can_baud param.
       throw std::runtime_error(
         "No answer from CAN id " + std::to_string(can_id) + " after " +
         std::to_string(ADD_MD80_ATTEMPTS) +
-        " attempts: the drive is absent/unpowered, or the USB link to the CANdle "
-        "timed out (look for '[USB] Did not receive response' above).");
+        " attempts: the drive is absent/unpowered, on a different CAN baudrate "
+        "than can_baud, or the CANdle link timed out "
+        "(look for 'Did not receive response' above).");
     }
 
     RCLCPP_INFO_STREAM(rclcpp::get_logger(get_name()), "Initialized motor at can_id: " << can_id);

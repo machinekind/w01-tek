@@ -18,20 +18,28 @@
   <xacro:arg name="kp" default="20.0" />
   <xacro:arg name="kd" default="1.0" />
   <xacro:arg name="max_torque" default="6.0" />
+  <!-- CAN link to the MD80s: CANdle HAT over SPI by default (drives flashed
+       to 8M). bus:=usb can_baud:=1 falls back to the old USB dongle; only
+       works if the drives are flashed back to 1M. -->
+  <xacro:arg name="bus" default="spi" />
+  <xacro:arg name="can_baud" default="8" />
   <xacro:arg name="usb_port" default="/dev/ttyACM0" />
-  <!-- Loaner BMI160 (no magnetometer) until the real BMX160 is sourced;
-       see bmi160_serial_hardware_interface. Swap back to
-       xacro:wojtek_imu_ros2_control below once the real sensor is back.
-       by-id path instead of /dev/ttyUSBx: the CP2102 drops off the bus on
-       a flaky cable and can re-enumerate under a different number; the
-       by-id symlink always points at the current node (the container mounts
-       the host's /dev, so the symlink stays live). -->
+  <!-- The serial IMU (loaner BMI160 behind an MCU + CP2102 bridge) was retired
+       2026-07-17 in favor of the Adafruit 5543 (LSM6DS3TR-C + LIS3MDL) wired
+       straight to the Pi's I2C1; its ros2_control interface does not exist
+       yet, so use_imu defaults to false and the whole IMU component is left
+       out (with the serial hardware gone, configuring it aborts the entire
+       ros2_control_node). Flip to true only with the CP2102 stack physically
+       reconnected. -->
+  <xacro:arg name="use_imu" default="false" />
   <xacro:arg name="imu_port"
     default="/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0" />
 
   <xacro:wojtek_body />
 
   <xacro:wojtek_ros2_control kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)"
-    usb_port="$(arg usb_port)" />
-  <xacro:wojtek_bmi160_imu_ros2_control port="$(arg imu_port)" />
+    usb_port="$(arg usb_port)" bus="$(arg bus)" can_baud="$(arg can_baud)" />
+  <xacro:if value="$(arg use_imu)">
+    <xacro:wojtek_bmi160_imu_ros2_control port="$(arg imu_port)" />
+  </xacro:if>
 </robot>

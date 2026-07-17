@@ -20,7 +20,11 @@ duty factor) over each scenario's moving window; angular tracking error
 (turn only); lateral tracking error (strafe only); base-height
 springiness -- peak-to-peak amplitude and 2-4 Hz spectral power fraction
 (stand_to_trot_ramp hold window only); foot-planting step count, post-
-switch clearance, and quiet-stance qvel (walk_to_stop only).
+switch clearance, and quiet-stance qvel (walk_to_stop only); sim2real
+symptom metrics, every scenario -- nose-down/up pitch p95 and 15-deg
+nosedive count, front/rear stance half-width of feet in contact, signed
+per-leg abduction mean, front-foot forward reach p95 and stride span,
+mean base height.
 """
 
 import argparse
@@ -40,6 +44,12 @@ from wojtek_rl import paths
 ABDUCTION_IDX = (0, 3, 6, 9)
 HIP_IDX = (1, 4, 7, 10)
 KNEE_IDX = (2, 5, 8, 11)
+
+# Foot order matches LEGS; +x is forward. Home-keyframe references for the
+# symptom metrics below: foot x = +-0.257 m, stance half-width |y| =
+# 0.174 m, base z = 0.129 m (14 kg model).
+REAR_FEET = (0, 1)
+FRONT_FEET = (2, 3)
 
 
 def vibration_index(qvel_hist, dt, cutoff_hz=5.0):
@@ -90,6 +100,26 @@ def duty_factor(contacts):
     duty ~= 1.0 on every foot with low diag/lateral correlation."""
     c = np.asarray(contacts, dtype=float)
     return [round(float(x), 3) for x in c.mean(axis=0)]
+
+
+def _yaw(quat):
+    """Yaw (rad) of a wxyz quaternion."""
+    w, x, y, z = quat
+    return np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+
+
+def pitch_down_deg(gravity_hist):
+    """Nose-down pitch (deg) per step, positive when the nose points down.
+    Verified sign: +20 deg about body +y gives gravity_body[0] = +sin(20)."""
+    g = np.asarray(gravity_hist, dtype=float)
+    return np.degrees(np.arctan2(g[:, 0], -g[:, 2]))
+
+
+def excursion_count(series, thresh):
+    """Rising-edge count of `series` crossing above `thresh`: one nosedive
+    that stays above the threshold for many steps counts once."""
+    above = np.asarray(series) > thresh
+    return int((above[1:] & ~above[:-1]).sum() + int(above[0]))
 
 
 def abduction_p95(qpos_hist):
@@ -232,6 +262,7 @@ def rollout(env, reset, step, inf, cmd_at, n, foot_radius, seed=0):
         "cmd_wz": [], "wz": [], "cmd_h": [], "h": [],
         "qvel": [], "qpos": [], "contact": [], "foot_clearance": [],
         "slip": [], "actuator_force": [], "base_accel": [],
+        "gravity": [], "foot_xy_body": [],
     }
     fell_at = None
     term = None
@@ -270,6 +301,18 @@ def rollout(env, reset, step, inf, cmd_at, n, foot_radius, seed=0):
         rec["slip"].append(float((np.square(fv[:, :2]).sum(-1) * c).sum()))
         rec["actuator_force"].append(np.asarray(d.actuator_force))
         rec["base_accel"].append(np.asarray(d.sensordata[adr : adr + 3]))
+        rec["gravity"].append(np.asarray(env._gravity_body(d)))
+        # Foot offsets from the base in the yaw-aligned horizontal frame
+        # (not the full body frame: stance width must not shrink just
+        # because the trunk rolls or pitches).
+        q = np.asarray(d.qpos)
+        yaw = _yaw(q[3:7])
+        cy, sy = np.cos(-yaw), np.sin(-yaw)
+        off = gx[:, :2] - q[:2]
+        rec["foot_xy_body"].append(
+            np.stack([cy * off[:, 0] - sy * off[:, 1],
+                      sy * off[:, 0] + cy * off[:, 1]], axis=-1)
+        )
     return {k: np.array(v) for k, v in rec.items()}, fell_at, term
 
 
@@ -303,6 +346,34 @@ def scenario_result(name, rec, fell_at, dt, torque_cap):
     r["splay_p95"] = round(abduction_p95(rec["qpos"]), 4)
     sat = saturation_fractions(rec["actuator_force"], torque_cap)
     r["saturation"] = {k: (round(v, 4) if v is not None else None) for k, v in sat.items()}
+
+    # Sim2real symptom metrics (2026-07 robot review): nosedive, stance
+    # width (tuck-in reads as a low half-width; splay_p95 is unsigned and
+    # cannot tell the two apart), front reach, and operating height.
+    # Home references: half-width 0.174 m, front foot x 0.257 m, base z
+    # 0.129 m.
+    pitch = pitch_down_deg(rec["gravity"])
+    r["pitch_down_p95_deg"] = round(float(np.percentile(np.clip(pitch, 0, None), 95)), 2)
+    r["pitch_up_p95_deg"] = round(float(np.percentile(np.clip(-pitch, 0, None), 95)), 2)
+    r["pitch_events_15deg"] = excursion_count(pitch, 15.0)
+    xy = rec["foot_xy_body"]
+    c = rec["contact"]
+    for label, feet in [("front", FRONT_FEET), ("rear", REAR_FEET)]:
+        w = np.abs(xy[:, feet, 1])[c[:, feet]]
+        if w.size:
+            r[f"stance_halfwidth_{label}_m"] = round(float(w.mean()), 4)
+    r["abduction_mean"] = [
+        round(float(rec["qpos"][:, j].mean()), 4) for j in ABDUCTION_IDX
+    ]
+    # Front reach over the moving window when there is one (strafe has
+    # none; fall back to the whole scenario there).
+    reach_w = moving if moving.sum() > 100 else np.ones(len(xy), dtype=bool)
+    fx = xy[reach_w][:, FRONT_FEET, 0]
+    r["front_foot_x_p95_m"] = round(float(np.percentile(fx, 95)), 4)
+    r["front_stride_span_m"] = round(
+        float(np.percentile(fx, 95) - np.percentile(fx, 5)), 4
+    )
+    r["base_height_mean"] = round(float(rec["h"].mean()), 4)
 
     # Gait purity over each scenario's own moving window (reuses `moving`,
     # so it lands on the ramp/hold for stand_to_trot_ramp, the vx=0.4

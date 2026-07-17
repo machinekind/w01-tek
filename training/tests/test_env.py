@@ -146,3 +146,37 @@ def test_torque_limit_zero_below_cap(env, reset_state):
 def test_torque_limit_positive_above_cap(env, reset_state):
     above = 0.95 * env._torque_cap  # above torque_limit_frac (0.85) * cap
     assert float(_reward_for_actuator_force(env, reset_state, above)) > 0.0
+
+
+# -- pd_kp / pd_kd ---------------------------------------------------------
+
+
+def test_pd_gains_zero_leaves_xml_gains_untouched(env):
+    """Default (0 = off): actuator gains stay the XML baseline
+    (gainprm[:,0]=20, biasprm[:,1]=-20, biasprm[:,2]=-1)."""
+    gainprm = np.array(env.mj_model.actuator_gainprm)
+    biasprm = np.array(env.mj_model.actuator_biasprm)
+    np.testing.assert_allclose(gainprm[:, 0], 20.0)
+    np.testing.assert_allclose(biasprm[:, 1], -20.0)
+    np.testing.assert_allclose(biasprm[:, 2], -1.0)
+
+
+def test_pd_gains_override_both_kp_and_kd():
+    cfg = wojtek_env.default_config()
+    cfg.pd_kp = 40.0
+    cfg.pd_kd = 1.4
+    stiff = wojtek_env.WojtekJoystick(cfg)
+    gainprm = np.array(stiff.mj_model.actuator_gainprm)
+    biasprm = np.array(stiff.mj_model.actuator_biasprm)
+    np.testing.assert_allclose(gainprm[:, 0], 40.0)
+    np.testing.assert_allclose(biasprm[:, 1], -40.0)
+    np.testing.assert_allclose(biasprm[:, 2], -1.4)
+    np.testing.assert_allclose(biasprm[:, 0], 0.0)
+
+
+def test_pd_gains_kp_only_keeps_xml_kd():
+    cfg = wojtek_env.default_config()
+    cfg.pd_kp = 40.0
+    kp_only = wojtek_env.WojtekJoystick(cfg)
+    biasprm = np.array(kp_only.mj_model.actuator_biasprm)
+    np.testing.assert_allclose(biasprm[:, 2], -1.0)

@@ -117,6 +117,24 @@ def saturation_fractions(actuator_force_hist, torque_cap):
     }
 
 
+TRACK_SETTLE_STEPS = 50  # 1 s at ctrl_dt=0.02: skip the reset transient
+
+
+def tracking_error(ctrl_hist, qpos_hist, settle_steps=TRACK_SETTLE_STEPS):
+    """RMS and p95 of |ctrl - qpos| (rad) over steps and actuated joints,
+    first settle_steps steps excluded. ctrl is the setpoint the PD servo
+    actually held, so this is the servo error the stiffness work targets."""
+    c = np.asarray(ctrl_hist, dtype=float)[settle_steps:]
+    q = np.asarray(qpos_hist, dtype=float)[settle_steps:]
+    if c.size == 0:
+        return {"rms": None, "p95": None}
+    err = np.abs(c - q)
+    return {
+        "rms": float(np.sqrt((err**2).mean())),
+        "p95": float(np.percentile(err, 95)),
+    }
+
+
 def plant_step(contacts, switch_idx, hold=25):
     """Steps from `switch_idx` until all four feet are in contact and stay
     that way for `hold` consecutive steps; None if that window never
@@ -231,7 +249,7 @@ def rollout(env, reset, step, inf, cmd_at, n, foot_radius, seed=0):
         "cmd_vx": [], "vx": [], "vx_local": [], "cmd_vy": [], "vy_local": [],
         "cmd_wz": [], "wz": [], "cmd_h": [], "h": [],
         "qvel": [], "qpos": [], "contact": [], "foot_clearance": [],
-        "slip": [], "actuator_force": [], "base_accel": [],
+        "slip": [], "actuator_force": [], "base_accel": [], "ctrl": [],
     }
     fell_at = None
     term = None
@@ -270,6 +288,7 @@ def rollout(env, reset, step, inf, cmd_at, n, foot_radius, seed=0):
         rec["slip"].append(float((np.square(fv[:, :2]).sum(-1) * c).sum()))
         rec["actuator_force"].append(np.asarray(d.actuator_force))
         rec["base_accel"].append(np.asarray(d.sensordata[adr : adr + 3]))
+        rec["ctrl"].append(np.asarray(d.ctrl))
     return {k: np.array(v) for k, v in rec.items()}, fell_at, term
 
 
@@ -296,6 +315,11 @@ def scenario_result(name, rec, fell_at, dt, torque_cap):
     # nearly motionless (tiny numerator over tiny denominator)
     r["qvel_rms"] = round(float(np.sqrt((rec["qvel"] ** 2).mean())), 3)
     r["slip_mean"] = round(float(rec["slip"].mean()), 4)
+    if "ctrl" in rec:
+        te = tracking_error(rec["ctrl"], rec["qpos"])
+        if te["rms"] is not None:
+            r["track_err_rms"] = round(te["rms"], 4)
+            r["track_err_p95"] = round(te["p95"], 4)
     if moving.sum() > 100:
         r["vel_err_overall"] = round(float((rec["cmd_vx"][moving] - rec["vx"][moving]).mean()), 3)
 

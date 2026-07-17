@@ -34,11 +34,34 @@ from navigation import NavConfig, command_to_target, quat_to_yaw
 USD = os.path.expanduser("~/wojtek_asset/wojtek_mjx.usd")
 ART_ROOT = "/World/Wojtek/root/root"
 W, H = 896, 504           # chase/orbit stream resolution (native, no resize)
-SPAWN = np.array([0.0, 0.0, 0.135])
+
+# ---- scene presets -----------------------------------------------------------
+# WOJTEK_SCENE=apartment (default) is the InteriorAgent photoreal flat; get it:
+#   hf download spatialverse/InteriorAgent --repo-type dataset \
+#     --include "kujiale_0003/*" --local-dir ~/interior_agent
+# "usd": None means the NVIDIA warehouse streamed from the assets server.
+# InteriorAgent floors sit at z~0.08, so a standing base reads z~0.21.
+SCENES = {
+    "warehouse": {"usd": None, "spawn": (0.0, 0.0, 0.135), "world_half": 5.0,
+                  "ambient": 0.35, "chase_dist": 2.4},
+    "apartment": {"usd": "~/interior_agent/kujiale_0003/kujiale_0003.usda",
+                  "spawn": (-1.27, 0.76, 0.135),   # living-room centroid (rooms.json)
+                  "world_half": 7.5, "ambient": 0.55, "chase_dist": 1.9},
+}
+SCENE_NAME = os.environ.get("WOJTEK_SCENE", "apartment")
+_sc = SCENES[SCENE_NAME]
+SCENE_USD = os.path.expanduser(_sc["usd"]) if _sc["usd"] else None
+if SCENE_USD and not os.path.exists(SCENE_USD):
+    print(f"SCENE_MISSING {SCENE_USD} -> falling back to warehouse", flush=True)
+    SCENE_NAME = "warehouse"
+    _sc = SCENES[SCENE_NAME]
+    SCENE_USD = None
+
+SPAWN = np.array(_sc["spawn"])
 CAM_OFF = np.array([1.6, 1.6, 0.9])
 FOOT_RADIUS = 0.046
 LEGS = ("rear_left", "rear_right", "front_right", "front_left")
-WORLD_HALF = 5.0
+WORLD_HALF = _sc["world_half"]
 CTRL_DT = 0.02
 # Render every 2nd tick: EXACTLY even 40 ms frame spacing (25 fps). Even
 # pacing looks smoother than more-but-jittery frames; DLAA render time
@@ -60,7 +83,8 @@ for _k, _v in [("/rtx/reflections/enabled", False),
                # placeholders whenever the robot walks into a new area
                ("/rtx-transient/resourcemanager/enableTextureStreaming", False),
                # GI is off, so lift pure-black shadow areas with flat ambient
-               ("/rtx/sceneDb/ambientLightIntensity", 0.35),
+               # (apartment needs more: interior rooms get no dome light)
+               ("/rtx/sceneDb/ambientLightIntensity", _sc["ambient"]),
                # sync rendering: async returns stale frames to the annotator
                # (~27% duplicates measured) -> judder in the stream
                ("/app/asyncRendering", False),
@@ -73,10 +97,18 @@ ctx = omni.usd.get_context()
 world = World(stage_units_in_meters=1.0, physics_dt=0.004, rendering_dt=0.02)
 stage = ctx.get_stage()
 UsdLux.DomeLight.Define(stage, "/World/DomeExtra").CreateIntensityAttr(400.0)
-add_reference_to_stage(
-    assets + "/Isaac/Environments/Simple_Warehouse/warehouse.usd", "/World/Warehouse")
+if SCENE_USD:
+    add_reference_to_stage(SCENE_USD, "/World/Scene")
+    # InteriorAgent ships zero authored colliders — cook static triangle-mesh
+    # colliders for the whole flat so the foot spheres have contacts.
+    from omni.physx.scripts import utils as physx_utils
+    physx_utils.setColliderSubtree(
+        stage.GetPrimAtPath("/World/Scene"), approximationShape="none")
+else:
+    add_reference_to_stage(
+        assets + "/Isaac/Environments/Simple_Warehouse/warehouse.usd", "/World/Warehouse")
 from isaacsim.core.api.objects.ground_plane import GroundPlane
-GroundPlane("/World/GroundBackstop", z_position=0.0, visible=False)
+GroundPlane("/World/GroundBackstop", z_position=-0.02, visible=False)
 
 add_reference_to_stage(USD, "/World/Wojtek")
 wb = stage.GetPrimAtPath("/World/Wojtek/worldBody")
@@ -139,9 +171,10 @@ bench_rgb = rep.AnnotatorRegistry.get_annotator("rgb"); bench_rgb.attach(bench_r
 # measurements showed no fps gain from gating. Keep it always-on; only the
 # ENCODE runs at 5 Hz.
 
-CHASE_DIST = 2.4      # orbit radius (m) from the robot base
-CHASE_PITCH = 0.26    # elevation angle (rad); ~15deg above horizontal, behind
-CHASE_LOOK_Z = 0.25   # aim above the base: flatter angle keeps the horizon in frame
+CHASE_DIST = _sc["chase_dist"]  # orbit radius (m); tighter indoors — narrow rooms
+CHASE_PITCH = 0.18    # elevation angle (rad); low — a 0.2 m dog needs a near-level cam
+CHASE_LOOK_Z = 0.10   # aim just above the base so the robot sits mid-frame
+EGO_Z_OFFSET = 0.24   # ego eye above the base: head-mounted dog POV, not human height
 CHASE_YAW_ALPHA = 0.08  # heading EMA — slower than position; turns are sharp
 # orbit limits
 DIST_MIN, DIST_MAX = 1.3, 6.0
@@ -186,7 +219,7 @@ def move_cams(pos, quat):
     eye[2] = max(eye[2], 0.12)  # never dip below the floor
     chase_t.Set(Gf.Vec3d(*eye))
     chase_o.Set(look_at_quat(eye, sp + np.array([0.0, 0.0, CHASE_LOOK_Z])))
-    eye = np.array([p[0], p[1], 1.25])
+    eye = np.array([p[0], p[1], p[2] + EGO_Z_OFFSET])
     bench_t.Set(Gf.Vec3d(*eye))
     bench_o.Set(look_at_quat(eye, eye + np.array([math.cos(yaw), math.sin(yaw), 0.0])))
 
@@ -328,7 +361,7 @@ async def index():
 
 @app.get("/api/info")
 async def info():
-    return JSONResponse({"world_half": WORLD_HALF, "backend": "isaac", "scene": "warehouse"})
+    return JSONResponse({"world_half": WORLD_HALF, "backend": "isaac", "scene": SCENE_NAME})
 
 @app.websocket("/ws")
 async def ws(sock: WebSocket):
@@ -487,7 +520,7 @@ while True:
             "ty": None if target is None else target[1],
             "reached": bool(reached), "dist": float(dist),
             "cmd": [round(c, 3) for c in cmd_now],
-            "exec": exec_stat, "mode": "isaac-warehouse",
+            "exec": exec_stat, "mode": "isaac-" + SCENE_NAME,
         }
     if do_render:
         data = chase_rgb.get_data()

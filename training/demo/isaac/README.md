@@ -1,10 +1,11 @@
 # Wojtek Isaac Sim demo
 
 Isaac Sim port of the MuJoCo click-to-walk demo (`training/demo/app.py`).
-Runs the exported joystick locomotion policy on a photoreal RTX warehouse
-scene and serves the same browser protocol: click-to-walk minimap, discrete
-VLM commands (`turn_left 15 | forward 0.5 | stop`), chase + ego camera
-streams over a websocket.
+Runs the exported joystick locomotion policy in a photoreal RTX scene —
+an InteriorAgent apartment by default, or the NVIDIA warehouse — and serves
+the same browser protocol: click-to-walk minimap, discrete VLM commands
+(`turn_left 15 | forward 0.5 | stop`), chase + ego camera streams over a
+websocket.
 
 The policy is loaded from `POLICY_DIR` (below), not vendored here, so the
 demo tracks whatever `ros/src/wojtek_policy/config` ships. Current policy is
@@ -33,14 +34,47 @@ getattr(pol, "default_height", ...))`, covering both runtimes.
   server's `POLICY_DIR` path.
 - Robot USD produced by `wojtek_mjcf2usd.py`.
 
+## Scenes
+
+`WOJTEK_SCENE` selects a preset (default `apartment`):
+
+| Scene | Source | Notes |
+|-------|--------|-------|
+| `apartment` | [InteriorAgent](https://huggingface.co/datasets/spatialverse/InteriorAgent) `kujiale_0003` — photoreal 12-room flat, local USD (~530 MB) | Spawn in the living room, `world_half` 7.5 m. Falls back to `warehouse` with a `SCENE_MISSING` log line if the USD is absent. |
+| `warehouse` | NVIDIA `Simple_Warehouse`, streamed from the assets server | The original demo scene. |
+
+Download the apartment once (not gated; `hf` CLI ships with
+`huggingface_hub`; wrap in a retry loop on flaky links — it resumes):
+
+```bash
+hf download spatialverse/InteriorAgent --repo-type dataset \
+  --include "kujiale_0003/*" --local-dir ~/interior_agent
+```
+
+Apartment specifics the presets already handle:
+
+- **InteriorAgent ships zero authored colliders** ("physics-ready" means clean
+  geometry only). The server cooks static triangle-mesh colliders for the
+  whole flat at load (`omni.physx.scripts.utils.setColliderSubtree`, approximation
+  `"none"`) so the foot spheres get contacts. A few empty `Section` meshes and
+  the windows' pre-authored `RigidBodyAPI` produce benign error lines at boot.
+- The flat's floor top sits at z≈0.08, so a standing base reads z≈0.21 —
+  normal, not a fall.
+- Indoor rooms see no dome light with GI off, so the flat ambient lift is
+  higher (0.55 vs 0.35), and the chase orbit radius tighter (1.9 m vs 2.4 m)
+  for narrow rooms.
+- The dataset has 25 `kujiale_*` scenes; to try another, download it and add a
+  preset entry (spawn from its `rooms.json` room centroids).
+
 ## Run
 
 ```bash
 OMNI_KIT_ACCEPT_EULA=YES WOJTEK_PORT=8200 python -u isaac_room_server.py
+# or: WOJTEK_SCENE=warehouse ... for the original warehouse
 ```
 
-First boot compiles shaders (~100 s) and streams warehouse assets from
-NVIDIA's asset server (needs internet). Open `http://<host>:8200/`.
+First boot compiles shaders (~100 s); the warehouse scene also streams assets
+from NVIDIA's asset server (needs internet). Open `http://<host>:8200/`.
 
 ## Running on a remote GPU host
 
@@ -87,6 +121,10 @@ Operational notes:
   training contact model (foot spheres r=0.046 + friction material, base box).
 - Importer applies a spurious `ArticulationRootAPI` on the massless
   `worldBody`; it must be removed or PhysX init fails.
+- Camera heights are sized to a 0.2 m-tall dog: the ego (VLM) camera rides
+  0.24 m above the base — a head-mounted POV that moves with the robot, not a
+  fixed human-height eye — and the chase camera uses a near-level pitch
+  aimed just above the base so the robot sits mid-frame.
 - Orbit camera: drag to rotate around the robot, scroll to zoom, double-click
   to reset. The server keeps an orbit state (yaw offset from "behind" the
   smoothed heading, pitch, distance) and rebuilds the eye each render; the

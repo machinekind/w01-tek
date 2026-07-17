@@ -15,6 +15,13 @@
 # training/docs/2026-07-12-reward-redesign.md. Phase B is launched with
 # `restore=<phase-A checkpoint>` at train time; this preset does not set
 # restore.
+# v2 (2026-07-17): trains on the corrected 14 kg model (commit 743e0dc; the
+# v1 keeper saw 16 kg) and adds the anti-nosedive package after the robot
+# kept pitching onto its face: ang_vel_xy returns at -0.3 (spin_posture
+# trained at -0.5; v1 dropped it to 0 and nosedived), and fall.max_tilt_gz
+# tightens from -0.4 (~66 deg) to -0.6 (~53 deg) so a nosedive ends the
+# episode while it is still a nosedive. termination stays -1.0: the lost
+# remaining reward stream is the real penalty.
 # Usage: ./run.sh train +experiment=springy_phase_b restore=runs/<phase_a>/checkpoints/<step>
 defaults:
   - override /task: joystick
@@ -25,6 +32,8 @@ task:
     max_torque: 6.0
     abduction_ctrl_limit: 0.44
     knee_target_max: 3.15
+    fall:
+      max_tilt_gz: -0.6
     latency:
       enable: true
     encoder:
@@ -60,7 +69,7 @@ task:
         tracking_ang_vel: 1.6
         height_tracking: 0.0
         lin_vel_z: 0.0
-        ang_vel_xy: 0.0
+        ang_vel_xy: -0.3
         orientation: -5.0
         torques: -6.0e-4
         torque_rate: -0.02
@@ -90,4 +99,4 @@ dr:
 ppo:
   num_timesteps: 800000000
 
-run_name: wojtek_springy_b
+run_name: wojtek_springy_b2

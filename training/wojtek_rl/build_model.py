@@ -26,12 +26,13 @@ DEFAULT_KP = 20.0
 # kd raised 0.5 -> 1.0 after fbb_v2: the policy buzzed at ~7 Hz, right at the
 # underdamped PD resonance (sqrt(kp/I)/2pi with reflected inertia ~0.01).
 DEFAULT_KD = 1.0
-# Real robot weighed in at ~16 kg (owner estimate, 2026-07-05); the old 10.0
-# was a placeholder guess.
-DEFAULT_TOTAL_MASS = 16.0
-# Scaled with the mass correction to keep the torque-to-weight ratio that
-# trained well at 10 kg / 6 Nm. MD80 drives allow 15 Nm, so 9 keeps margin;
-# the jump task overrides this per-env (12 Nm) for the launch.
+# Real robot measured at 14 kg on a scale (2026-07-16); supersedes the ~16 kg
+# owner estimate from 2026-07-05 and the original 10.0 placeholder.
+DEFAULT_TOTAL_MASS = 14.0
+# Set at the 16 kg estimate to keep the torque-to-weight ratio that trained
+# well at 10 kg / 6 Nm; kept at 9 for the measured 14 kg, which lands a bit
+# above that ratio (0.64 vs 0.6 Nm/kg). MD80 drives allow 15 Nm; the jump
+# task overrides this per-env (12 Nm) for the launch.
 FORCERANGE = 9.0
 # Base collision box half-sizes, eyeballed from the mesh footprint.
 BASE_BOX_HALFSIZE = (0.17, 0.08, 0.05)

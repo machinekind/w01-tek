@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WOJTEK // ISAAC OPS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:#efeeec; --panel:#ffffff; --panel-dark:#101010;
+    --line:#d8d6d2; --line-dark:#242424;
+    --ink:#111111; --mut:#77736c; --ink-inv:#f2f1ef; --mut-inv:#8a8a86;
+    --red:#e0201b; --ok:#1f8f4d;
+    --font-d:'Archivo',ui-sans-serif,system-ui,sans-serif;
+    --font-m:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  * { box-sizing:border-box; }
+  html,body { height:100%; }
+  body {
+    margin:0; font:14px/1.5 var(--font-m); color:var(--ink);
+    background:var(--bg); position:relative;
+  }
+
+  header {
+    position:relative; z-index:1;
+    padding:16px 28px 14px; border-bottom:1px solid var(--line);
+    display:flex; align-items:center; gap:26px; flex-wrap:wrap;
+    background:var(--panel);
+  }
+  header h1 {
+    margin:0; font:900 24px/1 var(--font-d); letter-spacing:-.01em; text-transform:uppercase;
+    color:var(--ink);
+  }
+  header h1 span { color:var(--mut); font-weight:700; }
+  header p { margin:0; color:var(--mut); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; }
+  header p b { color:var(--ink); font-weight:700; }
+  .sysline { margin-left:auto; font-size:10.5px; color:var(--red); letter-spacing:.18em; text-transform:uppercase; font-weight:700; }
+  .sysline::before { content:'▪ '; }
+  .sysline b { color:var(--red); font-weight:700; }
+
+  .wrap {
+    position:relative; z-index:1; display:grid; gap:18px; padding:18px 22px;
+    grid-template-columns:minmax(0,1.5fr) minmax(340px,1fr);
+    align-items:stretch; height:calc(100vh - 86px); min-height:560px;
+  }
+  .col { display:flex; flex-direction:column; gap:18px; min-width:0; min-height:0; }
+  .col .panel { flex:0 0 auto; min-height:0; }
+  .col .map-panel { flex:1; }
+  @media (max-width:1100px) {
+    .wrap { grid-template-columns:1fr; height:auto; }
+  }
+  .panel { display:flex; flex-direction:column; min-width:0; }
+  .panel .feed { flex:0 0 auto; }
+  .spacer { flex:1; }
+
+  .panel {
+    background:var(--panel);
+    border:1px solid var(--line); padding:16px 16px 14px; position:relative;
+  }
+  .panel h2 {
+    margin:0 0 12px; font:800 13px/1 var(--font-d); color:var(--ink);
+    text-transform:uppercase; letter-spacing:.12em;
+    display:flex; align-items:center; gap:8px;
+  }
+  .panel h2::before { content:'▪'; color:var(--red); font-size:10px; }
+  .panel h2::after { content:''; flex:1; height:1px; background:var(--line); }
+
+  /* feeds: hairline frame + label strip, editorial not HUD */
+  .feed { position:relative; border:1px solid var(--line-dark); }
+  .feed img { display:block; width:100%; height:auto; aspect-ratio:16/9; object-fit:cover; background:#0c0c0c; }
+  #ego { aspect-ratio:4/3; }
+  .push-down { margin-top:auto; }
+  .feed .c3, .feed .c4 { display:none; }
+  .feed .tag {
+    position:absolute; top:0; left:0; font:700 9.5px var(--font-m); color:var(--ink-inv);
+    background:var(--panel-dark); padding:4px 10px; letter-spacing:.2em; pointer-events:none;
+  }
+  .feed .rec {
+    position:absolute; top:0; right:0; font:700 9.5px var(--font-m); color:#fff;
+    background:var(--red); padding:4px 10px; letter-spacing:.2em; pointer-events:none;
+    animation:blink 1.6s steps(2) infinite;
+  }
+  @keyframes blink { 50%{opacity:.35} }
+
+  #ego { max-height:36vh; }
+  #cam { max-height:56vh; }
+  /* map = dark data section, like the spec table on the site */
+  .map-panel { background:var(--panel-dark); border-color:var(--panel-dark); }
+  .map-panel h2 { color:var(--ink-inv); }
+  .map-panel h2::after { background:var(--line-dark); }
+  .map-holder { flex:1; min-height:120px; display:flex; justify-content:center; }
+  #map { display:block; height:100%; max-width:100%; aspect-ratio:1; background:#101010; cursor:crosshair; touch-action:none; border:1px solid var(--line-dark); }
+  .map-panel .stat { color:var(--mut-inv); }
+  .map-panel .stat b { color:var(--red); }
+  .map-panel button {
+    background:var(--panel-dark); color:var(--ink-inv); border-color:#3a3a3a;
+  }
+  .map-panel button:hover { background:var(--ink-inv); color:var(--panel-dark); border-color:var(--ink-inv); }
+
+  .bar { display:flex; gap:10px; align-items:center; margin-top:12px; flex-wrap:wrap; }
+  button {
+    background:var(--panel); color:var(--ink);
+    border:1px solid var(--ink); padding:7px 15px; cursor:pointer;
+    font:700 11px var(--font-m); letter-spacing:.12em; text-transform:uppercase;
+    transition:background .12s, color .12s;
+  }
+  button:hover { background:var(--ink); color:var(--panel); }
+  button:active { transform:translateY(1px); }
+
+  input[type=text] {
+    flex:1; min-width:200px; background:var(--bg); color:var(--ink);
+    border:1px solid var(--line); border-bottom:1px solid var(--ink);
+    padding:8px 12px; font:13px var(--font-m);
+    outline:none; transition:border-color .12s, background .12s;
+  }
+  input[type=text]:focus { background:#fff; border-color:var(--ink); }
+  input::placeholder { color:#a5a29c; }
+
+  .stat { font-variant-numeric:tabular-nums; color:var(--mut); font-size:11px; letter-spacing:.08em; text-transform:uppercase; }
+  .stat b { color:var(--red); font-weight:700; }
+  .dot { display:inline-block; width:8px; height:8px; background:var(--red); margin-right:6px; vertical-align:1px; }
+  .dot.on { background:var(--ok); }
+  #vlmReason { margin-top:8px; font-size:11.5px; max-width:560px; color:var(--mut); text-transform:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>WOJTEK<span> / ISAAC SIM</span></h1>
+  <p>Platforma robotyczna / symulacja &middot; polityka PPO <b>fbb_loco_v8</b> &middot; <b>kliknij mapę</b> — robot tam dojdzie.</p>
+  <div class="sysline">Prototyp / 01 &middot; RTX WARP</div>
+</header>
+
+<div class="wrap">
+  <div class="panel">
+    <h2>Kamera pościgowa</h2>
+    <div class="feed">
+      <img id="cam" alt="robot view" />
+      <span class="c3"></span><span class="c4"></span>
+      <span class="tag">CAM-01 · CHASE</span><span class="rec">● REC</span>
+    </div>
+    <div class="spacer"></div>
+    <h2 style="margin-top:14px">Konsola komend</h2>
+    <div class="bar">
+      <input id="cmdText" type="text" placeholder="turn_left 30 | forward 0.5 | stop" />
+      <button id="cmdSend">Send</button>
+    </div>
+    <div class="bar">
+      <button class="quick" data-cmd="turn_left 15">⟲ 15°</button>
+      <button class="quick" data-cmd="turn_right 15">⟳ 15°</button>
+      <button class="quick" data-cmd="forward 0.5">↑ 0.5 m</button>
+      <button class="quick" data-cmd="backward 0.3">↓ 0.3 m</button>
+      <button class="quick" data-cmd="stop">stop</button>
+      <span class="stat">exec <b id="execStat">idle</b></span>
+    </div>
+    <div class="bar">
+      <input id="goalText" type="text" placeholder="VLM goal: go to the shelves" />
+      <button id="goalStart">Go</button>
+      <button id="goalCancel">Cancel</button>
+      <span class="stat">vlm <b id="vlmState">idle</b></span>
+      <span class="stat">step <b id="vlmStep">–</b></span>
+    </div>
+    <div class="stat" id="vlmReason"></div>
+  </div>
+
+  <div class="col">
+    <div class="panel" id="egoPanel">
+      <h2>Kamera ego — podgląd VLM</h2>
+      <div class="feed">
+        <img id="ego" alt="onboard view" />
+        <span class="c3"></span><span class="c4"></span>
+        <span class="tag">CAM-02 · EGO 90°</span><span class="rec">● REC</span>
+      </div>
+    </div>
+
+    <div class="panel map-panel">
+      <h2>Mapa taktyczna</h2>
+      <div class="map-holder"><canvas id="map" width="600" height="600"></canvas></div>
+      <div class="bar push-down">
+        <button id="reset">Reset robota</button>
+        <button id="clear">Wyczyść cel</button>
+        <span class="stat"><span id="conn" class="dot"></span><span id="connTxt">connecting…</span></span>
+      </div>
+      <div class="bar">
+        <span class="stat">dist <b id="dist">–</b> m</span>
+        <span class="stat">cmd [vx,vy,ω] <b id="cmd">–</b></span>
+        <span class="stat">pos <b id="pos">–</b></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let WORLD_HALF = 2.5;               // map spans [-WORLD_HALF, WORLD_HALF] m in x and y
+const cam = document.getElementById('cam');
+const map = document.getElementById('map');
+const ctx = map.getContext('2d');
+const W = map.width, H = map.height;
+
+let state = { x:0, y:0, yaw:0, tx:null, ty:null, reached:false };
+let trail = [];
+
+// Pull the world scale from the server so the map matches the loaded robot.
+async function initInfo() {
+  try {
+    const info = await (await fetch('/api/info')).json();
+    if (info.world_half) WORLD_HALF = info.world_half;
+  } catch (e) { /* server not ready yet; fall back to default scale */ }
+}
+
+const worldToPx = (wx, wy) => [ W/2 + wx/WORLD_HALF*(W/2), H/2 - wy/WORLD_HALF*(H/2) ];
+const pxToWorld = (px, py) => [ (px - W/2)/(W/2)*WORLD_HALF, -(py - H/2)/(H/2)*WORLD_HALF ];
+
+function draw() {
+  ctx.clearRect(0,0,W,H);
+  // grid
+  ctx.strokeStyle = '#232323'; ctx.lineWidth = 1;
+  for (let m=-Math.ceil(WORLD_HALF); m<=Math.ceil(WORLD_HALF); m++) {
+    const [gx] = worldToPx(m,0), [,gy] = worldToPx(0,m);
+    ctx.beginPath(); ctx.moveTo(gx,0); ctx.lineTo(gx,H); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0,gy); ctx.lineTo(W,gy); ctx.stroke();
+  }
+  // axes
+  ctx.strokeStyle = '#3a3a3a';
+  const [cx,cy] = worldToPx(0,0);
+  ctx.beginPath(); ctx.moveTo(cx,0); ctx.lineTo(cx,H); ctx.moveTo(0,cy); ctx.lineTo(W,cy); ctx.stroke();
+  // range rings
+  ctx.strokeStyle = 'rgba(255,255,255,.06)';
+  for (let r=1; r<=Math.ceil(WORLD_HALF); r++) {
+    ctx.beginPath(); ctx.arc(cx, cy, r/WORLD_HALF*(W/2), 0, 2*Math.PI); ctx.stroke();
+  }
+
+  // trail
+  if (trail.length > 1) {
+    ctx.strokeStyle = 'rgba(224,32,27,.65)'; ctx.lineWidth = 2; ctx.beginPath();
+    trail.forEach(([tx,ty],i) => { const [px,py]=worldToPx(tx,ty); i?ctx.lineTo(px,py):ctx.moveTo(px,py); });
+    ctx.stroke();
+  }
+  // target
+  if (state.tx !== null) {
+    const [px,py] = worldToPx(state.tx, state.ty);
+    ctx.strokeStyle = state.reached ? '#2fbf6b' : '#e0201b'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(px,py,9,0,2*Math.PI); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(px-13,py); ctx.lineTo(px+13,py); ctx.moveTo(px,py-13); ctx.lineTo(px,py+13); ctx.stroke();
+  }
+  // robot (triangle pointing along yaw)
+  const [rx,ry] = worldToPx(state.x, state.y);
+  ctx.save(); ctx.translate(rx,ry); ctx.rotate(-state.yaw);  // canvas y is down -> negate
+  ctx.fillStyle = '#f2f1ef';
+  ctx.beginPath(); ctx.moveTo(12,0); ctx.lineTo(-7,7); ctx.lineTo(-7,-7); ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
+function setConn(ok) {
+  document.getElementById('conn').classList.toggle('on', ok);
+  document.getElementById('connTxt').textContent = ok ? 'live' : 'disconnected';
+}
+
+let ws;
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => setConn(true);
+  ws.onclose = () => { setConn(false); setTimeout(connect, 1000); };
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.type === 'error') {
+      document.getElementById('connTxt').textContent = m.error;
+      return;
+    }
+    if (m.type === 'command_ack') {
+      document.getElementById('execStat').textContent = m.ok ? ('queued: ' + m.command) : ('error: ' + m.error);
+      return;
+    }
+    if (m.type === 'goal_ack') {
+      if (!m.ok) document.getElementById('vlmState').textContent = 'error: ' + m.error;
+      return;
+    }
+    if (m.type === 'vlm_status') {
+      document.getElementById('vlmState').textContent =
+        m.state + (m.reason ? ' (' + m.reason + ')' : '') + (m.error ? ': ' + m.error : '');
+      document.getElementById('vlmStep').textContent = m.step + '/' + m.max_steps;
+      if (m.last) document.getElementById('vlmReason').textContent =
+        m.last.action + (m.last.amount != null ? ' ' + m.last.amount : '') + ' — ' + m.last.reasoning;
+      return;
+    }
+    if (m.frame) cam.src = 'data:image/jpeg;base64,' + m.frame;
+    if (m.ego) {
+      document.getElementById('egoPanel').style.display = '';
+      document.getElementById('ego').src = 'data:image/jpeg;base64,' + m.ego;
+    }
+    if (m.exec) {
+      const e = m.exec;
+      document.getElementById('execStat').textContent =
+        e.active ? (e.active + ' (' + e.remaining + ' left, ' + e.queued + ' queued)') : (m.mode || 'idle');
+    }
+    state = m;
+    trail.push([m.x, m.y]); if (trail.length > 600) trail.shift();
+    document.getElementById('dist').textContent = m.tx===null ? '–' : m.dist.toFixed(2);
+    document.getElementById('cmd').textContent  = '[' + m.cmd.join(', ') + ']';
+    document.getElementById('pos').textContent  = m.x.toFixed(2) + ', ' + m.y.toFixed(2);
+    draw();
+  };
+}
+initInfo().then(() => { connect(); draw(); });
+
+map.addEventListener('click', (e) => {
+  const r = map.getBoundingClientRect();
+  // canvas is CSS-scaled: map client px -> internal canvas px before world transform
+  const [wx, wy] = pxToWorld((e.clientX - r.left) * (W / r.width),
+                             (e.clientY - r.top) * (H / r.height));
+  ws && ws.readyState === 1 && ws.send(JSON.stringify({ type:'target', x:wx, y:wy }));
+});
+document.getElementById('reset').onclick = () => { trail = []; ws && ws.send(JSON.stringify({ type:'reset' })); };
+document.getElementById('clear').onclick = () => { ws && ws.send(JSON.stringify({ type:'reset' })); trail = []; };
+
+const sendCommand = (text) => {
+  if (!text || !(ws && ws.readyState === 1)) return;
+  ws.send(JSON.stringify({ type:'command', text }));
+};
+document.getElementById('cmdSend').onclick = () => sendCommand(document.getElementById('cmdText').value);
+document.getElementById('cmdText').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') sendCommand(e.target.value);
+});
+document.querySelectorAll('.quick').forEach(b => b.onclick = () => sendCommand(b.dataset.cmd));
+
+const sendGoal = (text) => {
+  if (!text || !(ws && ws.readyState === 1)) return;
+  ws.send(JSON.stringify({ type:'goal', text }));
+};
+document.getElementById('goalStart').onclick = () => sendGoal(document.getElementById('goalText').value);
+document.getElementById('goalText').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') sendGoal(e.target.value);
+});
+document.getElementById('goalCancel').onclick = () => { ws && ws.send(JSON.stringify({ type:'goal_cancel' })); };
+draw();
+</script>
+</body>
+</html>

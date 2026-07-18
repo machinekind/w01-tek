@@ -489,7 +489,7 @@ using the preset.
 | `train` | `./training/run.sh train [Hydra overrides]`; writes checkpoints and `run.json` to `training/runs/<run_name>`. |
 | `smoke` | `./training/run.sh smoke [Hydra overrides]`; tiny CPU pipeline check with WandB disabled. A selected preset can override smoke's short PPO budget, so use `++ppo.num_timesteps=100000` when combining a preset with smoke. |
 | `eval` | `./training/run.sh eval --run runs/<name> [--x-vel V --y-vel V --yaw-vel W --height H --steps N --out FILE]`; renders a rollout. |
-| `battery` | `./training/run.sh battery --run runs/<name> [--out FILE]`; writes the fixed comparison battery. |
+| `battery` | `./training/run.sh battery --run runs/<name> [--out FILE --alpha A --lag-tau T]`; writes the fixed comparison battery. `--alpha`/`--lag-tau` are eval-only plant perturbations, see "Robustness grid (eval-only)" below. |
 | `report` | `./training/run.sh report --run runs/<name> [--out-json FILE --out-md FILE]`; writes battery, torque, power, impact proxy, and termination summary. |
 | `export` | `./training/run.sh export --run runs/<name> [--out DIR]`; validates and writes deployment `.npz` plus metadata. |
 | `app` | `./training/run.sh app [--host HOST --port PORT]`; runs the interactive navigation demo. `WOJTEK_RUN_DIR`, `HOST`, and `PORT` environment variables supply defaults; see [demo README](../demo/README.md). |
@@ -511,6 +511,46 @@ candidate for deployment:
 ./training/run.sh eval --run runs/my_locomotion --x-vel 0.3 --height 0.125
 ./training/run.sh export --run runs/my_locomotion --out runs/my_locomotion/deploy
 ```
+
+## Robustness grid (eval-only)
+
+`wojtek_rl/battery.py` accepts two eval-only plant perturbations, applied to
+the run's already-built, already-customized model -- neither one is a
+training-path or `env.py` change:
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--alpha FLOAT` | `1.0` (no-op) | Kt (torque-constant) miscalibration: scales the model's effective `actuator_gainprm[:,0]`/`actuator_biasprm[:,1:3]` (kp/kd) and `actuator_forcerange` (the torque cap) by `alpha`, in place, via `apply_kt_miscalibration`. Works even when the run's config has `pd_kp=0.0` (XML defaults), since it reads whatever the model's effective values are post-`_customize_model`, not the config. |
+| `--lag-tau SECONDS` | `0.0` (native pipeline) | Actuator-bandwidth first-order lag on the JOINT TORQUE (not the setpoint): a value `>0` switches the battery rollout to an explicit-PD substep loop (`make_lagged_rollout_fns`) that computes `kp*(ctrl-qpos)-kd*qvel`, clips to the effective torque cap, then applies `tau_applied += (1-exp(-dt_sub/lag_tau))*(tau_pd-tau_applied)` every physics substep, so the feedback path itself lags -- the mechanism that destabilizes a high-kp policy in practice. The filter state persists across control steps in `info["tau_applied"]`, zeroed at reset. |
+| `--out PATH` | `<run>/battery.json` | Where the perturbed battery result is written, so a grid cell never clobbers the run's canonical `battery.json`/`eval_report.json`. |
+
+Every cell -- including `--alpha 1.0 --lag-tau 0` -- runs the same code path,
+so results are directly comparable. A tiny nonzero `--lag-tau` (e.g. `1e-9`)
+reproduces the native (unperturbed) pipeline's battery numbers to within a
+few percent (chaotic contact dynamics amplify float32 rounding across a
+~700-step rollout; see `tests/test_robustness_grid.py` for the short-rollout
+tolerance and its rationale) -- that equivalence is the gate for trusting the
+explicit-PD substep loop at all.
+
+```bash
+# One perturbed cell against an existing run, without touching its battery.json
+JAX_PLATFORMS=cpu ./.venv/bin/python -m wojtek_rl.battery \
+  --run runs/wojtek_stiff_b_20260717_235321 \
+  --alpha 1.58 --lag-tau 0.005 \
+  --out runs/wojtek_stiff_b_20260717_235321/grid/battery_a1.58_lag5ms.json
+```
+
+[`training/hpc/stiff_grid.slurm`](../hpc/stiff_grid.slurm) sweeps this over a
+set of checkpoints and an alpha/lag grid (CPU-only, no GPU), writing
+`runs/<run>/grid/battery_a<alpha>_lag<ms>ms.json` per cell -- a crashed cell
+logs a WARN and the sweep continues, since a fallen-over policy under a harsh
+perturbation is a data point, not a job failure. `wojtek_rl/grid_report.py`
+then aggregates every listed run's cells into one markdown table (mean
+`track_err_rms` over the 4 battery scenarios, gated PASS/FAIL against the
+stiffness ladder's gates 1-4 -- see `training/hpc/stiff_ladder.slurm`'s
+`run_gates` -- keeper reference `wojtek_stiff_b_20260717_235321`, job
+NNNNNNN), ending with the stiffest run that stays PASS across every lag, per
+alpha-world.
 
 ## HPC launch configuration
 

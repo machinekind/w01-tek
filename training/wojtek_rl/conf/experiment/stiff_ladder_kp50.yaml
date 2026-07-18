@@ -1,0 +1,25 @@
+# @package _global_
+# Rung 1 of the stiffness ladder (kp40/kd1.6 keeper -> kp50/60/70/80),
+# restored from the keeper wojtek_stiff_b's checkpoint
+# (wojtek_stiff_b_20260717_235321, job NNNNNNN). kd=1.79 holds the
+# keeper's damping ratio constant: kd = 1.6*sqrt(kp/40) = 1.6*sqrt(50/40).
+# max_torque stays 9.0, unchanged from the keeper.
+# Launched with restore=<keeper checkpoint>; this preset does not set
+# restore.
+# Usage: ./training/run.sh train +experiment=stiff_ladder_kp50 restore=runs/<wojtek_stiff_b_...>/checkpoints/<step>
+defaults:
+  - springy_phase_b
+
+task:
+  env:
+    pd_kp: 50.0
+    pd_kd: 1.79
+    max_torque: 9.0
+
+dr:
+  joint_gains: { enable: true, gain_pct: 0.2, kd_pct: 0.2 }
+
+ppo:
+  num_timesteps: 400000000
+
+run_name: wojtek_stiff_kp50

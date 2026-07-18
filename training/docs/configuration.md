@@ -428,6 +428,8 @@ so command-line values can still override it.
 | `stiff_ladder_kp60` | springy_phase_b | Rung 2 of the stiffness ladder: `pd_kp=60`/`pd_kd=1.96`, restored from the accepted kp50 rung. |
 | `stiff_ladder_kp70` | springy_phase_b | Rung 3 of the stiffness ladder: `pd_kp=70`/`pd_kd=2.12`, restored from the accepted kp60 rung. |
 | `stiff_ladder_kp80` | springy_phase_b | Rung 4 of the stiffness ladder: `pd_kp=80`/`pd_kd=2.26`, restored from the accepted kp70 rung. |
+| `stiff_ladder_kp90` | springy_phase_b | Rung 5, an extension of the kp50-80 ladder: `pd_kp=90`/`pd_kd=2.40`, restored from the kp50-80 ladder's winner (kp80). |
+| `stiff_ladder_kp100` | springy_phase_b | Rung 6, extending the ladder further: `pd_kp=100`/`pd_kd=2.53`, restored from the accepted kp90 rung. |
 
 Read the matching file in [`conf/experiment`](../wojtek_rl/conf/experiment)
 before choosing a historical version: the comments explain its intended
@@ -469,6 +471,8 @@ than infer them from a historical run name:
 | `stiff_ladder_kp60` | `wojtek_stiff_kp60` | Inherits `springy_phase_b`. Ladder rung 2: `task.env.{pd_kp,pd_kd,max_torque}={60.0,1.96,9.0}` (`pd_kd=1.6*sqrt(kp/40)`); enables `dr.joint_gains` (`gain_pct=0.2`, `kd_pct=0.2`, per-joint); `ppo.num_timesteps=400000000`. Launched with `restore=<stiff_ladder_kp50 accepted checkpoint>`; the preset itself does not set `restore`. |
 | `stiff_ladder_kp70` | `wojtek_stiff_kp70` | Inherits `springy_phase_b`. Ladder rung 3: `task.env.{pd_kp,pd_kd,max_torque}={70.0,2.12,9.0}` (`pd_kd=1.6*sqrt(kp/40)`); enables `dr.joint_gains` (`gain_pct=0.2`, `kd_pct=0.2`, per-joint); `ppo.num_timesteps=400000000`. Launched with `restore=<stiff_ladder_kp60 accepted checkpoint>`; the preset itself does not set `restore`. |
 | `stiff_ladder_kp80` | `wojtek_stiff_kp80` | Inherits `springy_phase_b`. Ladder rung 4: `task.env.{pd_kp,pd_kd,max_torque}={80.0,2.26,9.0}` (`pd_kd=1.6*sqrt(kp/40)`); enables `dr.joint_gains` (`gain_pct=0.2`, `kd_pct=0.2`, per-joint); `ppo.num_timesteps=400000000`. Launched with `restore=<stiff_ladder_kp70 accepted checkpoint>`; the preset itself does not set `restore`. |
+| `stiff_ladder_kp90` | `wojtek_stiff_kp90` | Inherits `springy_phase_b`. Ladder rung 5, an extension rung beyond the kp50-80 ladder: `task.env.{pd_kp,pd_kd,max_torque}={90.0,2.40,9.0}` (`pd_kd=1.6*sqrt(kp/40)`); enables `dr.joint_gains` (`gain_pct=0.2`, `kd_pct=0.2`, per-joint); `ppo.num_timesteps=400000000`. Launched with `restore=<kp50-80 ladder's winner, stiff_ladder_kp80's accepted checkpoint, wojtek_stiff_kp80_20260718_100225>`; the preset itself does not set `restore`. |
+| `stiff_ladder_kp100` | `wojtek_stiff_kp100` | Inherits `springy_phase_b`. Ladder rung 6: `task.env.{pd_kp,pd_kd,max_torque}={100.0,2.53,9.0}` (`pd_kd=1.6*sqrt(kp/40)`); enables `dr.joint_gains` (`gain_pct=0.2`, `kd_pct=0.2`, per-joint); `ppo.num_timesteps=400000000`. Launched with `restore=<stiff_ladder_kp90 accepted checkpoint>`; the preset itself does not set `restore`. |
 
 `run_v2`'s restore path is an artifact dependency, not a guaranteed portable
 starting point. Its config comments note that the historical checkpoint no

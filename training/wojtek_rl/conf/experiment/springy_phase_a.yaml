@@ -27,6 +27,10 @@ task:
         action_rate: -0.075
         torques: -1.8e-4
         torque_limit: -0.03
+        # 0.3x of phase B's -0.3, same relief pattern as the rows above.
+        # fall.max_tilt_gz -0.6 inherits from phase B at full strength:
+        # termination is not part of the penalty relief.
+        ang_vel_xy: -0.09
 
 dr:
   motor_strength: { enable: true, range: [0.9, 1.1] }
@@ -37,4 +41,4 @@ dr:
 ppo:
   num_timesteps: 1200000000
 
-run_name: wojtek_springy_a
+run_name: wojtek_springy_a2

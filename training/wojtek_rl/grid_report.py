@@ -3,17 +3,20 @@ one markdown comparison table.
 
 Run: python3 -m wojtek_rl.grid_report --runs <run1> [<run2> ...] [--out FILE]
 
-Reads runs/<run>/grid/battery_a<alpha>_lag<lag_ms>ms.json for every run
-listed -- the files training/hpc/stiff_grid.slurm writes via battery.py's
---alpha/--lag-tau/--out (see wojtek_rl/battery.py's apply_kt_miscalibration/
-make_lagged_rollout_fns). Applies the stiffness ladder's gates 1-4 (see
-training/hpc/stiff_ladder.slurm's run_gates) to each cell independently --
-gate 5 (diminishing returns vs a previous rung) does not apply to a single
-eval cell, there is no "previous rung" here -- and reports mean
-track_err_rms over the 4 battery scenarios plus PASS/FAIL per cell. A
-missing cell (its battery run crashed or was never submitted -- see
-stiff_grid.slurm's per-cell WARN-and-continue policy) prints as MISSING,
-not a report crash.
+Reads runs/<run>/grid/battery_a<alpha>_lag<lag_ms>ms_env<tag>.json for every
+run listed -- the files training/hpc/stiff_grid.slurm writes via battery.py's
+--alpha/--lag-tau/--torque-envelope/--out (see wojtek_rl/battery.py's
+apply_kt_miscalibration/make_lagged_rollout_fns/apply_torque_envelope).
+`<tag>` is "none" (flat cap, no --torque-envelope passed) or
+"<OMEGA_B>-<OMEGA_0>". Filenames without the `_env<tag>` segment (grid runs
+predating this axis) are read too, treated as env "none" -- see CELL_RE.
+Applies the stiffness ladder's gates 1-4 (see training/hpc/stiff_ladder.
+slurm's run_gates) to each cell independently -- gate 5 (diminishing
+returns vs a previous rung) does not apply to a single eval cell, there is
+no "previous rung" here -- and reports mean track_err_rms over the 4
+battery scenarios plus PASS/FAIL per cell. A missing cell (its battery run
+crashed or was never submitted -- see stiff_grid.slurm's per-cell
+WARN-and-continue policy) prints as MISSING, not a report crash.
 """
 
 import argparse
@@ -39,21 +42,32 @@ VIBRATION_MULT = 1.3
 VEL_ERR_LIMIT = 0.20
 SATURATION_LIMIT = 0.05
 
-CELL_RE = re.compile(r"battery_a([0-9.]+)_lag(\d+)ms\.json$")
+# The `_env<tag>` segment is optional so grid runs from before this axis
+# existed (bare battery_a<alpha>_lag<ms>ms.json, no envelope tag at all)
+# still parse -- they get env "none" by construction (see find_cells): a
+# grid run made before --torque-envelope existed only ever probed the
+# flat cap. `<tag>` itself has no underscore (see stiff_grid.slurm's
+# env_tag construction: "none" or "OMEGA_B-OMEGA_0"), so `[^_]+` cannot
+# run past the `.json` this pattern anchors on.
+CELL_RE = re.compile(r"battery_a([0-9.]+)_lag(\d+)ms(?:_env([^_]+))?\.json$")
 
 
 def find_cells(run_dir: Path) -> dict:
-    """{(alpha, lag_ms): Path} for every grid-cell battery.json present
-    under run_dir/grid. Empty dict if the run never got a grid pass."""
+    """{(alpha, lag_ms, env_tag): Path} for every grid-cell battery.json
+    present under run_dir/grid. Empty dict if the run never got a grid
+    pass. `env_tag` is "none" for both an explicit `_envnone` cell and a
+    pre-envelope-axis cell with no `_env` segment at all -- both mean
+    "flat cap, no perturbation on this axis"."""
     out = {}
     grid_dir = run_dir / "grid"
     if not grid_dir.exists():
         return out
-    for p in sorted(grid_dir.glob("battery_a*_lag*ms.json")):
+    for p in sorted(grid_dir.glob("battery_a*_lag*ms*.json")):
         m = CELL_RE.search(p.name)
         if not m:
             continue
-        out[(float(m.group(1)), int(m.group(2)))] = p
+        alpha, lag_ms, env_tag = m.group(1), m.group(2), m.group(3)
+        out[(float(alpha), int(lag_ms), env_tag or "none")] = p
     return out
 
 
@@ -113,7 +127,7 @@ def kp_of(run_dir: Path):
 
 
 def build_grid(run_names, runs_root: Path):
-    """({run_name: {(alpha, lag_ms): (verdict, mean_err, reasons)}},
+    """({run_name: {(alpha, lag_ms, env_tag): (verdict, mean_err, reasons)}},
     {run_name: kp}) for every run in `run_names`."""
     grid, kp_by_run = {}, {}
     for run_name in run_names:
@@ -128,22 +142,37 @@ def build_grid(run_names, runs_root: Path):
     return grid, kp_by_run
 
 
+def _env_sort_key(tag: str):
+    """Sort "none" first, then numerically by (omega_b, omega_0) rather
+    than lexically ("15-28" before "5-10" would be wrong as strings)."""
+    if tag == "none":
+        return (0, 0.0, 0.0)
+    try:
+        omega_b, omega_0 = tag.split("-")
+        return (1, float(omega_b), float(omega_0))
+    except ValueError:
+        return (2, 0.0, 0.0)  # malformed tag: sort last, don't crash the report
+
+
 def render_markdown(grid: dict, kp_by_run: dict) -> str:
     all_keys = sorted({k for row in grid.values() for k in row})
-    lags = sorted({lag for _, lag in all_keys})
-    alphas = sorted({a for a, _ in all_keys})
+    lags = sorted({lag for _, lag, _ in all_keys})
+    alphas = sorted({a for a, _, _ in all_keys})
+    envs = sorted({e for _, _, e in all_keys}, key=_env_sort_key)
 
     lines = [
         "# Robustness grid report",
         "",
         "Eval-only sim2real plant perturbations (alpha: Kt miscalibration; "
-        "lag: actuator-bandwidth first-order torque lag, ms) -- see "
-        "wojtek_rl/battery.py's apply_kt_miscalibration/"
-        "make_lagged_rollout_fns and training/docs/configuration.md's "
-        "\"Robustness grid (eval-only)\".",
+        "lag: actuator-bandwidth first-order torque lag, ms; envelope: "
+        "speed-dependent driving-torque cap, \"none\" or \"OMEGA_B-OMEGA_0\" "
+        "rad/s) -- see wojtek_rl/battery.py's apply_kt_miscalibration/"
+        "make_lagged_rollout_fns/apply_torque_envelope and "
+        "training/docs/configuration.md's \"Robustness grid (eval-only)\".",
         "",
-        "Cell = mean track_err_rms over the 4 battery scenarios, then "
-        "PASS/FAIL against the stiffness ladder's gates 1-4 (falls; "
+        "Row = one run x alpha x envelope; columns = lags. Cell = mean "
+        "track_err_rms over the 4 battery scenarios, then PASS/FAIL "
+        "against the stiffness ladder's gates 1-4 (falls; "
         "vel_err_overall/strafe vy_err < 0.2; vibration <= 1.3x keeper ref "
         "per scenario -- stand_to_trot_ramp 0.247 / turn 0.144 / strafe "
         "0.359 / walk_to_stop 0.123; saturation max < 0.05). Provenance: "
@@ -156,39 +185,55 @@ def render_markdown(grid: dict, kp_by_run: dict) -> str:
         lines.append("No grid cells found under any listed run's `grid/` directory.")
         return "\n".join(lines) + "\n"
 
-    header = "| run | kp | alpha | " + " | ".join(f"{lag}ms" for lag in lags) + " |"
-    sep = "|" + "---|" * (3 + len(lags))
+    header = (
+        "| run | kp | alpha | envelope | "
+        + " | ".join(f"{lag}ms" for lag in lags) + " |"
+    )
+    sep = "|" + "---|" * (4 + len(lags))
     lines += [header, sep]
     for run_name, row in grid.items():
         kp = kp_by_run.get(run_name)
         kp_s = f"{kp:g}" if kp is not None else "-"
         for alpha in alphas:
-            cells = []
-            for lag in lags:
-                cell = row.get((alpha, lag))
-                if cell is None:
-                    cells.append("MISSING")
-                else:
-                    verdict, mean_err, _reasons = cell
-                    err_s = f"{mean_err:.4f}" if mean_err is not None else "-"
-                    cells.append(f"{err_s} {verdict}")
-            lines.append(f"| {run_name} | {kp_s} | {alpha:g} | " + " | ".join(cells) + " |")
+            for env in envs:
+                cells = []
+                for lag in lags:
+                    cell = row.get((alpha, lag, env))
+                    if cell is None:
+                        cells.append("MISSING")
+                    else:
+                        verdict, mean_err, _reasons = cell
+                        err_s = f"{mean_err:.4f}" if mean_err is not None else "-"
+                        cells.append(f"{err_s} {verdict}")
+                lines.append(
+                    f"| {run_name} | {kp_s} | {alpha:g} | {env} | "
+                    + " | ".join(cells) + " |"
+                )
 
-    lines += ["", "## Stiffest run that stays PASS across all lags, per alpha-world", ""]
+    lines += [
+        "",
+        "## Stiffest run that stays PASS across all lags and envelopes, "
+        "per alpha-world",
+        "",
+    ]
     for alpha in alphas:
         best_run, best_kp = None, None
         for run_name, row in grid.items():
             kp = kp_by_run.get(run_name)
             all_pass = all(
-                row.get((alpha, lag), ("FAIL", None, None))[0] == "PASS"
+                row.get((alpha, lag, env), ("FAIL", None, None))[0] == "PASS"
                 for lag in lags
+                for env in envs
             )
             if all_pass and kp is not None and (best_kp is None or kp > best_kp):
                 best_run, best_kp = run_name, kp
         if best_run:
             lines.append(f"- alpha={alpha:g}: **{best_run}** (kp={best_kp:g})")
         else:
-            lines.append(f"- alpha={alpha:g}: none of the listed runs pass every lag")
+            lines.append(
+                f"- alpha={alpha:g}: none of the listed runs pass every "
+                "lag/envelope"
+            )
 
     lines.append("")
     return "\n".join(lines)

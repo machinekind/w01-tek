@@ -514,43 +514,48 @@ candidate for deployment:
 
 ## Robustness grid (eval-only)
 
-`wojtek_rl/battery.py` accepts two eval-only plant perturbations, applied to
-the run's already-built, already-customized model -- neither one is a
+`wojtek_rl/battery.py` accepts three eval-only plant perturbations, applied
+to the run's already-built, already-customized model -- none of them is a
 training-path or `env.py` change:
 
 | Flag | Default | Effect |
 |---|---|---|
 | `--alpha FLOAT` | `1.0` (no-op) | Kt (torque-constant) miscalibration: scales the model's effective `actuator_gainprm[:,0]`/`actuator_biasprm[:,1:3]` (kp/kd) and `actuator_forcerange` (the torque cap) by `alpha`, in place, via `apply_kt_miscalibration`. Works even when the run's config has `pd_kp=0.0` (XML defaults), since it reads whatever the model's effective values are post-`_customize_model`, not the config. |
 | `--lag-tau SECONDS` | `0.0` (native pipeline) | Actuator-bandwidth first-order lag on the JOINT TORQUE (not the setpoint): a value `>0` switches the battery rollout to an explicit-PD substep loop (`make_lagged_rollout_fns`) that computes `kp*(ctrl-qpos)-kd*qvel`, clips to the effective torque cap, then applies `tau_applied += (1-exp(-dt_sub/lag_tau))*(tau_pd-tau_applied)` every physics substep, so the feedback path itself lags -- the mechanism that destabilizes a high-kp policy in practice. The filter state persists across control steps in `info["tau_applied"]`, zeroed at reset. |
+| `--torque-envelope "OMEGA_B,OMEGA_0"` | none (flat cap, unchanged) | Speed-dependent DRIVING-torque cap (`apply_torque_envelope`): real motors lose available driving torque as joint speed rises (back-EMF eats bus voltage), which the flat `actuator_forcerange` cap does not model. In the DRIVING quadrant (`tau*qvel >= 0`) the allowed `\|tau\|` is the static cap for `\|qvel\| <= OMEGA_B`, ramps linearly to 0 at `\|qvel\| == OMEGA_0`, and is 0 beyond; the BRAKING quadrant (`tau*qvel < 0`, regenerative) keeps the full static cap. `cap` is the model's current `actuator_forcerange` upper bound, so the envelope composes with `--alpha` (an alpha-scaled cap raises the envelope's plateau too). Applied last in the substep loop, after the lag filter -- the physically produced torque can never exceed what the envelope allows. Passing this flag forces the explicit-PD path even at `--lag-tau 0` (the envelope needs per-substep qvel, which only that path has); the lag filter is then an exact passthrough. |
 | `--out PATH` | `<run>/battery.json` | Where the perturbed battery result is written, so a grid cell never clobbers the run's canonical `battery.json`/`eval_report.json`. |
 
-Every cell -- including `--alpha 1.0 --lag-tau 0` -- runs the same code path,
-so results are directly comparable. A tiny nonzero `--lag-tau` (e.g. `1e-9`)
-reproduces the native (unperturbed) pipeline's battery numbers to within a
-few percent (chaotic contact dynamics amplify float32 rounding across a
-~700-step rollout; see `tests/test_robustness_grid.py` for the short-rollout
-tolerance and its rationale) -- that equivalence is the gate for trusting the
-explicit-PD substep loop at all.
+Every cell -- including `--alpha 1.0 --lag-tau 0`, no `--torque-envelope` --
+runs the same code path, so results are directly comparable. A tiny nonzero
+`--lag-tau` (e.g. `1e-9`) reproduces the native (unperturbed) pipeline's
+battery numbers to within a few percent (chaotic contact dynamics amplify
+float32 rounding across a ~700-step rollout; see `tests/test_robustness_grid.py`
+for the short-rollout tolerance and its rationale) -- that equivalence is the
+gate for trusting the explicit-PD substep loop at all.
 
 ```bash
 # One perturbed cell against an existing run, without touching its battery.json
 JAX_PLATFORMS=cpu ./.venv/bin/python -m wojtek_rl.battery \
   --run runs/wojtek_stiff_b_20260717_235321 \
-  --alpha 1.58 --lag-tau 0.005 \
-  --out runs/wojtek_stiff_b_20260717_235321/grid/battery_a1.58_lag5ms.json
+  --alpha 1.58 --lag-tau 0.005 --torque-envelope "15,28" \
+  --out runs/wojtek_stiff_b_20260717_235321/grid/battery_a1.58_lag5ms_env15-28.json
 ```
 
 [`training/hpc/stiff_grid.slurm`](../hpc/stiff_grid.slurm) sweeps this over a
-set of checkpoints and an alpha/lag grid (CPU-only, no GPU), writing
-`runs/<run>/grid/battery_a<alpha>_lag<ms>ms.json` per cell -- a crashed cell
-logs a WARN and the sweep continues, since a fallen-over policy under a harsh
-perturbation is a data point, not a job failure. `wojtek_rl/grid_report.py`
-then aggregates every listed run's cells into one markdown table (mean
-`track_err_rms` over the 4 battery scenarios, gated PASS/FAIL against the
-stiffness ladder's gates 1-4 -- see `training/hpc/stiff_ladder.slurm`'s
-`run_gates` -- keeper reference `wojtek_stiff_b_20260717_235321`, job
-NNNNNNN), ending with the stiffest run that stays PASS across every lag, per
-alpha-world.
+set of checkpoints and an alpha/lag/envelope grid (CPU-only, no GPU), writing
+`runs/<run>/grid/battery_a<alpha>_lag<ms>ms_env<tag>.json` per cell -- `<tag>`
+is `none` (no `--torque-envelope` passed for that cell, preserving the native
+path) or `<OMEGA_B>-<OMEGA_0>`. A crashed cell logs a WARN and the sweep
+continues, since a fallen-over policy under a harsh perturbation is a data
+point, not a job failure. `wojtek_rl/grid_report.py` then aggregates every
+listed run's cells into one markdown table (row = run x alpha x envelope,
+columns = lags; cell = mean `track_err_rms` over the 4 battery scenarios,
+gated PASS/FAIL against the stiffness ladder's gates 1-4 -- see
+`training/hpc/stiff_ladder.slurm`'s `run_gates` -- keeper reference
+`wojtek_stiff_b_20260717_235321`, job NNNNNNN), ending with the stiffest run
+that stays PASS across every lag and envelope, per alpha-world.
+Filenames without the `_env<tag>` segment (grid runs predating this axis)
+are still read, treated as envelope `none`.
 
 ## HPC launch configuration
 

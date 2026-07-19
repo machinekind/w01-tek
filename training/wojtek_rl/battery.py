@@ -388,7 +388,7 @@ def torque_cap_of(env) -> float:
 
 # -- robustness grid: eval-only plant perturbations --------------------------
 #
-# Two sim2real risks probed by mutating a run's BUILT, customized model at
+# Three sim2real risks probed by mutating a run's BUILT, customized model at
 # eval time -- no training-path change, env.py is untouched. See
 # training/docs/configuration.md's "Robustness grid (eval-only)".
 
@@ -422,7 +422,16 @@ def lag_coeff(dt_sub: float, lag_tau: float) -> float:
     lag_tau -> 0, dt_sub/lag_tau -> inf and coeff -> 1 (immediate pass-
     through, the native no-lag limit); a larger lag_tau slows the filter.
     Plain Python float in, float out -- called once per battery run
-    (lag_tau is a CLI scalar, not traced), so np.exp is fine here."""
+    (lag_tau is a CLI scalar, not traced), so np.exp is fine here.
+
+    lag_tau <= 0 is that limit's boundary, handled explicitly (coeff=1.0,
+    immediate passthrough) rather than run through the exp formula --
+    dt_sub/lag_tau ZeroDivisionErrors at exactly 0 in plain Python floats.
+    This lets a --torque-envelope-only cell (lag_tau=0, envelope set) use
+    this same filter as a no-op instead of a separately-coded branch; see
+    make_lagged_rollout_fns."""
+    if lag_tau <= 0:
+        return 1.0
     return 1.0 - float(np.exp(-dt_sub / lag_tau))
 
 
@@ -432,6 +441,61 @@ def lag_update(tau_applied, tau_target, coeff):
     tau_target*(1 - exp(-k*dt/lag_tau)) after k updates from zero) is
     unit-testable without a physics rollout."""
     return tau_applied + coeff * (tau_target - tau_applied)
+
+
+def torque_envelope_limit(qvel, cap, omega_b: float, omega_0: float):
+    """Per-actuator max |torque| a speed-dependent DRIVING envelope
+    permits at joint speed `qvel` (rad/s, vectorized over actuators; sign
+    ignored -- back-EMF eats bus headroom the same way in either rotation
+    direction): `cap` (the model's static torque limit, already
+    alpha-scaled if the caller applied apply_kt_miscalibration first) for
+    |qvel| <= omega_b, ramping linearly to 0 at |qvel| == omega_0, and 0
+    beyond. Real motors lose available driving torque as speed rises
+    because back-EMF eats into the bus voltage margin -- this is the
+    flat-cap model's missing piece (see training/docs/configuration.md's
+    "Robustness grid (eval-only)"). jit-safe (jp.clip, no Python branch on
+    a traced value)."""
+    w = jp.abs(qvel)
+    ramp = cap * (omega_0 - w) / (omega_0 - omega_b)
+    return jp.clip(ramp, 0.0, cap)
+
+
+def apply_torque_envelope(tau, qvel, cap, omega_b: float, omega_0: float):
+    """Clamp `tau` (the torque the explicit-PD loop has already lag-
+    filtered) to the speed-dependent envelope. Only the DRIVING quadrant
+    (tau*qvel >= 0: the motor is doing positive work on the joint) loses
+    headroom at speed; BRAKING (tau*qvel < 0, regenerative) keeps the
+    full static cap, since it isn't limited by available bus voltage the
+    same way. Vectorized over actuators via jp.where on the quadrant
+    test; jit-safe."""
+    driving = tau * qvel >= 0.0
+    limit = jp.where(driving, torque_envelope_limit(qvel, cap, omega_b, omega_0), cap)
+    return jp.clip(tau, -limit, limit)
+
+
+def parse_torque_envelope(spec):
+    """Parse a `--torque-envelope` CLI value "OMEGA_B,OMEGA_0" into an
+    (omega_b, omega_0) float tuple; None passes through unchanged (the
+    CLI default -- no envelope, flat cap). Raises ValueError with a plain
+    message on a malformed spec or a non-positive ramp width: the
+    envelope's linear segment runs from omega_b down to 0 at omega_0, so
+    omega_0 > omega_b >= 0 is required or torque_envelope_limit divides
+    by zero (or ramps the wrong way)."""
+    if spec is None:
+        return None
+    parts = spec.split(",")
+    if len(parts) != 2:
+        raise ValueError(f"--torque-envelope must be 'OMEGA_B,OMEGA_0', got {spec!r}")
+    try:
+        omega_b, omega_0 = float(parts[0]), float(parts[1])
+    except ValueError:
+        raise ValueError(f"--torque-envelope must be 'OMEGA_B,OMEGA_0', got {spec!r}")
+    if not (0 <= omega_b < omega_0):
+        raise ValueError(
+            "--torque-envelope requires 0 <= OMEGA_B < OMEGA_0, got "
+            f"{omega_b},{omega_0}"
+        )
+    return omega_b, omega_0
 
 
 def _torque_mode_model(mj_model):
@@ -461,20 +525,34 @@ def _torque_mode_model(mj_model):
 def _explicit_pd_substeps(
     mjx_model_torque, qadr, vadr, kp, kd, limit, coeff,
     data, prev_ctrl, new_ctrl, delay_substeps, tau_applied, n_substeps,
+    envelope=None,
 ):
     """jax.lax.scan over one control period's physics substeps, PD torque
     computed explicitly (not by the model's actuator gain/bias) and passed
     through the first-order lag before being applied. `prev_ctrl`/
     `new_ctrl`/`delay_substeps` reproduce base.py._step_with_latency's
     ctrl-switch-at-substep-`delay_substeps` semantics (prev_ctrl ==
-    new_ctrl when latency is disabled, so the switch is a no-op)."""
+    new_ctrl when latency is disabled, so the switch is a no-op).
+
+    `envelope`, if not None, is an (omega_b, omega_0) pair: the speed-
+    dependent torque envelope (see apply_torque_envelope) is applied last,
+    after the lag filter -- the physically produced torque can never
+    exceed what the envelope allows at the joint's current speed. `None`
+    (the default) skips the clamp entirely, so the traced program is
+    identical to the pre-envelope pipeline -- this is a Python-level
+    branch on a static per-run value, not a traced one, so it costs
+    nothing when unused."""
 
     def _substep(carry, i):
         data, tau_applied = carry
         ctrl = jp.where(i < delay_substeps, prev_ctrl, new_ctrl)
-        tau_pd = kp * (ctrl - data.qpos[qadr]) - kd * data.qvel[vadr]
+        qvel_j = data.qvel[vadr]
+        tau_pd = kp * (ctrl - data.qpos[qadr]) - kd * qvel_j
         tau_pd = jp.clip(tau_pd, -limit, limit)
         tau_applied = lag_update(tau_applied, tau_pd, coeff)
+        if envelope is not None:
+            omega_b, omega_0 = envelope
+            tau_applied = apply_torque_envelope(tau_applied, qvel_j, limit, omega_b, omega_0)
         data = data.replace(ctrl=tau_applied)
         data = mjx.step(mjx_model_torque, data)
         return (data, tau_applied), None
@@ -485,7 +563,7 @@ def _explicit_pd_substeps(
     return data, tau_applied
 
 
-def make_lagged_rollout_fns(env, lag_tau: float):
+def make_lagged_rollout_fns(env, lag_tau: float, torque_envelope=None):
     """(reset, step) pair for battery.rollout(), reproducing
     WojtekJoystick.reset/step exactly except the physics substep call:
     joint torque passes through a first-order lag (time constant
@@ -495,18 +573,30 @@ def make_lagged_rollout_fns(env, lag_tau: float):
     position servos) without a training-path change, so the substitution
     happens here, eval-only.
 
+    `torque_envelope`, if given, is an (omega_b, omega_0) pair (rad/s):
+    the speed-dependent driving-torque cap applied last in each substep
+    (see apply_torque_envelope). Passing one forces this explicit-PD path
+    even when `lag_tau` is 0 -- the envelope can only be evaluated here,
+    where per-substep qvel is available; lag_coeff(_, 0) is an explicit
+    passthrough (coeff=1.0) in that case, so the lag filter contributes
+    nothing and the envelope is the only perturbation.
+
     reset is untouched (bit-identical rng/state/kp-eff/kd-eff reads); only
     a per-actuator lag filter state (`tau_applied`) is added to info,
-    seeded to zeros. Requires lag_tau > 0 -- callers branch on that before
-    reaching here (see run_battery): lag_tau == 0 means "use the native
-    env unchanged", not "use this path with a zero filter state".
+    seeded to zeros. Requires lag_tau > 0 or a torque_envelope -- callers
+    branch on that before reaching here (see run_battery): lag_tau == 0
+    and no envelope means "use the native env unchanged", not "use this
+    path with a zero filter state".
 
     Reads kp/kd/torque-limit from `env.mj_model` as it stands NOW, so a
     caller applying apply_kt_miscalibration first gets the alpha-scaled
-    plant here too -- every grid cell (alpha, lag_tau combined or alone)
-    goes through this one construction path.
+    plant here too -- every grid cell (alpha, lag_tau, torque_envelope
+    combined or alone) goes through this one construction path, and the
+    envelope's plateau (below omega_b) is exactly that alpha-scaled cap.
     """
-    assert lag_tau > 0, "lag_tau <= 0 means native (see run_battery)"
+    assert lag_tau > 0 or torque_envelope is not None, (
+        "lag_tau <= 0 and no torque_envelope means native (see run_battery)"
+    )
     kp = jp.array(env.mj_model.actuator_gainprm[:, 0])
     kd = jp.array(-env.mj_model.actuator_biasprm[:, 2])
     limit = jp.array(env.mj_model.actuator_forcerange[:, 1])
@@ -566,7 +656,7 @@ def make_lagged_rollout_fns(env, lag_tau: float):
         data, tau_applied = _explicit_pd_substeps(
             mjx_model_torque, qadr, vadr, kp, kd, limit, coeff,
             data, prev_ctrl, new_ctrl, delay_substeps, info["tau_applied"],
-            n_substeps,
+            n_substeps, envelope=torque_envelope,
         )
         info["tau_applied"] = tau_applied
         # _explicit_pd_substeps leaves data.ctrl holding the last substep's
@@ -610,13 +700,16 @@ def make_lagged_rollout_fns(env, lag_tau: float):
     return reset, step
 
 
-def run_battery(run_dir: Path, alpha: float = 1.0, lag_tau: float = 0.0) -> dict:
+def run_battery(
+    run_dir: Path, alpha: float = 1.0, lag_tau: float = 0.0, torque_envelope=None,
+) -> dict:
     """Run the fixed scenario battery against `run_dir`'s checkpoint.
 
-    `alpha` (Kt miscalibration) and `lag_tau` (actuator lag, seconds) are
-    eval-only plant perturbations -- see apply_kt_miscalibration/
-    make_lagged_rollout_fns above. Defaults (1.0, 0.0) reproduce the
-    original unperturbed battery exactly.
+    `alpha` (Kt miscalibration), `lag_tau` (actuator lag, seconds), and
+    `torque_envelope` (an (omega_b, omega_0) pair, or None) are eval-only
+    plant perturbations -- see apply_kt_miscalibration/
+    make_lagged_rollout_fns/apply_torque_envelope above. Defaults
+    (1.0, 0.0, None) reproduce the original unperturbed battery exactly.
 
     Returns the same dict `main()` used to write (minus the `timestamp`
     stamp main() adds at write time). report.py imports this for the
@@ -628,8 +721,13 @@ def run_battery(run_dir: Path, alpha: float = 1.0, lag_tau: float = 0.0) -> dict
         apply_kt_miscalibration(env.mj_model, alpha)
         env._mjx_model = mjx.put_model(env.mj_model, impl=env._backend)
 
-    if lag_tau > 0:
-        reset_fn, step_fn = make_lagged_rollout_fns(env, lag_tau)
+    # A torque_envelope can only be evaluated in the explicit-PD loop (it
+    # needs per-substep qvel, which the native position-actuator gain/bias
+    # never surfaces) -- so it forces this path even at lag_tau == 0,
+    # where lag_coeff makes the filter a passthrough (see make_lagged_
+    # rollout_fns/lag_coeff).
+    if lag_tau > 0 or torque_envelope is not None:
+        reset_fn, step_fn = make_lagged_rollout_fns(env, lag_tau, torque_envelope)
         reset, step = jax.jit(reset_fn), jax.jit(step_fn)
     else:
         reset, step = jax.jit(env.reset), jax.jit(env.step)
@@ -643,6 +741,7 @@ def run_battery(run_dir: Path, alpha: float = 1.0, lag_tau: float = 0.0) -> dict
     results = {
         "run": run["run_name"], "checkpoint": ckpt.name,
         "alpha": alpha, "lag_tau": lag_tau,
+        "torque_envelope": list(torque_envelope) if torque_envelope else None,
     }
     for name, (cmd_at, n) in battery_scenarios().items():
         rec, fell_at, _term = rollout(env, reset, step, inf, cmd_at, n, foot_radius)
@@ -666,9 +765,21 @@ def main():
         "pipeline, unchanged). >0 switches to the explicit-PD substep "
         "loop with a first-order torque lag; see make_lagged_rollout_fns.",
     )
+    ap.add_argument(
+        "--torque-envelope", default=None,
+        help="'OMEGA_B,OMEGA_0' rad/s (default: none, flat cap unchanged). "
+        "Speed-dependent DRIVING-torque cap: the static cap up to OMEGA_B, "
+        "ramping linearly to 0 at OMEGA_0, 0 beyond; BRAKING keeps the "
+        "full static cap. Forces the explicit-PD path even when "
+        "--lag-tau is 0. See apply_torque_envelope.",
+    )
     args = ap.parse_args()
+    torque_envelope = parse_torque_envelope(args.torque_envelope)
 
-    results = run_battery(Path(args.run), alpha=args.alpha, lag_tau=args.lag_tau)
+    results = run_battery(
+        Path(args.run), alpha=args.alpha, lag_tau=args.lag_tau,
+        torque_envelope=torque_envelope,
+    )
     out = Path(args.out) if args.out else Path(args.run) / "battery.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     stamped = dict(results, timestamp=datetime.now().isoformat(timespec="seconds"))

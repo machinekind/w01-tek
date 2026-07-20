@@ -8,8 +8,8 @@
     * impedance gains kp/kd and max_torque default to the values the policy
       was trained against (kp=20, kd=1, +/-6 Nm). Override via xacro args
       for cautious first tests, e.g. max_torque:=2
-    * the BMX160 IMU ros2_control sensor is instantiated (it is commented out
-      in the original description).
+    * the IMU I2C ros2_control sensor is instantiated when use_imu:=true (it
+      is commented out in the original description).
 -->
 <robot name="quadruped" xmlns:xacro="http://www.ros.org/wiki/xacro">
   <xacro:include filename="$(find wojtek_description)/urdf/body.urdf.xacro" />
@@ -26,20 +26,20 @@
   <xacro:arg name="usb_port" default="/dev/ttyACM0" />
   <!-- The serial IMU (loaner BMI160 behind an MCU + CP2102 bridge) was retired
        2026-07-17 in favor of the Adafruit 5543 (LSM6DS3TR-C + LIS3MDL) wired
-       straight to the Pi's I2C1; its ros2_control interface does not exist
-       yet, so use_imu defaults to false and the whole IMU component is left
-       out (with the serial hardware gone, configuring it aborts the entire
-       ros2_control_node). Flip to true only with the CP2102 stack physically
-       reconnected. -->
+       straight to the Pi's I2C1: bench-tested (ros/hw_tests/imu_i2c), not
+       yet run through ros2_control on the robot. use_imu still defaults to
+       false until that first hardware test passes. -->
   <xacro:arg name="use_imu" default="false" />
-  <xacro:arg name="imu_port"
-    default="/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0" />
+  <xacro:arg name="imu_bus" default="/dev/i2c-1" />
+  <xacro:arg name="imu_addr_ag" default="0x6A" />
+  <xacro:arg name="imu_addr_mag" default="0x1C" />
 
   <xacro:wojtek_body />
 
   <xacro:wojtek_ros2_control kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)"
     usb_port="$(arg usb_port)" bus="$(arg bus)" can_baud="$(arg can_baud)" />
   <xacro:if value="$(arg use_imu)">
-    <xacro:wojtek_bmi160_imu_ros2_control port="$(arg imu_port)" />
+    <xacro:wojtek_imu_i2c_ros2_control bus="$(arg imu_bus)" addr_ag="$(arg imu_addr_ag)"
+      addr_mag="$(arg imu_addr_mag)" />
   </xacro:if>
 </robot>

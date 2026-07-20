@@ -1,8 +1,9 @@
 """Policy on the real robot: MD80 (IMPEDANCE) + IMU via ros2_control.
 
-    IMU is currently a loaner BMI160 (no magnetometer) -- see
-    bmi160_serial_hardware_interface and wojtek_real.urdf.xacro. Swap back to
-    wojtek_imu_ros2_control there once the real BMX160 is sourced.
+    IMU is the Adafruit 5543 (LSM6DS3TR-C + LIS3MDL) on the Pi's I2C1 -- see
+    imu_i2c_hardware_interface and wojtek_real.urdf.xacro. use_imu:=false by
+    default until this has run through ros2_control on the robot (bench
+    tests in ros/hw_tests/imu_i2c already pass).
 
     ros2 launch wojtek_bringup real.launch.py [max_torque:=2.0] [dry_run:=true]
                                               [boot_pose:=home|folded] [bag:=false]
@@ -48,14 +49,17 @@ def generate_launch_description():
     policy_share = get_package_share_directory("wojtek_policy")
     xacro_file = os.path.join(share, "urdf", "wojtek_real.urdf.xacro")
     max_torque = LaunchConfiguration("max_torque")
-    imu_port = LaunchConfiguration("imu_port")
+    imu_bus = LaunchConfiguration("imu_bus")
+    imu_addr_ag = LaunchConfiguration("imu_addr_ag")
+    imu_addr_mag = LaunchConfiguration("imu_addr_mag")
     bus = LaunchConfiguration("bus")
     can_baud = LaunchConfiguration("can_baud")
     use_imu = LaunchConfiguration("use_imu")
     robot_description = ParameterValue(
         Command(
             ["xacro ", xacro_file, " max_torque:=", max_torque,
-             " use_imu:=", use_imu, " imu_port:=", imu_port,
+             " use_imu:=", use_imu, " imu_bus:=", imu_bus,
+             " imu_addr_ag:=", imu_addr_ag, " imu_addr_mag:=", imu_addr_mag,
              " bus:=", bus, " can_baud:=", can_baud]
         ),
         value_type=str,
@@ -82,21 +86,15 @@ def generate_launch_description():
             # drives back to 1M (ros/hw_tests: candle_bus_test baud).
             DeclareLaunchArgument("bus", default_value="spi"),
             DeclareLaunchArgument("can_baud", default_value="8"),
-            # The serial IMU was retired for the I2C Adafruit 5543 (interface
-            # TBD); with the hardware gone, its ros2_control component aborts
-            # the whole ros2_control_node, hence off by default. use_imu:=true
-            # only with the CP2102 stack physically reconnected.
+            # IMU is the Adafruit 5543 (LSM6DS3TR-C + LIS3MDL) straight on
+            # I2C1 -- imu_i2c_hardware_interface, bench-tested but not yet
+            # exercised through ros2_control on the robot, hence off by
+            # default until that first hardware test passes.
             DeclareLaunchArgument("use_imu", default_value="false"),
-            # Default (empty) keeps the xacro's by-id path for the CP2102;
-            # override with e.g. imu_port:=/dev/ttyUSB0 if the adapter is
-            # ever swapped for one with a different by-id name.
-            DeclareLaunchArgument(
-                "imu_port",
-                default_value=(
-                    "/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_"
-                    "Bridge_Controller_0001-if00-port0"
-                ),
-            ),
+            DeclareLaunchArgument("imu_bus", default_value="/dev/i2c-1"),
+            # 0x6B/0x1E if the board's SDO pins are pulled high.
+            DeclareLaunchArgument("imu_addr_ag", default_value="0x6A"),
+            DeclareLaunchArgument("imu_addr_mag", default_value="0x1C"),
             DeclareLaunchArgument("dry_run", default_value="false"),
             DeclareLaunchArgument("rviz", default_value="false"),
             # Pose the robot is in when the motors activate / zero. "home"

@@ -198,7 +198,9 @@ def main(cfg: DictConfig) -> None:
         environment=env, eval_env=eval_env
     )
 
-    from wojtek_rl.build_model import DEFAULT_KD, DEFAULT_KP
+    # Effective post-customize gains (uniform across actuators; DR excluded).
+    kp_eff = float(env.mj_model.actuator_gainprm[0, 0])
+    kd_eff = float(-env.mj_model.actuator_biasprm[0, 2])
 
     (run_dir / "run.json").write_text(
         json.dumps(
@@ -213,8 +215,8 @@ def main(cfg: DictConfig) -> None:
                 "env_config": env._config.to_dict(),
                 "ppo_config": ppo_params.to_dict(),
                 "hydra_config": OmegaConf.to_container(cfg, resolve=True),
-                "kp": DEFAULT_KP,
-                "kd": DEFAULT_KD,
+                "kp": kp_eff,
+                "kd": kd_eff,
             },
             indent=2,
             default=str,

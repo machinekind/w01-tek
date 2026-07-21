@@ -10,7 +10,8 @@
 # zero falls; quiet stance qvel 0.006 unchanged. The v1 step-command freeze
 # (stand under vx >= 0.9 from standstill) is gone: tracks 1.03 at cmd 1.2.
 # Known regression: strafe vibration 0.49 (v1 0.34).
-# Trained as the two-phase pipeline (training/hpc/springy_two_phase.slurm)
+# Trained as the two-phase pipeline (as-run springy_two_phase.slurm
+# archived under hpc/ in the HF repo below)
 # at commit 3cf32c6, seed 1, ++ppo.num_envs=32768 ++ppo.batch_size=1024:
 # phase A 1.2B steps (penalties at 0.3x, eased difficulty), phase B 800M
 # restored from A's final checkpoint. WandB: WANDB_ENTITY/fbb-locomotion runs

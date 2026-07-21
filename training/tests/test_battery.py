@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from wojtek_rl.battery import (
     abduction_p95,
@@ -9,6 +10,7 @@ from wojtek_rl.battery import (
     lateral_corr,
     plant_step,
     saturation_fractions,
+    tracking_error,
 )
 
 
@@ -149,6 +151,40 @@ def test_saturation_fractions_unknown_cap():
     f = np.ones((3, 12))
     r = saturation_fractions(f, torque_cap=0.0)
     assert r == {"abduction": None, "hip": None, "knee": None}
+
+
+# -- tracking_error ------------------------------------------------------------
+
+
+def test_tracking_error_excludes_settle_window():
+    n, j = 60, 12
+    ctrl_hist = np.zeros((n, j))
+    qpos_hist = np.zeros((n, j))
+    # first 50 steps: garbage error, must be excluded by the settle cut.
+    ctrl_hist[:50] = 7.0
+    # last 10 steps: constant 0.1 rad error everywhere.
+    ctrl_hist[50:] = 0.1
+    r = tracking_error(ctrl_hist, qpos_hist)
+    assert r["rms"] == pytest.approx(0.1)
+    assert r["p95"] == pytest.approx(0.1)
+
+
+def test_tracking_error_short_rollout_returns_none():
+    ctrl_hist = np.zeros((30, 12))
+    qpos_hist = np.zeros((30, 12))
+    assert tracking_error(ctrl_hist, qpos_hist) == {"rms": None, "p95": None}
+
+
+def test_tracking_error_mixed_errors():
+    n, j = 60, 12
+    ctrl_hist = np.zeros((n, j))
+    qpos_hist = np.zeros((n, j))
+    # last window: half the joints (even columns) carry 0.2 rad error, the
+    # other half (odd columns) carry none.
+    ctrl_hist[50:, 0::2] = 0.2
+    r = tracking_error(ctrl_hist, qpos_hist)
+    assert r["rms"] == pytest.approx(np.sqrt(0.02))
+    assert r["p95"] == pytest.approx(0.2)
 
 
 # -- band_power_fraction ------------------------------------------------------

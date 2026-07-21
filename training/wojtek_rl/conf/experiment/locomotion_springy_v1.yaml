@@ -7,7 +7,8 @@
 # package for the weak abduction motors. Battery: turn vel_err 0.049,
 # walk_to_stop 0.069 with a 6-step plant and hold qvel 0.006, ramp 0.108,
 # zero falls; splay p95 8.5-13.5 deg inside the +-25 deg clamp.
-# Trained as the two-phase pipeline (training/hpc/springy_two_phase.slurm)
+# Trained as the two-phase pipeline (as-run springy_two_phase.slurm
+# archived under hpc/ in the HF repo below)
 # at commit 4c4047c, seed 1, ++ppo.num_envs=32768 ++ppo.batch_size=1024:
 # phase A 1.2B steps with penalties at 0.3x and eased difficulty, phase B
 # (this config) 800M steps restored from A's final checkpoint.

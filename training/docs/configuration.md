@@ -23,10 +23,12 @@ execution, so `auto` resolves to JAX for those commands.
 
 ## Naming
 
-Use **Wojtek** in new prose and new `run_name` values. The repository path
-remains `wojtek`, while `fbb-locomotion`, `fbb_*` preset run names, and
-`policies/fbb_v3` are literal current historical configuration/artifact names;
-do not rename them in documentation without changing the corresponding source
+Use **Wojtek** in new prose and new `run_name` values. The repository lives
+at `github.com/machinekind/wojtek` (older checkouts may still sit in
+directories named `wojtek`; cluster paths are parameterized, see the HPC
+section). `fbb-locomotion`, `fbb_*` preset run names, and `policies/fbb_v3`
+are literal current historical configuration/artifact names; do not rename
+them in documentation without changing the corresponding source
 configuration or artifact.
 
 ## First: resolve, then run
@@ -167,6 +169,8 @@ Default actor observations are `gyro`, `gravity`, `joint_pos`, `joint_vel`,
 | `task.env.push.interval_steps` | `200` | Push interval. |
 | `task.env.push.vel` | `0.4` m/s | Velocity impulse magnitude. |
 | `task.env.max_torque` | `0.0` Nm (off) | Clamps every actuator's forcerange to `±max_torque` (the model's default is ±9). A binding cap forces compliant leg use over torque spikes; deployment must apply the same cap (`real.launch.py` max torque). |
+| `task.env.pd_kp` | `0.0` (off) | `0` keeps the model XML's `kp=20`; a nonzero value patches `actuator_gainprm[:,0]`/`actuator_biasprm[:,1]` in `_customize_model`, overriding the PD servo gains at model load. `dr.joint_gains`'s per-joint gain scale multiplies on top. Deployment gains must match a policy trained with these. |
+| `task.env.pd_kd` | `0.0` (off) | `0` keeps the model XML's `kd=1`; a nonzero value patches `actuator_biasprm[:,2]` in `_customize_model`, overriding the PD servo gains at model load. `dr.joint_gains`'s `kd_pct` scale multiplies on top. Deployment gains must match a policy trained with these. |
 | `task.env.abduction_ctrl_limit` | `0.0` rad (off) | Intersects the 4 abduction actuators' ctrlrange with `±limit` in `_customize_model`; the mechanical hip travel is looser, so a nonzero value becomes the binding limit. Deploy must match. |
 | `task.env.knee_target_max` | `0.0` rad (off) | Upper bound on the knee (third-joint) motor target in `step()`. The knee ctrlrange upper bound is 5.8 rad, past `KNEE_SINGULARITY` (3.2), so a nonzero value is a real clamp, not a no-op. |
 | `task.env.action_delay` | `1` | Legacy fixed control-period delay. Set `0` for no fixed delay when latency randomization is off. |
@@ -417,6 +421,19 @@ so command-line values can still override it.
 | `run_v2` | joystick | Running iteration that includes a warm-start path. |
 | `springy_phase_b` | joystick | 2026-07-12 reward redesign: clock-free, height-command-free springy locomotion with the anti-splay package, full penalty weight. Self-contained; does not inherit `locomotion`. |
 | `springy_phase_a` | springy_phase_b | Same recipe at a 0.3x smoothness/torque penalty curriculum; phase B restores from its checkpoint. |
+| `stiff_probe_kp40` | springy_phase_a | Stiffness-arm ranking probe: `pd_kp=40`/`pd_kd=1.4`. |
+| `stiff_probe_kp60` | springy_phase_a | Stiffness-arm ranking probe: `pd_kp=60`/`pd_kd=1.73`. |
+| `stiff_phase_a` | springy_phase_a | Phase A of the kp40 probe winner's full two-phase run: `pd_kp=40`/`pd_kd=1.4`. |
+| `stiff_phase_b` | springy_phase_b | Phase B of the kp40 probe winner: `pd_kp=40`/`pd_kd=1.6` (bumped for damping margin), restored from phase A. |
+| `locomotion_stiff_v1` | joystick | Frozen keeper of the 2026-07-17 stiffness experiment: kp40/kd1.6 stiff PD operating point on the springy clock-free design. Self-contained; does not inherit `springy_phase_*`/`stiff_phase_*`. |
+| `stiff_ladder_kp50` | springy_phase_b | Rung 1 of the stiffness ladder off the kp40/kd1.6 keeper: `pd_kp=50`/`pd_kd=1.79`. |
+| `stiff_ladder_kp60` | springy_phase_b | Rung 2 of the stiffness ladder: `pd_kp=60`/`pd_kd=1.96`, restored from the accepted kp50 rung. |
+| `stiff_ladder_kp70` | springy_phase_b | Rung 3 of the stiffness ladder: `pd_kp=70`/`pd_kd=2.12`, restored from the accepted kp60 rung. |
+| `stiff_ladder_kp80` | springy_phase_b | Rung 4 of the stiffness ladder: `pd_kp=80`/`pd_kd=2.26`, restored from the accepted kp70 rung. |
+| `stiff_ladder_kp90` | springy_phase_b | Rung 5, an extension of the kp50-80 ladder: `pd_kp=90`/`pd_kd=2.40`, restored from the kp50-80 ladder's winner (kp80). |
+| `stiff_ladder_kp100` | springy_phase_b | Rung 6, extending the ladder further: `pd_kp=100`/`pd_kd=2.53`, restored from the accepted kp90 rung. |
+| `locomotion_stiff_kp80_v1` | joystick | Keeper v2, safe-without-compensation: consolidated stiffness-ladder rung kp80/kd2.26 (+800M steps beyond the ladder). Self-contained; does not inherit `springy_phase_*`/`stiff_ladder_*`. |
+| `locomotion_stiff_kp90_v1` | joystick | Keeper v2, maximum stiffness (sim ceiling at the 9 Nm cap): consolidated stiffness-ladder rung kp90/kd2.40 (+800M steps beyond the ladder). Self-contained; does not inherit `springy_phase_*`/`stiff_ladder_*`. Deploy only after matching the real actuators' stand-sag alpha — see the preset file's deployment contract. |
 
 Read the matching file in [`conf/experiment`](../wojtek_rl/conf/experiment)
 before choosing a historical version: the comments explain its intended
@@ -449,6 +466,19 @@ than infer them from a historical run name:
 | `run_v2` | `fbb_run_v2` | `task.env.command.{vx,vy,wz}={[-0.8,1.8],[-0.5,0.5],[-1,1]}`, `task.env.gait.{freq,swing_height}={[1.8,4.5],0.04}`, `task.env.push.vel=0.5`, historical `restore=runs/fbb_run_v1/checkpoints/000206438400`. |
 | `springy_phase_b` | `wojtek_springy_b` | Self-contained joystick preset (no `locomotion` inheritance). `task.env.{action_scale,max_torque,abduction_ctrl_limit,knee_target_max}={[0.25,0.5,0.5],6.0,0.44,3.15}`; `task.env.{latency,encoder}.enable=true`; `task.env.obs.include=[joint_pos,joint_vel,last_act,command]` (drops gyro/gravity/phase from the actor, critic list unchanged); `task.env.command.{vx,vy,wz,height,zero_prob,pure_wz_prob,pure_vy_prob}={[-0.8,1.2],[-0.5,0.5],[-1,1],[0.125,0.125],0.25,0.25,0.2}` (height pinned, not removed); `task.env.push.vel=0.8`; `task.env.gait.{swing_height,air_time_cap}={0.08,0.35}`; `task.env.reward.pose_leg_weight=0.1`; `task.env.reward.scales.{tracking_lin_vel,tracking_ang_vel,height_tracking,lin_vel_z,ang_vel_xy,orientation,torques,torque_rate,torque_limit,action_rate,action_accel,energy,pose,feet_air_time,feet_slip,feet_phase,contact_match,high_step,stand_still,stand_feet_down,termination}={4.0,1.6,0.0,0.0,0.0,-5.0,-6e-4,-0.02,-0.1,-0.25,0.0,0.0,-1.0,4.0,-0.35,0.0,0.0,4.0,-2.5,-30.0,-1.0}`; `dr.motor_strength.enable=true` (`range=[0.5,1.1]`); `ppo.num_timesteps=200000000`. |
 | `springy_phase_a` | `wojtek_springy_a` | Inherits `springy_phase_b`, overrides only the penalty curriculum: `task.env.reward.scales.{action_rate,torques,torque_limit}={-0.075,-1.8e-4,-0.03}` (0.3x of phase B; `torque_rate` stays `-0.02`, already below its measured `-0.06` freeze cliff); `ppo.num_timesteps=100000000`. Launch phase B afterward with `restore=<phase-A checkpoint>`; the preset itself does not set `restore`. |
+| `stiff_probe_kp40` | `wojtek_stiff40_probe` | Inherits `springy_phase_a`. Stiffness-arm ranking probe: `task.env.{pd_kp,pd_kd,max_torque}={40.0,1.4,9.0}` (gains patched onto the model at load; `max_torque` widened from phase A's `6.0` to the XML's own `±9` forcerange for transient headroom); enables `dr.joint_gains` (`gain_pct=0.2`, `kd_pct=0.2`, per-joint); `ppo.num_timesteps=300000000`. |
+| `stiff_probe_kp60` | `wojtek_stiff60_probe` | Inherits `springy_phase_a`. Stiffness-arm ranking probe: `task.env.{pd_kp,pd_kd,max_torque}={60.0,1.73,9.0}` (gains patched onto the model at load; `max_torque` widened from phase A's `6.0` to the XML's own `±9` forcerange for transient headroom); enables `dr.joint_gains` (`gain_pct=0.2`, `kd_pct=0.2`, per-joint); `ppo.num_timesteps=300000000`. |
+| `stiff_phase_a` | `wojtek_stiff_a` | Inherits `springy_phase_a`. Phase A of the kp40 probe winner's (job NNNNNNN) full two-phase run: `task.env.{pd_kp,pd_kd,max_torque}={40.0,1.4,9.0}` (kd matches the probe for curriculum continuity; `max_torque` widened to the XML's `±9` forcerange as in the probes); enables `dr.joint_gains` (`gain_pct=0.2`, `kd_pct=0.2`, per-joint); `ppo.num_timesteps=1200000000`. |
+| `stiff_phase_b` | `wojtek_stiff_b` | Inherits `springy_phase_b`. Phase B of the kp40 probe winner: `task.env.{pd_kp,pd_kd,max_torque}={40.0,1.6,9.0}` (`pd_kd` bumped from the probe's `1.4` for damping margin — its >5 Hz vibration metric exceeded the kp20 baseline on 3 of 4 scenarios — putting the damping ratio at ~1.13x the kp20/kd=1.0 reference, inside the ±20% kd DR band phase A already trained under; `max_torque` overrides phase B's `6.0` back to `9.0`); enables `dr.joint_gains` (`gain_pct=0.2`, `kd_pct=0.2`, per-joint); `ppo.num_timesteps=800000000`. Launched with `restore=<stiff_phase_a checkpoint>`; the preset itself does not set `restore`. **Deployment must match phase B** (`pd_kp=40`/`pd_kd=1.6`/`max_torque=9.0` in `wojtek_real.urdf.xacro`) if this becomes a keeper. |
+| `locomotion_stiff_v1` | `wojtek_loco_stiff_v1` | Frozen keeper, self-contained (no `springy_phase_*`/`stiff_phase_*` inheritance): reproduces `stiff_phase_b`'s effective config verbatim — `task.env.{action_scale,pd_kp,pd_kd,max_torque,abduction_ctrl_limit,knee_target_max}={[0.25,0.5,0.5],40.0,1.6,9.0,0.44,3.15}`; `task.env.{latency,encoder}.enable=true`; `task.env.obs.include=[joint_pos,joint_vel,last_act,command]`; command/push/gait/reward blocks identical to `springy_phase_b`; `dr.motor_strength.enable=true` (`range=[0.5,1.1]`) and `dr.joint_gains.enable=true` (`gain_pct=0.2`, `kd_pct=0.2`); `ppo.num_timesteps=800000000`. FROZEN from the trained run `wojtek_stiff_b_20260717_235321` (job NNNNNNN, commit `eb8bad2`) so it stays reproducible while `stiff_phase_*` evolves. Deployment must match: `pd_kp=40`/`pd_kd=1.6`/`max_torque=9.0` on the robot. |
+| `stiff_ladder_kp50` | `wojtek_stiff_kp50` | Inherits `springy_phase_b`. Ladder rung 1 off the kp40/kd1.6 keeper (`wojtek_stiff_b_20260717_235321`, job NNNNNNN): `task.env.{pd_kp,pd_kd,max_torque}={50.0,1.79,9.0}` (`pd_kd` holds the keeper's damping ratio: `kd=1.6*sqrt(kp/40)`); enables `dr.joint_gains` (`gain_pct=0.2`, `kd_pct=0.2`, per-joint); `ppo.num_timesteps=400000000`. Launched with `restore=<keeper checkpoint>`; the preset itself does not set `restore`. |
+| `stiff_ladder_kp60` | `wojtek_stiff_kp60` | Inherits `springy_phase_b`. Ladder rung 2: `task.env.{pd_kp,pd_kd,max_torque}={60.0,1.96,9.0}` (`pd_kd=1.6*sqrt(kp/40)`); enables `dr.joint_gains` (`gain_pct=0.2`, `kd_pct=0.2`, per-joint); `ppo.num_timesteps=400000000`. Launched with `restore=<stiff_ladder_kp50 accepted checkpoint>`; the preset itself does not set `restore`. |
+| `stiff_ladder_kp70` | `wojtek_stiff_kp70` | Inherits `springy_phase_b`. Ladder rung 3: `task.env.{pd_kp,pd_kd,max_torque}={70.0,2.12,9.0}` (`pd_kd=1.6*sqrt(kp/40)`); enables `dr.joint_gains` (`gain_pct=0.2`, `kd_pct=0.2`, per-joint); `ppo.num_timesteps=400000000`. Launched with `restore=<stiff_ladder_kp60 accepted checkpoint>`; the preset itself does not set `restore`. |
+| `stiff_ladder_kp80` | `wojtek_stiff_kp80` | Inherits `springy_phase_b`. Ladder rung 4: `task.env.{pd_kp,pd_kd,max_torque}={80.0,2.26,9.0}` (`pd_kd=1.6*sqrt(kp/40)`); enables `dr.joint_gains` (`gain_pct=0.2`, `kd_pct=0.2`, per-joint); `ppo.num_timesteps=400000000`. Launched with `restore=<stiff_ladder_kp70 accepted checkpoint>`; the preset itself does not set `restore`. |
+| `stiff_ladder_kp90` | `wojtek_stiff_kp90` | Inherits `springy_phase_b`. Ladder rung 5, an extension rung beyond the kp50-80 ladder: `task.env.{pd_kp,pd_kd,max_torque}={90.0,2.40,9.0}` (`pd_kd=1.6*sqrt(kp/40)`); enables `dr.joint_gains` (`gain_pct=0.2`, `kd_pct=0.2`, per-joint); `ppo.num_timesteps=400000000`. Launched with `restore=<kp50-80 ladder's winner, stiff_ladder_kp80's accepted checkpoint, wojtek_stiff_kp80_20260718_100225>`; the preset itself does not set `restore`. |
+| `stiff_ladder_kp100` | `wojtek_stiff_kp100` | Inherits `springy_phase_b`. Ladder rung 6: `task.env.{pd_kp,pd_kd,max_torque}={100.0,2.53,9.0}` (`pd_kd=1.6*sqrt(kp/40)`); enables `dr.joint_gains` (`gain_pct=0.2`, `kd_pct=0.2`, per-joint); `ppo.num_timesteps=400000000`. Launched with `restore=<stiff_ladder_kp90 accepted checkpoint>`; the preset itself does not set `restore`. |
+| `locomotion_stiff_kp80_v1` | `wojtek_loco_stiff_kp80_v1` | Frozen keeper, self-contained (no `springy_phase_*`/`stiff_ladder_*` inheritance): reproduces `wojtek_stiff_kp80c_20260719_105503`'s effective config verbatim — `task.env.{action_scale,pd_kp,pd_kd,max_torque,abduction_ctrl_limit,knee_target_max}={[0.25,0.5,0.5],80.0,2.26,9.0,0.44,3.15}`; `task.env.{latency,encoder}.enable=true`; `task.env.obs.include=[joint_pos,joint_vel,last_act,command]`; command/push/gait/reward blocks identical to `locomotion_stiff_v1`/`springy_phase_b`; `dr.motor_strength.enable=true` (`range=[0.5,1.1]`) and `dr.joint_gains.enable=true` (`gain_pct=0.2`, `kd_pct=0.2`); `ppo.num_timesteps=800000000` (the consolidation budget only — lineage is the `locomotion_stiff_v1` keeper (2.0B steps) → ladder rungs kp50→60→70→80 (+400M each) → this +800M consolidation, 4.4B cumulative). FROZEN from the trained run `wojtek_stiff_kp80c_20260719_105503` (job NNNNNNN, seed 1), consolidation restored from `wojtek_stiff_kp80_20260718_100225/checkpoints/000412876800`. Battery mean `track_err_rms` 0.05788 (pre-consolidation 0.06305, −8.2%); zero falls in 4/4 scenarios; max torque saturation 3.2%. Robustness grid gates 1-4 all PASS: `alpha=1.58` (uncompensated Kt miscalibration) → mean 0.0527; torque envelope `5,12` → mean 0.0579; actuator lag ≤10 ms harmless (proven on the pre-consolidation rung). Role: the safe-without-compensation keeper. Deployment must match: `pd_kp=80`/`pd_kd=2.26`/`max_torque=9.0` on the robot. |
+| `locomotion_stiff_kp90_v1` | `wojtek_loco_stiff_kp90_v1` | Frozen keeper, self-contained (no `springy_phase_*`/`stiff_ladder_*` inheritance): reproduces `wojtek_stiff_kp90c_20260719_105503`'s effective config verbatim — `task.env.{action_scale,pd_kp,pd_kd,max_torque,abduction_ctrl_limit,knee_target_max}={[0.25,0.5,0.5],90.0,2.40,9.0,0.44,3.15}`; `task.env.{latency,encoder}.enable=true`; `task.env.obs.include=[joint_pos,joint_vel,last_act,command]`; command/push/gait/reward blocks identical to `locomotion_stiff_v1`/`springy_phase_b`; `dr.motor_strength.enable=true` (`range=[0.5,1.1]`) and `dr.joint_gains.enable=true` (`gain_pct=0.2`, `kd_pct=0.2`); `ppo.num_timesteps=800000000` (the consolidation budget only — lineage is the `locomotion_stiff_v1` keeper (2.0B steps) → ladder rungs kp50→60→70→80→90 (+400M each; kp90 restored from the kp80 ladder winner, `wojtek_stiff_kp80_20260718_100225`) → this +800M consolidation, 4.8B cumulative). FROZEN from the trained run `wojtek_stiff_kp90c_20260719_105503` (job NNNNNNN, seed 1), consolidation restored from `wojtek_stiff_kp90_20260718_141500/checkpoints/000412876800`. Battery mean `track_err_rms` 0.05468 (pre-consolidation 0.059125, −7.5%); zero falls in 4/4 scenarios; max torque saturation 4.3%. Robustness grid gates 1-4 all PASS: `alpha=1.58` → mean 0.0498, turn `vel_err_overall` 0.16 (consolidation fixed the pre-consolidation rung's marginal `alpha=1.58` result — turn `vel_err_overall` 0.21-0.23 across lag 0/5/10 ms, over gate 2's 0.2 threshold); torque envelope `5,12` → mean 0.0546. kp100 (one rung further) was rejected at 5.7% saturation, over the ladder's 5% gate — kp90 is the stiffest accepted operating point at the 9 Nm cap. **DEPLOYMENT CONTRACT:** deploy ONLY after measuring the real actuators' stand-sag `alpha`; command `pd_kp/alpha`, `pd_kd/alpha`, and torque cap `9/alpha` so the physical plant matches training. `wojtek_real.urdf.xacro` and the launch file's `max_torque` MUST carry the matched values before any robot use; `HEIGHT_TABLE` must be re-measured at the matched operating point. |
 
 `run_v2`'s restore path is an artifact dependency, not a guaranteed portable
 starting point. Its config comments note that the historical checkpoint no
@@ -465,7 +495,7 @@ using the preset.
 | `train` | `./training/run.sh train [Hydra overrides]`; writes checkpoints and `run.json` to `training/runs/<run_name>`. |
 | `smoke` | `./training/run.sh smoke [Hydra overrides]`; tiny CPU pipeline check with WandB disabled. A selected preset can override smoke's short PPO budget, so use `++ppo.num_timesteps=100000` when combining a preset with smoke. |
 | `eval` | `./training/run.sh eval --run runs/<name> [--x-vel V --y-vel V --yaw-vel W --height H --steps N --out FILE]`; renders a rollout. |
-| `battery` | `./training/run.sh battery --run runs/<name> [--out FILE]`; writes the fixed comparison battery. |
+| `battery` | `./training/run.sh battery --run runs/<name> [--out FILE --alpha A --lag-tau T]`; writes the fixed comparison battery. `--alpha`/`--lag-tau` are eval-only plant perturbations, see "Robustness grid (eval-only)" below. |
 | `report` | `./training/run.sh report --run runs/<name> [--out-json FILE --out-md FILE]`; writes battery, torque, power, impact proxy, and termination summary. |
 | `export` | `./training/run.sh export --run runs/<name> [--out DIR]`; validates and writes deployment `.npz` plus metadata. |
 | `app` | `./training/run.sh app [--host HOST --port PORT]`; runs the interactive navigation demo. `WOJTEK_RUN_DIR`, `HOST`, and `PORT` environment variables supply defaults; see [demo README](../demo/README.md). |
@@ -488,14 +518,68 @@ candidate for deployment:
 ./training/run.sh export --run runs/my_locomotion --out runs/my_locomotion/deploy
 ```
 
+## Robustness grid (eval-only)
+
+`wojtek_rl/battery.py` accepts three eval-only plant perturbations, applied
+to the run's already-built, already-customized model -- none of them is a
+training-path or `env.py` change:
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--alpha FLOAT` | `1.0` (no-op) | Kt (torque-constant) miscalibration: scales the model's effective `actuator_gainprm[:,0]`/`actuator_biasprm[:,1:3]` (kp/kd) and `actuator_forcerange` (the torque cap) by `alpha`, in place, via `apply_kt_miscalibration`. Works even when the run's config has `pd_kp=0.0` (XML defaults), since it reads whatever the model's effective values are post-`_customize_model`, not the config. |
+| `--lag-tau SECONDS` | `0.0` (native pipeline) | Actuator-bandwidth first-order lag on the JOINT TORQUE (not the setpoint): a value `>0` switches the battery rollout to an explicit-PD substep loop (`make_lagged_rollout_fns`) that computes `kp*(ctrl-qpos)-kd*qvel`, clips to the effective torque cap, then applies `tau_applied += (1-exp(-dt_sub/lag_tau))*(tau_pd-tau_applied)` every physics substep, so the feedback path itself lags -- the mechanism that destabilizes a high-kp policy in practice. The filter state persists across control steps in `info["tau_applied"]`, zeroed at reset. |
+| `--torque-envelope "OMEGA_B,OMEGA_0"` | none (flat cap, unchanged) | Speed-dependent DRIVING-torque cap (`apply_torque_envelope`): real motors lose available driving torque as joint speed rises (back-EMF eats bus voltage), which the flat `actuator_forcerange` cap does not model. In the DRIVING quadrant (`tau*qvel >= 0`) the allowed `\|tau\|` is the static cap for `\|qvel\| <= OMEGA_B`, ramps linearly to 0 at `\|qvel\| == OMEGA_0`, and is 0 beyond; the BRAKING quadrant (`tau*qvel < 0`, regenerative) keeps the full static cap. `cap` is the model's current `actuator_forcerange` upper bound, so the envelope composes with `--alpha` (an alpha-scaled cap raises the envelope's plateau too). Applied last in the substep loop, after the lag filter -- the physically produced torque can never exceed what the envelope allows. Passing this flag forces the explicit-PD path even at `--lag-tau 0` (the envelope needs per-substep qvel, which only that path has); the lag filter is then an exact passthrough. |
+| `--out PATH` | `<run>/battery.json` | Where the perturbed battery result is written, so a grid cell never clobbers the run's canonical `battery.json`/`eval_report.json`. |
+
+Every cell -- including `--alpha 1.0 --lag-tau 0`, no `--torque-envelope` --
+runs the same code path, so results are directly comparable. A tiny nonzero
+`--lag-tau` (e.g. `1e-9`) reproduces the native (unperturbed) pipeline's
+battery numbers to within a few percent (chaotic contact dynamics amplify
+float32 rounding across a ~700-step rollout; see `tests/test_robustness_grid.py`
+for the short-rollout tolerance and its rationale) -- that equivalence is the
+gate for trusting the explicit-PD substep loop at all.
+
+```bash
+# One perturbed cell against an existing run, without touching its battery.json
+JAX_PLATFORMS=cpu ./.venv/bin/python -m wojtek_rl.battery \
+  --run runs/wojtek_stiff_b_20260717_235321 \
+  --alpha 1.58 --lag-tau 0.005 --torque-envelope "15,28" \
+  --out runs/wojtek_stiff_b_20260717_235321/grid/battery_a1.58_lag5ms_env15-28.json
+```
+
+[`training/hpc/stiff_grid.slurm`](../hpc/stiff_grid.slurm) sweeps this over a
+set of checkpoints and an alpha/lag/envelope grid (CPU-mode eval on a
+`PARTITION node — the shared venv only runs there; its single requested GPU
+sits idle), writing
+`runs/<run>/grid/battery_a<alpha>_lag<ms>ms_env<tag>.json` per cell -- `<tag>`
+is `none` (no `--torque-envelope` passed for that cell, preserving the native
+path) or `<OMEGA_B>-<OMEGA_0>`. A crashed cell logs a WARN and the sweep
+continues, since a fallen-over policy under a harsh perturbation is a data
+point, not a job failure. `wojtek_rl/grid_report.py` then aggregates every
+listed run's cells into one markdown table (row = run x alpha x envelope,
+columns = lags; cell = mean `track_err_rms` over the 4 battery scenarios,
+gated PASS/FAIL against the stiffness ladder's gates 1-4 -- see
+`training/hpc/stiff_ladder.slurm`'s `run_gates` -- keeper reference
+`wojtek_stiff_b_20260717_235321`, job NNNNNNN), ending with the stiffest run
+that stays PASS across every lag and envelope, per alpha-world.
+Filenames without the `_env<tag>` segment (grid runs predating this axis)
+are still read, treated as envelope `none`.
+
 ## HPC launch configuration
+
+Every `training/hpc/*.slurm` script is a parameterized, reusable tool;
+experiment-specific values enter via `sbatch --export`, and the as-run
+instance of a finished experiment is archived in its keeper's Hugging Face
+repo under `hpc/` — see [`training/CLAUDE.md`](../CLAUDE.md) for the
+convention and the per-script requirements.
 
 [`training/hpc/train.slurm`](../hpc/train.slurm) accepts these environment
 variables through `sbatch --export` or `make hpc-train`:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `WORKDIR` | `$HOME/M/wojtek` | Repository directory on the cluster. |
+| `WORKDIR` | submit directory | Repository checkout on the cluster; jobs are submitted from the repo root, so this rarely needs setting. |
+| `STORE_DIR` | from `.env` | Persistent per-person storage for the venv, caches, and offline wandb; set it in the repo-root `.env` (template in `.env.example`) or export explicitly. |
 | `EXPERIMENT` | `locomotion` | Name passed as `+experiment`. |
 | `RUN_NAME` | unset | Optional explicit run name. |
 | `NUM_ENVS` | `32768` | `++ppo.num_envs` across the 4-GPU default job. |
@@ -508,9 +592,10 @@ The Make wrapper additionally accepts these transport/scheduler variables:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `HPC_USER` | `ACCOUNT` | cluster username used to compose the remote destination; override it explicitly for another account. |
-| `HPC` | `$(HPC_USER)@ui.cluster.example` | SSH destination used by `hpc-*` Make targets. |
-| `REMOTE` | `/home/$(HPC_USER)/M/wojtek` | Remote checkout destination. |
+| `cluster_USER` | **required**, via `.env` | Full SSH destination, `<user>@ui.cluster.example` (template in `.env.example`). |
+| `HPC_NS` | **required**, via `.env` | Your namespace directory under `$HOME` on the shared account. |
+| `HPC_REPO` | `wojtek` | Checkout directory name inside the namespace. |
+| `REMOTE` | `/home/<user>/$(HPC_NS)/$(HPC_REPO)` | Remote checkout destination, composed from the above. |
 | `TIME` | unset | Optional Slurm time override passed by `make hpc-train`. |
 
 Example:

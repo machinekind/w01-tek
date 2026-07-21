@@ -1,0 +1,107 @@
+# @package _global_
+# stiff_kp80_v1 — keeper v2 of the stiffness ladder + consolidation
+# experiment, FROZEN from the trained run wojtek_stiff_kp80c_20260719_105503
+# (job NNNNNNN, seed 1) so it stays reproducible. What it is: the kp40/kd1.6
+# keeper (locomotion_stiff_v1, wojtek_stiff_b_20260717_235321) walked up a
+# stiffness ladder in +400M-step rungs (kp50 -> 60 -> 70 -> 80, each
+# restored from the previous accepted rung), then given +800M consolidation
+# steps at the same kp80/kd2.26 operating point (2.0B keeper + 4x400M ladder
+# + 800M consolidation = 4.4B cumulative steps). PD gains patched onto the
+# model at load via task.env.pd_kp/pd_kd (kp 40 -> 80, kd 1.6 -> 2.26,
+# holding the keeper's damping ratio: kd = 1.6*sqrt(kp/40)); torque cap
+# unchanged at 9 Nm; per-joint joint_gains DR at +-20% hedging the
+# unmeasured real motor Kt. Consolidation restored from
+# runs/wojtek_stiff_kp80_20260718_100225/checkpoints/000412876800 (the kp80
+# ladder rung's own latest checkpoint, not a fresh start) -- restore itself
+# is a launch-time flag, not set in this preset.
+# Battery (post-consolidation): mean track_err_rms 0.05788 (pre-consolidation
+# 0.06305, -8.2%); zero falls in any of the 4 scenarios; max torque
+# saturation 3.2% of steps (stand_to_trot_ramp's knee channel), under the
+# ladder's 5% gate.
+# Robustness grid (gates 1-4 all PASS -- no falls, vel_err/vy_err < 0.20,
+# vibration <= 1.3x keeper reference, saturation < 5%): Kt miscalibration
+# alpha=1.58 (uncompensated, no gain retuning) -> mean track_err_rms 0.0527;
+# harsh speed-dependent torque envelope "5,12" -> mean track_err_rms 0.0579;
+# actuator lag <=10 ms stays harmless (proven on the pre-consolidation kp80
+# rung; not re-run here since consolidation only adds training steps at the
+# same operating point).
+# Role: the safe-without-compensation keeper -- this is the rung that
+# survives a 1.58x Kt miscalibration uncompensated. Contrast
+# locomotion_stiff_kp90_v1, which needs the alpha-matched deployment
+# contract to reach the same guarantee.
+# Trained on the cluster CLUSTER cluster (training/hpc/stiff_ladder.slurm; the
+# as-run ladder + consolidation scripts are archived under hpc/ in the HF
+# repo below), 4xH100, ++ppo.num_envs=32768 ++ppo.batch_size=1024.
+# DEPLOYMENT MUST MATCH: kp=80 / kd=2.26 / +-9 Nm on the robot
+# (wojtek_real.urdf.xacro + launch max_torque).
+# Artifacts: https://huggingface.co/<HF_ORGANIZATION>/wojtek-stiff-kp80-locomotion
+# Sibling: https://huggingface.co/<HF_ORGANIZATION>/wojtek-stiff-kp90-locomotion
+# Usage: ./run.sh train +experiment=locomotion_stiff_kp80_v1
+defaults:
+  - override /task: joystick
+
+task:
+  env:
+    action_scale: [0.25, 0.5, 0.5]
+    pd_kp: 80.0
+    pd_kd: 2.26
+    max_torque: 9.0
+    abduction_ctrl_limit: 0.44
+    knee_target_max: 3.15
+    latency:
+      enable: true
+    encoder:
+      enable: true
+    obs:
+      include:
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+    command:
+      vx: [-0.8, 1.2]
+      vy: [-0.5, 0.5]
+      wz: [-1.0, 1.0]
+      height: [0.125, 0.125]
+      zero_prob: 0.25
+      pure_wz_prob: 0.25
+      pure_vy_prob: 0.2
+    push:
+      vel: 0.8
+    gait:
+      swing_height: 0.08
+      air_time_cap: 0.35
+    reward:
+      tracking_sigma: 0.1
+      pose_leg_weight: 0.1
+      scales:
+        tracking_lin_vel: 4.0
+        tracking_ang_vel: 1.6
+        height_tracking: 0.0
+        lin_vel_z: 0.0
+        ang_vel_xy: 0.0
+        orientation: -5.0
+        torques: -6.0e-4
+        torque_rate: -0.02
+        torque_limit: -0.1
+        action_rate: -0.25
+        action_accel: 0.0
+        energy: 0.0
+        pose: -1.0
+        feet_air_time: 4.0
+        feet_slip: -0.35
+        feet_phase: 0.0
+        contact_match: 0.0
+        high_step: 4.0
+        stand_still: -2.5
+        stand_feet_down: -30.0
+        termination: -1.0
+
+dr:
+  motor_strength: { enable: true, range: [0.5, 1.1] }
+  joint_gains: { enable: true, gain_pct: 0.2, kd_pct: 0.2 }
+
+ppo:
+  num_timesteps: 800000000
+
+run_name: wojtek_loco_stiff_kp80_v1

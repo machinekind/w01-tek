@@ -1,0 +1,25 @@
+# @package _global_
+# Stiffness probe, arm 1: kp=40 / kd=1.4 (kd = 1.0 * sqrt(kp/20) keeps the
+# current damping ratio). Gains are patched at model load via
+# task.env.pd_kp/pd_kd, so both arms share one branch and the committed
+# XML stays kp=20/kd=1. max_torque 6 -> 9 N*m (= the XML forcerange): the
+# stiffer loop needs transient headroom. Per-joint joint_gains DR (+-20%)
+# hedges the unmeasured real Kt. 300M steps ranks the arms; not a keeper
+# budget.
+# Usage: ./training/run.sh train +experiment=stiff_probe_kp40
+defaults:
+  - springy_phase_a
+
+task:
+  env:
+    pd_kp: 40.0
+    pd_kd: 1.4
+    max_torque: 9.0
+
+dr:
+  joint_gains: { enable: true, gain_pct: 0.2, kd_pct: 0.2 }
+
+ppo:
+  num_timesteps: 300000000
+
+run_name: wojtek_stiff40_probe

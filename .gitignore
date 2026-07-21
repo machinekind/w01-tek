@@ -22,3 +22,4 @@ MUJOCO_LOG.TXT
 
 #notatki i praca lokalna
 notes/
+Makefile.local

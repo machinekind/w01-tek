@@ -28,6 +28,7 @@ mean base height.
 """
 
 import argparse
+import copy
 import json
 from datetime import datetime
 from pathlib import Path
@@ -35,6 +36,7 @@ from pathlib import Path
 import jax
 import jax.numpy as jp
 import numpy as np
+from mujoco import mjx
 
 from wojtek_rl import paths
 
@@ -144,6 +146,24 @@ def saturation_fractions(actuator_force_hist, torque_cap):
         "abduction": float(over[:, ABDUCTION_IDX].mean()),
         "hip": float(over[:, HIP_IDX].mean()),
         "knee": float(over[:, KNEE_IDX].mean()),
+    }
+
+
+TRACK_SETTLE_STEPS = 50  # 1 s at ctrl_dt=0.02: skip the reset transient
+
+
+def tracking_error(ctrl_hist, qpos_hist, settle_steps=TRACK_SETTLE_STEPS):
+    """RMS and p95 of |ctrl - qpos| (rad) over steps and actuated joints,
+    first settle_steps steps excluded. ctrl is the setpoint the PD servo
+    actually held, so this is the servo error the stiffness work targets."""
+    c = np.asarray(ctrl_hist, dtype=float)[settle_steps:]
+    q = np.asarray(qpos_hist, dtype=float)[settle_steps:]
+    if c.size == 0:
+        return {"rms": None, "p95": None}
+    err = np.abs(c - q)
+    return {
+        "rms": float(np.sqrt((err**2).mean())),
+        "p95": float(np.percentile(err, 95)),
     }
 
 
@@ -261,7 +281,7 @@ def rollout(env, reset, step, inf, cmd_at, n, foot_radius, seed=0):
         "cmd_vx": [], "vx": [], "vx_local": [], "cmd_vy": [], "vy_local": [],
         "cmd_wz": [], "wz": [], "cmd_h": [], "h": [],
         "qvel": [], "qpos": [], "contact": [], "foot_clearance": [],
-        "slip": [], "actuator_force": [], "base_accel": [],
+        "slip": [], "actuator_force": [], "base_accel": [], "ctrl": [],
         "gravity": [], "foot_xy_body": [],
     }
     fell_at = None
@@ -301,6 +321,7 @@ def rollout(env, reset, step, inf, cmd_at, n, foot_radius, seed=0):
         rec["slip"].append(float((np.square(fv[:, :2]).sum(-1) * c).sum()))
         rec["actuator_force"].append(np.asarray(d.actuator_force))
         rec["base_accel"].append(np.asarray(d.sensordata[adr : adr + 3]))
+        rec["ctrl"].append(np.asarray(d.ctrl))
         rec["gravity"].append(np.asarray(env._gravity_body(d)))
         # Foot offsets from the base in the yaw-aligned horizontal frame
         # (not the full body frame: stance width must not shrink just
@@ -339,6 +360,11 @@ def scenario_result(name, rec, fell_at, dt, torque_cap):
     # nearly motionless (tiny numerator over tiny denominator)
     r["qvel_rms"] = round(float(np.sqrt((rec["qvel"] ** 2).mean())), 3)
     r["slip_mean"] = round(float(rec["slip"].mean()), 4)
+    if "ctrl" in rec:
+        te = tracking_error(rec["ctrl"], rec["qpos"])
+        if te["rms"] is not None:
+            r["track_err_rms"] = round(te["rms"], 4)
+            r["track_err_p95"] = round(te["p95"], 4)
     if moving.sum() > 100:
         r["vel_err_overall"] = round(float((rec["cmd_vx"][moving] - rec["vx"][moving]).mean()), 3)
 
@@ -431,17 +457,363 @@ def torque_cap_of(env) -> float:
     return float(mt) if mt else float(env.mj_model.actuator_forcerange[:, 1].max())
 
 
-def run_battery(run_dir: Path) -> dict:
+# -- robustness grid: eval-only plant perturbations --------------------------
+#
+# Three sim2real risks probed by mutating a run's BUILT, customized model at
+# eval time -- no training-path change, env.py is untouched. See
+# training/docs/configuration.md's "Robustness grid (eval-only)".
+
+
+def apply_kt_miscalibration(model, alpha: float) -> None:
+    """Scale the model's effective PD gains and torque cap by `alpha`, in
+    place. Models a firmware torque-constant (Kt) error: commanded kp/kd
+    and the torque ceiling all scale with the real Kt, physically -- see
+    the fbb hardware actuators note (X8-32 vs AK80-9 Kt mismatch). Reads
+    actuator_gainprm[:,0] (kp) and actuator_biasprm[:,1]/[:,2] (-kp/-kd,
+    scaled together so the bias term stays -kp*qpos - kd*qvel under the
+    new kp) and actuator_forcerange (the max_torque clamp `_customize_model`
+    set, or the XML default when pd_kp/max_torque are 0). These are
+    already the model's EFFECTIVE values by the time `_customize_model`
+    has run, so this scales correctly even for a config with pd_kp=0.0
+    (XML-default kp/kd).
+
+    alpha=1.0 writes nothing, so it is a bitwise no-op.
+    """
+    if alpha == 1.0:
+        return
+    model.actuator_gainprm[:, 0] *= alpha
+    model.actuator_biasprm[:, 1] *= alpha
+    model.actuator_biasprm[:, 2] *= alpha
+    model.actuator_forcerange[:, :] *= alpha
+
+
+def lag_coeff(dt_sub: float, lag_tau: float) -> float:
+    """First-order filter step coefficient: tau_applied <- tau_applied +
+    coeff*(target - tau_applied) applied once per physics substep. As
+    lag_tau -> 0, dt_sub/lag_tau -> inf and coeff -> 1 (immediate pass-
+    through, the native no-lag limit); a larger lag_tau slows the filter.
+    Plain Python float in, float out -- called once per battery run
+    (lag_tau is a CLI scalar, not traced), so np.exp is fine here.
+
+    lag_tau <= 0 is that limit's boundary, handled explicitly (coeff=1.0,
+    immediate passthrough) rather than run through the exp formula --
+    dt_sub/lag_tau ZeroDivisionErrors at exactly 0 in plain Python floats.
+    This lets a --torque-envelope-only cell (lag_tau=0, envelope set) use
+    this same filter as a no-op instead of a separately-coded branch; see
+    make_lagged_rollout_fns."""
+    if lag_tau <= 0:
+        return 1.0
+    return 1.0 - float(np.exp(-dt_sub / lag_tau))
+
+
+def lag_update(tau_applied, tau_target, coeff):
+    """One first-order-filter step, vectorized over actuators. Pulled out
+    of _explicit_pd_substeps so its step response (converges to
+    tau_target*(1 - exp(-k*dt/lag_tau)) after k updates from zero) is
+    unit-testable without a physics rollout."""
+    return tau_applied + coeff * (tau_target - tau_applied)
+
+
+def torque_envelope_limit(qvel, cap, omega_b: float, omega_0: float):
+    """Per-actuator max |torque| a speed-dependent DRIVING envelope
+    permits at joint speed `qvel` (rad/s, vectorized over actuators; sign
+    ignored -- back-EMF eats bus headroom the same way in either rotation
+    direction): `cap` (the model's static torque limit, already
+    alpha-scaled if the caller applied apply_kt_miscalibration first) for
+    |qvel| <= omega_b, ramping linearly to 0 at |qvel| == omega_0, and 0
+    beyond. Real motors lose available driving torque as speed rises
+    because back-EMF eats into the bus voltage margin -- this is the
+    flat-cap model's missing piece (see training/docs/configuration.md's
+    "Robustness grid (eval-only)"). jit-safe (jp.clip, no Python branch on
+    a traced value)."""
+    w = jp.abs(qvel)
+    ramp = cap * (omega_0 - w) / (omega_0 - omega_b)
+    return jp.clip(ramp, 0.0, cap)
+
+
+def apply_torque_envelope(tau, qvel, cap, omega_b: float, omega_0: float):
+    """Clamp `tau` (the torque the explicit-PD loop has already lag-
+    filtered) to the speed-dependent envelope. Only the DRIVING quadrant
+    (tau*qvel >= 0: the motor is doing positive work on the joint) loses
+    headroom at speed; BRAKING (tau*qvel < 0, regenerative) keeps the
+    full static cap, since it isn't limited by available bus voltage the
+    same way. Vectorized over actuators via jp.where on the quadrant
+    test; jit-safe."""
+    driving = tau * qvel >= 0.0
+    limit = jp.where(driving, torque_envelope_limit(qvel, cap, omega_b, omega_0), cap)
+    return jp.clip(tau, -limit, limit)
+
+
+def parse_torque_envelope(spec):
+    """Parse a `--torque-envelope` CLI value "OMEGA_B,OMEGA_0" into an
+    (omega_b, omega_0) float tuple; None passes through unchanged (the
+    CLI default -- no envelope, flat cap). Raises ValueError with a plain
+    message on a malformed spec or a non-positive ramp width: the
+    envelope's linear segment runs from omega_b down to 0 at omega_0, so
+    omega_0 > omega_b >= 0 is required or torque_envelope_limit divides
+    by zero (or ramps the wrong way)."""
+    if spec is None:
+        return None
+    parts = spec.split(",")
+    if len(parts) != 2:
+        raise ValueError(f"--torque-envelope must be 'OMEGA_B,OMEGA_0', got {spec!r}")
+    try:
+        omega_b, omega_0 = float(parts[0]), float(parts[1])
+    except ValueError:
+        raise ValueError(f"--torque-envelope must be 'OMEGA_B,OMEGA_0', got {spec!r}")
+    if not (0 <= omega_b < omega_0):
+        raise ValueError(
+            "--torque-envelope requires 0 <= OMEGA_B < OMEGA_0, got "
+            f"{omega_b},{omega_0}"
+        )
+    return omega_b, omega_0
+
+
+def _torque_mode_model(mj_model):
+    """Deep copy of `mj_model` with actuators converted to torque pass-
+    through (gain=1, bias=0): a Data built on this model applies whatever
+    is written to `ctrl` directly as joint torque, no PD math. The
+    explicit-PD substep loop below computes kp*(ctrl-qpos)-kd*qvel and the
+    lag filter itself in JAX and needs a model that will not re-interpret
+    its already-computed torque as a position setpoint (which is what the
+    native position-actuator gain/bias would do to it).
+
+    ctrllimited must also go: the source actuators are position servos, so
+    ctrlrange is in RADIANS (e.g. the third joint's [0.425, 5.8]) -- left
+    on, mj_fwdActuation would clip our torque (N*m, a completely different
+    scale) to that range before gain/bias ever runs, silently corrupting
+    it. The substep loop already clips to +-limit (actuator_forcerange)
+    itself before writing ctrl, so no ctrl-side limit belongs here.
+    """
+    m = copy.deepcopy(mj_model)
+    m.actuator_gainprm[:, 0] = 1.0
+    m.actuator_gainprm[:, 1:] = 0.0
+    m.actuator_biasprm[:, :] = 0.0
+    m.actuator_ctrllimited[:] = 0
+    return m
+
+
+def _explicit_pd_substeps(
+    mjx_model_torque, qadr, vadr, kp, kd, limit, coeff,
+    data, prev_ctrl, new_ctrl, delay_substeps, tau_applied, n_substeps,
+    envelope=None,
+):
+    """jax.lax.scan over one control period's physics substeps, PD torque
+    computed explicitly (not by the model's actuator gain/bias) and passed
+    through the first-order lag before being applied. `prev_ctrl`/
+    `new_ctrl`/`delay_substeps` reproduce base.py._step_with_latency's
+    ctrl-switch-at-substep-`delay_substeps` semantics (prev_ctrl ==
+    new_ctrl when latency is disabled, so the switch is a no-op).
+
+    `envelope`, if not None, is an (omega_b, omega_0) pair: the speed-
+    dependent torque envelope (see apply_torque_envelope) is applied last,
+    after the lag filter -- the physically produced torque can never
+    exceed what the envelope allows at the joint's current speed. `None`
+    (the default) skips the clamp entirely, so the traced program is
+    identical to the pre-envelope pipeline -- this is a Python-level
+    branch on a static per-run value, not a traced one, so it costs
+    nothing when unused."""
+
+    def _substep(carry, i):
+        data, tau_applied = carry
+        ctrl = jp.where(i < delay_substeps, prev_ctrl, new_ctrl)
+        qvel_j = data.qvel[vadr]
+        tau_pd = kp * (ctrl - data.qpos[qadr]) - kd * qvel_j
+        tau_pd = jp.clip(tau_pd, -limit, limit)
+        tau_applied = lag_update(tau_applied, tau_pd, coeff)
+        if envelope is not None:
+            omega_b, omega_0 = envelope
+            tau_applied = apply_torque_envelope(tau_applied, qvel_j, limit, omega_b, omega_0)
+        data = data.replace(ctrl=tau_applied)
+        data = mjx.step(mjx_model_torque, data)
+        return (data, tau_applied), None
+
+    (data, tau_applied), _ = jax.lax.scan(
+        _substep, (data, tau_applied), jp.arange(n_substeps)
+    )
+    return data, tau_applied
+
+
+def make_lagged_rollout_fns(env, lag_tau: float, torque_envelope=None):
+    """(reset, step) pair for battery.rollout(), reproducing
+    WojtekJoystick.reset/step exactly except the physics substep call:
+    joint torque passes through a first-order lag (time constant
+    `lag_tau`) before being applied, instead of the model's built-in PD
+    actuator recomputing an instantaneous torque every substep. This is
+    the plant-bandwidth risk env.py can't probe (its actuators are ideal
+    position servos) without a training-path change, so the substitution
+    happens here, eval-only.
+
+    `torque_envelope`, if given, is an (omega_b, omega_0) pair (rad/s):
+    the speed-dependent driving-torque cap applied last in each substep
+    (see apply_torque_envelope). Passing one forces this explicit-PD path
+    even when `lag_tau` is 0 -- the envelope can only be evaluated here,
+    where per-substep qvel is available; lag_coeff(_, 0) is an explicit
+    passthrough (coeff=1.0) in that case, so the lag filter contributes
+    nothing and the envelope is the only perturbation.
+
+    reset is untouched (bit-identical rng/state/kp-eff/kd-eff reads); only
+    a per-actuator lag filter state (`tau_applied`) is added to info,
+    seeded to zeros. Requires lag_tau > 0 or a torque_envelope -- callers
+    branch on that before reaching here (see run_battery): lag_tau == 0
+    and no envelope means "use the native env unchanged", not "use this
+    path with a zero filter state".
+
+    Reads kp/kd/torque-limit from `env.mj_model` as it stands NOW, so a
+    caller applying apply_kt_miscalibration first gets the alpha-scaled
+    plant here too -- every grid cell (alpha, lag_tau, torque_envelope
+    combined or alone) goes through this one construction path, and the
+    envelope's plateau (below omega_b) is exactly that alpha-scaled cap.
+    """
+    assert lag_tau > 0 or torque_envelope is not None, (
+        "lag_tau <= 0 and no torque_envelope means native (see run_battery)"
+    )
+    kp = jp.array(env.mj_model.actuator_gainprm[:, 0])
+    kd = jp.array(-env.mj_model.actuator_biasprm[:, 2])
+    limit = jp.array(env.mj_model.actuator_forcerange[:, 1])
+    coeff = lag_coeff(env.sim_dt, lag_tau)
+    mjx_model_torque = mjx.put_model(
+        _torque_mode_model(env.mj_model), impl=env._backend
+    )
+    n_substeps = env.n_substeps
+    qadr, vadr = env._qadr, env._vadr
+
+    def reset(rng):
+        state = env.reset(rng)
+        info = dict(state.info)
+        info["tau_applied"] = jp.zeros(env.mj_model.nu)
+        return state.replace(info=info)
+
+    def step(state, action):
+        # Mirrors WojtekJoystick.step() (env.py) line for line up through
+        # the physics call -- see that function for the rationale behind
+        # each piece; only the substep-physics segment differs.
+        info = dict(state.info)
+        rng, r_noise, r_cmd, r_push = jax.random.split(info["rng"], 4)
+        info["rng"] = rng
+
+        af = env._config.action_filter
+        filt = af * info["filtered_act"] + (1.0 - af) * action
+        info["filtered_act"] = filt
+        scale = jp.asarray(env._config.action_scale)
+        scale = jp.tile(scale, 4) if scale.ndim > 0 and scale.size == 3 else scale
+        motor_targets = jp.clip(
+            env._height_ctrl(info["command"][3]) + filt * scale,
+            env._target_lo, env._target_hi,
+        )
+        data = state.data
+        if env._config.push.enable:
+            push_now = (info["step_count"] % env._config.push.interval_steps) == (
+                env._config.push.interval_steps - 1
+            )
+            push = jax.random.uniform(r_push, (2,), minval=-1.0, maxval=1.0)
+            push = push / (jp.linalg.norm(push) + 1e-6) * env._config.push.vel
+            qvel = data.qvel.at[:2].add(jp.where(push_now, push, jp.zeros(2)))
+            data = data.replace(qvel=qvel)
+
+        eps = info["encoder_offset"]
+        if env._config.latency.enable:
+            prev_ctrl = info["motor_targets"] - eps
+            new_ctrl = motor_targets - eps
+            delay_substeps = info["ctrl_delay"]
+        else:
+            applied = (
+                info["motor_targets"] if env._config.action_delay > 0
+                else motor_targets
+            )
+            prev_ctrl = new_ctrl = applied - eps
+            delay_substeps = jp.array(0)  # prev == new: the switch is a no-op
+
+        data, tau_applied = _explicit_pd_substeps(
+            mjx_model_torque, qadr, vadr, kp, kd, limit, coeff,
+            data, prev_ctrl, new_ctrl, delay_substeps, info["tau_applied"],
+            n_substeps, envelope=torque_envelope,
+        )
+        info["tau_applied"] = tau_applied
+        # _explicit_pd_substeps leaves data.ctrl holding the last substep's
+        # APPLIED TORQUE (the torque-mode model's ctrl channel) -- restore
+        # the POSITION SETPOINT there instead, matching what the native
+        # pipeline leaves in data.ctrl (mjx_env.step/_step_with_latency
+        # write the position target to ctrl every substep, never a
+        # torque). rollout()'s tracking_error() reads rec["ctrl"] as a
+        # setpoint to diff against qpos; left as torque, track_err_rms
+        # comes out ~25x inflated (rad vs N*m), which is exactly the
+        # symptom that caught this while validating against the native
+        # battery. Same last-substep-wins condition as the scan's
+        # `i < delay_substeps` check, evaluated once at i = n_substeps-1.
+        data = data.replace(
+            ctrl=jp.where(n_substeps - 1 < delay_substeps, prev_ctrl, new_ctrl)
+        )
+
+        gravity = env._gravity_body(data)
+        fall = (data.qpos[2] < env._config.fall.min_height) | (
+            gravity[2] > env._config.fall.max_tilt_gz
+        )
+
+        info["last_act"] = action
+        info["motor_targets"] = motor_targets
+        phase = info["phase"] + env._phase_dt(info["command"])
+        info["phase"] = jp.fmod(phase + jp.pi, 2 * jp.pi) - jp.pi
+        info["step_count"] = info["step_count"] + 1
+        info["steps_since_cmd"] = info["steps_since_cmd"] + 1
+        resample = info["steps_since_cmd"] >= env._config.command.resample_steps
+        info["command"] = jp.where(
+            resample, env._sample_command(r_cmd), info["command"]
+        )
+        info["steps_since_cmd"] = jp.where(resample, 0, info["steps_since_cmd"])
+
+        obs = env._get_obs(data, info, r_noise)
+        done = fall.astype(jp.float32)
+        return state.replace(
+            data=data, obs=obs, reward=jp.zeros(()), done=done, info=info
+        )
+
+    return reset, step
+
+
+def run_battery(
+    run_dir: Path, alpha: float = 1.0, lag_tau: float = 0.0, torque_envelope=None,
+) -> dict:
     """Run the fixed scenario battery against `run_dir`'s checkpoint.
+
+    `alpha` (Kt miscalibration), `lag_tau` (actuator lag, seconds), and
+    `torque_envelope` (an (omega_b, omega_0) pair, or None) are eval-only
+    plant perturbations -- see apply_kt_miscalibration/
+    make_lagged_rollout_fns/apply_torque_envelope above. Defaults
+    (1.0, 0.0, None) reproduce the original unperturbed battery exactly.
 
     Returns the same dict `main()` used to write (minus the `timestamp`
     stamp main() adds at write time). report.py imports this for the
-    battery table half of eval_report.json.
+    battery table half of eval_report.json (always called with the
+    defaults, so that path is unaffected by this function's new params).
     """
     run, env, ckpt, inf, foot_radius = load_checkpoint_policy(run_dir)
-    reset, step = jax.jit(env.reset), jax.jit(env.step)
-    torque_cap = torque_cap_of(env)
-    results = {"run": run["run_name"], "checkpoint": ckpt.name}
+    if alpha != 1.0:
+        apply_kt_miscalibration(env.mj_model, alpha)
+        env._mjx_model = mjx.put_model(env.mj_model, impl=env._backend)
+
+    # A torque_envelope can only be evaluated in the explicit-PD loop (it
+    # needs per-substep qvel, which the native position-actuator gain/bias
+    # never surfaces) -- so it forces this path even at lag_tau == 0,
+    # where lag_coeff makes the filter a passthrough (see make_lagged_
+    # rollout_fns/lag_coeff).
+    if lag_tau > 0 or torque_envelope is not None:
+        reset_fn, step_fn = make_lagged_rollout_fns(env, lag_tau, torque_envelope)
+        reset, step = jax.jit(reset_fn), jax.jit(step_fn)
+    else:
+        reset, step = jax.jit(env.reset), jax.jit(env.step)
+
+    # Not torque_cap_of(env): that prefers the config's max_torque value
+    # verbatim, which apply_kt_miscalibration does not (and should not)
+    # update -- the model's own forcerange is the effective cap post-alpha,
+    # and torque_cap_of's fallback branch reads exactly that when
+    # max_torque is unset, so this is equivalent to it at alpha=1.0.
+    torque_cap = float(np.asarray(env.mj_model.actuator_forcerange[:, 1]).max())
+    results = {
+        "run": run["run_name"], "checkpoint": ckpt.name,
+        "alpha": alpha, "lag_tau": lag_tau,
+        "torque_envelope": list(torque_envelope) if torque_envelope else None,
+    }
     for name, (cmd_at, n) in battery_scenarios().items():
         rec, fell_at, _term = rollout(env, reset, step, inf, cmd_at, n, foot_radius)
         results[name] = scenario_result(name, rec, fell_at, env.dt, torque_cap)
@@ -452,10 +824,35 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run", required=True)
     ap.add_argument("--out", default=None)
+    ap.add_argument(
+        "--alpha", type=float, default=1.0,
+        help="Kt-miscalibration factor: scale the built model's effective "
+        "PD gains and torque cap by this much (1.0 = no-op). See "
+        "apply_kt_miscalibration.",
+    )
+    ap.add_argument(
+        "--lag-tau", type=float, default=0.0,
+        help="actuator-bandwidth time constant, seconds (0.0 = native "
+        "pipeline, unchanged). >0 switches to the explicit-PD substep "
+        "loop with a first-order torque lag; see make_lagged_rollout_fns.",
+    )
+    ap.add_argument(
+        "--torque-envelope", default=None,
+        help="'OMEGA_B,OMEGA_0' rad/s (default: none, flat cap unchanged). "
+        "Speed-dependent DRIVING-torque cap: the static cap up to OMEGA_B, "
+        "ramping linearly to 0 at OMEGA_0, 0 beyond; BRAKING keeps the "
+        "full static cap. Forces the explicit-PD path even when "
+        "--lag-tau is 0. See apply_torque_envelope.",
+    )
     args = ap.parse_args()
+    torque_envelope = parse_torque_envelope(args.torque_envelope)
 
-    results = run_battery(Path(args.run))
+    results = run_battery(
+        Path(args.run), alpha=args.alpha, lag_tau=args.lag_tau,
+        torque_envelope=torque_envelope,
+    )
     out = Path(args.out) if args.out else Path(args.run) / "battery.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
     stamped = dict(results, timestamp=datetime.now().isoformat(timespec="seconds"))
     out.write_text(json.dumps(stamped, indent=2))
     print(json.dumps(stamped, indent=2))

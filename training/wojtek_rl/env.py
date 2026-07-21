@@ -53,6 +53,13 @@ def default_config() -> config_dict.ConfigDict:
         # spikes; deploy MUST match (real.launch.py max_torque). Ported from
         # PR #19.
         max_torque=0.0,
+        # Override the PD servo gains on the loaded model (0 = keep the
+        # XML's kp=20/kd=1 from build_model). Patched at construction like
+        # max_torque, so stiffness experiments need no XML regeneration.
+        # DR gain/kd scales multiply on top; deploy MUST match
+        # (wojtek_real.urdf.xacro kp/kd).
+        pd_kp=0.0,
+        pd_kd=0.0,
         # Clamp the 4 abduction actuators' ctrlrange to +-this many rad
         # (0 = keep the model's +-pi). The mechanical hip travel exceeds this,
         # so once set the software clamp is the binding limit, not the joint
@@ -247,6 +254,13 @@ class WojtekJoystick(WojtekEnv):
         self._torque_cap = jp.array(self._mj_model.actuator_forcerange[:, 1])
 
     def _customize_model(self, m):
+        kp = self._config.get("pd_kp", 0.0)
+        if kp:
+            m.actuator_gainprm[:, 0] = kp
+            m.actuator_biasprm[:, 1] = -kp
+        kd = self._config.get("pd_kd", 0.0)
+        if kd:
+            m.actuator_biasprm[:, 2] = -kd
         # Ported from PR #19.
         mt = self._config.get("max_torque", 0.0)
         if mt:

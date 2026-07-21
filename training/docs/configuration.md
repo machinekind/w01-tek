@@ -576,8 +576,8 @@ variables through `sbatch --export` or `make hpc-train`:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `WORKDIR` | **required** | Repository directory on the cluster (per-person namespace on the shared account — no default). |
-| `STORE_DIR` | **required** | Persistent storage directory for the venv, caches, and offline wandb. |
+| `WORKDIR` | submit directory | Repository checkout on the cluster; jobs are submitted from the repo root, so this rarely needs setting. |
+| `STORE_DIR` | from `.env` | Persistent per-person storage for the venv, caches, and offline wandb; set it in the repo-root `.env` (template in `.env.example`) or export explicitly. |
 | `EXPERIMENT` | `locomotion` | Name passed as `+experiment`. |
 | `RUN_NAME` | unset | Optional explicit run name. |
 | `NUM_ENVS` | `32768` | `++ppo.num_envs` across the 4-GPU default job. |
@@ -590,11 +590,10 @@ The Make wrapper additionally accepts these transport/scheduler variables:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `HPC_USER` | **required** | cluster username; set per-invocation or in an untracked `Makefile.local`. |
-| `HPC_NS` | **required** | Your namespace directory under `$HOME` on the shared account. |
+| `cluster_USER` | **required**, via `.env` | Full SSH destination, `<user>@ui.cluster.example` (template in `.env.example`). |
+| `HPC_NS` | **required**, via `.env` | Your namespace directory under `$HOME` on the shared account. |
 | `HPC_REPO` | `wojtek` | Checkout directory name inside the namespace. |
-| `HPC` | `$(HPC_USER)@ui.cluster.example` | SSH destination used by `hpc-*` Make targets. |
-| `REMOTE` | `/home/$(HPC_USER)/$(HPC_NS)/$(HPC_REPO)` | Remote checkout destination. |
+| `REMOTE` | `/home/<user>/$(HPC_NS)/$(HPC_REPO)` | Remote checkout destination, composed from the above. |
 | `TIME` | unset | Optional Slurm time override passed by `make hpc-train`. |
 
 Example:

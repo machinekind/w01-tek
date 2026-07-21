@@ -1,16 +1,18 @@
 # cluster HPC workflow for the training project (see training/hpc/ and
 # skills/cluster-hpc). The account is shared: every person works in their
 # own namespace dir under $HOME (HPC_NS) — never rsync or submit into
-# someone else's namespace. HPC_USER, HPC_NS, and HPC_REPO are personal
-# and required: set them per-invocation or in an untracked local include
-# (e.g. `include Makefile.local`, gitignored).
+# someone else's namespace. cluster_USER, HPC_NS, and HPC_REPO are personal:
+# they live in .env (gitignored, template in .env.example), which also
+# rides to the cluster checkout via `make hpc-push` so SLURM jobs can
+# read it (training/hpc/_common.sh).
 
-HPC_USER ?=
-HPC_NS   ?=
-HPC_REPO ?= wojtek
-HPC      = $(HPC_USER)@ui.cluster.example
-REMOTE   = /home/$(HPC_USER)/$(HPC_NS)/$(HPC_REPO)
--include Makefile.local
+cluster_USER ?=
+HPC_NS    ?=
+HPC_REPO  ?= wojtek
+-include .env
+HPC        = $(cluster_USER)
+HPC_LOGIN  = $(word 1,$(subst @, ,$(cluster_USER)))
+REMOTE     = /home/$(HPC_LOGIN)/$(HPC_NS)/$(HPC_REPO)
 
 EXCLUDE  = --exclude='.git/' --exclude='__pycache__/' --exclude='*.pyc' \
            --exclude='.venv*/' --exclude='venv/' --exclude='logs/' \
@@ -32,8 +34,8 @@ verify-static:
 	./verify.sh --tier 0
 
 hpc-vars:
-	@test -n "$(HPC_USER)" && test -n "$(HPC_NS)" || { \
-	  echo "Set HPC_USER=<cluster user> and HPC_NS=<your namespace dir> (make hpc-... HPC_USER=... HPC_NS=..., or put them in Makefile.local)"; \
+	@test -n "$(cluster_USER)" && test -n "$(HPC_NS)" || { \
+	  echo "Set cluster_USER=<user>@ui.cluster.example and HPC_NS=<your namespace dir> in .env (see .env.example)"; \
 	  exit 1; }
 
 hpc-push: hpc-vars
@@ -47,7 +49,7 @@ hpc-train: hpc-vars
 	  $(if $(TIME),--time=$(TIME)) training/hpc/train.slurm"
 
 hpc-status: hpc-vars
-	ssh $(HPC) "squeue -u $(HPC_USER) -o '%.10i %.12j %.4t %.10M %.20R'"
+	ssh $(HPC) "squeue -u $(HPC_LOGIN) -o '%.10i %.12j %.4t %.10M %.20R'"
 
 # make hpc-logs JOB=1234567
 hpc-logs: hpc-vars

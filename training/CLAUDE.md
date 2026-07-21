@@ -33,18 +33,15 @@ first (SLURM writes `logs/%x-%j.{out,err}`). `_common.sh` provides the
 shared venv/cache/GPU-assert plumbing and the quota-fallback logic for the
 JAX compile cache; every script sources it via `WORKDIR`.
 
-Two variables are required by every job and have no defaults — the cluster
-account is shared and both live in per-person namespaces, so no personal
-path is ever committed:
-
-- `WORKDIR` — the repo checkout on the cluster.
-- `STORE_DIR` — persistent storage for the venv, caches, and offline wandb
-  (grant storage, not the tight home quota).
-
-Export both in your cluster login-shell profile (they then ride into jobs
-via `sbatch --export=ALL`) or pass them per-job. The `make hpc-*` wrappers
-similarly require `HPC_USER` and `HPC_NS` (namespace dir under `$HOME`),
-best kept in an untracked `Makefile.local`.
+Personal values live in one repo-root `.env` (gitignored; template in
+`.env.example`): `cluster_USER`/`HPC_NS`/`HPC_REPO` for the `make hpc-*`
+wrappers and `STORE_DIR` for the jobs. `make hpc-push` rsyncs `.env` to
+the cluster checkout, where `_common.sh` loads it for any variable not
+already exported — an explicit `sbatch --export` or shell export wins.
+`WORKDIR` needs no configuration: it defaults to the sbatch submit
+directory (jobs are submitted from the repo root). No personal path is
+ever committed — the account is shared and everything lives in per-person
+namespaces.
 
 | Script | Partition | Purpose |
 |---|---|---|

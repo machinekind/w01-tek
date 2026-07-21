@@ -201,7 +201,8 @@ def generate_launch_description():
             # policy.npz + policy_meta.json; pin a commit for durable runs.
             DeclareLaunchArgument(
                 "policy",
-                default_value="<HF_ORGANIZATION>/wojtek-springy-locomotion",
+                default_value="<HF_ORGANIZATION>/wojtek-springy-locomotion"
+                "@3bafe4c85a677f5fe8434208ab81a4f0ad89a5a5",
             ),
             # Measured stand-sag torque miscalibration of the real actuators;
             # the MD80s get the contract's kp/alpha, kd/alpha, cap/alpha.

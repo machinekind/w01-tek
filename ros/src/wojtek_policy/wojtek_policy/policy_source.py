@@ -20,6 +20,7 @@ No ROS imports here; huggingface_hub is imported only when an HF ref is
 actually used, so local-directory workflows need nothing extra installed.
 """
 
+import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -87,6 +88,36 @@ def _resolve_hf(ref: str) -> ResolvedPolicy:
     # resolved commit, which makes branch refs auditable in the logs.
     commit = npz.parent.name
     return ResolvedPolicy(npz, Path(paths[FILES[1]]), f"hf:{repo_id}@{commit}")
+
+
+def load_meta(ref: str) -> tuple[dict, str]:
+    """(policy_meta dict, provenance) for a reference, without the weights.
+
+    For launch files that need contract fields (e.g. the pd block) before
+    any node starts; the npz is downloaded alongside but not parsed.
+    """
+    resolved = resolve_policy(ref)
+    return json.loads(resolved.meta.read_text()), resolved.source
+
+
+def pd_settings(meta: dict, alpha: float = 1.0) -> dict:
+    """Driver-side servo settings for a policy contract: pd / alpha.
+
+    alpha is the measured stand-sag torque miscalibration of the real
+    actuators (training/docs/configuration.md, stiffness-ladder deployment
+    contract): commanding kp/alpha, kd/alpha and cap/alpha makes the
+    physical plant match the one the policy trained against. alpha=1 is
+    the identity (sim, or calibrated hardware).
+    """
+    pd = meta["pd"]
+    a = float(alpha)
+    if a <= 0.0:
+        raise ValueError(f"alpha must be positive, got {a}")
+    return {
+        "kp": float(pd["kp"]) / a,
+        "kd": float(pd["kd"]) / a,
+        "max_torque": float(pd["max_torque"]) / a,
+    }
 
 
 def main(argv=None) -> int:

@@ -24,7 +24,11 @@ from wojtek_policy.policy import (  # noqa: E402
     gravity_from_quat,
     height_anchor,
 )
-from wojtek_policy.policy_source import resolve_policy  # noqa: E402
+from wojtek_policy.policy_source import (  # noqa: E402
+    load_meta,
+    pd_settings,
+    resolve_policy,
+)
 
 CONFIG = PKG / "config"
 
@@ -308,6 +312,21 @@ def test_resolve_local_dir(tmp_path):
 def test_resolve_local_dir_missing_files(tmp_path):
     with pytest.raises(FileNotFoundError, match="policy.npz"):
         resolve_policy(str(tmp_path))
+
+
+def test_load_meta_and_pd_settings(tmp_path):
+    make_policy(tmp_path, meta_updates={"pd": {"kp": 80.0, "kd": 2.26,
+                                               "max_torque": 9.0}})
+    meta, source = load_meta(str(tmp_path))
+    assert source == f"local:{tmp_path}"
+    assert pd_settings(meta) == {"kp": 80.0, "kd": 2.26, "max_torque": 9.0}
+    # stand-sag compensation: the driver gets pd / alpha
+    scaled = pd_settings(meta, alpha=1.58)
+    assert scaled["kp"] == pytest.approx(80.0 / 1.58)
+    assert scaled["kd"] == pytest.approx(2.26 / 1.58)
+    assert scaled["max_torque"] == pytest.approx(9.0 / 1.58)
+    with pytest.raises(ValueError, match="alpha"):
+        pd_settings(meta, alpha=0.0)
 
 
 def test_resolve_rejects_non_reference():

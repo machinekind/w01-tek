@@ -5,8 +5,15 @@
     default until this has run through ros2_control on the robot (bench
     tests in ros/hw_tests/imu_i2c already pass).
 
-    ros2 launch wojtek_bringup real.launch.py [max_torque:=2.0] [dry_run:=true]
+    ros2 launch wojtek_bringup real.launch.py [policy:=org/name@sha]
+                                              [alpha:=1.0] [max_torque:=2.0]
+                                              [dry_run:=true]
                                               [boot_pose:=home|folded] [bag:=false]
+
+    The MD80 servo settings (impedance kp/kd, torque cap) come from the
+    loaded policy's contract, divided by alpha (measured stand-sag torque
+    miscalibration; 1.0 until measured). Explicit kp:=/kd:=/max_torque:=
+    override the contract verbatim -- e.g. max_torque:=2 for first tests.
 
     Every run records a full rosbag (all topics) to bag_dir/run_<timestamp>
     (bag_dir defaults to ~/wojtek_bags). Disable with bag:=false.
@@ -32,7 +39,7 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import (
     Command,
@@ -43,24 +50,37 @@ from launch.substitutions import (
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
+from wojtek_policy.policy_source import load_meta, pd_settings
 
-def generate_launch_description():
+
+def launch_setup(context, *args, **kwargs):
     share = get_package_share_directory("wojtek_bringup")
     policy_share = get_package_share_directory("wojtek_policy")
     xacro_file = os.path.join(share, "urdf", "wojtek_real.urdf.xacro")
-    max_torque = LaunchConfiguration("max_torque")
-    imu_bus = LaunchConfiguration("imu_bus")
-    imu_addr_ag = LaunchConfiguration("imu_addr_ag")
-    imu_addr_mag = LaunchConfiguration("imu_addr_mag")
-    bus = LaunchConfiguration("bus")
-    can_baud = LaunchConfiguration("can_baud")
+
+    policy_ref = LaunchConfiguration("policy").perform(context)
+    meta, source = load_meta(policy_ref)
+    pd = pd_settings(meta, float(LaunchConfiguration("alpha").perform(context)))
+    # Explicit args override the contract verbatim (no alpha applied --
+    # the operator gave the final value).
+    for key in ("kp", "kd", "max_torque"):
+        override = LaunchConfiguration(key).perform(context)
+        if override:
+            pd[key] = float(override)
+    print(f">> policy {meta['run_name']} from {source}; servo settings "
+          f"kp={pd['kp']:g} kd={pd['kd']:g} max_torque={pd['max_torque']:g}")
+
     use_imu = LaunchConfiguration("use_imu")
     robot_description = ParameterValue(
         Command(
-            ["xacro ", xacro_file, " max_torque:=", max_torque,
-             " use_imu:=", use_imu, " imu_bus:=", imu_bus,
-             " imu_addr_ag:=", imu_addr_ag, " imu_addr_mag:=", imu_addr_mag,
-             " bus:=", bus, " can_baud:=", can_baud,
+            ["xacro ", xacro_file,
+             f" kp:={pd['kp']} kd:={pd['kd']} max_torque:={pd['max_torque']}",
+             " use_imu:=", use_imu,
+             " imu_bus:=", LaunchConfiguration("imu_bus"),
+             " imu_addr_ag:=", LaunchConfiguration("imu_addr_ag"),
+             " imu_addr_mag:=", LaunchConfiguration("imu_addr_mag"),
+             " bus:=", LaunchConfiguration("bus"),
+             " can_baud:=", LaunchConfiguration("can_baud"),
              " dry_run:=", LaunchConfiguration("dry_run")]
         ),
         value_type=str,
@@ -70,18 +90,129 @@ def generate_launch_description():
     # when the launch is generated (each `ros2 launch` gets its own bag). We
     # collect little data, so recording everything (-a) as a per-run log is
     # cheap and worth having.
-    default_bag_dir = os.path.join(os.path.expanduser("~"), "wojtek_bags")
     bag_stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     bag_output = PathJoinSubstitution(
         [LaunchConfiguration("bag_dir"), TextSubstitution(text=f"run_{bag_stamp}")]
     )
 
+    return [
+        Node(
+            package="controller_manager",
+            executable="ros2_control_node",
+            parameters=[
+                {"robot_description": robot_description},
+                os.path.join(share, "config", "real_controllers.yaml"),
+            ],
+            output="screen",
+        ),
+        Node(
+            package="controller_manager",
+            executable="spawner",
+            arguments=["joint_state_broadcaster", "imu_sensor_broadcaster",
+                       "forward_position_controller"],
+            condition=IfCondition(use_imu),
+        ),
+        Node(
+            package="controller_manager",
+            executable="spawner",
+            arguments=["joint_state_broadcaster",
+                       "forward_position_controller"],
+            condition=UnlessCondition(use_imu),
+        ),
+        # RViz/robot_state_publisher use ABSOLUTE joint angles.
+        Node(
+            package="robot_state_publisher",
+            executable="robot_state_publisher",
+            parameters=[{"robot_description": robot_description}],
+            remappings=[("joint_states", "wojtek/joint_states_abs")],
+        ),
+        # wojtek.rviz uses odom as the fixed frame (the sim publishes ground
+        # truth odom -> base_link); there is no odometry on the real robot
+        # yet, so pin base_link at the origin for visualization.
+        Node(
+            package="tf2_ros",
+            executable="static_transform_publisher",
+            arguments=["--frame-id", "odom", "--child-frame-id", "base_link"],
+        ),
+        Node(
+            package="wojtek_bringup",
+            executable="real_io_node",
+            output="screen",
+            parameters=[
+                {
+                    "dry_run": LaunchConfiguration("dry_run"),
+                    "boot_pose": LaunchConfiguration("boot_pose"),
+                }
+            ],
+        ),
+        Node(
+            package="wojtek_policy",
+            executable="policy_node",
+            output="screen",
+            parameters=[
+                {
+                    "policy": LaunchConfiguration("policy"),
+                    # URDF imu_joint: rpy 0 pi 0 relative to base_link.
+                    "imu_mount_rpy": [0.0, 3.141592653589793, 0.0],
+                    "auto_enable": True,  # real_io arming is the gate
+                    "soft_start_s": 2.0,
+                    "clamp_knee": True,
+                    "watchdog_timeout_s": 0.2,
+                }
+            ],
+            remappings=[
+                ("joint_states", "wojtek/joint_states_abs"),
+            ],
+        ),
+        Node(
+            package="rviz2",
+            executable="rviz2",
+            arguments=["-d", os.path.join(policy_share, "rviz", "wojtek.rviz")],
+            condition=IfCondition(LaunchConfiguration("rviz")),
+        ),
+        # bash -c: mkdir the parent (rosbag2 creates the bag dir itself but
+        # not missing parents), then exec the recorder -- optionally under
+        # taskset when bag_cpus is set. Paths/cpus are passed as argv ($1..$3),
+        # not spliced into the script, so values with spaces are safe.
+        ExecuteProcess(
+            condition=IfCondition(LaunchConfiguration("bag")),
+            cmd=[
+                "bash", "-c",
+                'mkdir -p "$1"\n'
+                'if [ -n "$3" ]; then\n'
+                '  exec taskset -c "$3" ros2 bag record -a -o "$2"\n'
+                'fi\n'
+                'exec ros2 bag record -a -o "$2"\n',
+                "wojtek_bag_record",  # $0 (shell name in messages)
+                LaunchConfiguration("bag_dir"),  # $1
+                bag_output,  # $2
+                LaunchConfiguration("bag_cpus"),  # $3
+            ],
+            output="screen",
+        ),
+    ]
+
+
+def generate_launch_description():
+    default_bag_dir = os.path.join(os.path.expanduser("~"), "wojtek_bags")
     return LaunchDescription(
         [
-            # The shipped stiff_b policy trained with 9 Nm available (and
-            # kp=40/kd=1.6, which fall through to the xacro defaults). Lower
-            # this for cautious first tests, e.g. max_torque:=2.
-            DeclareLaunchArgument("max_torque", default_value="9.0"),
+            # HF repo id (org/name[@revision]) or a local directory with
+            # policy.npz + policy_meta.json; pin a commit for durable runs.
+            DeclareLaunchArgument(
+                "policy",
+                default_value="<HF_ORGANIZATION>/wojtek-springy-locomotion",
+            ),
+            # Measured stand-sag torque miscalibration of the real actuators;
+            # the MD80s get the contract's kp/alpha, kd/alpha, cap/alpha.
+            # 1.0 until measured.
+            DeclareLaunchArgument("alpha", default_value="1.0"),
+            # Explicit overrides of the policy contract's servo settings
+            # (empty = from the contract). E.g. max_torque:=2 for cautious
+            # first tests.
+            DeclareLaunchArgument("kp", default_value=""),
+            DeclareLaunchArgument("kd", default_value=""),
+            DeclareLaunchArgument("max_torque", default_value=""),
             # CAN link to the drives: CANdle HAT over SPI at 8M by default
             # (the drives' flashed baudrate since 2026-07-17). bus:=usb
             # can_baud:=1 = the legacy USB dongle, only after flashing the
@@ -107,108 +238,9 @@ def generate_launch_description():
             # bag:=false; change where they land with bag_dir:=/some/path.
             DeclareLaunchArgument("bag", default_value="true"),
             DeclareLaunchArgument("bag_dir", default_value=default_bag_dir),
-            # HF repo id (org/name[@revision]) or a local directory with
-            # policy.npz + policy_meta.json; pin a commit for durable runs.
-            DeclareLaunchArgument(
-                "policy",
-                default_value="<HF_ORGANIZATION>/wojtek-springy-locomotion",
-            ),
             # Optional CPU affinity for the recorder (comma list, e.g. "0,1");
             # empty = inherit. Mainly for the RPi service (see robot.launch.py).
             DeclareLaunchArgument("bag_cpus", default_value=""),
-            Node(
-                package="controller_manager",
-                executable="ros2_control_node",
-                parameters=[
-                    {"robot_description": robot_description},
-                    os.path.join(share, "config", "real_controllers.yaml"),
-                ],
-                output="screen",
-            ),
-            Node(
-                package="controller_manager",
-                executable="spawner",
-                arguments=["joint_state_broadcaster", "imu_sensor_broadcaster",
-                           "forward_position_controller"],
-                condition=IfCondition(use_imu),
-            ),
-            Node(
-                package="controller_manager",
-                executable="spawner",
-                arguments=["joint_state_broadcaster",
-                           "forward_position_controller"],
-                condition=UnlessCondition(use_imu),
-            ),
-            # RViz/robot_state_publisher use ABSOLUTE joint angles.
-            Node(
-                package="robot_state_publisher",
-                executable="robot_state_publisher",
-                parameters=[{"robot_description": robot_description}],
-                remappings=[("joint_states", "wojtek/joint_states_abs")],
-            ),
-            # wojtek.rviz uses odom as the fixed frame (the sim publishes ground
-            # truth odom -> base_link); there is no odometry on the real robot
-            # yet, so pin base_link at the origin for visualization.
-            Node(
-                package="tf2_ros",
-                executable="static_transform_publisher",
-                arguments=["--frame-id", "odom", "--child-frame-id", "base_link"],
-            ),
-            Node(
-                package="wojtek_bringup",
-                executable="real_io_node",
-                output="screen",
-                parameters=[
-                    {
-                        "dry_run": LaunchConfiguration("dry_run"),
-                        "boot_pose": LaunchConfiguration("boot_pose"),
-                    }
-                ],
-            ),
-            Node(
-                package="wojtek_policy",
-                executable="policy_node",
-                output="screen",
-                parameters=[
-                    {
-                        "policy": LaunchConfiguration("policy"),
-                        # URDF imu_joint: rpy 0 pi 0 relative to base_link.
-                        "imu_mount_rpy": [0.0, 3.141592653589793, 0.0],
-                        "auto_enable": True,  # real_io arming is the gate
-                        "soft_start_s": 2.0,
-                        "clamp_knee": True,
-                        "watchdog_timeout_s": 0.2,
-                    }
-                ],
-                remappings=[
-                    ("joint_states", "wojtek/joint_states_abs"),
-                ],
-            ),
-            Node(
-                package="rviz2",
-                executable="rviz2",
-                arguments=["-d", os.path.join(policy_share, "rviz", "wojtek.rviz")],
-                condition=IfCondition(LaunchConfiguration("rviz")),
-            ),
-            # bash -c: mkdir the parent (rosbag2 creates the bag dir itself but
-            # not missing parents), then exec the recorder -- optionally under
-            # taskset when bag_cpus is set. Paths/cpus are passed as argv ($1..$3),
-            # not spliced into the script, so values with spaces are safe.
-            ExecuteProcess(
-                condition=IfCondition(LaunchConfiguration("bag")),
-                cmd=[
-                    "bash", "-c",
-                    'mkdir -p "$1"\n'
-                    'if [ -n "$3" ]; then\n'
-                    '  exec taskset -c "$3" ros2 bag record -a -o "$2"\n'
-                    'fi\n'
-                    'exec ros2 bag record -a -o "$2"\n',
-                    "wojtek_bag_record",  # $0 (shell name in messages)
-                    LaunchConfiguration("bag_dir"),  # $1
-                    bag_output,  # $2
-                    LaunchConfiguration("bag_cpus"),  # $3
-                ],
-                output="screen",
-            ),
+            OpaqueFunction(function=launch_setup),
         ]
     )

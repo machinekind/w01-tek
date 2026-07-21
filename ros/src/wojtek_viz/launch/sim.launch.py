@@ -48,7 +48,14 @@ def generate_launch_description():
                 package="wojtek_viz",
                 executable="mujoco_sim_node",
                 output="screen",
-                parameters=[{"initial_pose": LaunchConfiguration("initial_pose")}],
+                parameters=[
+                    {
+                        "initial_pose": LaunchConfiguration("initial_pose"),
+                        # Match the simulated plant (servo gains, torque cap)
+                        # to the same policy contract policy_node loads.
+                        "policy": LaunchConfiguration("policy"),
+                    }
+                ],
             ),
             Node(
                 package="wojtek_policy",

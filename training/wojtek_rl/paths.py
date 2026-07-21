@@ -31,9 +31,10 @@ def scene_xml(name: str) -> Path:
     return ROOM_SCENE_XML if name == "room" else MUJOCO_DIR / f"scene_{name}.xml"
 
 # Exported NumPy policy runtime (ROS-free), shared with the real robot.
-# (policy_meta.json is found by WojtekPolicy next to the npz.)
 WOJTEK_POLICY_PKG = REPO_ROOT / "ros/src/wojtek_policy"
-POLICY_NPZ = WOJTEK_POLICY_PKG / "config/policy.npz"
+# Default policy reference for sim/demo apps: any form accepted by
+# wojtek_policy.policy_source (HF repo id, local dir, path to policy.npz).
+DEFAULT_POLICY = "<HF_ORGANIZATION>/wojtek-springy-locomotion"
 
 # URDF <-> MuJoCo affine joint map, shared with the ROS nodes (sysid bag
 # reader converts recorded signals with the exact same table).

@@ -14,7 +14,6 @@ pytestmark = pytest.mark.skipif(
     not (
         paths.ROOM_MANIFEST.exists()
         and paths.ROOM_SCENE_XML.exists()
-        and paths.POLICY_NPZ.exists()
     ),
     reason="room assets not built (run.sh room-assets + build-room)",
 )
@@ -24,7 +23,10 @@ pytestmark = pytest.mark.skipif(
 def bench_sim():
     from wojtek_rl.room_app import RoomSim
 
-    return RoomSim(paths.ROOM_SCENE_XML, paths.POLICY_NPZ, vlm_cam="bench")
+    try:
+        return RoomSim(paths.ROOM_SCENE_XML, paths.DEFAULT_POLICY, vlm_cam="bench")
+    except Exception as e:  # policy unresolvable (offline, no HF cache/token)
+        pytest.skip(f"policy {paths.DEFAULT_POLICY} unavailable: {e}")
 
 
 def test_bench_camera_defined_with_vlnce_geometry(bench_sim):
@@ -52,4 +54,4 @@ def test_unknown_camera_rejected():
     from wojtek_rl.room_app import RoomSim
 
     with pytest.raises(ValueError, match="camera"):
-        RoomSim(paths.ROOM_SCENE_XML, paths.POLICY_NPZ, vlm_cam="selfie")
+        RoomSim(paths.ROOM_SCENE_XML, paths.DEFAULT_POLICY, vlm_cam="selfie")

@@ -23,10 +23,12 @@ execution, so `auto` resolves to JAX for those commands.
 
 ## Naming
 
-Use **Wojtek** in new prose and new `run_name` values. The repository path
-remains `wojtek`, while `fbb-locomotion`, `fbb_*` preset run names, and
-`policies/fbb_v3` are literal current historical configuration/artifact names;
-do not rename them in documentation without changing the corresponding source
+Use **Wojtek** in new prose and new `run_name` values. The repository lives
+at `github.com/machinekind/wojtek` (older checkouts may still sit in
+directories named `wojtek`; cluster paths are parameterized, see the HPC
+section). `fbb-locomotion`, `fbb_*` preset run names, and `policies/fbb_v3`
+are literal current historical configuration/artifact names; do not rename
+them in documentation without changing the corresponding source
 configuration or artifact.
 
 ## First: resolve, then run
@@ -574,7 +576,8 @@ variables through `sbatch --export` or `make hpc-train`:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `WORKDIR` | `$HOME/M/wojtek` | Repository directory on the cluster. |
+| `WORKDIR` | **required** | Repository directory on the cluster (per-person namespace on the shared account — no default). |
+| `STORE_DIR` | **required** | Persistent storage directory for the venv, caches, and offline wandb. |
 | `EXPERIMENT` | `locomotion` | Name passed as `+experiment`. |
 | `RUN_NAME` | unset | Optional explicit run name. |
 | `NUM_ENVS` | `32768` | `++ppo.num_envs` across the 4-GPU default job. |
@@ -587,9 +590,11 @@ The Make wrapper additionally accepts these transport/scheduler variables:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `HPC_USER` | `ACCOUNT` | cluster username used to compose the remote destination; override it explicitly for another account. |
+| `HPC_USER` | **required** | cluster username; set per-invocation or in an untracked `Makefile.local`. |
+| `HPC_NS` | **required** | Your namespace directory under `$HOME` on the shared account. |
+| `HPC_REPO` | `wojtek` | Checkout directory name inside the namespace. |
 | `HPC` | `$(HPC_USER)@ui.cluster.example` | SSH destination used by `hpc-*` Make targets. |
-| `REMOTE` | `/home/$(HPC_USER)/M/wojtek` | Remote checkout destination. |
+| `REMOTE` | `/home/$(HPC_USER)/$(HPC_NS)/$(HPC_REPO)` | Remote checkout destination. |
 | `TIME` | unset | Optional Slurm time override passed by `make hpc-train`. |
 
 Example:

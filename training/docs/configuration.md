@@ -548,7 +548,9 @@ JAX_PLATFORMS=cpu ./.venv/bin/python -m wojtek_rl.battery \
 ```
 
 [`training/hpc/stiff_grid.slurm`](../hpc/stiff_grid.slurm) sweeps this over a
-set of checkpoints and an alpha/lag/envelope grid (CPU-only, no GPU), writing
+set of checkpoints and an alpha/lag/envelope grid (CPU-mode eval on a
+`PARTITION node — the shared venv only runs there; its single requested GPU
+sits idle), writing
 `runs/<run>/grid/battery_a<alpha>_lag<ms>ms_env<tag>.json` per cell -- `<tag>`
 is `none` (no `--torque-envelope` passed for that cell, preserving the native
 path) or `<OMEGA_B>-<OMEGA_0>`. A crashed cell logs a WARN and the sweep

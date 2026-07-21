@@ -47,7 +47,7 @@ namespaces.
 |---|---|---|
 | `train.slurm` | `PARTITION | Single training run of any `+experiment=` preset. |
 | `stiff_ladder.slurm` | `PARTITION | Gated PD-stiffness ladder: fine-tunes successively stiffer rungs from a keeper checkpoint, stops on gate rejection or diminishing returns. Requires `START_CHECKPOINT`, `RUNGS_LIST`, `BASELINE_MEAN_TRACK_ERR`, `BASELINE_VIBRATION_JSON`. |
-| `stiff_grid.slurm` | `PARTITION | Eval-only sim2real robustness grid (`--alpha`/`--lag-tau`/`--torque-envelope`) over existing runs; aggregates with `wojtek_rl.grid_report`. Requires `CKPTS_LIST`. |
+| `stiff_grid.slurm` | `PARTITION (1 GPU, idle) | Eval-only sim2real robustness grid (`--alpha`/`--lag-tau`/`--torque-envelope`) over existing runs; aggregates with `wojtek_rl.grid_report`. Requires `CKPTS_LIST`. CPU-mode eval, but the shared venv's interpreter exists only on GPU nodes. |
 
 cluster specifics (partitions, quotas, debugging) live in the opt-in
 `cluster-hpc` skill; see `skills/README.md`. Per the root `CLAUDE.md`, do not

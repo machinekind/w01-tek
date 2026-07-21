@@ -24,8 +24,10 @@ from rclpy.node import Node
 from sensor_msgs.msg import Imu, JointState
 from std_srvs.srv import SetBool, Trigger
 
+from wojtek_policy import poses
 from wojtek_policy.joint_map import JointMap
 from wojtek_policy.policy import WojtekPolicy, gravity_from_quat
+from wojtek_policy.policy_source import resolve_policy
 
 
 def rpy_to_mat(r, p, y):
@@ -41,7 +43,10 @@ class PolicyNode(Node):
     def __init__(self):
         super().__init__("wojtek_policy")
         share = get_package_share_directory("wojtek_policy")
-        self.declare_parameter("policy_dir", f"{share}/config")
+        # Local directory with policy.npz + policy_meta.json, or a Hugging
+        # Face repo id (org/name[@revision]) -- see policy_source.py. Real
+        # launches pin a revision; there is no baked-in default policy.
+        self.declare_parameter("policy", "")
         self.declare_parameter("joint_map_yaml", f"{share}/config/joint_map.yaml")
         # Rotation of the IMU frame expressed in base_link (URDF imu_joint
         # rpy). Sim publishes IMU already in base_link -> zeros.
@@ -57,11 +62,19 @@ class PolicyNode(Node):
         # the accelerometer measurement. Read per message, so tunable live.
         self.declare_parameter("grav_filter_alpha", 0.98)
 
-        pdir = self.get_parameter("policy_dir").value
+        resolved = resolve_policy(self.get_parameter("policy").value)
+        self._policy_source = resolved.source
         self.policy = WojtekPolicy(
-            f"{pdir}/policy.npz",
+            resolved.npz,
+            meta_path=resolved.meta,
             clamp_knee=self.get_parameter("clamp_knee").value,
         )
+        if self.policy.joint_names != poses.ACTUATOR_NAMES:
+            raise ValueError(
+                f"policy from {resolved.source} was trained for actuators "
+                f"{self.policy.joint_names}, this robot has "
+                f"{poses.ACTUATOR_NAMES}"
+            )
         self.jmap = JointMap(self.get_parameter("joint_map_yaml").value)
         self.joint_names = self.policy.joint_names  # policy actuator order
         self.imu_mount = rpy_to_mat(*self.get_parameter("imu_mount_rpy").value)
@@ -72,8 +85,8 @@ class PolicyNode(Node):
         self._gravity_base = None
         self._grav_filt = np.array([0.0, 0.0, -1.0])
         self._cmd = np.zeros(3)
-        if self.policy.command_width >= 4:
-            self._cmd = np.append(self._cmd, self.policy.command_height)
+        if self.policy.command_fill.size:
+            self._cmd = np.append(self._cmd, self.policy.command_fill)
         self._joints_stamp = None
         self._imu_stamp = None
         self._enabled = self.get_parameter("auto_enable").value
@@ -89,9 +102,12 @@ class PolicyNode(Node):
         self.create_service(SetBool, "wojtek/enable", self._srv_enable)
         self.create_service(Trigger, "wojtek/reset", self._srv_reset)
         self.create_timer(self.policy.ctrl_dt, self._tick)
+        pd = self.policy.meta.get("pd", {})
         self.get_logger().info(
-            f"policy {self.policy.meta['run_name']} loaded, "
-            f"{1.0 / self.policy.ctrl_dt:.0f} Hz, enabled={self._enabled}"
+            f"policy {self.policy.meta['run_name']} from {self._policy_source}, "
+            f"{1.0 / self.policy.ctrl_dt:.0f} Hz, enabled={self._enabled}; "
+            f"trained against kp={pd.get('kp')} kd={pd.get('kd')} "
+            f"max_torque={pd.get('max_torque')} -- the driver must match"
         )
 
     # -- inputs --------------------------------------------------------------
@@ -145,17 +161,19 @@ class PolicyNode(Node):
 
     def _on_cmd(self, msg):
         # Clip to the command box the policy trained on: never ask it to
-        # track more than it has seen (ranges come from policy_meta.json).
+        # track more than it has seen (ranges come from the loaded contract).
         cmd = np.array([msg.linear.x, msg.linear.y, msg.angular.z])
-        cmd = np.clip(cmd, self.policy.command_low, self.policy.command_high)
+        cmd = np.clip(cmd, self.policy.command_low[:3], self.policy.command_high[:3])
         if self.policy.command_width >= 4:
             # linear.z carries the commanded standing height (m); 0 (the
-            # Twist default) means "not set" -> keep the meta's height.
-            height = msg.linear.z if msg.linear.z > 0.0 else self.policy.command_height
+            # Twist default) means "not set" -> keep the contract's fill
+            # height.
+            height = (
+                msg.linear.z if msg.linear.z > 0.0
+                else float(self.policy.command_fill[0])
+            )
             height = np.clip(
-                height,
-                self.policy.command_height_low,
-                self.policy.command_height_high,
+                height, self.policy.command_low[3], self.policy.command_high[3]
             )
             cmd = np.append(cmd, height)
         self._cmd = cmd

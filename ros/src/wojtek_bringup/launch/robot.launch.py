@@ -107,6 +107,16 @@ def generate_launch_description():
             # docstring. bag_dir:=/some/path relocates the output.
             DeclareLaunchArgument("bag", default_value="false"),
             DeclareLaunchArgument("bag_dir", default_value=default_bag_dir),
+            # Which policy runs: a Hugging Face repo id (org/name[@revision])
+            # or a local directory with policy.npz + policy_meta.json. For a
+            # durable real-robot run pin a commit: policy:=<repo>@<sha>.
+            # First use of a new revision needs network + an HF token on the
+            # RPi (prefetch: python3 -m wojtek_policy.policy_source <ref>);
+            # afterwards it loads from the local HF cache.
+            DeclareLaunchArgument(
+                "policy",
+                default_value="<HF_ORGANIZATION>/wojtek-springy-locomotion",
+            ),
             # Optional CPU affinity for the recorder (comma list, e.g. "0,1").
             # Empty = inherit. The RPi service wraps the whole launch in
             # `taskset -c 2,3` (the isolated RT cores); it sets bag_cpus:=0,1 to
@@ -167,6 +177,7 @@ def generate_launch_description():
                 output="screen",
                 parameters=[
                     {
+                        "policy": LaunchConfiguration("policy"),
                         # URDF imu_joint: rpy 0 pi 0 relative to base_link.
                         "imu_mount_rpy": [0.0, 3.141592653589793, 0.0],
                         "auto_enable": True,  # real_io arming is the gate

@@ -107,6 +107,12 @@ def generate_launch_description():
             # bag:=false; change where they land with bag_dir:=/some/path.
             DeclareLaunchArgument("bag", default_value="true"),
             DeclareLaunchArgument("bag_dir", default_value=default_bag_dir),
+            # HF repo id (org/name[@revision]) or a local directory with
+            # policy.npz + policy_meta.json; pin a commit for durable runs.
+            DeclareLaunchArgument(
+                "policy",
+                default_value="<HF_ORGANIZATION>/wojtek-springy-locomotion",
+            ),
             # Optional CPU affinity for the recorder (comma list, e.g. "0,1");
             # empty = inherit. Mainly for the RPi service (see robot.launch.py).
             DeclareLaunchArgument("bag_cpus", default_value=""),
@@ -165,6 +171,7 @@ def generate_launch_description():
                 output="screen",
                 parameters=[
                     {
+                        "policy": LaunchConfiguration("policy"),
                         # URDF imu_joint: rpy 0 pi 0 relative to base_link.
                         "imu_mount_rpy": [0.0, 3.141592653589793, 0.0],
                         "auto_enable": True,  # real_io arming is the gate

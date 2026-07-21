@@ -33,6 +33,12 @@ def generate_launch_description():
         [
             DeclareLaunchArgument("rviz", default_value="true"),
             DeclareLaunchArgument("initial_pose", default_value="home"),
+            # HF repo id (org/name[@revision]) or a local directory with
+            # policy.npz + policy_meta.json -- see wojtek_policy/policy_source.py.
+            DeclareLaunchArgument(
+                "policy",
+                default_value="<HF_ORGANIZATION>/wojtek-springy-locomotion",
+            ),
             Node(
                 package="robot_state_publisher",
                 executable="robot_state_publisher",
@@ -50,6 +56,7 @@ def generate_launch_description():
                 output="screen",
                 parameters=[
                     {
+                        "policy": LaunchConfiguration("policy"),
                         "imu_mount_rpy": [0.0, 0.0, 0.0],  # sim IMU is in base_link
                         "auto_enable": True,
                         "soft_start_s": 0.5,

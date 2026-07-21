@@ -29,9 +29,10 @@ from wojtek_rl import paths
 SCENARIOS = ["stand_to_trot_ramp", "turn", "strafe", "walk_to_stop"]
 VEL_ERR_SCENARIOS = ["stand_to_trot_ramp", "turn", "walk_to_stop"]
 
-# Keeper reference numbers, provenance wojtek_stiff_b_20260717_235321 job
-# NNNNNNN -- see training/hpc/stiff_ladder.slurm's KEEPER_VIBRATION_JSON and
-# gates 1-4 (this module applies the same four gates per grid cell).
+# Keeper reference numbers, provenance wojtek_stiff_b_20260717_235321
+# (job NNNNNNN, eval_report.json) -- the same values passed to
+# training/hpc/stiff_ladder.slurm as BASELINE_VIBRATION_JSON; this module
+# applies the ladder's gates 1-4 (see its run_gates) per grid cell.
 KEEPER_VIBRATION = {
     "stand_to_trot_ramp": 0.247,
     "turn": 0.144,

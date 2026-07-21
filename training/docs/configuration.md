@@ -563,6 +563,12 @@ are still read, treated as envelope `none`.
 
 ## HPC launch configuration
 
+Every `training/hpc/*.slurm` script is a parameterized, reusable tool;
+experiment-specific values enter via `sbatch --export`, and the as-run
+instance of a finished experiment is archived in its keeper's Hugging Face
+repo under `hpc/` — see [`training/CLAUDE.md`](../CLAUDE.md) for the
+convention and the per-script requirements.
+
 [`training/hpc/train.slurm`](../hpc/train.slurm) accepts these environment
 variables through `sbatch --export` or `make hpc-train`:
 

@@ -14,7 +14,8 @@
 # the kp20 baseline after the kd 1.4 -> 1.6 bump (the kd=1.4 probe ran
 # ~2x baseline); vel_err ramp 0.071 / turn 0.13 / walk_to_stop 0.062;
 # torque saturation <=1.1% at the 9 Nm cap.
-# Trained as the two-phase pipeline (training/hpc/stiff_two_phase.slurm)
+# Trained as the two-phase pipeline (as-run stiff_two_phase.slurm archived
+# under hpc/ in the HF repo below)
 # at commit eb8bad2, seed 1, ++ppo.num_envs=32768 ++ppo.batch_size=1024:
 # phase A 1.2B steps at kd=1.4, phase B (this config) 800M steps restored
 # from A's final checkpoint with kd bumped to 1.6.

@@ -35,5 +35,9 @@ def scene_xml(name: str) -> Path:
 WOJTEK_POLICY_PKG = REPO_ROOT / "ros/src/wojtek_policy"
 POLICY_NPZ = WOJTEK_POLICY_PKG / "config/policy.npz"
 
+# URDF <-> MuJoCo affine joint map, shared with the ROS nodes (sysid bag
+# reader converts recorded signals with the exact same table).
+JOINT_MAP_YAML = WOJTEK_POLICY_PKG / "config/joint_map.yaml"
+
 # XML declaration order. Actuators and joints follow this order.
 LEGS = ("rear_left", "rear_right", "front_right", "front_left")

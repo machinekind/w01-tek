@@ -16,6 +16,18 @@ sshc() { ssh -o ConnectTimeout=10 -p PORT root@HOST "$@"; }
 WORK=/workspace/PROJECT/training
 ```
 
+Connect to the DIRECT address, not the `sshN.vast.ai` proxy that `vastai show instance`
+displays in its `SSH Addr`/`SSH Port` columns. The proxy can refuse every attempt with
+"Connection closed by ... port ..." even while the instance is healthy. On a `--direct`
+instance the real mapping is container port 22 in the raw ports field — `vastai ssh-url ID`
+prints it directly (2026-07: proxy refused indefinitely, `ssh://root@IP:PORT` from `ssh-url`
+worked first try):
+
+```bash
+vastai ssh-url ID                       # ssh://root@PUBLIC_IP:DIRECT_PORT — use this
+vastai show instance ID --raw | jq '.ports["22/tcp"]'   # same mapping, by hand
+```
+
 For this repository: module `wojtek_rl`, launcher `training/run.sh`, safe process pattern
 `wojtek_rl[.]train`.
 

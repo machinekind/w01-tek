@@ -30,7 +30,7 @@ import time
 RPI_HOST = os.environ.get("RPI_HOST", "rpi@10.42.0.2")
 REMOTE_WS = os.environ.get("REMOTE_WS", "wojtek_ws")
 ROS_DISTRO = os.environ.get("ROS_DISTRO", "jazzy")
-SERVICE = "wojtek-robot.service"
+SERVICE = os.environ.get("WOJTEK_SERVICE", "wojtek-robot.service")
 
 # Taken from this container so both ends of the link always agree. An ssh
 # command runs non-interactively and the RPi's profile sets nothing for ROS, so

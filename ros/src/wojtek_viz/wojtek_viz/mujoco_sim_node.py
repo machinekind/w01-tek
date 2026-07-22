@@ -7,7 +7,8 @@ it to ROS:
   subscribes  /wojtek/joint_targets (JointState, URDF convention)
   publishes   /joint_states (URDF convention, actuated + passive four-bar
               joints -> drives robot_state_publisher / RViz)
-              /imu/data (orientation, gyro, accel of the base, base_link frame)
+              /imu_sensor_broadcaster/imu (orientation, gyro, accel of the
+              base, base_link frame; named like the real broadcaster's topic)
               TF odom -> base_link (ground truth base pose)
               /odom_vel (Twist, ground-truth base velocity, debugging)
   services    /sim/reset (std_srvs/Trigger) -- back to the initial pose
@@ -106,7 +107,9 @@ class MujocoSimNode(Node):
             JointState, "wojtek/joint_targets", self._on_targets, 10
         )
         self._pub_js = self.create_publisher(JointState, "joint_states", 10)
-        self._pub_imu = self.create_publisher(Imu, "imu/data", 10)
+        # Same topic name the real robot's imu_sensor_broadcaster publishes,
+        # so policy/console subscribe one canonical name in sim and real.
+        self._pub_imu = self.create_publisher(Imu, "imu_sensor_broadcaster/imu", 10)
         self._pub_vel = self.create_publisher(Twist, "odom_vel", 10)
         self._tf = TransformBroadcaster(self)
         self.create_service(Trigger, "sim/reset", self._srv_reset)

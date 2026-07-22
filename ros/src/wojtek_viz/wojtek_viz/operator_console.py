@@ -10,7 +10,7 @@ the nodes already expose -- nothing in wojtek_bringup / wojtek_policy changes:
   * Services (M1): /wojtek/arm (SetBool), /wojtek/zero, /wojtek/stand_up,
     /wojtek/lie_down (Trigger), /wojtek/enable (SetBool), /wojtek/reset (Trigger).
   * Telemetry (M2): measured joint angles from /wojtek/joint_states_abs and
-    orientation/angular-rate from /imu/data, shown live.
+    orientation/angular-rate from /imu_sensor_broadcaster/imu, shown live.
   * Joint jog (M3): per-joint sliders publish /wojtek/joint_targets (absolute
     URDF JointState). real_io_node applies them ONLY when armed, and does NOT
     ramp -- so we ramp here, nudging the published target toward the slider set-
@@ -121,7 +121,8 @@ class RosNode(Node):
             JointState, "wojtek/joint_states_abs", self._on_joints_abs, 10)
         self.create_subscription(
             JointState, "joint_states", self._on_joints_raw, 10)
-        self.create_subscription(Imu, "imu/data", self._on_imu, 10)
+        self.create_subscription(
+            Imu, "imu_sensor_broadcaster/imu", self._on_imu, 10)
 
         # URDF (for jog slider limits): latched String from robot_state_publisher.
         latched = QoSProfile(depth=1, history=HistoryPolicy.KEEP_LAST,

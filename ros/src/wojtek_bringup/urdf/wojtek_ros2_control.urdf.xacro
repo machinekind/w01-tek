@@ -37,12 +37,21 @@
     </joint>
   </xacro:macro>
 
-  <xacro:macro name="wojtek_ros2_control" params="kp kd max_torque usb_port">
+  <!-- bus: "spi" = CANdle HAT on the Pi header (device defaults to
+       /dev/spidev0.0 inside the driver), "usb" = the legacy CANdle dongle at
+       usb_port. can_baud (Mbps) must match the drives' flashed baudrate:
+       8 since the 2026-07-17 migration for the HAT; the dongle setup ran 1.
+       See ros/hw_tests/README.md for the per-drive baud migration tool. -->
+  <xacro:macro name="wojtek_ros2_control" params="kp kd max_torque usb_port bus:=spi can_baud:=8 dry_run:=false">
     <ros2_control name="MD80HardwareInterface" type="system">
       <hardware>
         <plugin>md80_hardware_interface/MD80HardwareInterface</plugin>
         <param name="usb_port">${usb_port}</param>
-        <param name="bus">usb</param>
+        <param name="bus">${bus}</param>
+        <param name="can_baud">${can_baud}</param>
+        <!-- true = bench mode: drives never enabled (no torque), encoder
+             states still stream. Wired from the launches' dry_run arg. -->
+        <param name="dry_run">${dry_run}</param>
       </hardware>
 
       <xacro:wojtek_joint name="front_left_first_joint" can_id="10" kp="${kp}" kd="${kd}" max_torque="${max_torque}" />
@@ -63,14 +72,21 @@
     </ros2_control>
   </xacro:macro>
 
-  <!-- baud_rate must match the firmware's Serial.begin(), i.e. 115200 in
-       bmx160_serial_hardware_interface/firmware/main/main.ino. -->
-  <xacro:macro name="wojtek_imu_ros2_control" params="port baud_rate:=115200">
+  <!-- Adafruit 5543 (LSM6DS3TR-C + LIS3MDL) straight on the Pi's I2C bus:
+       no MCU/firmware bridge, no onboard fusion. orientation.* is exported
+       (imu_sensor_broadcaster requires it) but the driver always writes
+       (0,0,0,0); wojtek_policy's IMU callback treats that as "no fusion"
+       and runs its own accel+gyro complementary filter instead. addr_ag/
+       addr_mag default to the board's un-jumpered addresses; bump to
+       0x6B/0x1E if SDO is pulled high. See ros/hw_tests/imu_i2c for the
+       bench test this register map/init sequence was validated against. -->
+  <xacro:macro name="wojtek_imu_i2c_ros2_control" params="bus:=/dev/i2c-1 addr_ag:=0x6A addr_mag:=0x1C">
     <ros2_control name="imu" type="sensor">
       <hardware>
-        <plugin>bmx160_serial_hardware_interface/BMX160SerialHardwareInterface</plugin>
-        <param name="port">${port}</param>
-        <param name="baud_rate">${baud_rate}</param>
+        <plugin>imu_i2c_hardware_interface/ImuI2CHardwareInterface</plugin>
+        <param name="bus">${bus}</param>
+        <param name="addr_ag">${addr_ag}</param>
+        <param name="addr_mag">${addr_mag}</param>
       </hardware>
       <sensor name="imu">
         <state_interface name="orientation.x" />
@@ -80,33 +96,6 @@
         <state_interface name="magnetometer.x" />
         <state_interface name="magnetometer.y" />
         <state_interface name="magnetometer.z" />
-        <state_interface name="angular_velocity.x" />
-        <state_interface name="angular_velocity.y" />
-        <state_interface name="angular_velocity.z" />
-        <state_interface name="linear_acceleration.x" />
-        <state_interface name="linear_acceleration.y" />
-        <state_interface name="linear_acceleration.z" />
-      </sensor>
-    </ros2_control>
-  </xacro:macro>
-
-  <!-- Loaner sensor stand-in for wojtek_imu_ros2_control above: a bare BMI160
-       (accel+gyro only, no magnetometer) is what's actually wired in until
-       a real BMX160 is sourced. See bmi160_serial_hardware_interface for
-       why magnetometer.* is dropped: nothing downstream (imu_sensor_broadcaster,
-       wojtek_policy) consumes it anyway. -->
-  <xacro:macro name="wojtek_bmi160_imu_ros2_control" params="port baud_rate:=115200">
-    <ros2_control name="imu" type="sensor">
-      <hardware>
-        <plugin>bmi160_serial_hardware_interface/BMI160SerialHardwareInterface</plugin>
-        <param name="port">${port}</param>
-        <param name="baud_rate">${baud_rate}</param>
-      </hardware>
-      <sensor name="imu">
-        <state_interface name="orientation.x" />
-        <state_interface name="orientation.y" />
-        <state_interface name="orientation.z" />
-        <state_interface name="orientation.w" />
         <state_interface name="angular_velocity.x" />
         <state_interface name="angular_velocity.y" />
         <state_interface name="angular_velocity.z" />

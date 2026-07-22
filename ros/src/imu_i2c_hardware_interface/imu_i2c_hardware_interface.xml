@@ -1,0 +1,9 @@
+<library path="imu_i2c_hardware_interface">
+  <class name="imu_i2c_hardware_interface/ImuI2CHardwareInterface"
+         type="imu_i2c_hardware_interface::ImuI2CHardwareInterface"
+         base_class_type="hardware_interface::SensorInterface">
+    <description>
+      ros2_control hardware interface.
+    </description>
+  </class>
+</library>

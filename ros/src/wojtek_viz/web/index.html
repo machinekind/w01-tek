@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<!-- Web operator console page, served by wojtek_viz/web_console.py (which
+     also carries the websocket on the same port). Self-contained on purpose:
+     no CDN/vendored libraries, so it works offline on the robot's AP. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>wojtek console</title>
+<style>
+  :root {
+    --bg: #16181d; --card: #1f232b; --edge: #333a46; --fg: #d7dce4;
+    --dim: #8a92a0; --accent: #4a8cd8; --ok: #3fa66c; --warn: #c94f4f;
+  }
+  * { box-sizing: border-box; touch-action: manipulation; }
+  body { margin: 0; padding: 12px; background: var(--bg); color: var(--fg);
+         font: 14px/1.45 system-ui, sans-serif; max-width: 640px;
+         margin-inline: auto; }
+  h1 { font-size: 16px; margin: 0 0 10px; display: flex; align-items: center;
+       gap: 8px; font-weight: 600; }
+  #conn { width: 10px; height: 10px; border-radius: 50%; background: var(--warn); }
+  #conn.up { background: var(--ok); }
+  .card { background: var(--card); border: 1px solid var(--edge);
+          border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+  .card h2 { font-size: 12px; margin: 0 0 10px; color: var(--dim);
+             text-transform: uppercase; letter-spacing: .06em; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button { background: #2a3140; color: var(--fg);
+           border: 1px solid var(--edge); border-radius: 8px;
+           padding: 10px 14px; font-size: 14px; cursor: pointer; }
+  button:disabled { opacity: .35; cursor: default; }
+  button.armed { background: var(--warn); border-color: var(--warn); color: #fff; }
+  button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  label.toggle { display: flex; gap: 6px; align-items: center; color: var(--dim); }
+  #imu, #status, #driveout { font-family: ui-monospace, monospace; font-size: 12px; }
+  #imu { color: var(--dim); margin: 4px 0 12px; }
+  #status { color: var(--dim); min-height: 1.4em; }
+  #pad { background: #171a20; border: 1px solid var(--edge); border-radius: 10px;
+         touch-action: none; display: block; }
+  .drive { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+  .drivecol { flex: 1; min-width: 170px; display: flex; flex-direction: column;
+              gap: 8px; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  table { border-collapse: collapse; width: 100%; }
+  td { padding: 3px 6px; font-size: 12px; }
+  td.jn { color: var(--dim); white-space: nowrap; }
+  td.val { font-family: ui-monospace, monospace; white-space: nowrap; }
+  td.meas { color: var(--ok); }
+  details summary { cursor: pointer; color: var(--dim); font-size: 12px;
+                    text-transform: uppercase; letter-spacing: .06em; }
+</style>
+</head>
+<body>
+<h1><span id="conn"></span> wojtek operator console</h1>
+
+<div class="card">
+  <h2>Motor power / poses / policy</h2>
+  <div class="row">
+    <button id="arm" data-svc="arm">ARM</button>
+    <button data-svc="zero">Zero</button>
+    <button data-svc="stand_up">Stand up</button>
+    <button data-svc="lie_down">Lie down</button>
+    <button data-svc="reset">Policy reset</button>
+    <button id="enable" data-svc="enable">Policy ON</button>
+  </div>
+  <div id="imu">IMU: (waiting)</div>
+  <div id="status">connecting ...</div>
+</div>
+
+<div class="card">
+  <h2>Drive <span style="text-transform:none">(needs: ARMED + Policy ON)</span></h2>
+  <div class="drive">
+    <canvas id="pad" width="200" height="200"></canvas>
+    <div class="drivecol">
+      <label class="toggle"><input type="checkbox" id="driveon"> enable drive</label>
+      <div>strafe</div>
+      <input type="range" id="strafe" min="-1000" max="1000" value="0">
+      <div>height <span id="heightval">0.125</span> m</div>
+      <input type="range" id="height" min="90" max="170" value="125">
+      <div id="driveout">vx +0.00  vy +0.00  yaw +0.00  h 0.125</div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <details>
+    <summary>Joint jog (needs: ARMED + Policy OFF)</summary>
+    <label class="toggle" style="margin:10px 0">
+      <input type="checkbox" id="jogon"> enable jog (publish targets)</label>
+    <table id="jog"></table>
+  </details>
+</div>
+
+<script>
+"use strict";
+// ---- protocol: see web_console.py (JSON over one websocket) ---------------
+// trained command box from the policy meta (asymmetric per axis), sent in
+// the config frame; these are just pre-connect placeholders
+let ws = null, cmdLow = [-0.6, -0.4, -0.7], cmdHigh = [0.6, 0.4, 0.7];
+let armed = false, policyOn = false;
+const $ = id => document.getElementById(id);
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => { $("conn").classList.add("up"); setStatus("connected"); };
+  ws.onclose = () => {
+    $("conn").classList.remove("up");
+    setStatus("disconnected -- retrying ...");
+    $("driveon").checked = false;           // server dead-mans anyway
+    setTimeout(connect, 1000);
+  };
+  ws.onmessage = e => onMessage(JSON.parse(e.data));
+}
+function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
+function setStatus(text) { $("status").textContent = text; }
+
+function onMessage(m) {
+  if (m.t === "config") {
+    buildJog(m.joints, m.limits);
+    if (m.cmd_low) { cmdLow = m.cmd_low; cmdHigh = m.cmd_high; }
+    if (m.height_range) {
+      const h = $("height");
+      h.min = Math.round(m.height_range[0] * 1000);
+      h.max = Math.round(m.height_range[1] * 1000);
+      // don't clobber a set-point the operator already chose
+      if (!h.dataset.touched) h.value = Math.round(m.height_default * 1000);
+      $("heightval").textContent = (h.value / 1000).toFixed(3);
+    }
+  }
+  else if (m.t === "avail") for (const b of document.querySelectorAll("[data-svc]"))
+    b.disabled = !m.svc[b.dataset.svc];
+  else if (m.t === "svc") onSvc(m);
+  else if (m.t === "telemetry") onTelemetry(m);
+  else if (m.t === "jog_on") onJogOn(m);
+}
+
+// ---- services --------------------------------------------------------------
+// armed/policy state is tracked from service responses (there is no status
+// topic); a failed call leaves the local state unchanged -- same as Qt.
+for (const b of document.querySelectorAll("[data-svc]")) {
+  b.onclick = () => {
+    const k = b.dataset.svc;
+    if (k === "arm") send({t: "call", key: k, value: !armed});
+    else if (k === "enable") send({t: "call", key: k, value: !policyOn});
+    else send({t: "call", key: k});
+  };
+}
+function onSvc(m) {
+  if (m.success) {
+    if (m.key === "arm") {
+      armed = !!m.value;
+      $("arm").textContent = armed ? "ARMED" : "ARM";
+      $("arm").classList.toggle("armed", armed);
+    } else if (m.key === "enable") {
+      policyOn = !!m.value;
+      $("enable").textContent = policyOn ? "Policy ON" : "Policy OFF";
+      $("enable").classList.toggle("on", policyOn);
+    }
+    setStatus(`${m.key}: ${m.message || "ok"}`);
+  } else {
+    setStatus(`${m.key} FAILED: ${m.message}`);
+  }
+}
+
+// ---- drive pad ---------------------------------------------------------------
+// Screen up = +vx (forward), screen right = -wz (turn right; ROS +z yaw is
+// counter-clockwise); release recenters to zero (stop). The strafe slider is
+// vy (right = -vy, ROS +y is left) and recenters too. The height slider is an
+// absolute set-point (m) that HOLDS across stop/drive-disable. Normalized
+// motion values in [-1,1]; the server scales by CMD_LIMIT.
+const pad = $("pad"), ctx = pad.getContext("2d");
+let padX = 0, padY = 0;   // screen-normalized knob position
+
+function drawPad() {
+  const w = pad.width, h = pad.height, r = Math.min(w, h) / 2 - 8;
+  ctx.clearRect(0, 0, w, h);
+  ctx.strokeStyle = "#555e6e";
+  ctx.beginPath(); ctx.arc(w / 2, h / 2, r, 0, 7); ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(w / 2 - r, h / 2); ctx.lineTo(w / 2 + r, h / 2);
+  ctx.moveTo(w / 2, h / 2 - r); ctx.lineTo(w / 2, h / 2 + r); ctx.stroke();
+  ctx.fillStyle = "#4a8cd8";
+  ctx.beginPath();
+  ctx.arc(w / 2 + padX * r, h / 2 + padY * r, 10, 0, 7); ctx.fill();
+}
+function padSet(e) {
+  const rect = pad.getBoundingClientRect();
+  const r = Math.min(rect.width, rect.height) / 2 - 8;
+  padX = Math.max(-1, Math.min(1, (e.clientX - rect.left - rect.width / 2) / r));
+  padY = Math.max(-1, Math.min(1, (e.clientY - rect.top - rect.height / 2) / r));
+  drawPad(); sendCmd();
+}
+pad.onpointerdown = e => { pad.setPointerCapture(e.pointerId); padSet(e); };
+pad.onpointermove = e => { if (e.buttons || e.pointerType === "touch") padSet(e); };
+pad.onpointerup = pad.onpointercancel = () => { padX = padY = 0; drawPad(); sendCmd(); };
+
+const strafe = $("strafe"), height = $("height");
+strafe.oninput = sendCmd;
+const recenter = () => { strafe.value = 0; sendCmd(); };
+strafe.onpointerup = recenter;
+strafe.onchange = recenter;   // keyboard etc.
+
+// height holds its set-point (no recentering); slider is in mm for integer
+// steps, range comes from the server config
+height.oninput = () => {
+  height.dataset.touched = 1;
+  $("heightval").textContent = (height.value / 1000).toFixed(3);
+  sendCmd();
+};
+
+$("driveon").onchange = () => {
+  send({t: "drive", on: $("driveon").checked});
+  if ($("driveon").checked && !policyOn)
+    setStatus("drive on, but policy is OFF -- enable policy to move");
+  // stop recenters motion only -- the height set-point deliberately holds
+  if (!$("driveon").checked) { padX = padY = 0; strafe.value = 0; drawPad(); }
+};
+
+function sendCmd() {
+  // pad right = turn right = -wz; strafe right = -vy (ROS +y/+z are left/CCW)
+  const vx = -padY, yw = -padX, vy = -strafe.value / 1000, h = height.value / 1000;
+  // display mirrors the server's scaling: positive stick scales by the box
+  // high, negative by the box low (the trained box is asymmetric, e.g. vx)
+  const box = (v, i) => v >= 0 ? v * cmdHigh[i] : v * -cmdLow[i];
+  $("driveout").textContent =
+    `vx ${box(vx, 0).toFixed(2).padStart(5)}  ` +
+    `vy ${box(vy, 1).toFixed(2).padStart(5)}  ` +
+    `yaw ${box(yw, 2).toFixed(2).padStart(5)}  h ${h.toFixed(3)}`;
+  if ($("driveon").checked) send({t: "cmd", vx, vy, yaw: yw, height: h});
+}
+// keep-alive stream while driving: the server dead-mans /cmd_vel if this
+// stops (tab closed, wifi drop), so silence means stop -- by design.
+setInterval(() => { if ($("driveon").checked) sendCmd(); }, 100);
+drawPad();
+
+// ---- jog ---------------------------------------------------------------------
+let jogRows = {};   // name -> {slider, cmd, meas}
+function buildJog(joints, limits) {
+  const tbl = $("jog");
+  tbl.innerHTML = ""; jogRows = {};
+  for (const n of joints || []) {
+    const [lo, hi] = limits[n];
+    const tr = tbl.insertRow();
+    tr.insertCell().outerHTML = `<td class="jn">${n}</td>`;
+    const s = document.createElement("input");
+    s.type = "range"; s.min = Math.round(lo * 1000); s.max = Math.round(hi * 1000);
+    s.oninput = () => send({t: "jog_set", targets: {[n]: s.value / 1000}});
+    tr.insertCell().appendChild(s);
+    const cmd = tr.insertCell(); cmd.className = "val"; cmd.textContent = "cmd —";
+    const meas = tr.insertCell(); meas.className = "val meas"; meas.textContent = "meas —";
+    jogRows[n] = {slider: s, cmd, meas};
+  }
+}
+$("jogon").onchange = () => send({t: "jog", on: $("jogon").checked});
+function onJogOn(m) {
+  if (!m.ok) {
+    $("jogon").checked = false;
+    setStatus(`jog: ${m.message}`);
+    return;
+  }
+  for (const [n, v] of Object.entries(m.targets))
+    if (jogRows[n]) jogRows[n].slider.value = Math.round(v * 1000);
+  if (!armed) setStatus("jog on, but NOT armed -- targets ignored until you ARM");
+}
+
+// ---- telemetry -----------------------------------------------------------------
+function onTelemetry(m) {
+  for (const [n, v] of Object.entries(m.meas || {}))
+    if (jogRows[n]) jogRows[n].meas.textContent = `meas ${v >= 0 ? "+" : ""}${v.toFixed(3)}`;
+  for (const [n, v] of Object.entries(m.jog_cmd || {}))
+    if (jogRows[n]) jogRows[n].cmd.textContent = `cmd ${v >= 0 ? "+" : ""}${v.toFixed(3)}`;
+  if (m.imu) {
+    const d = x => (x * 180 / Math.PI).toFixed(1).padStart(6);
+    const [r, p, y] = m.imu.rpy, [wx, wy, wz] = m.imu.gyro;
+    $("imu").textContent = `IMU: roll ${d(r)}°  pitch ${d(p)}°  yaw ${d(y)}°  ` +
+      `gyro [${wx.toFixed(2)} ${wy.toFixed(2)} ${wz.toFixed(2)}] rad/s`;
+  }
+}
+
+connect();
+</script>
+</body>
+</html>

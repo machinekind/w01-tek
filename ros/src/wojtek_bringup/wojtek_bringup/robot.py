@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """One-command robot bring-up, run FROM the PC dev container.
 
-    ros2 run wojtek_bringup robot [--dry-run] [--sim] [--no-viz] [--plotjuggler]
+    ros2 run wojtek_bringup robot [--dry-run] [--sim] [--no-viz] [--foxglove]
+                                  [--plotjuggler]
 
 You work from one container shell (./dev.sh). This starts BOTH sides for a
 session and tears them down on Ctrl-C:
@@ -68,8 +69,14 @@ def main():
                     help="BENCH: launch on the RPi WITHOUT RT, no torque (testing)")
     ap.add_argument("--sim", action="store_true", help="MuJoCo sim locally; no RPi, no SSH")
     ap.add_argument("--no-viz", action="store_true", help="skip RViz/PlotJuggler")
+    ap.add_argument("--foxglove", action="store_true",
+                    help="foxglove_bridge instead of RViz (native Foxglove app on "
+                         "ws://localhost:8765; the fast path on macOS, no X11)")
     ap.add_argument("--no-console", action="store_true",
-                    help="skip the operator console GUI (arm/pose/jog/drive)")
+                    help="skip the operator console (arm/pose/jog/drive)")
+    ap.add_argument("--web-console", action="store_true",
+                    help="browser operator console on http://localhost:8080 "
+                         "instead of the Qt window (no X11 needed)")
     ap.add_argument("--plotjuggler", action="store_true", help="also open PlotJuggler")
     args = ap.parse_args()
 
@@ -104,16 +111,27 @@ def main():
     # ---- PC viz (local, in this container) ---------------------------------
     if not args.no_viz:
         pj = str(args.plotjuggler).lower()
-        print(f">> launching visualization (rviz, plotjuggler={pj})")
-        spawn(["ros2", "launch", "wojtek_viz", "viz.launch.py", f"plotjuggler:={pj}"])
+        fox = str(args.foxglove).lower()
+        rviz = str(not args.foxglove).lower()
+        print(f">> launching visualization (rviz={rviz}, foxglove={fox}, plotjuggler={pj})")
+        spawn(["ros2", "launch", "wojtek_viz", "viz.launch.py",
+               f"rviz:={rviz}", f"foxglove:={fox}", f"plotjuggler:={pj}"])
+        if args.foxglove:
+            print(">> foxglove_bridge up -- open the Foxglove app and connect to "
+                  "ws://localhost:8765 (3D panel reads /robot_description; "
+                  "Teleop panel drives /cmd_vel)")
 
     # ---- operator console (local GUI: arm/pose/jog/drive) ------------------
     # The manual-control surface for this session; comes up alongside viz so the
     # operator never types raw `ros2 service call`. GUI, so it needs the X mount
     # ../dev.sh sets up -- same as RViz.
     if not args.no_console:
-        print(">> launching operator console (ros2 run wojtek_viz console)")
-        spawn(["ros2", "run", "wojtek_viz", "console"])
+        if args.web_console:
+            print(">> launching web operator console -- open http://localhost:8080")
+            spawn(["ros2", "run", "wojtek_viz", "web_console"])
+        else:
+            print(">> launching operator console (ros2 run wojtek_viz console)")
+            spawn(["ros2", "run", "wojtek_viz", "console"])
 
     if not args.sim:
         print(ARMING_HINT)

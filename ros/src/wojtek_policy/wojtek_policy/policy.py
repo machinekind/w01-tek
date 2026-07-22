@@ -88,6 +88,11 @@ class WojtekPolicy:
 
         deploy = m.get("deploy", {})
         self.command_height = deploy.get("command_height", 0.0)
+        # Live-height policies (4-D command) trained on heights sampled from
+        # training/wojtek_rl/env.py command.height; commands outside that box
+        # are out of distribution, so callers should clip to these.
+        self.command_height_low = deploy.get("command_height_low", 0.09)
+        self.command_height_high = deploy.get("command_height_high", 0.17)
         self.command_low = np.array(
             deploy.get("command_low", [-0.6, -0.4, -0.7]), np.float32
         )
@@ -105,13 +110,19 @@ class WojtekPolicy:
         self.target_low, self.target_high = low, high
 
         if self._cmd_width >= 4:
+            self._anchor_height = self.command_height
             self.anchor_ctrl = height_anchor(
                 self.home_ctrl, self.command_height, self.ctrl_low, self.ctrl_high
             )
         else:
+            self._anchor_height = None
             self.anchor_ctrl = self.home_ctrl
 
         self.reset()
+
+    @property
+    def command_width(self):
+        return self._cmd_width
 
     def reset(self):
         self.last_action = np.zeros(12, np.float32)
@@ -163,8 +174,23 @@ class WojtekPolicy:
 
         All arrays in actuator order; gyro/gravity in the base (IMU) frame
         (ignored by policies whose obs_layout omits them), command =
-        [vx, vy, wz] in the base frame.
+        [vx, vy, wz] in the base frame, optionally with a fourth element:
+        the commanded standing height (m). A 3-D command to a 4-D policy
+        keeps the meta's fixed command_height.
         """
+        command = np.asarray(command, np.float32)
+        if self._cmd_width >= 4:
+            # Training re-anchors the stance to the commanded height every
+            # step (env.py uses _height_ctrl(command[3])); mirror that so
+            # "zero action" means "stand at the commanded height". A 3-D
+            # command falls back to the meta's fixed height, matching the
+            # padding _assemble_obs applies.
+            height = float(command[3]) if command.size >= 4 else self.command_height
+            if height != self._anchor_height:
+                self._anchor_height = height
+                self.anchor_ctrl = height_anchor(
+                    self.home_ctrl, height, self.ctrl_low, self.ctrl_high
+                )
         obs = self._assemble_obs(gyro, gravity_body, joint_pos, joint_vel, command)
         self.last_obs = obs
         action = self._mlp(obs)

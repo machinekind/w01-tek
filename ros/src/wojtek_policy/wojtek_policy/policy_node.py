@@ -5,7 +5,9 @@ parameters differ:
 
   subscribes  /joint_states  (sensor_msgs/JointState, URDF convention, absolute)
               /imu_sensor_broadcaster/imu (sensor_msgs/Imu)
-              /cmd_vel       (geometry_msgs/Twist)
+              /cmd_vel       (geometry_msgs/Twist; linear.x/y + angular.z are
+                              vx/vy/wz, linear.z > 0 commands the standing
+                              height for 4-D-command policies)
   publishes   /wojtek/joint_targets (sensor_msgs/JointState, URDF convention,
                                   absolute; 12 actuated joints)
   services    /wojtek/enable (std_srvs/SetBool), /wojtek/reset (std_srvs/Trigger)
@@ -70,6 +72,8 @@ class PolicyNode(Node):
         self._gravity_base = None
         self._grav_filt = np.array([0.0, 0.0, -1.0])
         self._cmd = np.zeros(3)
+        if self.policy.command_width >= 4:
+            self._cmd = np.append(self._cmd, self.policy.command_height)
         self._joints_stamp = None
         self._imu_stamp = None
         self._enabled = self.get_parameter("auto_enable").value
@@ -143,7 +147,18 @@ class PolicyNode(Node):
         # Clip to the command box the policy trained on: never ask it to
         # track more than it has seen (ranges come from policy_meta.json).
         cmd = np.array([msg.linear.x, msg.linear.y, msg.angular.z])
-        self._cmd = np.clip(cmd, self.policy.command_low, self.policy.command_high)
+        cmd = np.clip(cmd, self.policy.command_low, self.policy.command_high)
+        if self.policy.command_width >= 4:
+            # linear.z carries the commanded standing height (m); 0 (the
+            # Twist default) means "not set" -> keep the meta's height.
+            height = msg.linear.z if msg.linear.z > 0.0 else self.policy.command_height
+            height = np.clip(
+                height,
+                self.policy.command_height_low,
+                self.policy.command_height_high,
+            )
+            cmd = np.append(cmd, height)
+        self._cmd = cmd
 
     # -- services ------------------------------------------------------------
     def _srv_enable(self, req, res):

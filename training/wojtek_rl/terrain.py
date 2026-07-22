@@ -41,6 +41,8 @@ TYPES: tuple[str, ...] = (
     "pyramid_stairs",
     "inverted_pyramid_stairs",
     "discrete_obstacles",
+    "random_grid",
+    "wave",
 )
 
 DEFAULT_SEED = 0
@@ -81,6 +83,15 @@ DISCRETE_N = 12
 DISCRETE_HALF_RANGE = (0.10, 0.25)
 DISCRETE_EDGE_MARGIN = 0.1
 
+# random_grid (rubble): a cell grid; each cell may raise one small box.
+GRID_PITCH = 0.25
+GRID_FILL_PROB = 0.7
+GRID_HALF_RANGE = (0.04, 0.11)
+
+# wave: two integer half-periods per axis, so the surface is exactly 0 on all
+# four tile edges (see _wave_patch).
+WAVE_HALF_PERIODS = (2, 3)
+
 
 def rough_amplitude(d: float) -> float:
     return 0.005 + 0.035 * d
@@ -96,6 +107,10 @@ def stair_riser(d: float) -> float:
 
 def discrete_max_height(d: float) -> float:
     return 0.01 + 0.07 * d
+
+
+def wave_amplitude(d: float) -> float:
+    return 0.01 + 0.05 * d
 
 
 @dataclass(frozen=True)
@@ -285,6 +300,49 @@ def _discrete_boxes(cx: float, cy: float, d: float, rng: np.random.Generator) ->
     return boxes
 
 
+def _random_grid_boxes(cx: float, cy: float, d: float, rng: np.random.Generator) -> list[Box]:
+    """Rubble: a regular cell grid, each cell raising one small box with
+    probability GRID_FILL_PROB. Boxes only rise above grade -- unlike Isaac's
+    random grid we cannot also sink cells, since boxes cannot carve. Each box is
+    clamped inside its cell so neighbours never fuse into slabs, and held off
+    the pad (corner rule) and the tile edge (margin) to keep borders seamless."""
+    max_h = discrete_max_height(d)
+    reach = TILE_SIZE / 2 - DISCRETE_EDGE_MARGIN
+    n = int(2 * reach / GRID_PITCH)
+    start = -(n - 1) * GRID_PITCH / 2
+    boxes: list[Box] = []
+    for iy in range(n):
+        for ix in range(n):
+            if rng.uniform() > GRID_FILL_PROB:
+                continue
+            hx = float(rng.uniform(*GRID_HALF_RANGE))
+            hy = float(rng.uniform(*GRID_HALF_RANGE))
+            u = start + ix * GRID_PITCH
+            v = start + iy * GRID_PITCH
+            if np.hypot(u, v) < PAD_RADIUS + np.hypot(hx, hy) + 0.05:
+                continue
+            h = float(rng.uniform(0.3, 1.0)) * max_h
+            boxes.append(Box((cx + u, cy + v, h / 2), (hx, hy, h / 2)))
+    return boxes
+
+
+def _wave_patch(lx: np.ndarray, ly: np.ndarray, d: float, rng: np.random.Generator) -> np.ndarray:
+    # Integer half-periods in both axes make the product of sines exactly 0 on
+    # all four tile edges (lx or ly = +/- half), so the border invariant holds
+    # by construction. The pad is flattened with the same radial taper as rough.
+    amp = wave_amplitude(d)
+    half = TILE_SIZE / 2
+    kx = int(rng.choice(WAVE_HALF_PERIODS))
+    ky = int(rng.choice(WAVE_HALF_PERIODS))
+    wave = (
+        np.sin(kx * np.pi * (lx + half) / TILE_SIZE)
+        * np.sin(ky * np.pi * (ly + half) / TILE_SIZE)
+    )
+    r = np.sqrt(lx**2 + ly**2)
+    taper = np.clip((r - PAD_RADIUS) / PAD_TAPER, 0.0, 1.0)
+    return amp * wave * taper
+
+
 def generate(
     seed: int = DEFAULT_SEED,
     n_rows: int = DEFAULT_N_ROWS,
@@ -337,6 +395,10 @@ def generate(
                 boxes.extend(tile_boxes)
             elif ttype == "discrete_obstacles":
                 boxes.extend(_discrete_boxes(cx, cy, d, rng))
+            elif ttype == "random_grid":
+                boxes.extend(_random_grid_boxes(cx, cy, d, rng))
+            elif ttype == "wave":
+                heights[ri0:ri1, ci0:ci1] = _wave_patch(lx, ly, d, rng)
             tiles.append(
                 TileSpec(
                     row=i, col=j, terrain_type=ttype, difficulty=d,

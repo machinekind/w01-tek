@@ -57,8 +57,9 @@ def build_scene_xml(arena: terrain.Arena, hfield_file: str) -> str:
   <include file="wojtek_mjx.xml"/>
   <statistic center="0 0 0.15" extent="0.8"/>
   <visual>
-    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <headlight diffuse="0.3 0.3 0.3" ambient="0.3 0.3 0.3" specular="0 0 0"/>
     <global azimuth="120" elevation="-20"/>
+    <quality shadowsize="8192"/>
   </visual>
   <asset>
     <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
@@ -67,6 +68,7 @@ def build_scene_xml(arena: terrain.Arena, hfield_file: str) -> str:
     <hfield name="terrain" file="{hfield_file}" size="{size}"/>
   </asset>
   <worldbody>
+    <light name="sun" directional="true" castshadow="true" pos="0 0 20" dir="0.25 0.35 -0.9" diffuse="0.7 0.7 0.7" specular="0 0 0"/>
     <geom name="terrain_hfield" type="hfield" hfield="terrain" material="groundplane" pos="0 0 {hf.pos_z:.6f}" condim="3" conaffinity="15"/>
 {boxes}
     <camera name="track" mode="trackcom" pos="0.9 -1.3 0.5" xyaxes="0.83 0.55 0 -0.15 0.23 0.96"/>

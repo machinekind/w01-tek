@@ -73,19 +73,21 @@ def test_difficulty_monotonic_and_row0_flat(arena):
     assert all(np.diff([terrain.slope_angle(d) for d in ds]) > 0)
     assert all(np.diff([terrain.stair_riser(d) for d in ds]) > 0)
     assert all(np.diff([terrain.discrete_max_height(d) for d in ds]) > 0)
+    assert all(np.diff([terrain.wave_amplitude(d) for d in ds]) > 0)
     assert terrain.rough_amplitude(0) <= 0.01
     assert terrain.slope_angle(0) == 0.0
     assert terrain.stair_riser(0) <= 0.02
     assert terrain.discrete_max_height(0) <= 0.01
+    assert terrain.wave_amplitude(0) <= 0.01
 
     # Realized relief from the lookup grid grows with difficulty. Slopes and
-    # stairs are deterministic in d, so require strict monotonicity; rough and
-    # discrete draw random heights, so only require row 0 << row 9.
+    # stairs are deterministic in d, so require strict monotonicity; rough,
+    # discrete, random_grid and wave draw randomness, so only require r0 << r9.
     for ttype in ("pyramid_slope", "inverted_pyramid_slope",
                   "pyramid_stairs", "inverted_pyramid_stairs"):
         relief = [_tile_relief(arena, _tile(arena, ttype, r)) for r in rows]
         assert all(np.diff(relief) > -1e-6), (ttype, relief)
-    for ttype in ("rough_uniform", "discrete_obstacles"):
+    for ttype in ("rough_uniform", "discrete_obstacles", "random_grid", "wave"):
         r0 = _tile_relief(arena, _tile(arena, ttype, 0))
         r9 = _tile_relief(arena, _tile(arena, ttype, 9))
         assert r0 < r9
@@ -196,11 +198,11 @@ def test_tile_borders_seamless(arena):
     for t in arena.spec.tiles:
         m = _perimeter_max_abs(arena, t)
         if t.terrain_type in ("pyramid_slope", "inverted_pyramid_slope",
-                               "pyramid_stairs", "inverted_pyramid_stairs"):
+                               "pyramid_stairs", "inverted_pyramid_stairs", "wave"):
             bound = 0.02
         elif t.terrain_type == "rough_uniform":
             bound = terrain.rough_amplitude(t.difficulty) + 0.01
-        else:
+        else:  # discrete_obstacles, random_grid: boxes are held off the edge
             bound = terrain.discrete_max_height(t.difficulty) + 1e-3
         assert m <= bound, (t.terrain_type, t.row, m, bound)
 

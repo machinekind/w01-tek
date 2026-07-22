@@ -40,6 +40,9 @@ vlm-local = ["mlx-vlm>=0.3.3", "pillow"]
 # Navigation evaluation harness (wojtek_eval/): kinematic sim, occupancy
 # mapping, spoken-instruction chain, remote VLM client.
 eval = ["trimesh>=4.0", "pillow", "faster-whisper>=1.0"]
+# Engine-parameter identification from rosbags (wojtek_rl/sysid/):
+# ROS-free ros2 bag reader + CMA-ES.
+sysid = ["rosbags>=0.10", "cmaes>=0.10"]
 
 [build-system]
 requires = ["hatchling"]

@@ -46,6 +46,12 @@ hardware_interface::CallbackReturn MD80HardwareInterface::on_init(
   md80_info_.resize(motors_size);
   initial_positions_.resize(motors_size);
 
+  const auto & params = info_.hardware_parameters;
+  if (params.count("dry_run")) {
+    const auto & v = params.at("dry_run");
+    dry_run_ = (v == "true" || v == "True" || v == "1");
+  }
+
   return CallbackReturn::SUCCESS;
 }
 
@@ -126,6 +132,14 @@ hardware_interface::CallbackReturn MD80HardwareInterface::on_activate(
       ++i;
     }
   }
+  // Commands live in the activation-relative frame (write() adds
+  // initial_positions_ back). The read() above ran with initial_positions_
+  // still zero, so state -- and a command seeded from it -- would be in the
+  // drive's RAW frame; write() would then send raw + initial = 2x the raw
+  // position and the robot would actively jump instead of holding. Re-read
+  // now that the offsets are set: state ~= 0, so the seeded hold command is
+  // "stay where you are".
+  read(rclcpp::Time{}, rclcpp::Duration(0, 0));
   reset_command();
   log_current_joint_position();
 
@@ -381,9 +395,16 @@ void MD80HardwareInterface::zero_encoders()
 
 void MD80HardwareInterface::enable_motors()
 {
-  for (auto & md80 : md80_info_) {
-    auto candle = find_candle_by_motor_can_id(md80.can_id);
-    candle->controlMd80Enable(md80.can_id, true);
+  if (dry_run_) {
+    RCLCPP_WARN(
+      rclcpp::get_logger(get_name()),
+      "DRY RUN: drives left DISABLED -- no torque will reach the motors; "
+      "encoder states still stream");
+  } else {
+    for (auto & md80 : md80_info_) {
+      auto candle = find_candle_by_motor_can_id(md80.can_id);
+      candle->controlMd80Enable(md80.can_id, true);
+    }
   }
 
   for (auto & candle : candle_instances) {

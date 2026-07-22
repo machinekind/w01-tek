@@ -60,7 +60,8 @@ def generate_launch_description():
             ["xacro ", xacro_file, " max_torque:=", max_torque,
              " use_imu:=", use_imu, " imu_bus:=", imu_bus,
              " imu_addr_ag:=", imu_addr_ag, " imu_addr_mag:=", imu_addr_mag,
-             " bus:=", bus, " can_baud:=", can_baud]
+             " bus:=", bus, " can_baud:=", can_baud,
+             " dry_run:=", LaunchConfiguration("dry_run")]
         ),
         value_type=str,
     )

@@ -42,13 +42,16 @@
        usb_port. can_baud (Mbps) must match the drives' flashed baudrate:
        8 since the 2026-07-17 migration for the HAT; the dongle setup ran 1.
        See ros/hw_tests/README.md for the per-drive baud migration tool. -->
-  <xacro:macro name="wojtek_ros2_control" params="kp kd max_torque usb_port bus:=spi can_baud:=8">
+  <xacro:macro name="wojtek_ros2_control" params="kp kd max_torque usb_port bus:=spi can_baud:=8 dry_run:=false">
     <ros2_control name="MD80HardwareInterface" type="system">
       <hardware>
         <plugin>md80_hardware_interface/MD80HardwareInterface</plugin>
         <param name="usb_port">${usb_port}</param>
         <param name="bus">${bus}</param>
         <param name="can_baud">${can_baud}</param>
+        <!-- true = bench mode: drives never enabled (no torque), encoder
+             states still stream. Wired from the launches' dry_run arg. -->
+        <param name="dry_run">${dry_run}</param>
       </hardware>
 
       <xacro:wojtek_joint name="front_left_first_joint" can_id="10" kp="${kp}" kd="${kd}" max_torque="${max_torque}" />

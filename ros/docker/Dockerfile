@@ -22,6 +22,7 @@ COPY ./src/wojtek_description/package.xml ./src/wojtek_description/package.xml
 COPY ./src/md80_hardware_interface/package.xml ./src/md80_hardware_interface/package.xml
 COPY ./src/bmi160_serial_hardware_interface/package.xml ./src/bmi160_serial_hardware_interface/package.xml
 COPY ./src/bmx160_serial_hardware_interface/package.xml ./src/bmx160_serial_hardware_interface/package.xml
+COPY ./src/imu_i2c_hardware_interface/package.xml ./src/imu_i2c_hardware_interface/package.xml
 COPY ./src/wojtek_policy/package.xml ./src/wojtek_policy/package.xml
 COPY ./src/wojtek_bringup/package.xml ./src/wojtek_bringup/package.xml
 COPY ./src/wojtek_viz/package.xml ./src/wojtek_viz/package.xml
@@ -55,6 +56,7 @@ RUN /bin/bash -c "source /opt/ros/$ROS_DISTRO/setup.bash && \
     colcon build --symlink-install \
         --packages-select wojtek_description md80_hardware_interface \
             bmx160_serial_hardware_interface bmi160_serial_hardware_interface \
+            imu_i2c_hardware_interface \
             wojtek_policy wojtek_bringup wojtek_viz \
         --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF"
 

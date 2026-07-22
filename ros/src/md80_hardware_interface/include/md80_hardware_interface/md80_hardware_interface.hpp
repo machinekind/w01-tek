@@ -114,6 +114,10 @@ private:
 
   std::vector<MD80Info> md80_info_;
   std::vector<double> initial_positions_;
+  // Bench mode (URDF <hardware> param "dry_run"): keep the CANdle update loop
+  // running so encoder states stream, but never enable the drives -- no
+  // torque can reach the motors regardless of what is commanded.
+  bool dry_run_ = false;
 
   std::vector<std::shared_ptr<mab::Candle>> candle_instances;
 };

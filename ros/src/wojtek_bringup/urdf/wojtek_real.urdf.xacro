@@ -24,6 +24,9 @@
   <xacro:arg name="bus" default="spi" />
   <xacro:arg name="can_baud" default="8" />
   <xacro:arg name="usb_port" default="/dev/ttyACM0" />
+  <!-- Bench mode: drives are never enabled (no torque at all), encoder
+       states still stream. Set by the launches from their dry_run arg. -->
+  <xacro:arg name="dry_run" default="false" />
   <!-- The serial IMU (loaner BMI160 behind an MCU + CP2102 bridge) was retired
        2026-07-17 in favor of the Adafruit 5543 (LSM6DS3TR-C + LIS3MDL) wired
        straight to the Pi's I2C1: bench-tested (ros/hw_tests/imu_i2c), not
@@ -37,7 +40,8 @@
   <xacro:wojtek_body />
 
   <xacro:wojtek_ros2_control kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)"
-    usb_port="$(arg usb_port)" bus="$(arg bus)" can_baud="$(arg can_baud)" />
+    usb_port="$(arg usb_port)" bus="$(arg bus)" can_baud="$(arg can_baud)"
+    dry_run="$(arg dry_run)" />
   <xacro:if value="$(arg use_imu)">
     <xacro:wojtek_imu_i2c_ros2_control bus="$(arg imu_bus)" addr_ag="$(arg imu_addr_ag)"
       addr_mag="$(arg imu_addr_mag)" />

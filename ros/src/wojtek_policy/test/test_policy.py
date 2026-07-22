@@ -116,6 +116,30 @@ def test_anchor_is_height_shifted_home(policy):
 def test_command_box_from_meta(policy):
     assert np.allclose(policy.command_low, [-0.8, -0.5, -1.0])
     assert np.allclose(policy.command_high, [1.2, 0.5, 1.0])
+    assert policy.command_width == 4
+    assert policy.command_height_low < policy.command_height
+    assert policy.command_height < policy.command_height_high
+
+
+def test_height_command_moves_anchor_and_obs(policy):
+    # A 4-D command re-anchors the stance to the commanded height (as the
+    # training env does every step) and shows up verbatim in the obs.
+    policy.step(np.zeros(3), [0, 0, -1.0], policy.home_ctrl, np.zeros(12),
+                [0.1, 0.0, 0.0, 0.17])
+    assert np.allclose(policy.last_obs[36:40], [0.1, 0.0, 0.0, 0.17], atol=1e-6)
+    expect = height_anchor(
+        policy.home_ctrl, 0.17, policy.ctrl_low, policy.ctrl_high
+    )
+    assert np.allclose(policy.anchor_ctrl, expect, atol=1e-6)
+    # dropping back to a 3-D command falls back to the meta's fixed height
+    # in both the obs padding and the anchor
+    policy.step(np.zeros(3), [0, 0, -1.0], policy.home_ctrl, np.zeros(12),
+                [0.1, 0.0, 0.0])
+    assert np.allclose(policy.last_obs[36:40], [0.1, 0.0, 0.0, 0.125], atol=1e-6)
+    default = height_anchor(
+        policy.home_ctrl, 0.125, policy.ctrl_low, policy.ctrl_high
+    )
+    assert np.allclose(policy.anchor_ctrl, default, atol=1e-6)
 
 
 def test_determinism(policy):

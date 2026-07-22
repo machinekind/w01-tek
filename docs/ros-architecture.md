@@ -87,7 +87,7 @@ Runtime wytrenowanej polityki RL + node ROS. Działa na RPi i w symulacji.
 |---|---|---|
 | sub | `/joint_states` (absolutne URDF) | `sensor_msgs/JointState` |
 | sub | `/imu/data` | `sensor_msgs/Imu` |
-| sub | `/cmd_vel` (przycinany do boxa komend z treningu) | `geometry_msgs/Twist` |
+| sub | `/cmd_vel` (przycinany do boxa komend z treningu; `linear.z > 0` = komenda wysokości stania dla polityk z komendą 4-D) | `geometry_msgs/Twist` |
 | pub | `/wojtek/joint_targets` (absolutne URDF, 12 stawów) | `sensor_msgs/JointState` |
 | srv | `/wojtek/enable` | `std_srvs/SetBool` |
 | srv | `/wojtek/reset` | `std_srvs/Trigger` |
@@ -149,7 +149,7 @@ Parametry: `model_xml` (puste = przygotuj MJX z share z przepisaniem meshdir), `
 * **M1** — przyciski serwisów `/wojtek/{arm,zero,stand_up,lie_down,enable,reset}`,
 * **M2** — telemetria na żywo z `/wojtek/joint_states_abs` i `/imu/data`,
 * **M3** — jog per-staw: slidery publikują `/wojtek/joint_targets` z własną rampą 0.8 rad/s (wymaga: armed + policy DISABLED),
-* **M4** — pad XY + slider yaw → `/cmd_vel` @ 20 Hz, puszczenie = stop (wymaga: armed + policy ENABLED).
+* **M4** — pad XY (vx, yaw) + slider strafe + slider wysokości → `/cmd_vel` @ 20 Hz (wysokość na `linear.z`), puszczenie pada/strafe = stop, wysokość trzyma nastawę (wymaga: armed + policy ENABLED).
 
 Nie ma topicu statusu arm/enable — konsola śledzi stan lokalnie z odpowiedzi serwisów. rclpy spinuje w wątku tła, do GUI przez sygnały Qt.
 

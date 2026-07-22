@@ -460,7 +460,11 @@ def scenario_result(name, rec, fell_at, dt, torque_cap):
 
     if name == "arc":
         # 50-step settle after each wz switch; guarded like turn's slices
-        # because a fall truncates rec.
+        # because a fall truncates rec. Forward speed must be read in the
+        # body frame here: the heading rotates continuously on an arc, so
+        # the world-frame vx the generic vel_err bands use systematically
+        # under-reads it (vel_err_overall on this scenario is an artifact;
+        # use vx_err_local instead).
         if len(rec["wz"]) >= 400:
             w = slice(150, 400)
             r["ang_vel_err_left"] = round(
@@ -470,6 +474,11 @@ def scenario_result(name, rec, fell_at, dt, torque_cap):
             w = slice(450, 700)
             r["ang_vel_err_right"] = round(
                 float(np.abs(rec["cmd_wz"][w] - rec["wz"][w]).mean()), 3
+            )
+        if len(rec["vx_local"]) > 150:
+            w = slice(150, len(rec["vx_local"]))
+            r["vx_err_local"] = round(
+                float(np.abs(rec["cmd_vx"][w] - rec["vx_local"][w]).mean()), 3
             )
 
     if name == "height_step":

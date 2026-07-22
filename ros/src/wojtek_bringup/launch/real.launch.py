@@ -69,9 +69,10 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
-            # Start with a low torque cap for the first tests; the policy was
-            # trained with 6 Nm available.
-            DeclareLaunchArgument("max_torque", default_value="6.0"),
+            # The shipped stiff_b policy trained with 9 Nm available (and
+            # kp=40/kd=1.6, which fall through to the xacro defaults). Lower
+            # this for cautious first tests, e.g. max_torque:=2.
+            DeclareLaunchArgument("max_torque", default_value="9.0"),
             # Default (empty) keeps the xacro's by-id path for the CP2102;
             # override with e.g. imu_port:=/dev/ttyUSB0 if the adapter is
             # ever swapped for one with a different by-id name.

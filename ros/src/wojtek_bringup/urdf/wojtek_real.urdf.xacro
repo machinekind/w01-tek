@@ -30,10 +30,9 @@
   <xacro:arg name="dry_run" default="false" />
   <!-- The serial IMU (loaner BMI160 behind an MCU + CP2102 bridge) was retired
        2026-07-17 in favor of the Adafruit 5543 (LSM6DS3TR-C + LIS3MDL) wired
-       straight to the Pi's I2C1: bench-tested (ros/hw_tests/imu_i2c), not
-       yet run through ros2_control on the robot. use_imu still defaults to
-       false until that first hardware test passes. -->
-  <xacro:arg name="use_imu" default="false" />
+       straight to the Pi's I2C1 (imu_i2c_hardware_interface). On by default;
+       use_imu:=false brings the stack up with the sensor absent/unwired. -->
+  <xacro:arg name="use_imu" default="true" />
   <xacro:arg name="imu_bus" default="/dev/i2c-1" />
   <xacro:arg name="imu_addr_ag" default="0x6A" />
   <xacro:arg name="imu_addr_mag" default="0x1C" />

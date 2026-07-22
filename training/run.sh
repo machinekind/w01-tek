@@ -16,6 +16,7 @@ case "${1:-}" in
   battery) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.battery "$@" ;;
   report) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.report "$@" ;;
   export) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.export_policy "$@" ;;
+  sysid) shift; "$PY" -m wojtek_rl.sysid "$@" ;;  # engine params from rosbags, docs/sysid.md
   app)   shift; MUJOCO_GL="${MUJOCO_GL:-egl}" "$PY" -m demo.app "$@" ;;
   room-assets) shift; "$PY" -m wojtek_rl.room_assets "$@" ;;
   build-room)  shift; "$PY" -m wojtek_rl.build_room "$@" ;;

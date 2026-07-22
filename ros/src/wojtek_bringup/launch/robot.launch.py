@@ -32,7 +32,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import (
     Command,
     LaunchConfiguration,
@@ -47,11 +47,19 @@ def generate_launch_description():
     share = get_package_share_directory("wojtek_bringup")
     xacro_file = os.path.join(share, "urdf", "wojtek_real.urdf.xacro")
     max_torque = LaunchConfiguration("max_torque")
-    imu_port = LaunchConfiguration("imu_port")
+    imu_bus = LaunchConfiguration("imu_bus")
+    imu_addr_ag = LaunchConfiguration("imu_addr_ag")
+    imu_addr_mag = LaunchConfiguration("imu_addr_mag")
+    bus = LaunchConfiguration("bus")
+    can_baud = LaunchConfiguration("can_baud")
+    use_imu = LaunchConfiguration("use_imu")
     robot_description = ParameterValue(
         Command(
             ["xacro ", xacro_file, " max_torque:=", max_torque,
-             " imu_port:=", imu_port]
+             " use_imu:=", use_imu, " imu_bus:=", imu_bus,
+             " imu_addr_ag:=", imu_addr_ag, " imu_addr_mag:=", imu_addr_mag,
+             " bus:=", bus, " can_baud:=", can_baud,
+             " dry_run:=", LaunchConfiguration("dry_run")]
         ),
         value_type=str,
     )
@@ -73,16 +81,21 @@ def generate_launch_description():
             # the effective one -- the arg in wojtek_real.urdf.xacro never
             # gets a say (kp=40/kd=1.6 do fall through to the xacro defaults).
             DeclareLaunchArgument("max_torque", default_value="9.0"),
-            # Default (empty) keeps the xacro's by-id path for the CP2102;
-            # override with e.g. imu_port:=/dev/ttyUSB0 if the adapter is
-            # ever swapped for one with a different by-id name.
-            DeclareLaunchArgument(
-                "imu_port",
-                default_value=(
-                    "/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_"
-                    "Bridge_Controller_0001-if00-port0"
-                ),
-            ),
+            # CAN link to the drives: CANdle HAT over SPI at 8M by default
+            # (the drives' flashed baudrate since 2026-07-17). bus:=usb
+            # can_baud:=1 = the legacy USB dongle, only after flashing the
+            # drives back to 1M (ros/hw_tests: candle_bus_test baud).
+            DeclareLaunchArgument("bus", default_value="spi"),
+            DeclareLaunchArgument("can_baud", default_value="8"),
+            # IMU is the Adafruit 5543 (LSM6DS3TR-C + LIS3MDL) straight on
+            # I2C1 -- imu_i2c_hardware_interface, bench-tested but not yet
+            # exercised through ros2_control on the robot, hence off by
+            # default until that first hardware test passes.
+            DeclareLaunchArgument("use_imu", default_value="false"),
+            DeclareLaunchArgument("imu_bus", default_value="/dev/i2c-1"),
+            # 0x6B/0x1E if the board's SDO pins are pulled high.
+            DeclareLaunchArgument("imu_addr_ag", default_value="0x6A"),
+            DeclareLaunchArgument("imu_addr_mag", default_value="0x1C"),
             DeclareLaunchArgument("dry_run", default_value="false"),
             # Pose the robot is in when the motors activate / zero. "home"
             # (standing, position 0) by default; "folded" only if the drives'
@@ -113,6 +126,14 @@ def generate_launch_description():
                 executable="spawner",
                 arguments=["joint_state_broadcaster", "imu_sensor_broadcaster",
                            "forward_position_controller"],
+                condition=IfCondition(use_imu),
+            ),
+            Node(
+                package="controller_manager",
+                executable="spawner",
+                arguments=["joint_state_broadcaster",
+                           "forward_position_controller"],
+                condition=UnlessCondition(use_imu),
             ),
             # RViz/robot_state_publisher use ABSOLUTE joint angles.
             Node(
@@ -154,9 +175,10 @@ def generate_launch_description():
                         "watchdog_timeout_s": 0.2,
                     }
                 ],
+                # IMU needs no remap: policy_node subscribes the broadcaster's
+                # topic name directly (the sim publishes the same name).
                 remappings=[
                     ("joint_states", "wojtek/joint_states_abs"),
-                    ("imu/data", "imu_sensor_broadcaster/imu"),
                 ],
             ),
             # bash -c: mkdir the parent (rosbag2 creates the bag dir itself but
@@ -168,6 +190,7 @@ def generate_launch_description():
                 cmd=[
                     "bash", "-c",
                     'mkdir -p "$1"\n'
+                    'echo ">> rosbag: recording to $2"\n'
                     'if [ -n "$3" ]; then\n'
                     '  exec taskset -c "$3" ros2 bag record -a -o "$2"\n'
                     'fi\n'

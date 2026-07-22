@@ -80,6 +80,7 @@ def generate_launch_description():
                 cmd=[
                     "bash", "-c",
                     'mkdir -p "$1"\n'
+                    'echo ">> rosbag: recording to $2"\n'
                     'exec ros2 bag record -a -o "$2"\n',
                     "wojtek_bag_record",  # $0 (shell name in messages)
                     LaunchConfiguration("bag_dir"),  # $1

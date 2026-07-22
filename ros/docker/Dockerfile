@@ -12,7 +12,19 @@ STOPSIGNAL SIGINT
 
 WORKDIR /ros2_ws
 
-COPY ./src /ros2_ws/src/
+# Manifests only, not the full tree yet: apt-get/rosdep/candle below are the
+# slow part (network installs) but don't actually depend on source content,
+# only on declared dependencies. Copying just package.xml means ordinary code
+# edits under src/ (frequent) don't bust this layer's cache - only a changed
+# dependency (rare) does. Can't glob this (every package.xml has the same
+# basename and would collide in the destination), so list packages explicitly.
+COPY ./src/wojtek_description/package.xml ./src/wojtek_description/package.xml
+COPY ./src/md80_hardware_interface/package.xml ./src/md80_hardware_interface/package.xml
+COPY ./src/bmi160_serial_hardware_interface/package.xml ./src/bmi160_serial_hardware_interface/package.xml
+COPY ./src/bmx160_serial_hardware_interface/package.xml ./src/bmx160_serial_hardware_interface/package.xml
+COPY ./src/wojtek_policy/package.xml ./src/wojtek_policy/package.xml
+COPY ./src/wojtek_bringup/package.xml ./src/wojtek_bringup/package.xml
+COPY ./src/wojtek_viz/package.xml ./src/wojtek_viz/package.xml
 
 # This is a dev/build environment, not a slimmed-down production image:
 # ros-dev-tools (colcon, rosdep, compilers, git, ...) stay installed so
@@ -23,6 +35,7 @@ RUN apt-get update && \
         ros-dev-tools udev git python3-pip setserial openssh-client \
         ros-${ROS_DISTRO}-rmw-cyclonedds-cpp \
         ros-${ROS_DISTRO}-plotjuggler-ros && \
+    mkdir -p src/md80_hardware_interface/3rd_party && \
     rm -rf src/md80_hardware_interface/3rd_party/candle && \
     git clone https://github.com/mabrobotics/candle src/md80_hardware_interface/3rd_party/candle && \
     git -C src/md80_hardware_interface/3rd_party/candle checkout "$CANDLE_COMMIT" && \
@@ -30,14 +43,20 @@ RUN apt-get update && \
     rosdep update --rosdistro "$ROS_DISTRO" && \
     rosdep install --from-paths src -y -i && \
     pip3 install --break-system-packages mujoco && \
-    /bin/bash -c "source /opt/ros/$ROS_DISTRO/setup.bash && \
-        colcon build --symlink-install \
-            --packages-select wojtek_description md80_hardware_interface \
-                bmx160_serial_hardware_interface bmi160_serial_hardware_interface \
-                wojtek_policy wojtek_bringup wojtek_viz \
-            --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF" && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+
+# The real source, now that the slow network-installs above are cached.
+# Everything from here on re-runs on every src/ change, but that's just the
+# compile step below, not the ROS/apt/candle download.
+COPY ./src /ros2_ws/src/
+
+RUN /bin/bash -c "source /opt/ros/$ROS_DISTRO/setup.bash && \
+    colcon build --symlink-install \
+        --packages-select wojtek_description md80_hardware_interface \
+            bmx160_serial_hardware_interface bmi160_serial_hardware_interface \
+            wojtek_policy wojtek_bringup wojtek_viz \
+        --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF"
 
 # So an interactive `docker exec -it <container> bash` also has ROS +
 # the workspace overlay sourced (docker exec bypasses ENTRYPOINT).

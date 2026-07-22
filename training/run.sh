@@ -8,6 +8,7 @@ if [[ "$(uname)" == "Linux" ]]; then export MUJOCO_GL="${MUJOCO_GL:-egl}"; fi
 
 case "${1:-}" in
   build) shift; "$PY" -m wojtek_rl.build_model "$@" ;;
+  build-terrain) shift; "$PY" -m wojtek_rl.build_terrain "$@" ;;
   pose)  shift; "$PY" -m wojtek_rl.pose_explorer "$@" ;;
   check) shift; "$PY" -m wojtek_rl.check_model_mjx "$@" ;;
   train) shift; "$PY" -m wojtek_rl.train "$@" ;;

@@ -180,3 +180,29 @@ def test_pd_gains_kp_only_keeps_xml_kd():
     kp_only = wojtek_env.WojtekJoystick(cfg)
     biasprm = np.array(kp_only.mj_model.actuator_biasprm)
     np.testing.assert_allclose(biasprm[:, 2], -1.0)
+
+
+# -- command.arc_prob ---------------------------------------------------------
+
+
+def test_sample_command_arc_mode_holds_forward_curve():
+    """arc_prob=1: every draw is a forward arc -- vx inside arc_vx, vy
+    zeroed, wz kept live inside its range."""
+    cfg = wojtek_env.default_config()
+    cfg.command.arc_prob = 1.0
+    cfg.command.zero_prob = 0.0
+    arc_env = wojtek_env.WojtekJoystick(cfg)
+    keys = jax.random.split(jax.random.PRNGKey(0), 64)
+    cmds = np.array(jax.vmap(arc_env._sample_command)(keys))
+    np.testing.assert_allclose(cmds[:, 1], 0.0)
+    assert np.all(cmds[:, 0] >= cfg.command.arc_vx[0])
+    assert np.all(cmds[:, 0] <= cfg.command.arc_vx[1])
+    assert np.all(cmds[:, 2] >= cfg.command.wz[0])
+    assert np.all(cmds[:, 2] <= cfg.command.wz[1])
+
+
+def test_sample_command_arc_default_off(env):
+    """Default arc_prob=0 keeps the plain box: vy is drawn, not zeroed."""
+    keys = jax.random.split(jax.random.PRNGKey(0), 64)
+    cmds = np.array(jax.vmap(env._sample_command)(keys))
+    assert np.any(np.abs(cmds[:, 1]) > 1e-6)

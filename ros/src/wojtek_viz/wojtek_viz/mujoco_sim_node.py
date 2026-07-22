@@ -1,8 +1,9 @@
 """Real-time MuJoCo simulator node for wojtek.
 
-Steps scene_mjx.xml (the exact physics the policy was trained on: position
-servos kp=20/kd=1, forcerange +/-6, dt=0.004) paced to wall clock and bridges
-it to ROS:
+Steps scene_mjx.xml paced to wall clock and bridges it to ROS. The XML
+carries kp=20/kd=1/forcerange +/-6 servo defaults; those are overwritten
+below with the gains the shipped policy trained against, so the simulated
+plant matches wojtek_policy/config/policy_meta.json. Topics:
 
   subscribes  /wojtek/joint_targets (JointState, URDF convention)
   publishes   /joint_states (URDF convention, actuated + passive four-bar
@@ -71,6 +72,16 @@ class MujocoSimNode(Node):
 
         xml = self.get_parameter("model_xml").value or _prepare_model_xml()
         self.model = mujoco.MjModel.from_xml_path(xml)
+        # The scene XML still carries the springy-era servo settings
+        # (kp=20/kd=1/+-6 Nm); the shipped stiff_b policy trained under
+        # kp=40/kd=1.6/+-9 Nm. Keep in sync with the pd block in
+        # wojtek_policy/config/policy_meta.json.
+        kp, kd, max_torque = 40.0, 1.6, 9.0
+        self.model.actuator_gainprm[:, 0] = kp
+        self.model.actuator_biasprm[:, 1] = -kp
+        self.model.actuator_biasprm[:, 2] = -kd
+        self.model.actuator_forcerange[:, 0] = -max_torque
+        self.model.actuator_forcerange[:, 1] = max_torque
         self.data = mujoco.MjData(self.model)
         self.jmap = JointMap(self.get_parameter("joint_map_yaml").value)
 

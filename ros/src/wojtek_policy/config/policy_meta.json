@@ -1,6 +1,7 @@
 {
-  "run_name": "wojtek_springy_b_20260713_1827",
+  "run_name": "wojtek_stiff_b_20260717_235321",
   "checkpoint": "LOCAL_PATH
+  "task": "joystick",
   "obs_size": 40,
   "action_size": 12,
   "obs_layout": [
@@ -25,17 +26,17 @@
   ],
   "home_ctrl": [
     0.0,
-    -0.2,
-    3.1,
+    -0.20000000298023224,
+    3.0999999046325684,
     0.0,
-    -0.2,
-    3.1,
+    -0.20000000298023224,
+    3.0999999046325684,
     0.0,
-    -0.2,
-    3.1,
+    -0.20000000298023224,
+    3.0999999046325684,
     0.0,
-    -0.2,
-    3.1
+    -0.20000000298023224,
+    3.0999999046325684
   ],
   "ctrl_low": [
     -3.1416,
@@ -68,8 +69,18 @@
   "action_scale": [
     0.25,
     0.5,
+    0.5,
+    0.25,
+    0.5,
+    0.5,
+    0.25,
+    0.5,
+    0.5,
+    0.25,
+    0.5,
     0.5
   ],
+  "action_filter": 0.0,
   "ctrl_dt": 0.02,
   "trot_phase": [
     0.0,
@@ -79,8 +90,13 @@
   ],
   "gait_freq_hz": 2.2,
   "knee_singularity": 3.2,
+  "pd": {
+    "kp": 40.0,
+    "kd": 1.6,
+    "max_torque": 9.0
+  },
   "deploy": {
-    "_note": "Hand-added from the run's run.json env_config: the command box and ctrl clamps the policy trained under, which export_policy.py does not emit yet. Everything above is the verbatim exporter output (also on HF: <HF_ORGANIZATION>/wojtek-springy-locomotion).",
+    "_note": "Hand-translated from the schema-2 meta on HF (<HF_ORGANIZATION>/wojtek-stiff-locomotion @ 2c52d74c) because this loader reads schema-1 keys. Every number is the exporter's; ctrl_low/high plus these clamps reproduce the contract's resolved target_low/high and anchor_ctrl exactly. trot_phase/gait_freq_hz are the vestigial keys the schema-1 exporter always emitted -- no phase in obs_layout, unused. The pd block (kp/kd/max_torque the run trained under) is informational here: nothing on main plumbs it into the launch or hardware config.",
     "command_height": 0.125,
     "command_low": [-0.8, -0.5, -1.0],
     "command_high": [1.2, 0.5, 1.0],

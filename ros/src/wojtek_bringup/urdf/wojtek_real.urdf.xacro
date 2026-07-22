@@ -5,9 +5,10 @@
   Mechanically identical to wojtek_description's wojtek.urdf.xacro
   (same leg macros), but the ros2_control block differs:
     * command interface `position` -> MD80 IMPEDANCE mode
-    * impedance gains kp/kd and max_torque default to the values the policy
-      was trained against (kp=20, kd=1, +/-6 Nm). Override via xacro args
-      for cautious first tests, e.g. max_torque:=2
+    * impedance gains kp/kd and max_torque default to the values the shipped
+      policy was trained against (kp=40, kd=1.6, +/-9 Nm -- the pd block in
+      wojtek_policy/config/policy_meta.json). Override via xacro args for
+      cautious first tests, e.g. max_torque:=2
     * the IMU I2C ros2_control sensor is instantiated when use_imu:=true (it
       is commented out in the original description).
 -->
@@ -15,9 +16,9 @@
   <xacro:include filename="$(find wojtek_description)/urdf/body.urdf.xacro" />
   <xacro:include filename="$(find wojtek_bringup)/urdf/wojtek_ros2_control.urdf.xacro" />
 
-  <xacro:arg name="kp" default="20.0" />
-  <xacro:arg name="kd" default="1.0" />
-  <xacro:arg name="max_torque" default="6.0" />
+  <xacro:arg name="kp" default="40.0" />
+  <xacro:arg name="kd" default="1.6" />
+  <xacro:arg name="max_torque" default="9.0" />
   <!-- CAN link to the MD80s: CANdle HAT over SPI by default (drives flashed
        to 8M). bus:=usb can_baud:=1 falls back to the old USB dongle; only
        works if the drives are flashed back to 1M. -->

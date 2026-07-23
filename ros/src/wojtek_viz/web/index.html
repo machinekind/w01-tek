@@ -102,7 +102,12 @@ const $ = id => document.getElementById(id);
 
 function connect() {
   ws = new WebSocket(`ws://${location.host}/ws`);
-  ws.onopen = () => { $("conn").classList.add("up"); setStatus("connected"); };
+  ws.onopen = () => {
+    $("conn").classList.add("up"); setStatus("connected");
+    // A pad in use keeps drive live across websocket drops: onclose unchecks
+    // the box, and the server forgets drive_on when its last client leaves.
+    if (gpIndex !== null) { $("driveon").checked = true; send({t: "drive", on: true}); }
+  };
   ws.onclose = () => {
     $("conn").classList.remove("up");
     setStatus("disconnected -- retrying ...");
@@ -232,6 +237,60 @@ function sendCmd() {
 // stops (tab closed, wifi drop), so silence means stop -- by design.
 setInterval(() => { if ($("driveon").checked) sendCmd(); }, 100);
 drawPad();
+
+// ---- bluetooth gamepad (browser Gamepad API) --------------------------------
+// An Xbox pad paired with THIS machine (the one running the browser) drives
+// the same pipeline as the touch pad. This is the macOS path -- Docker there
+// can't pass /dev/input into the container, but the browser reads the pad
+// natively. Standard mapping: left stick = vx/yaw, right stick left-right =
+// strafe, A toggles ARM, D-pad up/down steps the height set-point by 5 mm.
+// While a pad is connected it owns the motion inputs (the knob and strafe
+// slider mirror it) and drive auto-enables; the server's dead-man still
+// applies (this poll throttles/stops when the tab is hidden -> robot stops).
+let gpIndex = null, gpPrev = {a: false, up: false, down: false};
+const GP_DEADZONE = 0.1;   // rescaled: dead near center, still 1 at full throw
+function gpShape(v) {
+  const s = Math.abs(v) < GP_DEADZONE ? 0 :
+    Math.min(1, (Math.abs(v) - GP_DEADZONE) / (1 - GP_DEADZONE));
+  return v < 0 ? -s : s;
+}
+window.addEventListener("gamepadconnected", e => {
+  if (gpIndex !== null) return;              // first pad wins
+  gpIndex = e.gamepad.index;
+  $("driveon").checked = true;               // pad = drive is always live
+  send({t: "drive", on: true});
+  setStatus(`gamepad: ${e.gamepad.id} -- sticks drive, A arms, D-pad height` +
+            (policyOn ? "" : " (policy is OFF)"));
+});
+window.addEventListener("gamepaddisconnected", e => {
+  if (e.gamepad.index !== gpIndex) return;
+  gpIndex = null;
+  padX = padY = 0; strafe.value = 0; drawPad(); sendCmd();   // stop motion
+  setStatus("gamepad disconnected -- stopped");
+});
+setInterval(() => {
+  if (gpIndex === null) return;
+  const gp = navigator.getGamepads()[gpIndex];
+  if (!gp) return;
+  // Sticks feed the same screen-convention inputs the touch pad sets
+  // (+x right, +y down); sendCmd applies the ROS sign flips.
+  padX = gpShape(gp.axes[0]); padY = gpShape(gp.axes[1]);
+  strafe.value = Math.round(gpShape(gp.axes[2]) * 1000);
+  // A toggles ARM on the press edge -- same call as the button.
+  const a = !!gp.buttons[0] && gp.buttons[0].pressed;
+  if (a && !gpPrev.a) send({t: "call", key: "arm", value: !armed});
+  // D-pad up/down: step the held height set-point (slider is in mm and
+  // clamps to the trained range itself).
+  const up = !!gp.buttons[12] && gp.buttons[12].pressed;
+  const down = !!gp.buttons[13] && gp.buttons[13].pressed;
+  if ((up && !gpPrev.up) || (down && !gpPrev.down)) {
+    height.value = +height.value + (up ? 5 : -5);
+    height.dataset.touched = 1;
+    $("heightval").textContent = (height.value / 1000).toFixed(3);
+  }
+  gpPrev = {a, up, down};
+  drawPad(); sendCmd();
+}, 50);
 
 // ---- jog ---------------------------------------------------------------------
 let jogRows = {};   // name -> {slider, cmd, meas}

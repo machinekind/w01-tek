@@ -114,8 +114,13 @@ def test_anchor_is_height_shifted_home(policy):
 
 
 def test_command_box_from_meta(policy):
-    assert np.allclose(policy.command_low, [-0.8, -0.5, -1.0])
-    assert np.allclose(policy.command_high, [1.2, 0.5, 1.0])
+    # The shipped deploy box, NOT the trained one: stiff_phase_c trained wz
+    # to +-1.5, but the meta caps the operator at +-0.6 — the console
+    # scales full stick from this box, the robot's achievable
+    # spin-in-place rate is ~0.5 rad/s, and +-0.6 is the owner-confirmed
+    # well-tracked range (see the meta's _note).
+    assert np.allclose(policy.command_low, [-0.8, -0.5, -0.6])
+    assert np.allclose(policy.command_high, [1.2, 0.5, 0.6])
     assert policy.command_width == 4
     assert policy.command_height_low < policy.command_height
     assert policy.command_height < policy.command_height_high

@@ -21,6 +21,10 @@ def generate_launch_description():
         [
             # Which /dev/input device the joy driver opens (0 = first pad).
             DeclareLaunchArgument("device_id", default_value="0"),
+            # Policy reference whose contract sets the stick command box
+            # (same reference policy_node gets); empty = the teleop node's
+            # conservative default limits.
+            DeclareLaunchArgument("policy", default_value=""),
             Node(
                 package="joy",
                 executable="joy_node",
@@ -42,6 +46,7 @@ def generate_launch_description():
                 package="wojtek_viz",
                 executable="gamepad_teleop",
                 output="screen",
+                parameters=[{"policy": LaunchConfiguration("policy")}],
             ),
         ]
     )

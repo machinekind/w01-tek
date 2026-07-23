@@ -143,10 +143,15 @@ def main():
     # The manual-control surface for this session; comes up alongside viz so the
     # operator never types raw `ros2 service call`. GUI, so it needs the X mount
     # ../dev.sh sets up -- same as RViz.
+    # The consoles/teleop read their command box from the same policy
+    # contract; without --policy they fall back to conservative defaults.
+    console_policy = (
+        ["--ros-args", "-p", f"policy:={args.policy}"] if args.policy else []
+    )
     if not args.no_console:
         if args.web_console:
             print(">> launching web operator console -- open http://localhost:8080")
-            spawn(["ros2", "run", "wojtek_viz", "web_console"])
+            spawn(["ros2", "run", "wojtek_viz", "web_console"] + console_policy)
         else:
             print(">> launching operator console (ros2 run wojtek_viz console)")
             spawn(["ros2", "run", "wojtek_viz", "console"])
@@ -157,7 +162,7 @@ def main():
     if args.gamepad:
         print(">> launching gamepad teleop (left stick vx/yaw, right stick "
               "strafe, A arms, D-pad height)")
-        spawn(["ros2", "launch", "wojtek_viz", "gamepad.launch.py"])
+        spawn(["ros2", "launch", "wojtek_viz", "gamepad.launch.py"] + policy_arg)
 
     if not args.sim:
         print(ARMING_HINT)

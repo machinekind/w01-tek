@@ -11,6 +11,12 @@ interpreter of this file:
   motor_targets = clip(anchor_ctrl + filt * action_scale,
                        target_low, target_high)
 
+The one exception is the live standing height: when the command box trains
+a real height range (4th dim, low < high), the stance anchor is a function
+of the commanded height and cannot be a single resolved vector. The
+contract then ships ctrl_low/ctrl_high and the runtime re-anchors with its
+copy of the env's measured height table (policy.py height_anchor).
+
 Every env-config key must be classified below as either CONSUMED (it shapes
 a contract field) or TRAINING_ONLY (provably irrelevant to deployment).
 build_contract() refuses to export when it meets a key it does not know --
@@ -170,6 +176,12 @@ def build_contract(env, run: dict, checkpoint: str = "") -> dict:
         "action_scale": scale.tolist(),
         "target_low": np.asarray(env._target_lo, np.float32).tolist(),
         "target_high": np.asarray(env._target_hi, np.float32).tolist(),
+        # The customized model's ctrlrange (what _height_ctrl clips to).
+        # Live-height contracts need it: the runtime re-derives the stance
+        # anchor from the commanded height and must clip exactly as the
+        # training env did -- to this range, not the narrower target bounds.
+        "ctrl_low": np.asarray(env._ctrlrange[:, 0], np.float32).tolist(),
+        "ctrl_high": np.asarray(env._ctrlrange[:, 1], np.float32).tolist(),
         "command_low": command_low,
         "command_high": command_high,
         "command_fill": [float(v) for v in command_fill],

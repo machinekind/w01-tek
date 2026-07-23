@@ -28,8 +28,6 @@ Threading: rclpy spins in a background thread; all ROS->GUI updates cross over
 through Qt signals (queued, thread-safe). Service calls are async so the UI
 never blocks.
 """
-import json
-import os
 import signal
 import sys
 import threading
@@ -37,10 +35,6 @@ import xml.etree.ElementTree as ET
 
 import numpy as np
 import rclpy
-from ament_index_python.packages import (
-    PackageNotFoundError,
-    get_package_share_directory,
-)
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile
@@ -64,11 +58,12 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-# Keep inside the policy's trained command box (policy_meta.json deploy
-# command_low/high): [vx, vy, yaw].
+# Console-side cap on the XY-pad drive commands [vx, vy, yaw]. Deliberately
+# conservative; policy_node additionally clips /cmd_vel to the loaded
+# policy's trained command box.
 CMD_LIMIT = (0.6, 0.4, 0.7)
 # Commanded standing height (m): trained envelope and default stance. Keep in
-# sync with policy_meta.json deploy.command_height and the training env's
+# sync with the loaded policy contract's command_height and the training env's
 # command.height range. Published on Twist linear.z (0 = use policy default).
 HEIGHT_RANGE = (0.09, 0.17)
 HEIGHT_DEFAULT = 0.125
@@ -112,9 +107,10 @@ class RosNode(Node):
         self._pub_targets = self.create_publisher(JointState, "wojtek/joint_targets", 10)
         self._pub_cmd = self.create_publisher(Twist, "cmd_vel", 10)
 
-        # Canonical actuated joint names, straight from policy_meta.json (same
-        # source real_io/policy use). Lets the jog UI build immediately, even in
-        # sim where wojtek/joint_states_abs is never published.
+        # Canonical actuated joint names, from the robot constants in
+        # wojtek_policy.poses (same source real_io uses). Lets the jog UI
+        # build immediately, even in sim where wojtek/joint_states_abs is
+        # never published.
         self.joint_names = self._load_joint_names()
 
         # --- telemetry (M2) ---
@@ -138,11 +134,9 @@ class RosNode(Node):
 
     def _load_joint_names(self):
         try:
-            share = get_package_share_directory("wojtek_policy")
-            meta = json.loads(
-                open(os.path.join(share, "config", "policy_meta.json")).read())
-            return list(meta["actuator_names"])
-        except (PackageNotFoundError, OSError, KeyError, ValueError) as e:
+            from wojtek_policy import poses
+            return list(poses.ACTUATOR_NAMES)
+        except ImportError as e:
             self.get_logger().warning(f"no canonical joint names ({e}); "
                                       "jog will build from telemetry instead")
             return []

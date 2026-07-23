@@ -21,3 +21,4 @@ deploy/rpi/cache/
 # Generated room scene (training: ./run.sh build-room)
 /src/wojtek_description/mujoco/scene_room.xml
 /src/wojtek_description/mujoco/scene_apartment.xml
+.policies/

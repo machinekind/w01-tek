@@ -83,6 +83,12 @@ def main():
                          "D-pad height; combine with --no-console to replace "
                          "the console entirely")
     ap.add_argument("--plotjuggler", action="store_true", help="also open PlotJuggler")
+    ap.add_argument("--policy", default=None,
+                    help="policy reference for policy_node: HF repo id "
+                         "(org/name[@revision]) or a local artifact directory; "
+                         "default = the launch file's pinned default. Ignored "
+                         "by the systemd RT path, which uses the service's "
+                         "own launch arguments.")
     args = ap.parse_args()
 
     procs = []
@@ -94,18 +100,25 @@ def main():
         return p
 
     # ---- robot side --------------------------------------------------------
+    policy_arg = [f"policy:={args.policy}"] if args.policy else []
     if args.sim:
         print(">> [sim] MuJoCo sim (local, in container)")
-        spawn(["ros2", "launch", "wojtek_viz", "sim.launch.py", "rviz:=false"])
+        spawn(["ros2", "launch", "wojtek_viz", "sim.launch.py", "rviz:=false"]
+              + policy_arg)
     elif args.dry_run:
         print(f">> [BENCH] launching on {RPI_HOST} WITHOUT RT, no torque")
+        remote_policy = f" {policy_arg[0]}" if policy_arg else ""
         remote = (f"source /opt/ros/{ROS_DISTRO}/setup.bash && "
                   f"source ~/{REMOTE_WS}/install/setup.bash && "
                   f"{REMOTE_DDS_ENV} && "
-                  f"ros2 launch wojtek_bringup robot.launch.py dry_run:=true")
+                  f"ros2 launch wojtek_bringup robot.launch.py dry_run:=true"
+                  f"{remote_policy}")
         spawn(SSH_TTY + [remote])
         stop_remote = lambda: subprocess.run(SSH + ["pkill -f robot.launch.py"])
     else:
+        if args.policy:
+            print(">> NOTE: --policy does not reach the systemd RT stack; "
+                  "set it in the service's launch arguments on the RPi")
         # Default: start the RT stack via its systemd service (RT-pinned), for
         # this session only. Stopped again on exit.
         print(f">> starting RPi RT stack on {RPI_HOST} (systemd, RT-pinned)")
@@ -130,10 +143,15 @@ def main():
     # The manual-control surface for this session; comes up alongside viz so the
     # operator never types raw `ros2 service call`. GUI, so it needs the X mount
     # ../dev.sh sets up -- same as RViz.
+    # The consoles/teleop read their command box from the same policy
+    # contract; without --policy they fall back to conservative defaults.
+    console_policy = (
+        ["--ros-args", "-p", f"policy:={args.policy}"] if args.policy else []
+    )
     if not args.no_console:
         if args.web_console:
             print(">> launching web operator console -- open http://localhost:8080")
-            spawn(["ros2", "run", "wojtek_viz", "web_console"])
+            spawn(["ros2", "run", "wojtek_viz", "web_console"] + console_policy)
         else:
             print(">> launching operator console (ros2 run wojtek_viz console)")
             spawn(["ros2", "run", "wojtek_viz", "console"])
@@ -144,7 +162,7 @@ def main():
     if args.gamepad:
         print(">> launching gamepad teleop (left stick vx/yaw, right stick "
               "strafe, A arms, D-pad height)")
-        spawn(["ros2", "launch", "wojtek_viz", "gamepad.launch.py"])
+        spawn(["ros2", "launch", "wojtek_viz", "gamepad.launch.py"] + policy_arg)
 
     if not args.sim:
         print(ARMING_HINT)

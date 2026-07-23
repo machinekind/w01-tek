@@ -5,10 +5,10 @@
   Mechanically identical to wojtek_description's wojtek.urdf.xacro
   (same leg macros), but the ros2_control block differs:
     * command interface `position` -> MD80 IMPEDANCE mode
-    * impedance gains kp/kd and max_torque default to the values the shipped
-      policy was trained against (kp=40, kd=1.6, +/-9 Nm -- the pd block in
-      wojtek_policy/config/policy_meta.json). Override via xacro args for
-      cautious first tests, e.g. max_torque:=2
+    * impedance gains kp/kd and max_torque are xacro args. The launch files
+      feed them from the loaded policy's contract (policy_meta.json pd
+      block); the defaults here (kp=40, kd=1.6, +/-9 Nm) only apply when the
+      xacro is used directly.
     * the IMU I2C ros2_control sensor is instantiated when use_imu:=true (it
       is commented out in the original description).
 -->

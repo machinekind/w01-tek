@@ -1,11 +1,11 @@
-"""Unit tests for the numpy policy runtime and joint map (no ROS required).
+"""Unit tests for the numpy policy runtime, resolver, and joint map.
 
 Run: ros/build.sh test (or pytest with numpy+yaml on the host).
 
-The shipped config is the springy policy (IMU-blind, 4-D command, vector
-action scale); the v3-style legacy layout (gyro+gravity+gait clock, scalar
-scale) is covered with a synthetic single-layer network whose output is
-known in closed form.
+No shipped policy artifacts exist in the repo anymore (policies load by
+reference, usually a Hugging Face repo id -- see policy_source.py), so
+every policy here is synthetic: a single-layer network with a zero kernel,
+whose output tanh(bias) is known in closed form for any observation.
 """
 
 import json
@@ -24,23 +24,49 @@ from wojtek_policy.policy import (  # noqa: E402
     gravity_from_quat,
     height_anchor,
 )
+from wojtek_policy.policy_source import (  # noqa: E402
+    load_meta,
+    load_policy,
+    pd_settings,
+    resolve_policy,
+)
 
 CONFIG = PKG / "config"
-META = json.loads((CONFIG / "policy_meta.json").read_text())
+
+HOME = [0.0, -0.2, 3.1] * 4
+META = {
+    "schema_version": 2,
+    "run_name": "synthetic",
+    "checkpoint": "",
+    "task": "joystick",
+    "obs_size": 40,
+    "action_size": 12,
+    "obs_layout": ["joint_pos:12", "joint_vel:12", "last_act:12", "command:4"],
+    "actuator_names": [
+        f"{leg}_{joint}_joint"
+        for leg in ("rear_left", "rear_right", "front_right", "front_left")
+        for joint in ("first", "second", "third")
+    ],
+    "home_ctrl": HOME,
+    "anchor_ctrl": [0.0, -0.2 + 1 / 30, 3.1 + 2 / 30] * 4,
+    "action_scale": [0.25, 0.5, 0.5] * 4,
+    "target_low": [-0.44, -3.14, 0.425] * 4,
+    "target_high": [0.44, 3.14, 3.15] * 4,
+    "command_low": [-0.8, -0.5, -1.0, 0.125],
+    "command_high": [1.2, 0.5, 1.0, 0.125],
+    "command_fill": [0.125],
+    "action_filter": 0.0,
+    "ctrl_dt": 0.02,
+    "knee_singularity": 3.2,
+    "pd": {"kp": 20.0, "kd": 1.0, "max_torque": 6.0},
+}
 
 
-@pytest.fixture
-def policy():
-    return WojtekPolicy(CONFIG / "policy.npz")
-
-
-def _v3_style_policy(tmp_path, bias12=None, deploy=None, action_scale=0.5):
-    """Synthetic single-layer policy in the wojtek_v3 obs layout.
-
-    With a zero kernel the MLP output is tanh(bias) for any obs, so the
-    action -- and therefore the target pipeline -- is known exactly.
-    """
-    obs_size = 53
+def make_policy(tmp_path, bias12=None, meta_updates=None, clamp_knee=False):
+    """Synthetic zero-kernel policy: action = tanh(bias) for any obs."""
+    meta = dict(META)
+    meta.update(meta_updates or {})
+    obs_size = meta["obs_size"]
     bias = np.zeros(24, np.float32)
     if bias12 is not None:
         bias[:12] = bias12
@@ -51,37 +77,38 @@ def _v3_style_policy(tmp_path, bias12=None, deploy=None, action_scale=0.5):
         hidden_0_kernel=np.zeros((obs_size, 24), np.float32),
         hidden_0_bias=bias,
     )
-    meta = dict(META)
-    meta["obs_size"] = obs_size
-    meta["obs_layout"] = [
-        "gyro:3", "gravity:3", "qpos-home:12", "qvel:12", "last_act:12",
-        "command:3", "phase_cos_sin:8",
-    ]
-    meta["action_scale"] = action_scale
-    meta.pop("deploy", None)
-    if deploy is not None:
-        meta["deploy"] = deploy
     (tmp_path / "policy_meta.json").write_text(json.dumps(meta))
-    return WojtekPolicy(tmp_path / "policy.npz")
+    return WojtekPolicy(tmp_path / "policy.npz", clamp_knee=clamp_knee)
 
 
-# -- springy (shipped config) -------------------------------------------------
+@pytest.fixture
+def policy(tmp_path):
+    return make_policy(tmp_path, bias12=np.linspace(-0.4, 0.4, 12))
+
+
+# -- contract interpretation --------------------------------------------------
 
 def test_obs_assembly_matches_layout(policy):
     assert policy.uses_imu is False
     q = policy.home_ctrl + np.linspace(0.01, 0.12, 12)
     dq = np.linspace(-1.0, 1.0, 12)
-    cmd = [0.3, -0.1, 0.2]
-    policy.step(np.zeros(3), [0, 0, -1.0], q, dq, cmd)
+    policy.step(np.zeros(3), [0, 0, -1.0], q, dq, [0.3, -0.1, 0.2])
     obs = policy.last_obs
     assert obs.shape == (META["obs_size"],)
     assert np.allclose(obs[0:12], q - policy.home_ctrl, atol=1e-6)
     assert np.allclose(obs[12:24], dq, atol=1e-6)
     assert np.allclose(obs[24:36], 0.0)  # last_act starts at zero
+    # 3-D /cmd_vel command is completed from command_fill
     assert np.allclose(obs[36:40], [0.3, -0.1, 0.2, 0.125], atol=1e-6)
 
 
-def test_ignores_imu(policy):
+def test_full_width_command_passes_through(policy):
+    policy.step(np.zeros(3), [0, 0, -1.0], policy.home_ctrl, np.zeros(12),
+                [0.3, -0.1, 0.2, 0.125])
+    assert np.allclose(policy.last_obs[36:40], [0.3, -0.1, 0.2, 0.125])
+
+
+def test_ignores_imu_when_layout_omits_it(policy):
     q, dq, cmd = policy.home_ctrl, np.zeros(12), [0.4, 0.0, 0.1]
     t1 = policy.step(np.zeros(3), [0, 0, -1.0], q, dq, cmd)
     policy.reset()
@@ -89,62 +116,120 @@ def test_ignores_imu(policy):
     assert np.allclose(t1, t2)
 
 
-def test_targets_respect_training_clamps(policy):
-    rng = np.random.default_rng(0)
-    for _ in range(100):
-        q = policy.home_ctrl + rng.uniform(-0.5, 0.5, 12)
-        dq = rng.uniform(-8, 8, 12)
-        cmd = rng.uniform(policy.command_low, policy.command_high)
-        t = policy.step(np.zeros(3), [0, 0, -1.0], q, dq, cmd)
-        assert np.all(np.abs(t[0::3]) <= 0.44 + 1e-6)  # abduction clamp
-        assert np.all(t[2::3] <= 3.15 + 1e-6)  # knee target cap
-        assert np.all(t >= policy.target_low - 1e-6)
-
-
-def test_anchor_is_height_shifted_home(policy):
-    # dsecond(0.125) = 0.15 * (0.125-0.121)/(0.139-0.121) = 1/30
-    d = 1.0 / 30.0
-    expect = policy.home_ctrl + np.tile([0.0, 1.0, 2.0], 4) * d
-    assert np.allclose(policy.anchor_ctrl, expect, atol=1e-6)
-    # the table's 0.121 row is the home pose itself
-    at_home = height_anchor(
-        policy.home_ctrl, 0.121, policy.ctrl_low, policy.ctrl_high
+def test_imu_layout_observes_gyro_and_gravity(tmp_path):
+    pol = make_policy(
+        tmp_path,
+        meta_updates={
+            "obs_size": 46,
+            "obs_layout": ["gyro:3", "gravity:3", "joint_pos:12",
+                           "joint_vel:12", "last_act:12", "command:4"],
+        },
     )
-    assert np.allclose(at_home, policy.home_ctrl, atol=1e-6)
+    assert pol.uses_imu is True
+    gyro, grav = [0.1, -0.2, 0.3], [0.0, 0.1, -0.99]
+    pol.step(gyro, grav, pol.home_ctrl, np.zeros(12), [0.3, 0.1, -0.2])
+    assert np.allclose(pol.last_obs[0:3], gyro, atol=1e-6)
+    assert np.allclose(pol.last_obs[3:6], grav, atol=1e-6)
 
 
-def test_command_box_from_meta(policy):
-    # The shipped deploy box, NOT the trained one: stiff_phase_c trained wz
-    # to +-1.5, but the meta caps the operator at +-0.6 — the console
-    # scales full stick from this box, the robot's achievable
-    # spin-in-place rate is ~0.5 rad/s, and +-0.6 is the owner-confirmed
-    # well-tracked range (see the meta's _note).
-    assert np.allclose(policy.command_low, [-0.8, -0.5, -0.6])
-    assert np.allclose(policy.command_high, [1.2, 0.5, 0.6])
-    assert policy.command_width == 4
-    assert policy.command_height_low < policy.command_height
-    assert policy.command_height < policy.command_height_high
+LIVE_HEIGHT_META = {
+    "command_low": [-0.8, -0.5, -1.0, 0.10],
+    "command_high": [1.2, 0.5, 1.0, 0.16],
+    "command_fill": [0.125],
+    "ctrl_low": [-0.6, -3.4, 0.3] * 4,
+    "ctrl_high": [0.6, 3.4, 3.6] * 4,
+}
 
 
-def test_height_command_moves_anchor_and_obs(policy):
-    # A 4-D command re-anchors the stance to the commanded height (as the
-    # training env does every step) and shows up verbatim in the obs.
+def test_height_command_moves_anchor_and_obs(tmp_path):
+    # A live-height contract re-anchors the stance to command[3] (as the
+    # training env does every step); the command shows up verbatim in obs.
+    pol = make_policy(tmp_path, meta_updates=LIVE_HEIGHT_META)
+    pol.step(np.zeros(3), [0, 0, -1.0], pol.home_ctrl, np.zeros(12),
+             [0.1, 0.0, 0.0, 0.16])
+    assert np.allclose(pol.last_obs[36:40], [0.1, 0.0, 0.0, 0.16], atol=1e-6)
+    expect = height_anchor(pol.home_ctrl, 0.16, pol.ctrl_low, pol.ctrl_high)
+    assert np.allclose(pol.anchor_ctrl, expect, atol=1e-6)
+    # dropping back to a 3-D command falls back to the contract's fill
+    # height in both the obs padding and the anchor
+    pol.step(np.zeros(3), [0, 0, -1.0], pol.home_ctrl, np.zeros(12),
+             [0.1, 0.0, 0.0])
+    assert np.allclose(pol.last_obs[36:40], [0.1, 0.0, 0.0, 0.125], atol=1e-6)
+    default = height_anchor(pol.home_ctrl, 0.125, pol.ctrl_low, pol.ctrl_high)
+    assert np.allclose(pol.anchor_ctrl, default, atol=1e-6)
+
+
+def test_pinned_height_keeps_resolved_anchor(policy):
+    # The default fixture pins height (low == high): the resolved anchor is
+    # the contract's word, never recomputed at runtime.
+    before = policy.anchor_ctrl.copy()
     policy.step(np.zeros(3), [0, 0, -1.0], policy.home_ctrl, np.zeros(12),
-                [0.1, 0.0, 0.0, 0.17])
-    assert np.allclose(policy.last_obs[36:40], [0.1, 0.0, 0.0, 0.17], atol=1e-6)
-    expect = height_anchor(
-        policy.home_ctrl, 0.17, policy.ctrl_low, policy.ctrl_high
+                [0.1, 0.0, 0.0, 0.125])
+    assert np.allclose(policy.anchor_ctrl, before)
+
+
+def test_live_height_contract_requires_ctrlrange(tmp_path):
+    # A live height range without ctrl_low/ctrl_high must refuse to load --
+    # silently keeping a fixed anchor would mis-anchor the stance.
+    updates = {k: v for k, v in LIVE_HEIGHT_META.items()
+               if k not in ("ctrl_low", "ctrl_high")}
+    with pytest.raises(ValueError, match="ctrl_low/ctrl_high"):
+        make_policy(tmp_path, meta_updates=updates)
+
+
+def test_closed_form_targets(tmp_path):
+    b = np.linspace(-0.4, 0.4, 12).astype(np.float32)
+    pol = make_policy(tmp_path, bias12=b)
+    t = pol.step(np.zeros(3), [0, 0, -1.0], pol.home_ctrl, np.zeros(12),
+                 [0.3, 0.1, -0.2])
+    expect = np.clip(
+        np.array(META["anchor_ctrl"]) + np.tanh(b) * np.array(META["action_scale"]),
+        META["target_low"], META["target_high"],
     )
-    assert np.allclose(policy.anchor_ctrl, expect, atol=1e-6)
-    # dropping back to a 3-D command falls back to the meta's fixed height
-    # in both the obs padding and the anchor
-    policy.step(np.zeros(3), [0, 0, -1.0], policy.home_ctrl, np.zeros(12),
-                [0.1, 0.0, 0.0])
-    assert np.allclose(policy.last_obs[36:40], [0.1, 0.0, 0.0, 0.125], atol=1e-6)
-    default = height_anchor(
-        policy.home_ctrl, 0.125, policy.ctrl_low, policy.ctrl_high
+    assert np.allclose(t, expect, atol=1e-6)
+
+
+def test_targets_respect_contract_bounds(tmp_path):
+    # bias saturating every joint positive: knees (anchor 3.167 + 0.5) pin
+    # to the 3.15 knee cap, the rest stay inside the box
+    pol = make_policy(tmp_path, bias12=np.full(12, 9.0, np.float32))
+    t = pol.step(np.zeros(3), [0, 0, -1.0], pol.home_ctrl, np.zeros(12),
+                 [0.5, 0, 0])
+    expect = np.clip(
+        np.array(META["anchor_ctrl"]) + np.tanh(9.0) * np.array(META["action_scale"]),
+        META["target_low"], META["target_high"],
     )
-    assert np.allclose(policy.anchor_ctrl, default, atol=1e-6)
+    assert np.allclose(t, expect, atol=1e-6)
+    assert np.allclose(t[2::3], 3.15)  # knee target cap binds
+    assert np.all(np.abs(t[0::3]) <= 0.44 + 1e-6)  # abduction clamp
+
+
+def test_action_filter_is_ema(tmp_path):
+    b = np.full(12, 0.5, np.float32)
+    pol = make_policy(tmp_path, bias12=b, meta_updates={"action_filter": 0.8})
+    a = np.tanh(b)
+    args = (np.zeros(3), [0, 0, -1.0], pol.home_ctrl, np.zeros(12), [0.2, 0, 0])
+    t1 = pol.step(*args)
+    t2 = pol.step(*args)
+    scale = np.array(META["action_scale"])
+    anchor = np.array(META["anchor_ctrl"])
+    lo, hi = META["target_low"], META["target_high"]
+    assert np.allclose(t1, np.clip(anchor + 0.2 * a * scale, lo, hi), atol=1e-6)
+    assert np.allclose(
+        t2, np.clip(anchor + (0.8 * 0.2 + 0.2) * a * scale, lo, hi), atol=1e-6
+    )
+    pol.reset()
+    assert np.allclose(pol.filtered_action, 0.0)
+
+
+def test_clamp_knee_safety_clip(tmp_path):
+    pol = make_policy(
+        tmp_path, bias12=np.full(12, 9.0, np.float32), clamp_knee=True,
+        meta_updates={"target_high": [0.44, 3.14, 5.8] * 4},
+    )
+    t = pol.step(np.zeros(3), [0, 0, -1.0], pol.home_ctrl, np.zeros(12),
+                 [0.5, 0, 0])
+    assert np.all(t[2::3] <= pol.knee_singularity + 1e-9)
 
 
 def test_determinism(policy):
@@ -162,61 +247,110 @@ def test_determinism(policy):
         assert np.allclose(t, seq_a[i])
 
 
-def test_last_action_feeds_back(policy):
-    t1 = policy.step(np.zeros(3), [0, 0, -1.0], policy.home_ctrl,
-                     np.zeros(12), [0.3, 0, 0])
-    assert not np.allclose(policy.last_action, 0.0)
-    t2 = policy.step(np.zeros(3), [0, 0, -1.0], policy.home_ctrl,
-                     np.zeros(12), [0.3, 0, 0])
-    assert not np.allclose(t1, t2)  # last_act changed -> different action
-    policy.reset()
-    assert np.allclose(policy.last_action, 0.0)
-
-
-# -- legacy v3-style layout ---------------------------------------------------
-
-def test_v3_layout_obs_and_targets(tmp_path):
-    b = np.linspace(-0.4, 0.4, 12).astype(np.float32)
-    pol = _v3_style_policy(tmp_path, bias12=b)
-    assert pol.uses_imu is True
-    assert np.allclose(pol.anchor_ctrl, pol.home_ctrl)
-
-    gyro = [0.1, -0.2, 0.3]
-    grav = [0.0, 0.1, -0.99]
-    q = pol.home_ctrl + 0.05
-    dq = np.full(12, 0.2)
-    p0 = pol.phase.copy()
-    t = pol.step(gyro, grav, q, dq, [0.3, 0.1, -0.2])
-
-    obs = pol.last_obs
-    assert obs.shape == (53,)
-    assert np.allclose(obs[0:3], gyro, atol=1e-6)
-    assert np.allclose(obs[3:6], grav, atol=1e-6)
-    assert np.allclose(obs[6:18], 0.05, atol=1e-6)
-    assert np.allclose(obs[30:42], 0.0)  # last_act
-    assert np.allclose(obs[42:45], [0.3, 0.1, -0.2], atol=1e-6)
-    assert np.allclose(obs[45:49], np.cos(p0), atol=1e-6)
-    assert np.allclose(obs[49:53], np.sin(p0), atol=1e-6)
-    assert not np.allclose(pol.phase, p0)  # gait clock advanced
-
-    # zero kernel -> action = tanh(bias), targets known in closed form
-    expect = np.clip(
-        pol.home_ctrl + np.tanh(b) * 0.5, pol.ctrl_low, pol.ctrl_high
+def test_last_action_feeds_back(tmp_path):
+    # identity-ish kernel so the action depends on last_act: use a nonzero
+    # kernel row from last_act slice into the outputs
+    obs_size = META["obs_size"]
+    kernel = np.zeros((obs_size, 24), np.float32)
+    kernel[24:36, :12] = np.eye(12, dtype=np.float32) * 0.5
+    np.savez(
+        tmp_path / "policy.npz",
+        norm_mean=np.zeros(obs_size, np.float32),
+        norm_std=np.ones(obs_size, np.float32),
+        hidden_0_kernel=kernel,
+        hidden_0_bias=np.full(24, 0.3, np.float32),
     )
-    assert np.allclose(t, expect, atol=1e-6)
+    (tmp_path / "policy_meta.json").write_text(json.dumps(META))
+    pol = WojtekPolicy(tmp_path / "policy.npz")
+    args = (np.zeros(3), [0, 0, -1.0], pol.home_ctrl, np.zeros(12), [0.3, 0, 0])
+    t1 = pol.step(*args)
+    assert not np.allclose(pol.last_action, 0.0)
+    t2 = pol.step(*args)
+    assert not np.allclose(t1, t2)  # last_act changed -> different action
+    pol.reset()
+    assert np.allclose(pol.last_action, 0.0)
 
 
-def test_no_deploy_block_falls_back_to_ctrlrange(tmp_path):
-    # bias saturating the knees high: without a deploy block the only guard
-    # below the model ctrlrange (5.8) is the clamp_knee singularity clip
-    b = np.full(12, 5.0, np.float32)
-    pol = _v3_style_policy(tmp_path, bias12=b)
-    assert np.allclose(pol.target_high, pol.ctrl_high)
-    assert np.allclose(pol.command_high, [0.6, 0.4, 0.7])
-    pol.clamp_knee = True
-    t = pol.step(np.zeros(3), [0, 0, -1.0], pol.home_ctrl, np.zeros(12),
-                 [0.5, 0, 0])
-    assert np.all(t[2::3] <= pol.knee_singularity + 1e-9)
+# -- contract enforcement -----------------------------------------------------
+
+def test_rejects_wrong_schema_version(tmp_path):
+    with pytest.raises(ValueError, match="schema_version"):
+        make_policy(tmp_path, meta_updates={"schema_version": None})
+    with pytest.raises(ValueError, match="schema_version"):
+        make_policy(tmp_path, meta_updates={"schema_version": 1})
+
+
+def test_rejects_unknown_obs_component(tmp_path):
+    with pytest.raises(ValueError, match="phase"):
+        make_policy(
+            tmp_path,
+            meta_updates={
+                "obs_size": 48,
+                "obs_layout": ["joint_pos:12", "joint_vel:12", "last_act:12",
+                               "command:4", "phase:8"],
+            },
+        )
+
+
+def test_rejects_inconsistent_command_fill(tmp_path):
+    with pytest.raises(ValueError, match="command_fill"):
+        make_policy(tmp_path, meta_updates={"command_fill": []})
+
+
+# -- resolver -----------------------------------------------------------------
+
+def test_resolve_local_dir(tmp_path):
+    make_policy(tmp_path)
+    r = resolve_policy(str(tmp_path))
+    assert r.npz == tmp_path / "policy.npz"
+    assert r.meta == tmp_path / "policy_meta.json"
+    assert r.source == f"local:{tmp_path}"
+    assert WojtekPolicy(r.npz, meta_path=r.meta).joint_names[0] == (
+        "rear_left_first_joint"
+    )
+
+
+def test_resolve_local_dir_missing_files(tmp_path):
+    with pytest.raises(FileNotFoundError, match="policy.npz"):
+        resolve_policy(str(tmp_path))
+
+
+def test_load_meta_and_pd_settings(tmp_path):
+    make_policy(tmp_path, meta_updates={"pd": {"kp": 80.0, "kd": 2.26,
+                                               "max_torque": 9.0}})
+    meta, source = load_meta(str(tmp_path))
+    assert source == f"local:{tmp_path}"
+    # servo settings come from the contract verbatim
+    assert pd_settings(meta) == {"kp": 80.0, "kd": 2.26, "max_torque": 9.0}
+
+
+def test_load_policy_resolves_once_and_applies_overrides(tmp_path):
+    make_policy(tmp_path, meta_updates={"pd": {"kp": 80.0, "kd": 2.26,
+                                               "max_torque": 9.0}})
+    loaded = load_policy(str(tmp_path))
+    assert loaded.source == f"local:{tmp_path}"
+    assert loaded.run_name == "synthetic"
+    # the resolved dir (what a node gets as `policy`) holds both files
+    assert loaded.directory == tmp_path
+    assert loaded.npz == tmp_path / "policy.npz"
+    assert loaded.meta_path == tmp_path / "policy_meta.json"
+    assert loaded.meta["pd"]["kp"] == 80.0
+    # contract verbatim when no overrides
+    assert loaded.pd == {"kp": 80.0, "kd": 2.26, "max_torque": 9.0}
+    # non-empty overrides replace individual entries; empty string / None
+    # keep the contract value
+    over = load_policy(str(tmp_path),
+                       overrides={"max_torque": "2", "kp": "", "kd": None})
+    assert over.pd == {"kp": 80.0, "kd": 2.26, "max_torque": 2.0}
+
+
+def test_resolve_rejects_non_reference():
+    with pytest.raises(ValueError):
+        resolve_policy("")
+    with pytest.raises(ValueError):
+        resolve_policy("no-slash-and-no-such-dir")
+    with pytest.raises(ValueError):
+        resolve_policy("/nonexistent/dir/policy.npz")
 
 
 # -- shared helpers -----------------------------------------------------------
@@ -243,6 +377,5 @@ def test_joint_map_roundtrip():
 def test_joint_map_home_within_urdf_limits_for_second_joint():
     """The trained home pose maps to finite URDF angles (sanity of offsets)."""
     jm = JointMap(CONFIG / "joint_map.yaml")
-    policy = WojtekPolicy(CONFIG / "policy.npz")
-    urdf_home = jm.to_urdf(policy.joint_names, policy.home_ctrl)
+    urdf_home = jm.to_urdf(META["actuator_names"], np.array(HOME))
     assert np.all(np.isfinite(urdf_home))

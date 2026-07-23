@@ -20,27 +20,23 @@ another driver enumerates differently):
 Driving is ALWAYS live -- there is no drive on/off gate like the consoles
 have; the sticks command velocity whenever the stack accepts it. Two rails
 stay in place anyway:
-  * sticks scale into the policy's trained command box (policy_meta.json
-    deploy.command_low/high, the same source policy_node clips against), and
+  * sticks scale into the policy's trained command box, read from the
+    contract of the `policy` parameter's reference (the same reference
+    policy_node gets; empty = conservative defaults), and
   * a dead-man zeroes the motion if Joy messages stop (pad powered off / out
     of bluetooth range / joy driver gone) for more than cmd_timeout_s. The
     height set-point is held through stops, same rule as the consoles.
 """
-import json
-import os
-
 import rclpy
-from ament_index_python.packages import (
-    PackageNotFoundError,
-    get_package_share_directory,
-)
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from sensor_msgs.msg import Joy
 from std_srvs.srv import SetBool
 
-# Fallbacks for a policy_meta.json without a deploy box -- same values and
-# same role as in web_console.py / operator_console.py.
+from wojtek_policy.policy_source import load_meta
+
+# Fallbacks when no policy reference is set (or it fails to load) -- same
+# values and same role as in web_console.py / operator_console.py.
 DEFAULT_CMD_LOW = (-0.6, -0.4, -0.7)
 DEFAULT_CMD_HIGH = (0.6, 0.4, 0.7)
 DEFAULT_HEIGHT_RANGE = (0.09, 0.17)
@@ -65,6 +61,9 @@ class GamepadTeleop(Node):
         self._deadzone = self.declare_parameter("deadzone", 0.1).value
         self._height_step = self.declare_parameter("height_step", 0.005).value
         self._cmd_timeout = self.declare_parameter("cmd_timeout_s", 0.5).value
+        # Same reference policy_node gets (HF repo id or local directory);
+        # empty = drive with the conservative default limits below.
+        self.declare_parameter("policy", "")
 
         self._load_meta()
 
@@ -87,27 +86,33 @@ class GamepadTeleop(Node):
         )
 
     def _load_meta(self):
-        """Trained command box + height envelope, same source as the consoles."""
+        """Trained command box + height envelope from the policy contract."""
         self.cmd_low = list(DEFAULT_CMD_LOW)
         self.cmd_high = list(DEFAULT_CMD_HIGH)
         self.height_range = list(DEFAULT_HEIGHT_RANGE)
         self.height_default = DEFAULT_HEIGHT
-        try:
-            share = get_package_share_directory("wojtek_policy")
-            meta = json.loads(
-                open(os.path.join(share, "config", "policy_meta.json")).read())
-        except (PackageNotFoundError, OSError, ValueError) as e:
-            self.get_logger().warning(f"no policy meta ({e}); driving with "
-                                      "default command limits")
+        ref = self.get_parameter("policy").value
+        if not ref:
+            self.get_logger().warning(
+                "no policy reference set; driving with default command limits")
             return
-        deploy = meta.get("deploy", {})
-        self.cmd_low = list(deploy.get("command_low", DEFAULT_CMD_LOW))[:3]
-        self.cmd_high = list(deploy.get("command_high", DEFAULT_CMD_HIGH))[:3]
-        self.height_range = [
-            deploy.get("command_height_low", DEFAULT_HEIGHT_RANGE[0]),
-            deploy.get("command_height_high", DEFAULT_HEIGHT_RANGE[1]),
-        ]
-        self.height_default = deploy.get("command_height", 0.0) or DEFAULT_HEIGHT
+        try:
+            meta, source = load_meta(ref)
+        except Exception as e:  # resolver/network/file -- stay drivable
+            self.get_logger().warning(
+                f"could not load policy contract {ref!r} ({e}); driving "
+                "with default command limits")
+            return
+        self.cmd_low = [float(v) for v in meta["command_low"][:3]]
+        self.cmd_high = [float(v) for v in meta["command_high"][:3]]
+        if len(meta["command_low"]) >= 4:
+            self.height_range = [
+                float(meta["command_low"][3]), float(meta["command_high"][3])
+            ]
+        if meta.get("command_fill"):
+            self.height_default = float(meta["command_fill"][0])
+        self.get_logger().info(
+            f"command box from {meta['run_name']} ({source})")
 
     # ---- pad input -----------------------------------------------------------
     def _shape(self, v):

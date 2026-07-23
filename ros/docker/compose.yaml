@@ -37,6 +37,12 @@ services:
       # config/keys it doesn't own ("Bad owner or permissions ..."). The
       # entrypoint copies it into a root-owned /root/.ssh at container start.
       - ${HOME}/.ssh:/host-ssh:ro
+      # Host Hugging Face cache (token + downloaded policy artifacts).
+      # policy_node loads policies by reference (policy:=org/name@rev); the
+      # keeper repos are private, so the container reuses the host's login
+      # and cache instead of needing its own token. Prefetch on the host:
+      # python3 -m wojtek_policy.policy_source <ref>.
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
       # Host SSH agent socket. The RPi key (id_ed25519) is passphrase-protected,
       # so mounting ~/.ssh alone is NOT enough: without the agent, ssh inside the
       # container can't decrypt the key and silently falls back to password auth

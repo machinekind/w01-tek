@@ -11,6 +11,7 @@ case "${1:-}" in
   build-terrain) shift; "$PY" -m wojtek_rl.build_terrain "$@" ;;
   pose)  shift; "$PY" -m wojtek_rl.pose_explorer "$@" ;;
   check) shift; "$PY" -m wojtek_rl.check_model_mjx "$@" ;;
+  check-terrain) shift; "$PY" -m wojtek_rl.check_terrain "$@" ;;
   train) shift; "$PY" -m wojtek_rl.train "$@" ;;
   smoke) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.train smoke=true wandb.enable=false "$@" ;;
   eval)  shift; "$PY" -m wojtek_rl.eval "$@" ;;

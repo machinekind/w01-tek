@@ -1,7 +1,6 @@
 {
-  "run_name": "wojtek_stiff_b_20260717_235321",
+  "run_name": "wojtek_stiff_c_20260723_004620",
   "checkpoint": "LOCAL_PATH
-  "task": "joystick",
   "obs_size": 40,
   "action_size": 12,
   "obs_layout": [
@@ -26,17 +25,17 @@
   ],
   "home_ctrl": [
     0.0,
-    -0.20000000298023224,
-    3.0999999046325684,
+    -0.2,
+    3.1,
     0.0,
-    -0.20000000298023224,
-    3.0999999046325684,
+    -0.2,
+    3.1,
     0.0,
-    -0.20000000298023224,
-    3.0999999046325684,
+    -0.2,
+    3.1,
     0.0,
-    -0.20000000298023224,
-    3.0999999046325684
+    -0.2,
+    3.1
   ],
   "ctrl_low": [
     -3.1416,
@@ -69,18 +68,8 @@
   "action_scale": [
     0.25,
     0.5,
-    0.5,
-    0.25,
-    0.5,
-    0.5,
-    0.25,
-    0.5,
-    0.5,
-    0.25,
-    0.5,
     0.5
   ],
-  "action_filter": 0.0,
   "ctrl_dt": 0.02,
   "trot_phase": [
     0.0,
@@ -90,17 +79,27 @@
   ],
   "gait_freq_hz": 2.2,
   "knee_singularity": 3.2,
-  "pd": {
-    "kp": 40.0,
-    "kd": 1.6,
-    "max_torque": 9.0
-  },
   "deploy": {
-    "_note": "Hand-translated from the schema-2 meta on HF (<HF_ORGANIZATION>/wojtek-stiff-locomotion @ 2c52d74c) because this loader reads schema-1 keys. Every number is the exporter's; ctrl_low/high plus these clamps reproduce the contract's resolved target_low/high and anchor_ctrl exactly. trot_phase/gait_freq_hz are the vestigial keys the schema-1 exporter always emitted -- no phase in obs_layout, unused. The pd block (kp/kd/max_torque the run trained under) is informational here: nothing on main plumbs it into the launch or hardware config.",
+    "_note": "Hand-added from the stiff_phase_c resolved config (run_wojtek_stiff_c_20260723_004620.resolved.yaml): the exporter does not emit a deploy block; this loader reads these keys. command box = the trained task.env.command ranges; height is LIVE on this policy (trained 0.10-0.16 m, resampled in-episode), Twist linear.z carries it, 0.125 is the fallback when unset. The pd block is informational: the gains the run trained under; deployment must match (kp=40/kd=1.6/9 Nm, unchanged from the stiff_b keeper).",
     "command_height": 0.125,
-    "command_low": [-0.8, -0.5, -1.0],
-    "command_high": [1.2, 0.5, 1.0],
+    "command_height_low": 0.1,
+    "command_height_high": 0.16,
+    "command_low": [
+      -0.8,
+      -0.5,
+      -1.5
+    ],
+    "command_high": [
+      1.2,
+      0.5,
+      1.5
+    ],
     "abduction_ctrl_limit": 0.44,
-    "knee_target_max": 3.15
+    "knee_target_max": 3.15,
+    "pd": {
+      "kp": 40.0,
+      "kd": 1.6,
+      "max_torque": 9.0
+    }
   }
 }

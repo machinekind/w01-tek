@@ -114,8 +114,10 @@ def test_anchor_is_height_shifted_home(policy):
 
 
 def test_command_box_from_meta(policy):
-    assert np.allclose(policy.command_low, [-0.8, -0.5, -1.0])
-    assert np.allclose(policy.command_high, [1.2, 0.5, 1.0])
+    # The shipped artifact's trained box: stiff_phase_c widened wz to +-1.5
+    # over the stiff_b keeper's +-1.0.
+    assert np.allclose(policy.command_low, [-0.8, -0.5, -1.5])
+    assert np.allclose(policy.command_high, [1.2, 0.5, 1.5])
     assert policy.command_width == 4
     assert policy.command_height_low < policy.command_height
     assert policy.command_height < policy.command_height_high

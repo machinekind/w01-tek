@@ -1,0 +1,12 @@
+# Magnetometer ellipsoid calibration consumed by imu_i2c_hardware_interface
+# (m = soft_iron * (raw - hard_iron), units uT).  This shipped file is an
+# IDENTITY PLACEHOLDER: the ESKF runs uncalibrated with it and learns the
+# field norm from the first accepted sample.  Generate the real one with
+# ros/hw_tests/imu_i2c/mag_calib.py while rotating the robot through all
+# orientations, then commit the result here.
+hard_iron_ut: [0.0, 0.0, 0.0]
+soft_iron: [1.0, 0.0, 0.0,
+            0.0, 1.0, 0.0,
+            0.0, 0.0, 1.0]
+# <= 0 means "learn from the first accepted sample".
+field_norm_ut: 0.0

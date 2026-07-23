@@ -15,6 +15,7 @@
 #ifndef IMU_I2C_HARDWARE_INTERFACE__IMU_I2C_HARDWARE_INTERFACE_HPP_
 #define IMU_I2C_HARDWARE_INTERFACE__IMU_I2C_HARDWARE_INTERFACE_HPP_
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -23,6 +24,7 @@
 #include "hardware_interface/sensor_interface.hpp"
 #include "hardware_interface/types/hardware_interface_return_values.hpp"
 #include "imu_i2c_hardware_interface/imu_i2c.hpp"
+#include "imu_i2c_hardware_interface/orientation_eskf.hpp"
 #include "imu_i2c_hardware_interface/visibility_control.h"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/state.hpp"
@@ -60,14 +62,24 @@ private:
   rclcpp::Logger logger_{rclcpp::get_logger("ImuI2CHardwareInterface")};
   rclcpp::Clock steady_clock_{RCL_STEADY_TIME};
 
+  // Sensor fusion: the LSM6DS3TR-C/LIS3MDL pair has no onboard fusion, so
+  // orientation.* is computed here by an error-state Kalman filter (gyro
+  // prediction + accel roll/pitch + mag yaw, see orientation_eskf.hpp).
+  // Until the filter has initialized (first fresh accel+mag pair) the
+  // quaternion stays (0,0,0,0), which wojtek_policy's IMU callback treats
+  // as "no orientation available" and falls back to its own accel+gyro
+  // complementary filter (policy_node.py _on_imu) -- a graceful start and
+  // the rollback path (gravity_from_accel param) in one.
+  std::unique_ptr<OrientationEskf> eskf_;
+  // Time accumulated between fresh gyro samples (read() polls at the
+  // 400 Hz controller rate, the LSM6 samples at 104 Hz).
+  double gyro_dt_ = 0.0;
+  // A mag sample can land on a cycle without a fresh gyro sample (80 vs
+  // 104 Hz); latch it and hand it to the filter on the next gyro step.
+  bool mag_pending_ = false;
+
   // Layout: magnetometer.{x,y,z} (0-2), angular_velocity.{x,y,z} (3-5),
   // linear_acceleration.{x,y,z} (6-8), orientation.{x,y,z,w} (9-12).
-  // orientation is pinned to (0,0,0,0) for the plugin's whole lifetime: the
-  // LSM6DS3TR-C/LIS3MDL pair has no onboard or firmware sensor fusion (see
-  // bmx160/bmi160's MCU-side Mahony filter for what that used to look
-  // like), and wojtek_policy's IMU callback already treats an all-zero
-  // quaternion as "no orientation available" and falls back to its own
-  // accel+gyro complementary filter (policy_node.py _on_imu).
   std::vector<double> hw_states_;
 };
 

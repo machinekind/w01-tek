@@ -14,7 +14,7 @@ MuJoCo resolves <hfield file=> against meshdir (the included robot XML sets it).
 
 Run:
     ./run.sh build-terrain [--seed N] [--rows N] [--tile-size M] [--border M]
-                           [--cell-size M] [--no-check]
+                           [--cell-size M] [--ordered] [--no-check]
 """
 
 from __future__ import annotations
@@ -48,9 +48,14 @@ def build_scene_xml(arena: terrain.Arena, hfield_file: str) -> str:
     for k, b in enumerate(arena.boxes):
         pos = " ".join(f"{v:.4f}" for v in b.pos)
         half = " ".join(f"{v:.4f}" for v in b.half)
+        # quat (not euler) sidesteps MJCF's angle-unit ambiguity; only emitted
+        # when the box is turned, so axis-aligned boxes read as before.
+        quat = ""
+        if b.yaw != 0.0:
+            quat = f' quat="{np.cos(b.yaw / 2):.6f} 0 0 {np.sin(b.yaw / 2):.6f}"'
         box_lines.append(
             f'    <geom name="terrain_box_{k}" type="box" size="{half}" '
-            f'pos="{pos}" condim="3" conaffinity="15" rgba="{_BOX_RGBA[k % 2]}"/>'
+            f'pos="{pos}"{quat} condim="3" conaffinity="15" rgba="{_BOX_RGBA[k % 2]}"/>'
         )
     boxes = "\n".join(box_lines)
     return f"""<mujoco model="wojtek_terrain_scene">
@@ -103,12 +108,14 @@ def main() -> None:
     p.add_argument("--tile-size", type=float, default=terrain.TILE_SIZE)
     p.add_argument("--border", type=float, default=terrain.BORDER)
     p.add_argument("--cell-size", type=float, default=terrain.CELL_SIZE)
+    p.add_argument("--ordered", action="store_true",
+                   help="legacy sorted-column, exact-difficulty layout (eval arenas)")
     p.add_argument("--no-check", action="store_true", help="skip the compile check")
     args = p.parse_args()
 
     arena = terrain.generate(
         seed=args.seed, n_rows=args.rows, tile_size=args.tile_size,
-        border=args.border, cell_size=args.cell_size,
+        border=args.border, cell_size=args.cell_size, ordered=args.ordered,
     )
     write_arena(arena)
     if not args.no_check:

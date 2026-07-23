@@ -1,12 +1,17 @@
 """Procedural terrain arena for Wojtek locomotion training.
 
-One shared arena, deterministic from a seed: a grid of ~3 m tiles with rows =
-difficulty (0..1) and columns = terrain type, plus a flat border around the
-grid. Rough, slopes, and the inverted-stairs pit are carved into a single
-heightfield covering the whole arena; stairs and discrete obstacles are static
-box geoms (crisp edges, cheap contacts) sitting on the heightfield. Every tile
-reaches flat ground (z = 0) at its border so neighbours join seamlessly, and
-every tile has a flat circular spawn pad at its centre.
+One shared arena, deterministic from a seed: a grid of ~3 m tiles with rows of
+increasing difficulty (0..1) and one tile of every terrain type per row, plus a
+flat border around the grid. By default each row's column order is shuffled and
+each interior row's difficulty is jittered within half a row gap; ``ordered=True``
+restores the legacy sorted-column, exact-difficulty layout for eval arenas.
+Rough, slopes, and the inverted-stairs pit are carved into a single heightfield
+covering the whole arena; stairs and discrete obstacles are static box geoms
+(crisp edges, cheap contacts) sitting on the heightfield. A modality overlay of
+low rough noise rides the slope and box-tile grounds so those tiles are not
+perfectly smooth. Every tile reaches flat ground (z = 0) at its border so
+neighbours join seamlessly, and every tile has a flat circular spawn pad at its
+centre.
 
 The heightfield geom and all box geoms live in the worldbody, so MuJoCo's
 same-body exclusion drops every terrain-vs-terrain contact for free; only the
@@ -63,6 +68,10 @@ PAD_RADIUS = 0.6
 # Rough noise ramps from 0 at the pad edge to full over this width, so the pad
 # has no cliff at its rim.
 PAD_TAPER = 0.25
+# Rough noise and the modality overlay ramp back to exactly 0 over this width
+# inward from the tile edge, so borders stay seamless. The pad taper alone left
+# rough proud at the rim (a several-cm one-cell step across a row seam).
+EDGE_TAPER = 0.25
 
 # Slope tiles: flat square platform (holds the pad), then a linear ramp.
 SLOPE_PLATFORM_HALF = 0.6
@@ -78,6 +87,9 @@ STAIR_PIT_HALF = STAIR_PLATFORM_HALF + (N_STEPS - 1) * TREAD
 # Rough tiles: white noise sampled on this coarse pitch then bilinearly
 # upsampled, so features are foot-scale rolling ground, not per-cell spikes.
 ROUGH_COARSE_STEP = 0.15
+# Modality overlay: coarse rough noise at this fraction of the rough amplitude
+# laid over slope and box-tile grounds, so those tiles are not perfectly smooth.
+OVERLAY_FRACTION = 0.3
 
 DISCRETE_N = 12
 DISCRETE_HALF_RANGE = (0.10, 0.25)
@@ -115,10 +127,11 @@ def wave_amplitude(d: float) -> float:
 
 @dataclass(frozen=True)
 class Box:
-    """Axis-aligned static box, world centre and half-sizes (m)."""
+    """Static box: world centre, half-sizes (m), and yaw about +z (rad)."""
 
     pos: tuple[float, float, float]
     half: tuple[float, float, float]
+    yaw: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -151,6 +164,7 @@ class TerrainSpec:
     tile_size: float
     border: float
     cell_size: float
+    ordered: bool
     types: tuple[str, ...]
     x_min: float
     x_max: float
@@ -203,18 +217,40 @@ def _cheby(lx: np.ndarray, ly: np.ndarray) -> np.ndarray:
     return np.maximum(np.abs(lx), np.abs(ly))
 
 
+def _pad_taper(lx: np.ndarray, ly: np.ndarray) -> np.ndarray:
+    """0 inside the spawn pad, ramping to 1 by PAD_TAPER past its rim."""
+    r = np.sqrt(lx**2 + ly**2)
+    return np.clip((r - PAD_RADIUS) / PAD_TAPER, 0.0, 1.0)
+
+
+def _edge_taper(lx: np.ndarray, ly: np.ndarray) -> np.ndarray:
+    """1 in the tile interior, ramping to exactly 0 at the tile perimeter."""
+    return np.clip((TILE_SIZE / 2 - _cheby(lx, ly)) / EDGE_TAPER, 0.0, 1.0)
+
+
+def _coarse_noise(lx: np.ndarray, ly: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    """White noise on ROUGH_COARSE_STEP pitch, bilinearly upsampled to (lx, ly)."""
+    n = int(round(TILE_SIZE / ROUGH_COARSE_STEP)) + 1
+    half = TILE_SIZE / 2
+    coarse = rng.uniform(-1.0, 1.0, size=(n, n))
+    step = TILE_SIZE / (n - 1)
+    return _bilinear(coarse, -half, step, -half, step, lx, ly)
+
+
 def _rough_patch(
     lx: np.ndarray, ly: np.ndarray, d: float, rng: np.random.Generator
 ) -> np.ndarray:
     amp = rough_amplitude(d)
-    n = int(round(TILE_SIZE / ROUGH_COARSE_STEP)) + 1
-    half = TILE_SIZE / 2
-    coarse = rng.uniform(-1.0, 1.0, size=(n, n))
-    noise = _bilinear(coarse, -half, TILE_SIZE / (n - 1), -half,
-                      TILE_SIZE / (n - 1), lx, ly)
-    r = np.sqrt(lx**2 + ly**2)
-    taper = np.clip((r - PAD_RADIUS) / PAD_TAPER, 0.0, 1.0)
-    return amp * noise * taper
+    return amp * _coarse_noise(lx, ly, rng) * _pad_taper(lx, ly) * _edge_taper(lx, ly)
+
+
+def _overlay(
+    lx: np.ndarray, ly: np.ndarray, d: float, rng: np.random.Generator
+) -> np.ndarray:
+    """Coarse rough noise for slope and box-tile grounds, its own rng draw. Zero
+    at the pad and at the border, so pads stay flat and borders stay seamless."""
+    amp = OVERLAY_FRACTION * rough_amplitude(d)
+    return amp * _coarse_noise(lx, ly, rng) * _pad_taper(lx, ly) * _edge_taper(lx, ly)
 
 
 def slope_plateau_height(d: float) -> float:
@@ -290,26 +326,32 @@ def _discrete_boxes(cx: float, cy: float, d: float, rng: np.random.Generator) ->
     for _ in range(DISCRETE_N):
         hx = float(rng.uniform(*DISCRETE_HALF_RANGE))
         hy = float(rng.uniform(*DISCRETE_HALF_RANGE))
-        u = float(rng.uniform(-reach + hx, reach - hx))
-        v = float(rng.uniform(-reach + hy, reach - hy))
+        yaw = float(rng.uniform(0.0, np.pi))
+        # Clamp on the rotated footprint's AABB, so a turned box still clears
+        # the tile edge by DISCRETE_EDGE_MARGIN and the border stays seamless.
+        hax = hx * abs(np.cos(yaw)) + hy * abs(np.sin(yaw))
+        hay = hx * abs(np.sin(yaw)) + hy * abs(np.cos(yaw))
+        u = float(rng.uniform(-reach + hax, reach - hax))
+        v = float(rng.uniform(-reach + hay, reach - hay))
         # Clear the pad by the box's corner radius, so no corner pokes in.
         if np.hypot(u, v) < PAD_RADIUS + np.hypot(hx, hy) + 0.05:
             continue
         h = float(rng.uniform(0.5, 1.0)) * max_h
-        boxes.append(Box((cx + u, cy + v, h / 2), (hx, hy, h / 2)))
+        boxes.append(Box((cx + u, cy + v, h / 2), (hx, hy, h / 2), yaw))
     return boxes
 
 
 def _random_grid_boxes(cx: float, cy: float, d: float, rng: np.random.Generator) -> list[Box]:
-    """Rubble: a regular cell grid, each cell raising one small box with
+    """Rubble: a regular cell grid, each cell raising one small yawed box with
     probability GRID_FILL_PROB. Boxes only rise above grade -- unlike Isaac's
     random grid we cannot also sink cells, since boxes cannot carve. Each box is
-    clamped inside its cell so neighbours never fuse into slabs, and held off
-    the pad (corner rule) and the tile edge (margin) to keep borders seamless."""
+    kept inside its cell so neighbours never fuse into slabs, and held off the
+    pad (corner rule) and the tile edge (margin) to keep borders seamless."""
     max_h = discrete_max_height(d)
     reach = TILE_SIZE / 2 - DISCRETE_EDGE_MARGIN
     n = int(2 * reach / GRID_PITCH)
     start = -(n - 1) * GRID_PITCH / 2
+    half_cell = GRID_PITCH / 2
     boxes: list[Box] = []
     for iy in range(n):
         for ix in range(n):
@@ -317,12 +359,25 @@ def _random_grid_boxes(cx: float, cy: float, d: float, rng: np.random.Generator)
                 continue
             hx = float(rng.uniform(*GRID_HALF_RANGE))
             hy = float(rng.uniform(*GRID_HALF_RANGE))
-            u = start + ix * GRID_PITCH
-            v = start + iy * GRID_PITCH
+            yaw = float(rng.uniform(0.0, np.pi))
+            # The box's bounding circle (radius = half-diagonal) plus its jitter
+            # must stay inside the cell, whatever the yaw, so neighbours never
+            # fuse. Shrink an oversized box, then jitter within the slack.
+            diag = np.hypot(hx, hy)
+            if diag > half_cell:
+                s = 0.98 * half_cell / diag
+                hx *= s
+                hy *= s
+                diag = np.hypot(hx, hy)
+            jitter = max(0.0, half_cell - diag)
+            jr = jitter * np.sqrt(rng.uniform())
+            jth = rng.uniform(0.0, 2 * np.pi)
+            u = start + ix * GRID_PITCH + jr * np.cos(jth)
+            v = start + iy * GRID_PITCH + jr * np.sin(jth)
             if np.hypot(u, v) < PAD_RADIUS + np.hypot(hx, hy) + 0.05:
                 continue
             h = float(rng.uniform(0.3, 1.0)) * max_h
-            boxes.append(Box((cx + u, cy + v, h / 2), (hx, hy, h / 2)))
+            boxes.append(Box((cx + u, cy + v, h / 2), (hx, hy, h / 2), yaw))
     return boxes
 
 
@@ -338,9 +393,60 @@ def _wave_patch(lx: np.ndarray, ly: np.ndarray, d: float, rng: np.random.Generat
         np.sin(kx * np.pi * (lx + half) / TILE_SIZE)
         * np.sin(ky * np.pi * (ly + half) / TILE_SIZE)
     )
-    r = np.sqrt(lx**2 + ly**2)
-    taper = np.clip((r - PAD_RADIUS) / PAD_TAPER, 0.0, 1.0)
-    return amp * wave * taper
+    return amp * wave * _pad_taper(lx, ly)
+
+
+def _footprint_nodes(
+    xs: np.ndarray, ys: np.ndarray, px: float, py: float,
+    hx: float, hy: float, yaw: float,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """(row, col) indices of grid nodes under a box: its axis-aligned cell block
+    when yaw == 0, else the nodes inside the rotated rectangle (node offsets
+    rotated by -yaw, tested against |u| <= hx, |v| <= hy). None if no node."""
+    if yaw == 0.0:
+        c0 = int(np.searchsorted(xs, px - hx))
+        c1 = int(np.searchsorted(xs, px + hx, side="right"))
+        r0 = int(np.searchsorted(ys, py - hy))
+        r1 = int(np.searchsorted(ys, py + hy, side="right"))
+        if c1 <= c0 or r1 <= r0:
+            return None
+        rr, cc = np.mgrid[r0:r1, c0:c1]
+        return rr.ravel(), cc.ravel()
+    hax = hx * abs(np.cos(yaw)) + hy * abs(np.sin(yaw))
+    hay = hx * abs(np.sin(yaw)) + hy * abs(np.cos(yaw))
+    c0 = int(np.searchsorted(xs, px - hax))
+    c1 = int(np.searchsorted(xs, px + hax, side="right"))
+    r0 = int(np.searchsorted(ys, py - hay))
+    r1 = int(np.searchsorted(ys, py + hay, side="right"))
+    if c1 <= c0 or r1 <= r0:
+        return None
+    gx, gy = np.meshgrid(xs[c0:c1] - px, ys[r0:r1] - py)
+    u = gx * np.cos(yaw) + gy * np.sin(yaw)
+    v = -gx * np.sin(yaw) + gy * np.cos(yaw)
+    rr, cc = np.nonzero((np.abs(u) <= hx) & (np.abs(v) <= hy))
+    if rr.size == 0:
+        return None
+    return r0 + rr, c0 + cc
+
+
+def _seat_boxes(
+    tile_boxes: list[Box], heights: np.ndarray, xs: np.ndarray, ys: np.ndarray
+) -> list[Box]:
+    """Drop each box onto the undulating tile ground: its base sits at the max
+    ground height under its footprint, so it embeds at worst and never floats."""
+    seated: list[Box] = []
+    for b in tile_boxes:
+        px, py, _ = b.pos
+        hx, hy, hz = b.half
+        nodes = _footprint_nodes(xs, ys, px, py, hx, hy, b.yaw)
+        if nodes is None:
+            r = int(np.clip(np.searchsorted(ys, py), 0, heights.shape[0] - 1))
+            c = int(np.clip(np.searchsorted(xs, px), 0, heights.shape[1] - 1))
+            base = float(heights[r, c])
+        else:
+            base = float(heights[nodes].max())
+        seated.append(Box((px, py, base + hz), b.half, b.yaw))
+    return seated
 
 
 def generate(
@@ -349,6 +455,7 @@ def generate(
     tile_size: float = TILE_SIZE,
     border: float = BORDER,
     cell_size: float = CELL_SIZE,
+    ordered: bool = False,
 ) -> Arena:
     n_cols = len(TYPES)
     total_x = n_cols * tile_size + 2 * border
@@ -367,11 +474,27 @@ def generate(
     boxes: list[Box] = []
     tiles: list[TileSpec] = []
     for i in range(n_rows):
-        d = i / (n_rows - 1)
+        nominal = i / (n_rows - 1)
+        if ordered:
+            row_types = TYPES
+            d = nominal
+        else:
+            # One rng stream per row drives both the column shuffle and the
+            # difficulty jitter. Each row still holds every type exactly once.
+            row_rng = np.random.default_rng([seed, i])
+            row_types = tuple(TYPES[k] for k in row_rng.permutation(n_cols))
+            if 0 < i < n_rows - 1:
+                # Jitter under half a row gap (+-0.4 of 1/(n-1)) keeps realized
+                # difficulty strictly increasing; rows 0 and n-1 stay exact so
+                # the curriculum floor and ceiling are preserved.
+                d = float(np.clip(
+                    nominal + row_rng.uniform(-0.4, 0.4) / (n_rows - 1), 0.0, 1.0))
+            else:
+                d = nominal
         cy = grid_y0 + (i + 0.5) * tile_size
         ri0 = int(np.searchsorted(ys, cy - tile_size / 2))
         ri1 = int(np.searchsorted(ys, cy + tile_size / 2))
-        for j, ttype in enumerate(TYPES):
+        for j, ttype in enumerate(row_types):
             cx = grid_x0 + (j + 0.5) * tile_size
             ci0 = int(np.searchsorted(xs, cx - tile_size / 2))
             ci1 = int(np.searchsorted(xs, cx + tile_size / 2))
@@ -381,10 +504,10 @@ def generate(
             if ttype == "rough_uniform":
                 heights[ri0:ri1, ci0:ci1] = _rough_patch(lx, ly, d, rng)
             elif ttype == "pyramid_slope":
-                heights[ri0:ri1, ci0:ci1] = _slope_patch(lx, ly, d, +1.0)
+                heights[ri0:ri1, ci0:ci1] = _slope_patch(lx, ly, d, +1.0) + _overlay(lx, ly, d, rng)
                 pad_height = slope_plateau_height(d)
             elif ttype == "inverted_pyramid_slope":
-                heights[ri0:ri1, ci0:ci1] = _slope_patch(lx, ly, d, -1.0)
+                heights[ri0:ri1, ci0:ci1] = _slope_patch(lx, ly, d, -1.0) + _overlay(lx, ly, d, rng)
                 pad_height = -slope_plateau_height(d)
             elif ttype == "pyramid_stairs":
                 tile_boxes, pad_height = _pyramid_stair_boxes(cx, cy, d)
@@ -394,9 +517,11 @@ def generate(
                 tile_boxes, pad_height = _inverted_stair_boxes(cx, cy, d)
                 boxes.extend(tile_boxes)
             elif ttype == "discrete_obstacles":
-                boxes.extend(_discrete_boxes(cx, cy, d, rng))
+                heights[ri0:ri1, ci0:ci1] = _overlay(lx, ly, d, rng)
+                boxes.extend(_seat_boxes(_discrete_boxes(cx, cy, d, rng), heights, xs, ys))
             elif ttype == "random_grid":
-                boxes.extend(_random_grid_boxes(cx, cy, d, rng))
+                heights[ri0:ri1, ci0:ci1] = _overlay(lx, ly, d, rng)
+                boxes.extend(_seat_boxes(_random_grid_boxes(cx, cy, d, rng), heights, xs, ys))
             elif ttype == "wave":
                 heights[ri0:ri1, ci0:ci1] = _wave_patch(lx, ly, d, rng)
             tiles.append(
@@ -411,11 +536,17 @@ def generate(
     for b in boxes:
         px, py, pz = b.pos
         hx, hy, hz = b.half
-        c0 = int(np.searchsorted(xs, px - hx))
-        c1 = int(np.searchsorted(xs, px + hx, side="right"))
-        r0 = int(np.searchsorted(ys, py - hy))
-        r1 = int(np.searchsorted(ys, py + hy, side="right"))
-        np.maximum(lookup[r0:r1, c0:c1], pz + hz, out=lookup[r0:r1, c0:c1])
+        top = pz + hz
+        if b.yaw == 0.0:
+            c0 = int(np.searchsorted(xs, px - hx))
+            c1 = int(np.searchsorted(xs, px + hx, side="right"))
+            r0 = int(np.searchsorted(ys, py - hy))
+            r1 = int(np.searchsorted(ys, py + hy, side="right"))
+            np.maximum(lookup[r0:r1, c0:c1], top, out=lookup[r0:r1, c0:c1])
+        else:
+            nodes = _footprint_nodes(xs, ys, px, py, hx, hy, b.yaw)
+            if nodes is not None:
+                np.maximum.at(lookup, nodes, top)
 
     hmin = float(heights.min())
     hmax = float(heights.max())
@@ -428,7 +559,7 @@ def generate(
 
     spec = TerrainSpec(
         seed=seed, n_rows=n_rows, n_cols=n_cols, tile_size=tile_size,
-        border=border, cell_size=cell_size, types=TYPES,
+        border=border, cell_size=cell_size, ordered=ordered, types=TYPES,
         x_min=x_min, x_max=x_max, y_min=y_min, y_max=y_max,
         hfield=HFieldSpec(
             nrow=nrow, ncol=ncol, radius_x=total_x / 2, radius_y=total_y / 2,
@@ -471,6 +602,7 @@ def spec_to_dict(spec: TerrainSpec) -> dict:
         "tile_size": spec.tile_size,
         "border": spec.border,
         "cell_size": spec.cell_size,
+        "ordered": spec.ordered,
         "types": list(spec.types),
         "extent": {
             "x_min": spec.x_min, "x_max": spec.x_max,

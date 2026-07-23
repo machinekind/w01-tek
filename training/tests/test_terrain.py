@@ -46,15 +46,48 @@ def _tile_relief(arena, tile):
     return float(np.ptp(h))
 
 
+def _layout(a):
+    return [(t.row, t.col, t.terrain_type) for t in a.spec.tiles]
+
+
 def test_determinism(arena):
     a2 = terrain.generate(seed=0)
     assert np.array_equal(arena.lookup, a2.lookup)
     assert np.array_equal(arena.hfield_data, a2.hfield_data)
     assert terrain.spec_to_dict(arena.spec) == terrain.spec_to_dict(a2.spec)
-    # A different seed changes the random tiles (rough/discrete) but not the grid.
+    # The default layout shuffles each row, but every row is still a full
+    # permutation of the types, so (type, row) selection stays unique.
+    for r in range(arena.spec.n_rows):
+        row = sorted(t.terrain_type for t in arena.spec.tiles if t.row == r)
+        assert row == sorted(terrain.TYPES)
+    # A different seed reshuffles the layout and redraws the tiles.
     a3 = terrain.generate(seed=1)
     assert not np.array_equal(arena.lookup, a3.lookup)
-    assert terrain.spec_to_dict(arena.spec)["tiles"] == terrain.spec_to_dict(a3.spec)["tiles"]
+    assert _layout(arena) != _layout(a3)
+
+
+def test_ordered_layout_is_legacy(arena):
+    """ordered=True restores the sorted-column, exact-nominal-difficulty arena."""
+    a = terrain.generate(seed=0, ordered=True)
+    s = a.spec
+    assert s.ordered is True
+    assert terrain.spec_to_dict(s)["ordered"] is True
+    for r in range(s.n_rows):
+        cols = sorted((t for t in s.tiles if t.row == r), key=lambda t: t.col)
+        assert [t.terrain_type for t in cols] == list(terrain.TYPES)
+        assert all(t.difficulty == r / (s.n_rows - 1) for t in cols)
+    # The shuffled default differs from the legacy layout.
+    assert _layout(a) != _layout(arena)
+
+
+def test_row_difficulty_jittered_but_monotone(arena):
+    """Interior rows are jittered off nominal; row 0 and the last stay exact and
+    realized difficulty is still strictly increasing across rows."""
+    s = arena.spec
+    ds = [next(t.difficulty for t in s.tiles if t.row == r) for r in range(s.n_rows)]
+    assert ds[0] == 0.0 and ds[-1] == 1.0
+    assert all(np.diff(ds) > 0)
+    assert any(d != r / (s.n_rows - 1) for r, d in enumerate(ds))
 
 
 def test_grid_layout(arena):
@@ -80,9 +113,12 @@ def test_difficulty_monotonic_and_row0_flat(arena):
     assert terrain.discrete_max_height(0) <= 0.01
     assert terrain.wave_amplitude(0) <= 0.01
 
-    # Realized relief from the lookup grid grows with difficulty. Slopes and
-    # stairs are deterministic in d, so require strict monotonicity; rough,
-    # discrete, random_grid and wave draw randomness, so only require r0 << r9.
+    # Realized relief from the lookup grid grows with difficulty (the realized,
+    # per-row-jittered d, which is strictly increasing). Slope and stair relief
+    # is dominated by the analytic ramp/step, so it stays strictly monotone even
+    # though slopes now carry the small rough overlay; rough, discrete,
+    # random_grid and wave draw more randomness, so only require r0 << r9. Rows 0
+    # and 9 keep exact nominal d (0 and 1), so their bounds are unaffected.
     for ttype in ("pyramid_slope", "inverted_pyramid_slope",
                   "pyramid_stairs", "inverted_pyramid_stairs"):
         relief = [_tile_relief(arena, _tile(arena, ttype, r)) for r in rows]
@@ -156,9 +192,11 @@ def test_lookup_matches_geometry(model, arena):
             zl = float(terrain.lookup_height(arena, x, cy))
             assert zr is not None and abs(zr - zl) < 0.02, (ttype, r, zr, zl)
 
-    # Box-top centres sampled across the arena (covers the discrete obstacles).
+    # Box-top centres sampled across the arena (covers discrete + yawed rubble).
     rng = np.random.default_rng(0)
-    for b in [arena.boxes[i] for i in rng.integers(0, len(arena.boxes), 40)]:
+    sampled = [arena.boxes[i] for i in rng.integers(0, len(arena.boxes), 40)]
+    assert any(b.yaw != 0.0 for b in sampled)  # rotated boxes are in the mix
+    for b in sampled:
         px, py, _ = b.pos
         top = b.pos[2] + b.half[2]
         zr = _ray_down(model, data, px, py)
@@ -193,18 +231,64 @@ def _perimeter_max_abs(arena, tile, inset=0.02, n=25):
 
 def test_tile_borders_seamless(arena):
     """Every tile reaches ~flat ground at its border, so a robot promoted across
-    the edge does not hit a wall or cliff. Discrete boxes are held off the edge,
-    so those borders are flat too (loose bound kept as a documented safety net)."""
+    the edge does not hit a wall or cliff. Rough and the modality overlay now
+    taper to 0 at the rim, so rough holds the same tight bound as slopes and
+    stairs. Discrete boxes are held off the edge (loose bound kept as a net)."""
     for t in arena.spec.tiles:
         m = _perimeter_max_abs(arena, t)
         if t.terrain_type in ("pyramid_slope", "inverted_pyramid_slope",
-                               "pyramid_stairs", "inverted_pyramid_stairs", "wave"):
+                               "pyramid_stairs", "inverted_pyramid_stairs",
+                               "wave", "rough_uniform"):
             bound = 0.02
-        elif t.terrain_type == "rough_uniform":
-            bound = terrain.rough_amplitude(t.difficulty) + 0.01
         else:  # discrete_obstacles, random_grid: boxes are held off the edge
             bound = terrain.discrete_max_height(t.difficulty) + 1e-3
         assert m <= bound, (t.terrain_type, t.row, m, bound)
+
+
+def test_arena_seams_no_step(arena):
+    """No one-cell height step above 2.5 cm across any internal tile border.
+    Scans lookup nodes within 2 cells of each seam line, so it never crosses a
+    stair-pit interior or a box top (both held well inside their tiles)."""
+    s = arena.spec
+    L = arena.lookup
+    xs = np.linspace(s.x_min, s.x_max, s.hfield.ncol)
+    ys = np.linspace(s.y_min, s.y_max, s.hfield.nrow)
+    grid_x0 = -s.n_cols * s.tile_size / 2
+    grid_y0 = -s.n_rows * s.tile_size / 2
+    band = 2 * s.cell_size + 1e-9
+    worst = 0.0
+    # Vertical seams (between columns): horizontal one-cell steps in the band.
+    for j in range(1, s.n_cols):
+        cols = np.nonzero(np.abs(xs - (grid_x0 + j * s.tile_size)) <= band)[0]
+        block = L[:, cols.min():cols.max() + 1]
+        worst = max(worst, float(np.abs(np.diff(block, axis=1)).max()))
+    # Horizontal seams (between rows): vertical one-cell steps in the band.
+    for i in range(1, s.n_rows):
+        rows = np.nonzero(np.abs(ys - (grid_y0 + i * s.tile_size)) <= band)[0]
+        block = L[rows.min():rows.max() + 1, :]
+        worst = max(worst, float(np.abs(np.diff(block, axis=0)).max()))
+    assert worst <= 0.025, worst
+
+
+def test_rotated_box_top_matches_ray(model, arena):
+    """At least one box is yawed. Its rasterised lookup and mj_ray straight down
+    agree at the box centre, so the rotated-rect rasterisation matches physics.
+    Where a yawed box is the local surface, that shared height is its own top
+    (discrete boxes may overlap, so a taller neighbour can cap the centre)."""
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+    yawed = [b for b in arena.boxes if b.yaw != 0.0]
+    assert yawed
+    checked_top = False
+    for b in yawed[:: max(1, len(yawed) // 20)]:
+        px, py, _ = b.pos
+        top = b.pos[2] + b.half[2]
+        zr = _ray_down(model, data, px, py)
+        zl = float(terrain.lookup_height(arena, px, py))
+        assert zr is not None and abs(zr - zl) < 0.012, (b, zr, zl)
+        if abs(zr - top) < 0.012:
+            checked_top = True
+    assert checked_top
 
 
 def test_physics_smoke_on_rough_pad(model, arena):

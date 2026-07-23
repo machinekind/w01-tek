@@ -15,6 +15,14 @@
 #   ./sim.sh --rviz         force X11 RViz on macOS (slow; needs XQuartz)
 #   ./sim.sh --qt-console   the Qt operator console instead of the web one
 #                           (needs X11; on macOS: XQuartz, see below)
+#   ./sim.sh --gamepad      drive with a bluetooth Xbox pad instead of the web
+#                           console (left stick vx/yaw, right stick strafe,
+#                           A arms, D-pad height). Pair the pad on the HOST
+#                           first. Linux: joy driver in the container via the
+#                           /dev mount. macOS: Docker can't pass input devices,
+#                           so this falls back to the web console, which reads
+#                           the pad in the browser (same mapping) -- press any
+#                           pad button on the page to activate.
 #
 # macOS one-time setup, only for the X11 paths (--rviz / --qt-console):
 #   brew install --cask xquartz
@@ -35,6 +43,7 @@ for arg in "$@"; do
     --rviz) VIZ=rviz ;;
     --foxglove) VIZ=foxglove ;;
     --qt-console) CONSOLE=qt ;;
+    --gamepad) CONSOLE=gamepad ;;
     --no-console) CONSOLE=none ;;
     *) EXTRA+=("$arg") ;;
   esac
@@ -43,6 +52,16 @@ done
 MAC=false
 if [ "$(uname -s)" = "Darwin" ]; then
   MAC=true
+fi
+
+if [ "$CONSOLE" = gamepad ] && $MAC; then
+  # Docker on macOS can't pass input devices into the container, but the web
+  # console reads the pad in the BROWSER (Gamepad API) with the same mapping
+  # (left stick vx/yaw, right stick strafe, A arms, D-pad height).
+  echo ">> macOS: the container can't see the pad -- using the web console,"
+  echo ">> which reads it in the browser. Pair the pad with this Mac, open"
+  echo ">> http://localhost:8080 and press any pad button to activate."
+  CONSOLE=web
 fi
 
 COMPOSE=(docker compose)
@@ -106,6 +125,7 @@ fi
 CMD=(ros2 run wojtek_bringup robot --sim)
 if [ "$VIZ" = foxglove ]; then CMD+=(--foxglove); fi
 if [ "$CONSOLE" = web ]; then CMD+=(--web-console); fi
+if [ "$CONSOLE" = gamepad ]; then CMD+=(--no-console --gamepad); fi
 if [ "$CONSOLE" = none ]; then CMD+=(--no-console); fi
 
 "${COMPOSE[@]}" up -d
@@ -115,6 +135,9 @@ if [ "$VIZ" = foxglove ]; then
 fi
 if [ "$CONSOLE" = web ]; then
   echo ">> console:  open http://localhost:8080 (drive pad, arm/pose buttons)"
+fi
+if [ "$CONSOLE" = gamepad ]; then
+  echo ">> gamepad:  left stick vx/yaw, right stick strafe, A arms, D-pad height"
 fi
 
 # docker exec bypasses the entrypoint and non-interactive bash skips .bashrc,

@@ -9,6 +9,13 @@ X11 window -- so it works on macOS (no XQuartz), headless boxes, and phones
 or tablets joined to the robot's AP. It talks to the SAME services/topics
 the nodes already expose; nothing in wojtek_bringup / wojtek_policy changes.
 
+The page also reads a bluetooth gamepad via the browser's Gamepad API (pair
+the pad with the machine running the BROWSER, press any pad button on the
+page): left stick vx/yaw, right stick strafe, A arms, D-pad height -- the
+same mapping as wojtek_viz/gamepad_teleop.py, which is the in-container
+(Linux) alternative. All pad traffic rides the existing cmd stream, so the
+dead-man below covers it too.
+
 One port (default 8080, parameter `port`): plain GET serves the page,
 a websocket upgrade on the same port carries a small JSON protocol.
 

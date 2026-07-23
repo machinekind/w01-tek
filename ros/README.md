@@ -34,6 +34,19 @@ over X11 is slow, so it starts `foxglove_bridge` instead — open the native
 `ws://localhost:8765` (add a 3D panel). `--rviz` / `--foxglove` override the
 platform default.
 
+**Bluetooth Xbox pad**: left stick = vx/yaw, right stick left-right = strafe,
+**A** toggles arm, D-pad up/down steps the standing height. Driving is always
+live (no drive-enable gate); a dead-man zeroes `/cmd_vel` if the pad drops
+off. Two paths, same mapping:
+
+- The **web console reads a pad in the browser** (Gamepad API): pair the pad
+  with whatever machine the browser runs on (macOS included), open the
+  console page and press any pad button — the sticks take over the drive pad.
+- `./sim.sh --gamepad` runs the in-container `joy` driver + `gamepad_teleop`
+  instead of the web console. Linux only (the container sees the pad through
+  the `/dev` mount; Docker on macOS can't pass input devices, so there this
+  flag falls back to the web console path with a hint).
+
 `--qt-console` switches to the original Qt operator console (an X11 app).
 On macOS that needs a one-time XQuartz setup — `sim.sh` then starts XQuartz
 itself when needed:
@@ -104,6 +117,9 @@ Flags:
                 ws://localhost:8765 -- the fast path on macOS)
 --web-console   browser operator console on http://localhost:8080 instead
                 of the Qt window (no X11; works from a phone on the AP)
+--gamepad       bluetooth Xbox pad teleop (left stick vx/yaw, right stick
+                strafe, A arms, D-pad height); add --no-console to replace
+                the console entirely
 ```
 The stack comes up DISARMED. **Arming is manual** (that's when torque reaches the
 motors) — from another shell in the same container:

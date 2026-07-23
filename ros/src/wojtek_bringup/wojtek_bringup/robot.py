@@ -2,7 +2,7 @@
 """One-command robot bring-up, run FROM the PC dev container.
 
     ros2 run wojtek_bringup robot [--dry-run] [--sim] [--no-viz] [--foxglove]
-                                  [--plotjuggler]
+                                  [--plotjuggler] [--gamepad]
 
 You work from one container shell (./dev.sh). This starts BOTH sides for a
 session and tears them down on Ctrl-C:
@@ -77,6 +77,11 @@ def main():
     ap.add_argument("--web-console", action="store_true",
                     help="browser operator console on http://localhost:8080 "
                          "instead of the Qt window (no X11 needed)")
+    ap.add_argument("--gamepad", action="store_true",
+                    help="bluetooth Xbox pad teleop (joy driver + gamepad_teleop): "
+                         "left stick vx/yaw, right stick strafe, A arms, "
+                         "D-pad height; combine with --no-console to replace "
+                         "the console entirely")
     ap.add_argument("--plotjuggler", action="store_true", help="also open PlotJuggler")
     args = ap.parse_args()
 
@@ -132,6 +137,14 @@ def main():
         else:
             print(">> launching operator console (ros2 run wojtek_viz console)")
             spawn(["ros2", "run", "wojtek_viz", "console"])
+
+    # ---- gamepad teleop (bluetooth Xbox pad -> /cmd_vel) --------------------
+    # Independent of the console choice: the pad drives, the console (if any)
+    # keeps the pose/jog/telemetry surface.
+    if args.gamepad:
+        print(">> launching gamepad teleop (left stick vx/yaw, right stick "
+              "strafe, A arms, D-pad height)")
+        spawn(["ros2", "launch", "wojtek_viz", "gamepad.launch.py"])
 
     if not args.sim:
         print(ARMING_HINT)

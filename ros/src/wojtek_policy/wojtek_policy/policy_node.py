@@ -47,6 +47,11 @@ class PolicyNode(Node):
         # Face repo id (org/name[@revision]) -- see policy_source.py. Real
         # launches pin a revision; there is no baked-in default policy.
         self.declare_parameter("policy", "")
+        # Readable provenance for the logs when a launch already resolved the
+        # reference: `policy` is then the resolved local dir and this carries
+        # the origin it came from ("hf:org/name@commit"). Empty (standalone
+        # `ros2 run` with a raw ref) -> derive it from `policy`.
+        self.declare_parameter("policy_source", "")
         self.declare_parameter("joint_map_yaml", f"{share}/config/joint_map.yaml")
         # Rotation of the IMU frame expressed in base_link (URDF imu_joint
         # rpy). Sim publishes IMU already in base_link -> zeros.
@@ -63,7 +68,9 @@ class PolicyNode(Node):
         self.declare_parameter("grav_filter_alpha", 0.98)
 
         resolved = resolve_policy(self.get_parameter("policy").value)
-        self._policy_source = resolved.source
+        self._policy_source = (
+            self.get_parameter("policy_source").value or resolved.source
+        )
         self.policy = WojtekPolicy(
             resolved.npz,
             meta_path=resolved.meta,

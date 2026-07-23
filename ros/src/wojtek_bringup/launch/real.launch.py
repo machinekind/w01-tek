@@ -6,14 +6,12 @@
     tests in ros/hw_tests/imu_i2c already pass).
 
     ros2 launch wojtek_bringup real.launch.py [policy:=org/name@sha]
-                                              [alpha:=1.0] [max_torque:=2.0]
-                                              [dry_run:=true]
+                                              [max_torque:=2.0] [dry_run:=true]
                                               [boot_pose:=home|folded] [bag:=false]
 
     The MD80 servo settings (impedance kp/kd, torque cap) come from the
-    loaded policy's contract, divided by alpha (measured stand-sag torque
-    miscalibration; 1.0 until measured). Explicit kp:=/kd:=/max_torque:=
-    override the contract verbatim -- e.g. max_torque:=2 for first tests.
+    loaded policy's contract. Explicit kp:=/kd:=/max_torque:= override it
+    verbatim -- e.g. max_torque:=2 for first tests.
 
     Every run records a full rosbag (all topics) to bag_dir/run_<timestamp>
     (bag_dir defaults to ~/wojtek_bags). Disable with bag:=false.
@@ -50,7 +48,7 @@ from launch.substitutions import (
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
-from wojtek_policy.policy_source import load_meta, pd_settings
+from wojtek_policy.policy_source import load_policy
 
 
 def launch_setup(context, *args, **kwargs):
@@ -58,16 +56,13 @@ def launch_setup(context, *args, **kwargs):
     policy_share = get_package_share_directory("wojtek_policy")
     xacro_file = os.path.join(share, "urdf", "wojtek_real.urdf.xacro")
 
-    policy_ref = LaunchConfiguration("policy").perform(context)
-    meta, source = load_meta(policy_ref)
-    pd = pd_settings(meta, float(LaunchConfiguration("alpha").perform(context)))
-    # Explicit args override the contract verbatim (no alpha applied --
-    # the operator gave the final value).
-    for key in ("kp", "kd", "max_torque"):
-        override = LaunchConfiguration(key).perform(context)
-        if override:
-            pd[key] = float(override)
-    print(f">> policy {meta['run_name']} from {source}; servo settings "
+    loaded = load_policy(
+        LaunchConfiguration("policy").perform(context),
+        overrides={k: LaunchConfiguration(k).perform(context)
+                   for k in ("kp", "kd", "max_torque")},
+    )
+    pd = loaded.pd
+    print(f">> policy {loaded.run_name} from {loaded.source}; servo settings "
           f"kp={pd['kp']:g} kd={pd['kd']:g} max_torque={pd['max_torque']:g}")
 
     use_imu = LaunchConfiguration("use_imu")
@@ -151,7 +146,10 @@ def launch_setup(context, *args, **kwargs):
             output="screen",
             parameters=[
                 {
-                    "policy": LaunchConfiguration("policy"),
+                    # Already-resolved local dir + its provenance, so the node
+                    # loads the same files without resolving the ref again.
+                    "policy": str(loaded.directory),
+                    "policy_source": loaded.source,
                     # URDF imu_joint: rpy 0 pi 0 relative to base_link.
                     "imu_mount_rpy": [0.0, 3.141592653589793, 0.0],
                     "auto_enable": True,  # real_io arming is the gate
@@ -204,10 +202,6 @@ def generate_launch_description():
                 default_value="<HF_ORGANIZATION>/wojtek-stiff-locomotion-v2"
                 "@4dda27e12101a68dbf52bb134721b18dc166a7d3",
             ),
-            # Measured stand-sag torque miscalibration of the real actuators;
-            # the MD80s get the contract's kp/alpha, kd/alpha, cap/alpha.
-            # 1.0 until measured.
-            DeclareLaunchArgument("alpha", default_value="1.0"),
             # Explicit overrides of the policy contract's servo settings
             # (empty = from the contract). E.g. max_torque:=2 for cautious
             # first tests.

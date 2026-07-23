@@ -7,8 +7,8 @@
     * command interface `position` -> MD80 IMPEDANCE mode
     * impedance gains kp/kd and max_torque are xacro args. The launch files
       feed them from the loaded policy's contract (policy_meta.json pd
-      block, divided by the alpha launch arg); the defaults here (kp=40,
-      kd=1.6, +/-9 Nm) only apply when the xacro is used directly.
+      block); the defaults here (kp=40, kd=1.6, +/-9 Nm) only apply when the
+      xacro is used directly.
     * the IMU I2C ros2_control sensor is instantiated when use_imu:=true (it
       is commented out in the original description).
 -->

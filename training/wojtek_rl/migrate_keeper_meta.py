@@ -26,6 +26,11 @@ KNOWN_KEEPERS = (
     "<HF_ORGANIZATION>/wojtek-stiff-locomotion",
     "<HF_ORGANIZATION>/wojtek-stiff-kp80-locomotion",
     "<HF_ORGANIZATION>/wojtek-stiff-kp90-locomotion",
+    # stiff_phase_c (live height + rotation/arc). Its published meta is
+    # hand-curated on top of the regenerated contract (operator wz cap,
+    # 0.125 m fill height -- see the meta's _note); a plain re-migrate
+    # --apply would overwrite that curation.
+    "<HF_ORGANIZATION>/wojtek-stiff-locomotion-v2",
 )
 
 

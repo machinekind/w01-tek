@@ -74,6 +74,10 @@ COMMAND_TRAINING_KEYS = {
     "zero_prob",
     "pure_wz_prob",
     "pure_vy_prob",
+    # Arc curriculum: redraws vx within the trained box for a fraction of
+    # samples; changes what is practiced, not the command box itself.
+    "arc_prob",
+    "arc_vx",
 }
 
 

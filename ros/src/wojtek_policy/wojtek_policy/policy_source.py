@@ -100,24 +100,62 @@ def load_meta(ref: str) -> tuple[dict, str]:
     return json.loads(resolved.meta.read_text()), resolved.source
 
 
-def pd_settings(meta: dict, alpha: float = 1.0) -> dict:
-    """Driver-side servo settings for a policy contract: pd / alpha.
+def pd_settings(meta: dict) -> dict:
+    """Driver-side servo settings for a policy contract, taken verbatim.
 
-    alpha is the measured stand-sag torque miscalibration of the real
-    actuators (training/docs/configuration.md, stiffness-ladder deployment
-    contract): commanding kp/alpha, kd/alpha and cap/alpha makes the
-    physical plant match the one the policy trained against. alpha=1 is
-    the identity (sim, or calibrated hardware).
+    The MD80 impedance kp/kd and torque cap are the ones the policy trained
+    against; they come straight from the contract's pd block.
     """
     pd = meta["pd"]
-    a = float(alpha)
-    if a <= 0.0:
-        raise ValueError(f"alpha must be positive, got {a}")
     return {
-        "kp": float(pd["kp"]) / a,
-        "kd": float(pd["kd"]) / a,
-        "max_torque": float(pd["max_torque"]) / a,
+        "kp": float(pd["kp"]),
+        "kd": float(pd["kd"]),
+        "max_torque": float(pd["max_torque"]),
     }
+
+
+@dataclass
+class LoadedPolicy:
+    """A resolved policy plus its parsed contract, loaded once for a launch.
+
+    `directory` is what a node should get as its `policy` parameter: the
+    resolved snapshot dir, where policy.npz and policy_meta.json sit together
+    (in the HF cache too), so the node reads the same files without resolving
+    the reference a second time. `source` is the provenance to pass through
+    for logs so it stays readable ("hf:org/name@commit", not the cache path).
+    """
+    npz: Path
+    meta_path: Path
+    source: str
+    meta: dict
+    pd: dict
+    run_name: str
+    directory: Path
+
+
+def load_policy(ref: str, overrides=None) -> LoadedPolicy:
+    """Resolve a reference once and read everything a launch needs from it.
+
+    pd is the contract's servo block; overrides ({kp,kd,max_torque}, float or
+    string, empty string = keep the contract value) replace individual entries
+    verbatim -- e.g. a low max_torque for cautious first tests.
+    """
+    resolved = resolve_policy(ref)
+    meta = json.loads(resolved.meta.read_text())
+    pd = pd_settings(meta)
+    for key in ("kp", "kd", "max_torque"):
+        override = (overrides or {}).get(key)
+        if override is not None and str(override) != "":
+            pd[key] = float(override)
+    return LoadedPolicy(
+        npz=resolved.npz,
+        meta_path=resolved.meta,
+        source=resolved.source,
+        meta=meta,
+        pd=pd,
+        run_name=meta["run_name"],
+        directory=resolved.npz.parent,
+    )
 
 
 def main(argv=None) -> int:

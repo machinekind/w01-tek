@@ -26,6 +26,7 @@ from wojtek_policy.policy import (  # noqa: E402
 )
 from wojtek_policy.policy_source import (  # noqa: E402
     load_meta,
+    load_policy,
     pd_settings,
     resolve_policy,
 )
@@ -319,14 +320,28 @@ def test_load_meta_and_pd_settings(tmp_path):
                                                "max_torque": 9.0}})
     meta, source = load_meta(str(tmp_path))
     assert source == f"local:{tmp_path}"
+    # servo settings come from the contract verbatim
     assert pd_settings(meta) == {"kp": 80.0, "kd": 2.26, "max_torque": 9.0}
-    # stand-sag compensation: the driver gets pd / alpha
-    scaled = pd_settings(meta, alpha=1.58)
-    assert scaled["kp"] == pytest.approx(80.0 / 1.58)
-    assert scaled["kd"] == pytest.approx(2.26 / 1.58)
-    assert scaled["max_torque"] == pytest.approx(9.0 / 1.58)
-    with pytest.raises(ValueError, match="alpha"):
-        pd_settings(meta, alpha=0.0)
+
+
+def test_load_policy_resolves_once_and_applies_overrides(tmp_path):
+    make_policy(tmp_path, meta_updates={"pd": {"kp": 80.0, "kd": 2.26,
+                                               "max_torque": 9.0}})
+    loaded = load_policy(str(tmp_path))
+    assert loaded.source == f"local:{tmp_path}"
+    assert loaded.run_name == "synthetic"
+    # the resolved dir (what a node gets as `policy`) holds both files
+    assert loaded.directory == tmp_path
+    assert loaded.npz == tmp_path / "policy.npz"
+    assert loaded.meta_path == tmp_path / "policy_meta.json"
+    assert loaded.meta["pd"]["kp"] == 80.0
+    # contract verbatim when no overrides
+    assert loaded.pd == {"kp": 80.0, "kd": 2.26, "max_torque": 9.0}
+    # non-empty overrides replace individual entries; empty string / None
+    # keep the contract value
+    over = load_policy(str(tmp_path),
+                       overrides={"max_torque": "2", "kp": "", "kd": None})
+    assert over.pd == {"kp": 80.0, "kd": 2.26, "max_torque": 2.0}
 
 
 def test_resolve_rejects_non_reference():

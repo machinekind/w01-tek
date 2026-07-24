@@ -58,6 +58,44 @@ SCAN_SCHEMA = 1
 # -- pure helpers: no jax, no checkpoint, unit-tested directly -----------------
 
 
+def leg_sign(crossings):
+    """+1 while walking out, -1 while walking back.
+
+    The commanded forward speed carries the sign; the heading never changes. A
+    180 degree turn on a 13 cm tread might be the hardest thing in the suite,
+    and the number would then measure turning instead of climbing.
+    """
+    return 1.0 - 2.0 * (crossings % 2)
+
+
+def crossing_progress(crossings, radius, running, xp=np):
+    """Advance the crossing counter by at most one.
+
+    An outbound leg finishes at OUT_RADIUS from the tile centre, an inbound leg
+    at BACK_RADIUS. A run that has already fallen or finished never advances
+    again, and the count stops at CROSSINGS. Pure, so the rule is testable
+    without physics; `xp` is numpy or jax.numpy.
+    """
+    outbound = (crossings % 2) == 0
+    leg_done = xp.where(
+        outbound, radius >= terrain_suite.OUT_RADIUS, radius <= terrain_suite.BACK_RADIUS
+    )
+    return xp.minimum(crossings + (leg_done & running), terrain_suite.CROSSINGS)
+
+
+def fall_progress(fell, done, running):
+    """Sticky fall flag, recorded only while a run is still on its course.
+
+    A run that has finished its fourth crossing keeps being stepped: the batch is
+    one program over 32 environments and there is no way to drop one of them
+    mid-loop. Its command still says "walk out", so it walks on, and without this
+    gate a robot that falls over a hundred steps after completing the course
+    would turn its own pass into a fall. The run is the four crossings; what
+    happens after them is not the measurement.
+    """
+    return fell | (running & done)
+
+
 @dataclass(frozen=True)
 class CellResult:
     """One cell at one commanded speed, over RUNS_PER_CELL_SPEED fixed runs."""
@@ -323,9 +361,7 @@ def make_cell_runner(env, inf):
 
         def body(carry):
             i, state, rng, crossings, fell, sat, err, clr, counted, nacon = carry
-            # Outbound on even crossings, back on odd: the sign of the commanded
-            # forward speed flips, the heading never does.
-            sign = 1.0 - 2.0 * (crossings % 2)
+            sign = leg_sign(crossings)
             command = jp.stack(
                 [sign * speed, zeros, zeros, jp.full(n, height)], axis=-1
             )
@@ -339,16 +375,8 @@ def make_cell_runner(env, inf):
             data = state.data
 
             radius = jp.linalg.norm(data.qpos[:, 0:2] - centre, axis=-1)
-            outbound = (crossings % 2) == 0
-            leg_done = jp.where(
-                outbound,
-                radius >= terrain_suite.OUT_RADIUS,
-                radius <= terrain_suite.BACK_RADIUS,
-            )
-            crossings = jp.minimum(
-                crossings + (leg_done & was_running), terrain_suite.CROSSINGS
-            )
-            fell = fell | (state.done > 0.5)
+            crossings = crossing_progress(crossings, radius, was_running, xp=jp)
+            fell = fall_progress(fell, state.done > 0.5, was_running)
 
             # Metrics skip the settle window and stop once a run is over.
             live = was_running & (i >= terrain_suite.SETTLE_STEPS)

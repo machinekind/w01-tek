@@ -43,10 +43,11 @@ def test_pass_requires_all_four_crossings_and_no_fall():
     assert r.nacon_max == 77
 
 
-def test_a_completed_course_that_then_fell_is_not_a_pass():
-    """Falling anywhere in the run fails it, even after the fourth crossing --
-    the rule is four crossings AND no fall."""
-    r = terrain_scan.reduce_runs(_out([CROSSINGS], [True]))
+def test_a_fall_fails_the_run():
+    """Falling during the course fails it, whatever the crossing count. The
+    rollout is what makes sure a fall AFTER the fourth crossing is never
+    recorded -- see fall_progress."""
+    r = terrain_scan.reduce_runs(_out([CROSSINGS - 1], [True]))
     assert r.passed == 0
     assert r.falls == 1
     assert r.timeouts == 0
@@ -234,3 +235,83 @@ def test_command_box_warnings_flag_an_unreachable_height():
 
 def test_command_box_warnings_tolerate_an_old_run():
     assert terrain_scan.command_box_warnings({}) == []
+
+
+# -- the crossing rule ---------------------------------------------------------
+
+OUT = terrain_suite.OUT_RADIUS
+BACK = terrain_suite.BACK_RADIUS
+
+
+def _advance(crossings, radius, running=True):
+    return int(
+        terrain_scan.crossing_progress(
+            np.array([crossings]), np.array([radius]), np.array([running])
+        )[0]
+    )
+
+
+def test_standing_on_the_pad_earns_no_crossing():
+    """The failure this rule exists for: half the commanded distance can be
+    walked on the flat pad without ever meeting the obstacle."""
+    assert _advance(0, 0.0) == 0
+    assert _advance(0, terrain_suite.EVAL_PAD_RADIUS) == 0
+    # and not even reaching the outermost stair tread counts
+    assert _advance(0, 1.25) == 0
+    assert _advance(0, OUT - 1e-6) == 0
+
+
+def test_outbound_leg_completes_at_the_turnaround_radius():
+    assert _advance(0, OUT) == 1
+    assert _advance(0, OUT + 0.3) == 1
+    assert _advance(2, OUT) == 3  # even counts are outbound
+
+
+def test_inbound_leg_completes_near_the_centre():
+    """After an outbound leg the robot is past OUT_RADIUS, so the inbound test
+    cannot fire on the same spot -- no double count."""
+    assert _advance(1, OUT) == 1
+    assert _advance(1, BACK + 1e-6) == 1
+    assert _advance(1, BACK) == 2
+    assert _advance(3, 0.0) == 4
+
+
+def test_a_finished_run_never_advances():
+    assert _advance(2, OUT, running=False) == 2
+    assert _advance(0, OUT, running=False) == 0
+
+
+def test_the_count_stops_at_four():
+    assert _advance(terrain_suite.CROSSINGS, 0.0) == terrain_suite.CROSSINGS
+    assert _advance(terrain_suite.CROSSINGS, OUT) == terrain_suite.CROSSINGS
+
+
+def test_a_single_step_advances_by_at_most_one():
+    """Otherwise a fast run could bank two crossings in one step."""
+    for crossings in range(terrain_suite.CROSSINGS):
+        for radius in (0.0, BACK, 1.0, OUT, 5.0):
+            assert _advance(crossings, radius) - crossings in (0, 1)
+
+
+def test_leg_sign_alternates_out_and_back():
+    signs = [float(terrain_scan.leg_sign(np.array([c]))[0]) for c in range(4)]
+    assert signs == [1.0, -1.0, 1.0, -1.0]
+
+
+def test_a_fall_after_the_course_is_not_recorded():
+    """A run keeps being stepped after its fourth crossing -- the batch is one
+    program over 32 envs -- and its command still says walk out, so it walks on.
+    Without the running gate, falling over a hundred steps after passing would
+    turn the pass into a fall."""
+    finished = np.array([False])  # no longer running: crossings == CROSSINGS
+    assert not bool(
+        terrain_scan.fall_progress(np.array([False]), np.array([True]), finished)[0]
+    )
+    # still on course: the fall counts
+    assert bool(
+        terrain_scan.fall_progress(np.array([False]), np.array([True]), np.array([True]))[0]
+    )
+    # and the flag is sticky once set, even after the run stops
+    assert bool(
+        terrain_scan.fall_progress(np.array([True]), np.array([False]), finished)[0]
+    )

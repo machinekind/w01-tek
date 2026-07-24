@@ -11,6 +11,7 @@ traceback, the optional sentinel gets "FAIL <reason>", and the process
 exits nonzero; on success the sentinel gets "OK".
 
 CPU:  ./run.sh check-terrain --backend jax --num-envs 4 --steps 10
+GPU:  ./run.sh check-terrain --backend warp --arena eval
 """
 
 from __future__ import annotations
@@ -195,10 +196,20 @@ def main() -> None:
     p.add_argument("--backend", choices=["auto", "warp", "jax"], default="auto")
     p.add_argument("--num-envs", type=int, default=256)
     p.add_argument("--steps", type=int, default=200)
-    p.add_argument("--scene", default=str(paths.TERRAIN_SCENE_XML))
-    p.add_argument("--out", default=str(paths.PROJECT_DIR / "runs/check_terrain.json"))
+    p.add_argument("--arena", choices=paths.TERRAIN_KINDS, default="train",
+                   help="which generated arena to check; also names the "
+                        "default report so two arenas do not overwrite "
+                        "each other")
+    p.add_argument("--scene", default=None,
+                   help="scene XML to check (default: the --arena one)")
+    p.add_argument("--out", default=None)
     p.add_argument("--sentinel", default=None)
     args = p.parse_args()
+    if args.scene is None:
+        args.scene = str(paths.terrain_paths(args.arena)["scene"])
+    if args.out is None:
+        tag = "" if args.arena == "train" else f"_{args.arena}"
+        args.out = str(paths.PROJECT_DIR / f"runs/check_terrain{tag}.json")
 
     out = Path(args.out)
     try:

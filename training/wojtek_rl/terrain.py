@@ -4,7 +4,8 @@ One shared arena, deterministic from a seed: a grid of ~3 m tiles with rows of
 increasing difficulty (0..1) and one tile of every terrain type per row, plus a
 flat border around the grid. By default each row's column order is shuffled and
 each interior row's difficulty is jittered within half a row gap; ``ordered=True``
-restores the legacy sorted-column, exact-difficulty layout for eval arenas.
+restores the sorted-column, exact-difficulty layout, and ``difficulties=`` gives
+the rows explicitly (what the measurement arena in ``terrain_suite`` does).
 Rough, slopes, and the inverted-stairs pit are carved into a single heightfield
 covering the whole arena; stairs and discrete obstacles are static box geoms
 (crisp edges, cheap contacts) sitting on the heightfield. A modality overlay of
@@ -60,11 +61,19 @@ BORDER = 2.0
 # finer cells are the documented failure mode there.
 CELL_SIZE = 0.04
 # The base box lifts to this below the arena floor, so nothing falls through
-# even where slope/stair tiles dig below z = 0.
-HFIELD_BASE_Z = 0.5
+# even where slope/stair tiles dig below z = 0. The deepest pit is the inverted
+# six-step flight at the hardest measurement row: 6 x 11.8 cm = 71 cm.
+HFIELD_BASE_Z = 1.0
 
-# Flat circular spawn pad at every tile centre (>= 0.5 m per the brief).
+# Flat circular spawn pad at every tile centre (>= 0.5 m per the brief). The
+# measurement arena passes a smaller radius: spawn jitter is zero there, so the
+# pad only has to hold the standing footprint.
 PAD_RADIUS = 0.6
+# A standing robot's reach: the feet sit 0.31 m from the base centre (0.257
+# fore/aft, 0.174 lateral) and the foot radius is 0.046 m. This much flat ground
+# under the base, plus whatever spawn jitter is in play, is what a spawn needs;
+# it is the floor under every pad radius in this file.
+FOOTPRINT_REACH = 0.36
 # Rough noise ramps from 0 at the pad edge to full over this width, so the pad
 # has no cliff at its rim.
 PAD_TAPER = 0.25
@@ -75,14 +84,27 @@ EDGE_TAPER = 0.25
 
 # Slope tiles: flat square platform (holds the pad), then a linear ramp.
 SLOPE_PLATFORM_HALF = 0.6
-# Stair tiles: flat square platform, then concentric 0.13 m treads. Four steps
-# matches the physical mini-staircase rig (4 steps, 13 cm tread).
-STAIR_PLATFORM_HALF = 0.7
+# Stair tiles: flat square platform, then concentric 0.13 m treads.
+#
+# Six steps, not the physical rig's four. The feet sit 0.257 m fore and aft of
+# the base centre, so four 13 cm treads (0.52 m) are exactly one wheelbase and
+# the robot always has feet on flat ground at one end or the other -- four
+# steps measures entering and leaving a staircase, never walking one. Six give
+# 0.78 m of run, so there is a window with all four feet on treads and more
+# treads ahead. A 0.60 m platform leaves 0.90 m of tile radius, which is the
+# six treads; it cannot shrink below 0.51 m while spawn jitter stays at 0.15 m.
+STAIR_PLATFORM_HALF = 0.6
 TREAD = 0.13
-N_STEPS = 4
-# Outer half-size of the stair terrace region; the inverted pit is carved to
-# this square and both stair types reach flat ground (0) at the rim.
-STAIR_PIT_HALF = STAIR_PLATFORM_HALF + (N_STEPS - 1) * TREAD
+N_STEPS = 6
+
+
+def stair_pit_half(stair_platform_half: float = STAIR_PLATFORM_HALF) -> float:
+    """Outer half-size of the stair terrace region. The inverted pit is carved
+    to this square and both stair types reach flat ground (0) at the rim."""
+    return stair_platform_half + (N_STEPS - 1) * TREAD
+
+
+STAIR_PIT_HALF = stair_pit_half()
 
 # Rough tiles: white noise sampled on this coarse pitch then bilinearly
 # upsampled, so features are foot-scale rolling ground, not per-cell spikes.
@@ -125,6 +147,32 @@ def wave_amplitude(d: float) -> float:
     return 0.01 + 0.05 * d
 
 
+# Inverses of the five ramps above. The measurement suite asks for physical
+# dimensions ("a 5 cm riser") and needs the difficulty that realizes them, so
+# it inverts the generator's own ramp instead of carrying a second table that
+# could drift. test_terrain.py pins each pair as an exact round trip.
+
+
+def rough_difficulty(amplitude: float) -> float:
+    return (amplitude - 0.005) / 0.035
+
+
+def slope_difficulty(angle_rad: float) -> float:
+    return angle_rad / 0.4
+
+
+def stair_difficulty(riser: float) -> float:
+    return (riser - 0.02) / 0.07
+
+
+def discrete_difficulty(height: float) -> float:
+    return (height - 0.01) / 0.07
+
+
+def wave_difficulty(amplitude: float) -> float:
+    return (amplitude - 0.01) / 0.05
+
+
 @dataclass(frozen=True)
 class Box:
     """Static box: world centre, half-sizes (m), and yaw about +z (rad)."""
@@ -165,6 +213,9 @@ class TerrainSpec:
     border: float
     cell_size: float
     ordered: bool
+    pad_radius: float
+    stair_platform_half: float
+    n_steps: int
     types: tuple[str, ...]
     x_min: float
     x_max: float
@@ -217,10 +268,10 @@ def _cheby(lx: np.ndarray, ly: np.ndarray) -> np.ndarray:
     return np.maximum(np.abs(lx), np.abs(ly))
 
 
-def _pad_taper(lx: np.ndarray, ly: np.ndarray) -> np.ndarray:
+def _pad_taper(lx: np.ndarray, ly: np.ndarray, pad_radius: float) -> np.ndarray:
     """0 inside the spawn pad, ramping to 1 by PAD_TAPER past its rim."""
     r = np.sqrt(lx**2 + ly**2)
-    return np.clip((r - PAD_RADIUS) / PAD_TAPER, 0.0, 1.0)
+    return np.clip((r - pad_radius) / PAD_TAPER, 0.0, 1.0)
 
 
 def _edge_taper(lx: np.ndarray, ly: np.ndarray) -> np.ndarray:
@@ -238,19 +289,27 @@ def _coarse_noise(lx: np.ndarray, ly: np.ndarray, rng: np.random.Generator) -> n
 
 
 def _rough_patch(
-    lx: np.ndarray, ly: np.ndarray, d: float, rng: np.random.Generator
+    lx: np.ndarray, ly: np.ndarray, d: float, rng: np.random.Generator,
+    pad_radius: float,
 ) -> np.ndarray:
     amp = rough_amplitude(d)
-    return amp * _coarse_noise(lx, ly, rng) * _pad_taper(lx, ly) * _edge_taper(lx, ly)
+    return (
+        amp * _coarse_noise(lx, ly, rng)
+        * _pad_taper(lx, ly, pad_radius) * _edge_taper(lx, ly)
+    )
 
 
 def _overlay(
-    lx: np.ndarray, ly: np.ndarray, d: float, rng: np.random.Generator
+    lx: np.ndarray, ly: np.ndarray, d: float, rng: np.random.Generator,
+    pad_radius: float,
 ) -> np.ndarray:
     """Coarse rough noise for slope and box-tile grounds, its own rng draw. Zero
     at the pad and at the border, so pads stay flat and borders stay seamless."""
     amp = OVERLAY_FRACTION * rough_amplitude(d)
-    return amp * _coarse_noise(lx, ly, rng) * _pad_taper(lx, ly) * _edge_taper(lx, ly)
+    return (
+        amp * _coarse_noise(lx, ly, rng)
+        * _pad_taper(lx, ly, pad_radius) * _edge_taper(lx, ly)
+    )
 
 
 def slope_plateau_height(d: float) -> float:
@@ -267,27 +326,33 @@ def _slope_patch(lx: np.ndarray, ly: np.ndarray, d: float, sign: float) -> np.nd
     return sign * slope * reach
 
 
-def _pyramid_stair_boxes(cx: float, cy: float, d: float) -> tuple[list[Box], float]:
+def _pyramid_stair_boxes(
+    cx: float, cy: float, d: float, stair_half: float
+) -> tuple[list[Box], float]:
     """High central plateau; treads descend to ground (0) at the rim, so the
     tile border stays seamless. Boxes sit on the flat heightfield."""
     riser = stair_riser(d)
     top = N_STEPS * riser
-    boxes = [Box((cx, cy, top / 2), (STAIR_PLATFORM_HALF, STAIR_PLATFORM_HALF, top / 2))]
+    boxes = [Box((cx, cy, top / 2), (stair_half, stair_half, top / 2))]
     for k in range(1, N_STEPS):
-        r_in = STAIR_PLATFORM_HALF + (k - 1) * TREAD
-        r_out = STAIR_PLATFORM_HALF + k * TREAD
+        r_in = stair_half + (k - 1) * TREAD
+        r_out = stair_half + k * TREAD
         boxes.extend(_frame_boxes(cx, cy, r_in, r_out, top=(N_STEPS - k) * riser))
     return boxes, top
 
 
-def _pit_carve(lx: np.ndarray, ly: np.ndarray, d: float) -> np.ndarray:
+def _pit_carve(
+    lx: np.ndarray, ly: np.ndarray, d: float, stair_half: float
+) -> np.ndarray:
     """Heightfield patch for an inverted-stairs pit: -H inside the pit square,
     0 outside, so the rim is flush with the tile ground."""
     depth = N_STEPS * stair_riser(d)
-    return np.where(_cheby(lx, ly) <= STAIR_PIT_HALF, -depth, 0.0)
+    return np.where(_cheby(lx, ly) <= stair_pit_half(stair_half), -depth, 0.0)
 
 
-def _inverted_stair_boxes(cx: float, cy: float, d: float) -> tuple[list[Box], float]:
+def _inverted_stair_boxes(
+    cx: float, cy: float, d: float, stair_half: float
+) -> tuple[list[Box], float]:
     """Terraces inside the carved pit: each ring sits on the pit floor (-H) and
     rises one riser more outward. The topmost riser (-riser -> 0) is the carve
     wall itself, beveled over at most one cell (CELL_SIZE) by the heightfield.
@@ -296,8 +361,8 @@ def _inverted_stair_boxes(cx: float, cy: float, d: float) -> tuple[list[Box], fl
     depth = N_STEPS * riser
     boxes: list[Box] = []
     for j in range(1, N_STEPS):
-        r_in = STAIR_PLATFORM_HALF + (j - 1) * TREAD
-        r_out = STAIR_PLATFORM_HALF + j * TREAD
+        r_in = stair_half + (j - 1) * TREAD
+        r_out = stair_half + j * TREAD
         boxes.extend(_frame_boxes(cx, cy, r_in, r_out, top=-depth + j * riser, base=-depth))
     return boxes, -depth
 
@@ -317,7 +382,9 @@ def _frame_boxes(
     ]
 
 
-def _discrete_boxes(cx: float, cy: float, d: float, rng: np.random.Generator) -> list[Box]:
+def _discrete_boxes(
+    cx: float, cy: float, d: float, rng: np.random.Generator, pad_radius: float
+) -> list[Box]:
     max_h = discrete_max_height(d)
     # Keep obstacles clear of the tile edge so the border stays seamless with
     # the neighbour tile (a box at the rim would be a step across it).
@@ -334,14 +401,16 @@ def _discrete_boxes(cx: float, cy: float, d: float, rng: np.random.Generator) ->
         u = float(rng.uniform(-reach + hax, reach - hax))
         v = float(rng.uniform(-reach + hay, reach - hay))
         # Clear the pad by the box's corner radius, so no corner pokes in.
-        if np.hypot(u, v) < PAD_RADIUS + np.hypot(hx, hy) + 0.05:
+        if np.hypot(u, v) < pad_radius + np.hypot(hx, hy) + 0.05:
             continue
         h = float(rng.uniform(0.5, 1.0)) * max_h
         boxes.append(Box((cx + u, cy + v, h / 2), (hx, hy, h / 2), yaw))
     return boxes
 
 
-def _random_grid_boxes(cx: float, cy: float, d: float, rng: np.random.Generator) -> list[Box]:
+def _random_grid_boxes(
+    cx: float, cy: float, d: float, rng: np.random.Generator, pad_radius: float
+) -> list[Box]:
     """Rubble: a regular cell grid, each cell raising one small yawed box with
     probability GRID_FILL_PROB. Boxes only rise above grade -- unlike Isaac's
     random grid we cannot also sink cells, since boxes cannot carve. Each box is
@@ -374,14 +443,17 @@ def _random_grid_boxes(cx: float, cy: float, d: float, rng: np.random.Generator)
             jth = rng.uniform(0.0, 2 * np.pi)
             u = start + ix * GRID_PITCH + jr * np.cos(jth)
             v = start + iy * GRID_PITCH + jr * np.sin(jth)
-            if np.hypot(u, v) < PAD_RADIUS + np.hypot(hx, hy) + 0.05:
+            if np.hypot(u, v) < pad_radius + np.hypot(hx, hy) + 0.05:
                 continue
             h = float(rng.uniform(0.3, 1.0)) * max_h
             boxes.append(Box((cx + u, cy + v, h / 2), (hx, hy, h / 2), yaw))
     return boxes
 
 
-def _wave_patch(lx: np.ndarray, ly: np.ndarray, d: float, rng: np.random.Generator) -> np.ndarray:
+def _wave_patch(
+    lx: np.ndarray, ly: np.ndarray, d: float, rng: np.random.Generator,
+    pad_radius: float,
+) -> np.ndarray:
     # Integer half-periods in both axes make the product of sines exactly 0 on
     # all four tile edges (lx or ly = +/- half), so the border invariant holds
     # by construction. The pad is flattened with the same radial taper as rough.
@@ -393,7 +465,7 @@ def _wave_patch(lx: np.ndarray, ly: np.ndarray, d: float, rng: np.random.Generat
         np.sin(kx * np.pi * (lx + half) / TILE_SIZE)
         * np.sin(ky * np.pi * (ly + half) / TILE_SIZE)
     )
-    return amp * wave * _pad_taper(lx, ly)
+    return amp * wave * _pad_taper(lx, ly, pad_radius)
 
 
 def _footprint_nodes(
@@ -456,8 +528,28 @@ def generate(
     border: float = BORDER,
     cell_size: float = CELL_SIZE,
     ordered: bool = False,
+    difficulties: tuple[float, ...] | None = None,
+    pad_radius: float = PAD_RADIUS,
+    stair_platform_half: float = STAIR_PLATFORM_HALF,
 ) -> Arena:
+    """Build one arena.
+
+    ``difficulties`` replaces the 0..1 ramp with an explicit per-row list, and
+    then sets the row count. Rows take those values exactly -- no jitter, and
+    no clamp at 1.0, so the measurement arena can hold rows harder than
+    anything training reaches. The column shuffle still draws from the same
+    per-row stream in the same order, so a seed picks the same tile contents
+    with or without an explicit difficulty list.
+
+    ``pad_radius`` sizes the flat spawn pad. It cannot go below 0.36 m: the
+    feet sit 0.31 m from the base centre and the foot radius is 0.046 m, so
+    that is the flat ground a standing robot needs. Anything above the
+    training default's spawn jitter (0.15 m) plus that footprint is safe.
+    """
     n_cols = len(TYPES)
+    if difficulties is not None:
+        difficulties = tuple(float(d) for d in difficulties)
+        n_rows = len(difficulties)
     total_x = n_cols * tile_size + 2 * border
     total_y = n_rows * tile_size + 2 * border
     x_min, x_max = -total_x / 2, total_x / 2
@@ -474,23 +566,21 @@ def generate(
     boxes: list[Box] = []
     tiles: list[TileSpec] = []
     for i in range(n_rows):
-        nominal = i / (n_rows - 1)
+        d = difficulties[i] if difficulties is not None else i / (n_rows - 1)
         if ordered:
             row_types = TYPES
-            d = nominal
         else:
             # One rng stream per row drives both the column shuffle and the
             # difficulty jitter. Each row still holds every type exactly once.
             row_rng = np.random.default_rng([seed, i])
             row_types = tuple(TYPES[k] for k in row_rng.permutation(n_cols))
-            if 0 < i < n_rows - 1:
+            if difficulties is None and 0 < i < n_rows - 1:
                 # Jitter under half a row gap (+-0.4 of 1/(n-1)) keeps realized
                 # difficulty strictly increasing; rows 0 and n-1 stay exact so
-                # the curriculum floor and ceiling are preserved.
+                # the curriculum floor and ceiling are preserved. An explicit
+                # difficulty list is taken as given, so no draw happens.
                 d = float(np.clip(
-                    nominal + row_rng.uniform(-0.4, 0.4) / (n_rows - 1), 0.0, 1.0))
-            else:
-                d = nominal
+                    d + row_rng.uniform(-0.4, 0.4) / (n_rows - 1), 0.0, 1.0))
         cy = grid_y0 + (i + 0.5) * tile_size
         ri0 = int(np.searchsorted(ys, cy - tile_size / 2))
         ri1 = int(np.searchsorted(ys, cy + tile_size / 2))
@@ -502,33 +592,47 @@ def generate(
             rng = _tile_rng(seed, i, j)
             pad_height = 0.0
             if ttype == "rough_uniform":
-                heights[ri0:ri1, ci0:ci1] = _rough_patch(lx, ly, d, rng)
+                heights[ri0:ri1, ci0:ci1] = _rough_patch(lx, ly, d, rng, pad_radius)
             elif ttype == "pyramid_slope":
-                heights[ri0:ri1, ci0:ci1] = _slope_patch(lx, ly, d, +1.0) + _overlay(lx, ly, d, rng)
+                heights[ri0:ri1, ci0:ci1] = (
+                    _slope_patch(lx, ly, d, +1.0) + _overlay(lx, ly, d, rng, pad_radius)
+                )
                 pad_height = slope_plateau_height(d)
             elif ttype == "inverted_pyramid_slope":
-                heights[ri0:ri1, ci0:ci1] = _slope_patch(lx, ly, d, -1.0) + _overlay(lx, ly, d, rng)
+                heights[ri0:ri1, ci0:ci1] = (
+                    _slope_patch(lx, ly, d, -1.0) + _overlay(lx, ly, d, rng, pad_radius)
+                )
                 pad_height = -slope_plateau_height(d)
             elif ttype == "pyramid_stairs":
-                tile_boxes, pad_height = _pyramid_stair_boxes(cx, cy, d)
+                tile_boxes, pad_height = _pyramid_stair_boxes(
+                    cx, cy, d, stair_platform_half
+                )
                 boxes.extend(tile_boxes)
             elif ttype == "inverted_pyramid_stairs":
-                heights[ri0:ri1, ci0:ci1] = _pit_carve(lx, ly, d)
-                tile_boxes, pad_height = _inverted_stair_boxes(cx, cy, d)
+                heights[ri0:ri1, ci0:ci1] = _pit_carve(
+                    lx, ly, d, stair_platform_half
+                )
+                tile_boxes, pad_height = _inverted_stair_boxes(
+                    cx, cy, d, stair_platform_half
+                )
                 boxes.extend(tile_boxes)
             elif ttype == "discrete_obstacles":
-                heights[ri0:ri1, ci0:ci1] = _overlay(lx, ly, d, rng)
-                boxes.extend(_seat_boxes(_discrete_boxes(cx, cy, d, rng), heights, xs, ys))
+                heights[ri0:ri1, ci0:ci1] = _overlay(lx, ly, d, rng, pad_radius)
+                boxes.extend(_seat_boxes(
+                    _discrete_boxes(cx, cy, d, rng, pad_radius), heights, xs, ys
+                ))
             elif ttype == "random_grid":
-                heights[ri0:ri1, ci0:ci1] = _overlay(lx, ly, d, rng)
-                boxes.extend(_seat_boxes(_random_grid_boxes(cx, cy, d, rng), heights, xs, ys))
+                heights[ri0:ri1, ci0:ci1] = _overlay(lx, ly, d, rng, pad_radius)
+                boxes.extend(_seat_boxes(
+                    _random_grid_boxes(cx, cy, d, rng, pad_radius), heights, xs, ys
+                ))
             elif ttype == "wave":
-                heights[ri0:ri1, ci0:ci1] = _wave_patch(lx, ly, d, rng)
+                heights[ri0:ri1, ci0:ci1] = _wave_patch(lx, ly, d, rng, pad_radius)
             tiles.append(
                 TileSpec(
                     row=i, col=j, terrain_type=ttype, difficulty=d,
                     origin=(float(cx), float(cy), 0.0),
-                    pad_radius=PAD_RADIUS, pad_height=float(pad_height),
+                    pad_radius=pad_radius, pad_height=float(pad_height),
                 )
             )
 
@@ -559,7 +663,9 @@ def generate(
 
     spec = TerrainSpec(
         seed=seed, n_rows=n_rows, n_cols=n_cols, tile_size=tile_size,
-        border=border, cell_size=cell_size, ordered=ordered, types=TYPES,
+        border=border, cell_size=cell_size, ordered=ordered,
+        pad_radius=pad_radius, stair_platform_half=stair_platform_half,
+        n_steps=N_STEPS, types=TYPES,
         x_min=x_min, x_max=x_max, y_min=y_min, y_max=y_max,
         hfield=HFieldSpec(
             nrow=nrow, ncol=ncol, radius_x=total_x / 2, radius_y=total_y / 2,
@@ -603,6 +709,9 @@ def spec_to_dict(spec: TerrainSpec) -> dict:
         "border": spec.border,
         "cell_size": spec.cell_size,
         "ordered": spec.ordered,
+        "pad_radius": spec.pad_radius,
+        "stair_platform_half": spec.stair_platform_half,
+        "n_steps": spec.n_steps,
         "types": list(spec.types),
         "extent": {
             "x_min": spec.x_min, "x_max": spec.x_max,

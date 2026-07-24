@@ -7,16 +7,27 @@ import pytest
 from wojtek_rl import build_terrain, paths, terrain
 
 
+TEST_ARENA = "test"
+
+
 @pytest.fixture(scope="module")
 def arena():
+    """A generated arena written to the `test` file set, never the one a policy
+    trains on, and removed afterwards. Writing over the training arena is how a
+    later training run silently collapsed its curriculum to three rungs with no
+    record in run.json."""
     a = terrain.generate(seed=0)
-    build_terrain.write_arena(a)  # deterministic; refreshes the scene artifacts
-    return a
+    build_terrain.write_arena(a, TEST_ARENA)
+    yield a
+    for p in paths.terrain_paths(TEST_ARENA).values():
+        p.unlink(missing_ok=True)
 
 
 @pytest.fixture(scope="module")
 def model(arena):
-    return mujoco.MjModel.from_xml_path(str(paths.TERRAIN_SCENE_XML))
+    return mujoco.MjModel.from_xml_path(
+        str(paths.terrain_paths(TEST_ARENA)["scene"])
+    )
 
 
 def _tile(arena, ttype, row):
@@ -88,6 +99,41 @@ def test_row_difficulty_jittered_but_monotone(arena):
     assert ds[0] == 0.0 and ds[-1] == 1.0
     assert all(np.diff(ds) > 0)
     assert any(d != r / (s.n_rows - 1) for r, d in enumerate(ds))
+
+
+def test_ramp_inverses_round_trip():
+    """The measurement suite asks for physical dimensions and inverts these
+    ramps to get the difficulty that realizes them, so each pair has to be an
+    exact round trip or the suite's row table means something else than the
+    terrain it describes."""
+    pairs = [
+        (terrain.rough_amplitude, terrain.rough_difficulty, (0.01, 0.025, 0.04)),
+        (terrain.slope_angle, terrain.slope_difficulty, (0.14, 0.26, 0.38)),
+        (terrain.stair_riser, terrain.stair_difficulty, (0.03, 0.05, 0.07, 0.09)),
+        (terrain.discrete_max_height, terrain.discrete_difficulty,
+         (0.025, 0.05, 0.065, 0.08)),
+        (terrain.wave_amplitude, terrain.wave_difficulty, (0.02, 0.04, 0.06)),
+    ]
+    for ramp, inverse, targets in pairs:
+        for target in targets:
+            assert ramp(inverse(target)) == pytest.approx(target, abs=1e-12)
+            # and the other way round, over the frontier rows too
+            for d in (0.0, 0.5, 1.0, 1.4):
+                assert inverse(ramp(d)) == pytest.approx(d, abs=1e-12)
+
+
+def test_six_step_stair_flight(arena):
+    """Six treads, and they end inside the tile with room for the crossing
+    radius the measurement course walks out to."""
+    assert terrain.N_STEPS == 6
+    assert terrain.stair_pit_half() == pytest.approx(1.25)
+    assert terrain.stair_pit_half() < arena.spec.tile_size / 2
+    # 0.78 m of run, against a 0.514 m front-to-rear foot spacing: there is a
+    # window with all four feet on treads. Four treads would be one wheelbase.
+    assert terrain.N_STEPS * terrain.TREAD > 0.514
+    # The base box has to sit below the deepest pit the hardest row digs.
+    deepest = terrain.N_STEPS * terrain.stair_riser(max(1.4, 1.0))
+    assert terrain.HFIELD_BASE_Z > deepest, (terrain.HFIELD_BASE_Z, deepest)
 
 
 def test_grid_layout(arena):
@@ -205,17 +251,35 @@ def test_lookup_matches_geometry(model, arena):
         assert abs(zr - top) < 0.012
 
 
-def test_spawn_pads_flat(arena):
-    """Lookup variance within each spawn pad is below a tight epsilon."""
+def pad_flatness(arena, spawn_jitter):
+    """(worst height spread, worst offset from the declared pad height) over the
+    ground a spawned robot actually stands on: its footprint reach, displaced by
+    the worst spawn jitter, capped by the pad.
+
+    Not the pad rim. A stair tile's platform half-size equals its pad radius, so
+    the rim node IS the first tread -- correct geometry, and not something a
+    spawn ever stands on (0.15 m jitter plus a 0.36 m footprint reaches 0.51 m
+    of the 0.60 m platform)."""
+    worst_std, worst_off = 0.0, 0.0
     for t in arena.spec.tiles:
         cx, cy, _ = t.origin
-        r = np.linspace(0.0, t.pad_radius, 8)
+        reach = min(t.pad_radius, terrain.FOOTPRINT_REACH + spawn_jitter)
+        r = np.linspace(0.0, reach, 8)
         ang = np.linspace(0.0, 2 * np.pi, 32)
         xs = cx + np.outer(r, np.cos(ang)).ravel()
         ys = cy + np.outer(r, np.sin(ang)).ravel()
         h = terrain.lookup_height(arena, xs, ys)
-        assert h.std() < 1e-3, (t.terrain_type, t.row, float(h.std()))
-        assert abs(float(h.mean()) - t.pad_height) < 1e-3
+        worst_std = max(worst_std, float(h.std()))
+        worst_off = max(worst_off, abs(float(h.mean()) - t.pad_height))
+    return worst_std, worst_off
+
+
+def test_spawn_pads_flat(arena):
+    """Every spawn stands on flat ground at the tile's declared pad height,
+    at the training arena's 0.15 m spawn jitter."""
+    spread, offset = pad_flatness(arena, spawn_jitter=0.15)
+    assert spread < 1e-3, spread
+    assert offset < 1e-3, offset
 
 
 def _perimeter_max_abs(arena, tile, inset=0.02, n=25):
@@ -310,10 +374,11 @@ def test_physics_smoke_on_rough_pad(model, arena):
 
 
 def test_sidecars_written(arena):
-    assert paths.TERRAIN_HFIELD.exists()
-    assert paths.TERRAIN_SCENE_XML.exists()
-    meta = json.loads(paths.TERRAIN_SPEC_JSON.read_text())
+    files = paths.terrain_paths(TEST_ARENA)
+    assert files["hfield"].exists()
+    assert files["scene"].exists()
+    meta = json.loads(files["spec"].read_text())
     assert meta["seed"] == 0 and len(meta["tiles"]) == arena.spec.n_rows * arena.spec.n_cols
-    npz = np.load(paths.TERRAIN_LOOKUP_NPZ)
+    npz = np.load(files["lookup"])
     assert npz["lookup"].shape == (arena.spec.hfield.nrow, arena.spec.hfield.ncol)
     assert np.array_equal(npz["lookup"], arena.lookup)

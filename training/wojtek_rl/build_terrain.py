@@ -1,6 +1,7 @@
-"""Build the shared terrain arena and its scene from a seed.
+"""Build a terrain arena and its scene from a seed.
 
-Generates the arena with wojtek_rl.terrain and writes, next to the robot XML:
+Generates the arena with wojtek_rl.terrain and writes, next to the robot XML
+(names shown for the default `train` arena; see paths.terrain_paths):
   - scene_terrain.xml   -- mirrors build_model.SCENE_XML_TEXT, but the flat
     floor plane is replaced by the heightfield geom plus the terrain boxes,
     all carrying the floor's collision semantics (default contype,
@@ -9,12 +10,20 @@ Generates the arena with wojtek_rl.terrain and writes, next to the robot XML:
   - terrain_spec.json   -- grid meta, per-tile type/difficulty/origin, pads
   - terrain_lookup.npz  -- ground-truth height grid + extents/resolution
 
+`--arena eval` writes a separate file set holding the fixed measurement course
+(wojtek_rl.terrain_suite): its 12 rows, sorted columns and 0.40 m pads. Its
+row/pad settings come from the suite, so `--rows`, `--ordered` and
+`--pad-radius` do not apply there. `--arena test` is a scratch set for the test
+suite. Separate sets are what keeps a measurement from overwriting the arena a
+policy trained on.
+
 The heightfield file path is emitted relative to the robot's meshdir, because
 MuJoCo resolves <hfield file=> against meshdir (the included robot XML sets it).
 
 Run:
-    ./run.sh build-terrain [--seed N] [--rows N] [--tile-size M] [--border M]
-                           [--cell-size M] [--ordered] [--no-check]
+    ./run.sh build-terrain [--arena {train,eval,test}] [--seed N] [--rows N]
+                           [--tile-size M] [--border M] [--cell-size M]
+                           [--pad-radius M] [--ordered] [--no-check]
 """
 
 from __future__ import annotations
@@ -23,12 +32,13 @@ import argparse
 import json
 import os
 import re
+import time
 from pathlib import Path
 
 import mujoco
 import numpy as np
 
-from wojtek_rl import paths, terrain
+from wojtek_rl import paths, terrain, terrain_suite
 
 # Box tint, alternating by parity so steps read in the viewer; collision
 # attributes match the floor line in build_model.SCENE_XML_TEXT.
@@ -82,44 +92,81 @@ def build_scene_xml(arena: terrain.Arena, hfield_file: str) -> str:
 """
 
 
-def write_arena(arena: terrain.Arena) -> None:
-    terrain.write_hfield_bin(paths.TERRAIN_HFIELD, arena.hfield_data)
-    hfield_file = os.path.relpath(paths.TERRAIN_HFIELD, _robot_meshdir()).replace(os.sep, "/")
-    paths.TERRAIN_SCENE_XML.write_text(build_scene_xml(arena, hfield_file))
-    paths.TERRAIN_SPEC_JSON.write_text(json.dumps(terrain.spec_to_dict(arena.spec), indent=2))
+def _force_new_mtime(path: Path, replaced_mtime: float | None) -> None:
+    """Make `path` look strictly newer than the file it replaced.
+
+    MuJoCo (3.10) caches heightfield assets by filename at one-second mtime
+    resolution. Two arenas written to one filename inside the same second, and
+    the second compile silently serves the FIRST one's elevation data -- a scene
+    whose physics does not match the lookup grid the env reads heights from, with
+    no error anywhere. File size is not part of the cache key, so a different
+    grid shape does not save you. Reproduced on 2 of 3 tight-loop trials.
+
+    Only the heightfield needs this: the scene XML is re-parsed every load, and
+    the spec/lookup sidecars go through json/numpy, which cache nothing. The
+    mtime can land up to one second per rebuild in the future, which is bounded
+    by how many times a single process rebuilds one arena.
+    """
+    if replaced_mtime is None:
+        return
+    target = max(time.time(), replaced_mtime + 1.0)
+    os.utime(path, (target, target))
+
+
+def write_arena(arena: terrain.Arena, kind: str = "train") -> None:
+    """Write one arena's four files. `kind` picks the file set to overwrite."""
+    out = paths.terrain_paths(kind)
+    replaced = out["hfield"].stat().st_mtime if out["hfield"].exists() else None
+    terrain.write_hfield_bin(out["hfield"], arena.hfield_data)
+    _force_new_mtime(out["hfield"], replaced)
+    hfield_file = os.path.relpath(out["hfield"], _robot_meshdir()).replace(os.sep, "/")
+    out["scene"].write_text(build_scene_xml(arena, hfield_file))
+    out["spec"].write_text(json.dumps(terrain.spec_to_dict(arena.spec), indent=2))
     s = arena.spec
     np.savez_compressed(
-        paths.TERRAIN_LOOKUP_NPZ,
+        out["lookup"],
         lookup=arena.lookup,
         x_min=s.x_min, x_max=s.x_max, y_min=s.y_min, y_max=s.y_max,
         cell_size=s.cell_size, nrow=s.hfield.nrow, ncol=s.hfield.ncol,
     )
-    for p in (
-        paths.TERRAIN_HFIELD, paths.TERRAIN_SCENE_XML,
-        paths.TERRAIN_SPEC_JSON, paths.TERRAIN_LOOKUP_NPZ,
-    ):
+    for p in (out["hfield"], out["scene"], out["spec"], out["lookup"]):
         print(f"wrote {p} ({p.stat().st_size / 1e6:.2f} MB)")
 
 
 def main() -> None:
     p = argparse.ArgumentParser()
+    p.add_argument("--arena", choices=paths.TERRAIN_KINDS, default="train",
+                   help="which file set to write; eval is the fixed "
+                        "measurement course (terrain_suite)")
     p.add_argument("--seed", type=int, default=terrain.DEFAULT_SEED)
     p.add_argument("--rows", type=int, default=terrain.DEFAULT_N_ROWS)
     p.add_argument("--tile-size", type=float, default=terrain.TILE_SIZE)
     p.add_argument("--border", type=float, default=terrain.BORDER)
     p.add_argument("--cell-size", type=float, default=terrain.CELL_SIZE)
+    p.add_argument("--pad-radius", type=float, default=terrain.PAD_RADIUS)
     p.add_argument("--ordered", action="store_true",
-                   help="legacy sorted-column, exact-difficulty layout (eval arenas)")
+                   help="sorted-column, exact-difficulty layout")
     p.add_argument("--no-check", action="store_true", help="skip the compile check")
     args = p.parse_args()
 
-    arena = terrain.generate(
+    kwargs = dict(
         seed=args.seed, n_rows=args.rows, tile_size=args.tile_size,
         border=args.border, cell_size=args.cell_size, ordered=args.ordered,
+        pad_radius=args.pad_radius,
     )
-    write_arena(arena)
+    if args.arena == "eval":
+        # The measurement course is a definition, not a CLI choice: its rows,
+        # column order and pad radius come from the suite.
+        kwargs.update(terrain_suite.eval_arena_kwargs())
+        print(
+            f"eval arena: {len(terrain_suite.DIFFICULTIES)} rows "
+            f"{terrain_suite.DIFFICULTIES}, pad {terrain_suite.EVAL_PAD_RADIUS} m"
+        )
+    arena = terrain.generate(**kwargs)
+    write_arena(arena, args.arena)
     if not args.no_check:
-        m = mujoco.MjModel.from_xml_path(str(paths.TERRAIN_SCENE_XML))
+        scene = paths.terrain_paths(args.arena)["scene"]
+        m = mujoco.MjModel.from_xml_path(str(scene))
         print(
             f"compiled: {m.ngeom} geoms, {len(arena.boxes)} terrain boxes, "
             f"hfield {m.hfield_nrow[0]}x{m.hfield_ncol[0]}"

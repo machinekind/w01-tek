@@ -132,11 +132,12 @@ def termination_summary(events: list) -> dict:
 
     Each item of `events`: {"scenario", "fell_at", "height", "gravity_z",
     "min_height", "max_tilt_gz"}. `height`/`gravity_z` are the base height
-    / local-frame gravity z-component (base.py._gravity_body) at the step
+    ABOVE THE LOCAL SURFACE (base.py._base_height, which is qpos[2] on the flat
+    scene) / local-frame gravity z-component (base.py._gravity_body) at the step
     that ended the scenario (None if it never fell -- see
     battery.rollout()'s `term` return). The fall reason is inferred from
     which of the env's two termination conditions (env.py's
-    `fall = (qpos[2] < min_height) | (gravity[2] > max_tilt_gz)`) tripped:
+    `fall = (base_height < min_height) | (gravity[2] > max_tilt_gz)`) tripped:
     "height", "tilt", "both", or "unknown" if neither threshold explains a
     `done=True` fall (e.g. episode-length timeout counted as done upstream).
     """
@@ -179,19 +180,29 @@ def assemble_report(
     termination: dict,
     torque_by_speed: dict | None = None,
     timestamp: str | None = None,
+    battery_scene: str = "",
+    terrain: dict | None = None,
 ) -> dict:
     """Merge the computed sections into the documented eval_report.json
-    schema: run, checkpoint, battery, torque, power, foot_force_proxy,
-    termination, torque_by_speed, timestamp."""
+    schema: run, checkpoint, battery_scene, battery, torque, power,
+    foot_force_proxy, termination, torque_by_speed, terrain, timestamp.
+
+    `battery_scene` names the scene every battery-derived number came from --
+    always the flat one, so the table stays comparable with flat keepers.
+    `terrain` is a terrain-scan document (terrain_scan.json), carried through
+    unchanged when the run has one; the scan names its own arena, so the two
+    sections can never be read as the same measurement."""
     return {
         "run": run_name,
         "checkpoint": checkpoint,
+        "battery_scene": battery_scene,
         "battery": battery,
         "torque": torque,
         "power": power,
         "foot_force_proxy": foot_force,
         "termination": termination,
         "torque_by_speed": torque_by_speed or {},
+        "terrain": terrain,
         "timestamp": timestamp or datetime.now().isoformat(timespec="seconds"),
     }
 
@@ -199,11 +210,30 @@ def assemble_report(
 # -- report assembly (needs a checkpoint + jax rollout) ------------------
 
 
+TERRAIN_SCAN_JSON = "terrain_scan.json"
+
+
+def load_terrain_scan(run_dir: Path) -> dict | None:
+    """A run's terrain-scan document, if one was produced.
+
+    The scan is a separate, expensive step (`./run.sh terrain-scan`) that can
+    run on a cluster while the report is rendered on a laptop, so the report
+    reads its file rather than recomputing it -- the same split the battery
+    already has. A flat run never has one."""
+    path = run_dir / TERRAIN_SCAN_JSON
+    return json.loads(path.read_text()) if path.exists() else None
+
+
 def build_report(run_dir: Path) -> dict:
-    """Run the battery once, reducing its rollouts into the full report:
+    """Run the flat battery once, reducing its rollouts into the full report:
     battery table + torque/power percentiles + foot-force proxy +
-    termination summary + speed-binned torque."""
-    run, env, ckpt, inf, foot_radius = load_checkpoint_policy(run_dir)
+    termination summary + speed-binned torque, plus the terrain scan when the
+    run has one.
+
+    The battery always runs on the flat scene, terrain runs included: its
+    scenarios are the fixed comparison against flat keepers. Terrain numbers
+    come from the scan, which says which arena it used."""
+    run, env, ckpt, inf = load_checkpoint_policy(run_dir)
     reset, step = jax.jit(env.reset), jax.jit(env.step)
     fall_cfg = env._config.fall
     total_mass = float(env.mj_model.body_mass.sum())
@@ -215,7 +245,7 @@ def build_report(run_dir: Path) -> dict:
     vx_local_chunks, vy_local_chunks = [], []
     term_events = []
     for name, (cmd_at, n) in battery_scenarios().items():
-        rec, fell_at, term = rollout(env, reset, step, inf, cmd_at, n, foot_radius)
+        rec, fell_at, term = rollout(env, reset, step, inf, cmd_at, n)
         battery[name] = scenario_result(name, rec, fell_at, env.dt, torque_cap)
         if rec["actuator_force"].size:
             force_chunks.append(rec["actuator_force"])
@@ -249,6 +279,8 @@ def build_report(run_dir: Path) -> dict:
         foot_force=foot_force_proxy(all_accel_z, total_mass, gravity_mag),
         termination=termination_summary(term_events),
         torque_by_speed=torque_by_speed(all_vx_local, all_vy_local, all_force),
+        battery_scene=Path(env.xml_path).name,
+        terrain=load_terrain_scan(run_dir),
     )
 
 
@@ -271,6 +303,9 @@ def render_markdown(report: dict) -> str:
         f"- generated: {report['timestamp']}",
         "",
         "## Battery",
+        "",
+        f"- scene: {report.get('battery_scene') or 'unknown'} (the battery is "
+        "always the flat comparison against flat keepers)",
         "",
         "| scenario | fell_at | steps | metrics |",
         "|---|---|---|---|",
@@ -343,8 +378,53 @@ def render_markdown(report: dict) -> str:
         lines.append(
             f"| {name} | {s['fell']} | {_fmt(s['fell_at'])} | {s['reason'] or '-'} |"
         )
+    lines += render_terrain_markdown(report.get("terrain"))
     lines.append("")
     return "\n".join(lines)
+
+
+def render_terrain_markdown(scan: dict | None) -> list[str]:
+    """The terrain-scan section, or a one-line note when there is no scan.
+
+    Each row is one cell at one commanded speed: how many of the 32 fixed runs
+    passed, against the bar and where the bar's number came from. `provisional`
+    means the terrain plan sets no bar at that speed and the 0.4 m/s number was
+    carried across, so a failure there is a prompt to check the bar."""
+    if not scan:
+        return ["", "## Terrain", "", "- no terrain scan for this run", ""]
+    arena = scan.get("arena", {})
+    lines = [
+        "",
+        "## Terrain",
+        "",
+        f"- engine: {scan.get('engine', '?')}   arena: seed {arena.get('seed')}, "
+        f"{arena.get('rows')} rows, {arena.get('pad_radius')} m pads, "
+        f"cells {arena.get('cells')}",
+        f"- runs per cell and speed: {scan.get('runs_per_cell_speed')}",
+        "",
+        "| cell | speed | passed | of | bar | provenance | crossings | falls |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for name, per_speed in (scan.get("cells") or {}).items():
+        for speed, r in per_speed.items():
+            lines.append(
+                f"| {name} | {speed} | {r.get('passed')} | {r.get('of')} | "
+                f"{_fmt(r.get('bar'))} | {r.get('provenance', '-')} | "
+                f"{_fmt(r.get('crossings_mean'))} | {r.get('falls')} |"
+            )
+    gate = scan.get("gate")
+    if gate:
+        lines += [
+            "",
+            "### Gate",
+            "",
+            f"- absolute: {gate.get('absolute', {}).get('verdict', '-')} "
+            f"({len(gate.get('absolute', {}).get('failures', []))} failing cells)",
+            f"- relative: {gate.get('relative', {}).get('verdict', '-')}",
+        ]
+        for line in gate.get("notes", []):
+            lines.append(f"- {line}")
+    return lines
 
 
 def main():

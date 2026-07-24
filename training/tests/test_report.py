@@ -132,9 +132,12 @@ def test_assemble_report_schema_keys():
         timestamp="2026-07-10T00:00:00",
     )
     assert set(report.keys()) == {
-        "run", "checkpoint", "battery", "torque", "power",
-        "foot_force_proxy", "termination", "torque_by_speed", "timestamp",
+        "run", "checkpoint", "battery_scene", "battery", "torque", "power",
+        "foot_force_proxy", "termination", "torque_by_speed", "terrain",
+        "timestamp",
     }
+    # A run with no terrain scan says so, rather than omitting the section.
+    assert report["terrain"] is None
     assert report["run"] == "probe"
     assert report["checkpoint"] == "1000"
     assert report["timestamp"] == "2026-07-10T00:00:00"

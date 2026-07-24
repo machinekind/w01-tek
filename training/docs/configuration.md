@@ -181,11 +181,11 @@ Default actor observations are `gyro`, `gravity`, `joint_pos`, `joint_vel`,
 | `task.env.encoder.range` | `0.02` rad | Uniform encoder offset is in `[-range, range]`. |
 | `task.env.action_filter` | `0.0` | EMA filter strength on actions (`0` disables it). Mirror this filter on the robot if enabled during training. |
 | `task.env.terrain.enable` | `false` | Train on the terrain arena. Needs `build-terrain` first. See [Terrain curriculum](#terrain-curriculum). |
-| `task.env.terrain.feet_only` | `true` | Only the four feet and the base box collide with terrain. |
+| `task.env.terrain.arena` | `train` | Which generated arena to load: `train`, `eval` (the fixed measurement course) or `test`. Build it with `build-terrain --arena <kind>`. |
 | `task.env.terrain.spawn_yaw` | `true` | Random heading at every spawn. |
 | `task.env.terrain.pad_jitter` | `0.15` m | Spawn scatter around the pad centre. Keep it under 0.2. |
 | `task.env.terrain.init_level_frac` | `0.5` | First spawns come from the easiest half of the rows. |
-| `task.env.terrain.demote_fraction` | `0.5` | Drop a level when the episode walked less than this fraction of its commanded distance. |
+| `task.env.terrain.demote_fraction` | `0.5` | Drop a level when the episode walked less than this fraction of the distance its commands asked for over a full episode. |
 | `task.env.fall.min_height` | `0.06` m | Fall threshold. |
 | `task.env.fall.max_tilt_gz` | `-0.4` | Fall tilt threshold in body-frame gravity z. |
 | `task.env.gait.freq` | `[1.4, 3.0]` Hz | Clock frequency range from slow walking to maximum command speed. |
@@ -374,16 +374,23 @@ Build the arena first. The files are generated and gitignored:
 ./training/run.sh train task=joystick ++task.env.terrain.enable=true
 ```
 
-If the files are missing, the env tells you to run `build-terrain`.
+If any of the four generated files is missing, the env tells you to run
+`build-terrain`.
+
+There are three arena kinds, each with its own file set next to the robot XML:
+`train` (the shuffled curriculum arena), `eval` (the fixed measurement course,
+see [Terrain measurement suite](#terrain-measurement-suite)) and `test` (the
+test suite's scratch arena). Separate sets are what keeps a measurement or a
+test run from overwriting the arena a policy trained on.
 
 Keys under `task.env.terrain`:
 
 | Key | Default | Meaning |
 |---|---:|---|
 | `enable` | `false` | Terrain scene and curriculum on. |
-| `feet_only` | `true` | Only the four feet and the base box collide with terrain. |
+| `arena` | `train` | Which generated file set to load: `train`, `eval` or `test`. |
 | `spawn_yaw` | `true` | Random heading at every spawn. |
-| `pad_jitter` | `0.15` m | Spawn scatter around the pad centre. Keep it under 0.2 so spawns stay on the pad. |
+| `pad_jitter` | `0.15` m | Spawn scatter around the pad centre. Keep it under 0.2: the pad is 0.6 m in radius and a standing robot needs 0.36 m of it. |
 | `init_level_frac` | `0.5` | First spawns come from the easiest half of the rows. |
 | `demote_fraction` | `0.5` | See the rule below. |
 
@@ -391,11 +398,32 @@ The rule, from legged_gym, applied when an episode ends by fall or by
 timeout:
 
 - Walked further than half a tile: one row harder.
-- Covered less than half the distance the commands asked for: one row
-  easier.
+- Covered less than `demote_fraction` of the distance the commands asked for
+  over a **full episode**: one row easier. The commanded distance actually
+  accumulated is scaled by `episode_length / steps_lived`, because this env
+  resamples the command mid-episode and legged_gym's literal rule (half the
+  reset command's speed times the whole episode) is not available. A timeout
+  lived the whole episode, so its threshold is unchanged; a fall at step 50 of
+  1000 gets twenty times the distance commanded so far, so almost any fall
+  demotes. That is the escape valve legged_gym has, and falling is the dominant
+  termination on terrain.
 - Standing episodes stay where they are.
+- Promotion wins when both fire, matching legged_gym's `move_down * ~move_up`.
 - Promoted while already at the top row: random row, so easy terrain stays
   in training.
+
+Two things worth knowing about the rule:
+
+- The promote threshold is hardcoded at half a tile while demote is
+  configurable. Half a tile knows nothing about how long the obstacle is, which
+  is what bounds the stair flight at six steps: treads end 1.25 m from the tile
+  centre and promotion needs 1.5 m, so an env crosses the flight and then
+  reaches the threshold on flat ground. A longer flight needs promotion defined
+  against the feature band first.
+- Timeouts produce some spurious demotions. A perfect tracker demotes on 14 to
+  17 percent of timeout episodes because resampled command directions cancel,
+  so the commanded distance exceeds the net displacement. Harmless for drift,
+  worth remembering when reading `terrain_lvl_train`.
 
 Each env keeps one terrain type for the whole run. Only the row changes. The
 robot is teleported between tiles. That is safe because no observation
@@ -407,18 +435,115 @@ starts fresh at every evaluation, so it will not climb. To watch the real
 curriculum, run with `++ppo.log_training_metrics=true` and read
 `terrain_lvl_train`. The step-5 preset should set this flag.
 
+The legs collide with terrain, and there is no option to turn that off. The
+shins are what hit a riser face: without them a leg swings through the step
+wall and the foot lands on the tread, which is a way up the stairs the robot
+does not have. It costs contacts and step rate, both measured rather than
+assumed.
+
+Foot contact is a height lookup, not a contact force, and that has a blind
+band on terrain. A foot pressed against a riser face reads as airborne, and so
+does a foot on the ground within about one heightfield cell (0.04 m) of a box
+edge, where the lookup returns the box top. Both errors are one-sided and both
+land on the stair and step tiles the curriculum aims at.
+
 Warp needs a bigger contact budget. The flat default
 (`sim.naconmax_per_env=32`) is too small for terrain, and warp drops extra
-contacts silently. Start at about double and measure with `check-terrain` on
-the GPU:
+contacts silently. Warp allows four contacts per geom-heightfield pair and 21
+of the robot's geoms touch the field, so 84 heightfield contacts before any box
+contact. Measure it, on the GPU and with `--backend warp` -- the jax backend
+sizes its own buffers and never applies the budget, so a jax run cannot tell
+you what warp needs:
 
 ```bash
-./training/run.sh check-terrain --backend jax --num-envs 4 --steps 50
+./training/run.sh check-terrain --backend warp --arena train
+./training/run.sh check-terrain --backend warp --arena eval   # measurement course
 ./training/run.sh train task=joystick ++task.env.terrain.enable=true \
-  ++task.env.sim.naconmax_per_env=64
+  ++task.env.sim.naconmax_per_env=128
 ```
 
 The env prints a warning if a warp terrain run keeps the flat default.
+
+## Terrain measurement suite
+
+`./run.sh terrain-scan` scores a checkpoint on a fixed course and writes
+`runs/<name>/terrain_scan.json`. `report` reads that file rather than
+recomputing it, so a scan can run on the cluster and a laptop can render the
+report from it. `training/hpc/terrain_scan.slurm` is the parameterized job.
+
+```bash
+./training/run.sh build-terrain --arena eval          # 12 rows, 0.40 m pads
+./training/run.sh terrain-scan --run runs/wojtek_terrain_v2 \
+  --baseline <HF_ORGANIZATION>/wojtek-terrain-v1
+./training/run.sh terrain-scan --list-cells           # the 43 cells and bars
+```
+
+The course, per cell: spawn at the tile centre on a fixed heading, walk out
+until the base is 1.45 m from the centre (one crossing), then the commanded
+forward speed flips sign and the robot walks back to within 0.30 m (the
+second). Four crossings. A run passes when all four finish inside the step
+budget with no fall. 8 headings x 4 start offsets = 32 runs per cell and
+commanded speed, at 0.2 / 0.4 / 0.7 m/s: 4128 runs, about 5.1M environment
+steps. Nothing is sampled, so two scans of one checkpoint agree.
+
+Crossings rather than distance walked, because a stair tile is 3 m across and
+its treads only occupy the band from 0.60 m to 1.25 m from the centre -- "half
+the commanded distance" can be walked on the flat pad without meeting the
+obstacle. Counting crossings also gives a failure a reason: the robot fell, or
+it never reached 1.45 m, and on a stair those are different problems.
+
+The reversal is deliberate. A 180 degree turn on a 13 cm tread might be the
+hardest thing in the suite, and the number would then measure turning instead
+of climbing. Walking backwards is inside every real preset's command box.
+
+43 cells, 18 of them gated:
+
+| Family | Cells | Bar |
+|---|---|---|
+| Rough | 1 / 2.5 / 4 cm | 95 / 80 / 60 % |
+| Slope up and down | 8 / 15 / 22 deg | 95 / 80 / 60 % |
+| Stairs up and down | 3 / 5 / 7 cm riser | 95 / 80 / 60 % |
+| Stairs up and down | 9 cm riser | tracked |
+| Steps | 2.5 / 5 / 6.5 cm | 95 / 80 / 60 % |
+| Steps | 8 cm | tracked |
+| Rubble and wave | 3 rows each | tracked |
+| Every type at difficulty 1.2 and 1.4 | 16 cells | tracked |
+
+As counts out of 32 runs the bars are 31, 26 and 20. Every threshold is
+printed with where its number came from: `plan` at 0.4 m/s, which is the only
+speed the terrain plan sets bars for, and `provisional` at 0.2 and 0.7, where
+the same numbers were carried across rather than invented. A provisional
+failure is a prompt to check the bar. After the first terrain keeper, measured
+numbers replace them.
+
+The 8 cm step is tracked, not gated at 60 % as the plan has it: 8 cm is 0.64 of
+this robot's 12.5 cm hip height, above the 0.5-0.6 the same document calls the
+blind limit. A 6.5 cm cell takes the 60 % bar instead. The 8 cm number is still
+measured and reported.
+
+Cell names (`pyramid_stairs_5cm`) are stable identifiers: a gate compares them
+against a baseline, so renaming one retires its history.
+
+Two gates. The absolute bars above, and the relative rule from the terrain
+plan: no cell drops more than 10 points against the previous keeper. The
+baseline is an input, published with the keeper it came from, not a file this
+repository keeps -- a best-ever number held in the repo hides which run set the
+bar, so a rejected policy could leave a bar behind nobody can trace.
+`--baseline` takes a path, a directory holding `terrain_scan.json`, or an HF
+reference `org/name[@rev]`. Three rules keep the comparison honest: a cell the
+baseline never measured counts as nothing to compare against rather than a
+failure; a baseline from a different arena is refused, because scores from two
+terrains are not comparable; and a baseline from a different engine is refused
+until the cross-engine spread is measured, since warp is float32 with a contact
+budget and CPU MuJoCo is float64 with none.
+
+Warp on the GPU produces the reported numbers. MJX-jax is a cross-check on a
+few cells (`--backend jax --cells ...`): it has no contact budget, so a
+disagreement points at the budget. The scan records the peak `nacon` it saw and
+refuses to call an overflowed run a measurement.
+
+What the suite does not measure: it is the nominal plant only, with no pushes
+and no randomized dynamics. Robustness on terrain needs its own protocol.
 
 ## PPO configuration
 

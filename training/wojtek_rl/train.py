@@ -177,19 +177,35 @@ def main(cfg: DictConfig) -> None:
         # avg_episode_length exposes die-and-reset reward hacking that the
         # reward number alone hides (trot_v1 post-mortem, 2026-07-05).
         ep_len = metrics.get("eval/avg_episode_length", float("nan"))
-        print(
+        line = (
             f"steps {num_steps:>12,}  reward {reward:8.2f}  "
             f"ep_len {ep_len:6.0f}  {sps:,.0f} steps/s"
         )
+        # terrain_level_per_step is already per-episode-length normalized by
+        # brax's evaluator (the `_per_step` suffix), so this is the mean
+        # curriculum level across the eval batch.
+        level = metrics.get("eval/episode_terrain_level_per_step")
+        if level is not None:
+            line += f"  terrain_lvl {float(level):5.2f}"
+        print(line)
         if wb is not None:
             wb.log({**metrics, "perf/steps_per_sec": sps}, step=num_steps)
+
+    # Terrain runs need the curriculum auto-reset wrapper (promote/demote +
+    # teleport on done); the flat path keeps brax's stock wrapper exactly.
+    if getattr(env, "_terrain_enabled", False):
+        from wojtek_rl.terrain_wrapper import wrap_for_terrain_brax_training
+
+        wrap_env_fn = wrap_for_terrain_brax_training
+    else:
+        wrap_env_fn = wrapper.wrap_for_brax_training
 
     train_fn = functools.partial(
         ppo.train,
         **training_params,
         network_factory=network_factory,
         seed=cfg.seed,
-        wrap_env_fn=wrapper.wrap_for_brax_training,
+        wrap_env_fn=wrap_env_fn,
         save_checkpoint_path=str(ckpt_dir),
         restore_checkpoint_path=restore,
         progress_fn=progress,

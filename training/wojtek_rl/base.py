@@ -97,7 +97,7 @@ class WojtekEnv(mjx_env.MjxEnv):
         # key, so `.get` leaves them on the flat scene.
         terrain_cfg = self._config.get("terrain")
         self._terrain_enabled = bool(
-            terrain_cfg is not None and terrain_cfg.get("enable", False)
+            terrain_cfg is not None and terrain_cfg.enable
         )
         scene_xml = paths.TERRAIN_SCENE_XML if self._terrain_enabled else paths.SCENE_XML
         if self._terrain_enabled:
@@ -105,7 +105,7 @@ class WojtekEnv(mjx_env.MjxEnv):
         self._mj_model = mujoco.MjModel.from_xml_path(str(scene_xml))
         self._mj_model.opt.timestep = self.sim_dt
         self._customize_model(self._mj_model)
-        if self._terrain_enabled and terrain_cfg.get("feet_only", True):
+        if self._terrain_enabled and terrain_cfg.feet_only:
             self._collide_feet_only(self._mj_model)
         sim = self._config.sim
         self._backend = resolve_backend(sim.backend)
@@ -196,10 +196,12 @@ class WojtekEnv(mjx_env.MjxEnv):
         self._terrain_n_rows = int(spec["n_rows"])
         self._terrain_n_types = len(terrain.TYPES)
         self._terrain_tile_size = float(spec["tile_size"])
-        self._terrain_pad_jitter = float(terrain_cfg.get("pad_jitter", 0.15))
-        self._terrain_spawn_yaw = bool(terrain_cfg.get("spawn_yaw", True))
-        self._terrain_demote_fraction = float(terrain_cfg.get("demote_fraction", 0.5))
-        self._terrain_init_level_frac = float(terrain_cfg.get("init_level_frac", 0.5))
+        # Attribute access on purpose: defaults live in default_config only,
+        # and a missing key should fail loud, not fall back quietly.
+        self._terrain_pad_jitter = float(terrain_cfg.pad_jitter)
+        self._terrain_spawn_yaw = bool(terrain_cfg.spawn_yaw)
+        self._terrain_demote_fraction = float(terrain_cfg.demote_fraction)
+        self._terrain_init_level_frac = float(terrain_cfg.init_level_frac)
 
         # Warp has a fixed contact pool and drops overflow silently. The
         # flat default is too small for terrain, so warn. The real budget

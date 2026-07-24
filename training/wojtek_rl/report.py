@@ -392,7 +392,8 @@ def render_terrain_markdown(scan: dict | None) -> list[str]:
     carried across, so a failure there is a prompt to check the bar."""
     if not scan:
         return ["", "## Terrain", "", "- no terrain scan for this run", ""]
-    arena = scan.get("arena", {})
+    arena = scan.get("arena") or {}
+    contacts = scan.get("contacts") or {}
     lines = [
         "",
         "## Terrain",
@@ -401,6 +402,18 @@ def render_terrain_markdown(scan: dict | None) -> list[str]:
         f"{arena.get('rows')} rows, {arena.get('pad_radius')} m pads, "
         f"cells {arena.get('cells')}",
         f"- runs per cell and speed: {scan.get('runs_per_cell_speed')}",
+    ]
+    # A scan the JSON itself declares invalid must not render as a clean table.
+    if contacts.get("overflow"):
+        lines.append(
+            f"- **INVALID: the warp contact pool overflowed** "
+            f"({contacts.get('nacon_max')} >= {contacts.get('capacity')}); warp "
+            "discards the overflow silently, so the numbers below are not a "
+            "measurement. Raise --naconmax-per-env and rescan."
+        )
+    for warning in scan.get("warnings") or []:
+        lines.append(f"- WARNING: {warning}")
+    lines += [
         "",
         "| cell | speed | passed | of | bar | provenance | crossings | falls "
         "| track err | measured |",
@@ -422,16 +435,32 @@ def render_terrain_markdown(scan: dict | None) -> list[str]:
     ]
     gate = scan.get("gate")
     if gate:
+        absolute = gate.get("absolute") or {}
+        relative = gate.get("relative") or {}
         lines += [
             "",
             "### Gate",
             "",
-            f"- absolute: {gate.get('absolute', {}).get('verdict', '-')} "
-            f"({len(gate.get('absolute', {}).get('failures', []))} failing cells)",
-            f"- relative: {gate.get('relative', {}).get('verdict', '-')}",
+            f"- absolute: {absolute.get('verdict', '-')} "
+            f"({len(absolute.get('failures') or [])} of "
+            f"{absolute.get('checked', '?')} gated cell/speed pairs below bar; "
+            f"a complete scan gates {absolute.get('expected', '?')})",
+            f"- relative: {relative.get('verdict', '-')}",
         ]
-        for line in gate.get("notes", []):
-            lines.append(f"- {line}")
+        for failure in absolute.get("failures") or []:
+            lines.append(
+                f"  - {failure['cell']} @ vx {failure['speed']}: "
+                f"{failure['passed']} < {failure['bar']} [{failure['provenance']}]"
+            )
+        # The refusal reason lives under the relative gate, which is where a
+        # reader looks to find out WHY a baseline was rejected.
+        for note in relative.get("notes") or []:
+            lines.append(f"  - {note}")
+        for drop in relative.get("drops") or []:
+            lines.append(
+                f"  - {drop['cell']} @ vx {drop['speed']}: {drop['was']}% -> "
+                f"{drop['now']}% ({drop['drop']} points)"
+            )
     return lines
 
 

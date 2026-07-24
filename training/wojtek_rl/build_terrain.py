@@ -92,8 +92,14 @@ def build_scene_xml(arena: terrain.Arena, hfield_file: str) -> str:
 """
 
 
+# Highest mtime this process has stamped on each heightfield. Deleting a file
+# does not clear MuJoCo's cache entry for its name, so the memory has to outlive
+# the file -- see _force_new_mtime.
+_STAMPED_MTIME: dict[Path, float] = {}
+
+
 def _force_new_mtime(path: Path, replaced_mtime: float | None) -> None:
-    """Make `path` look strictly newer than the file it replaced.
+    """Make `path` look strictly newer than any version this process has seen.
 
     MuJoCo (3.10) caches heightfield assets by filename at one-second mtime
     resolution. Two arenas written to one filename inside the same second, and
@@ -102,15 +108,26 @@ def _force_new_mtime(path: Path, replaced_mtime: float | None) -> None:
     no error anywhere. File size is not part of the cache key, so a different
     grid shape does not save you. Reproduced on 2 of 3 tight-loop trials.
 
+    Deleting the file in between does not help: the cache is keyed on the name,
+    so a fresh file with a fresh (same-second) mtime collides with the entry the
+    deleted one left behind. That is exactly what the test fixtures do at
+    teardown, which is why the bump cannot be conditional on finding a file to
+    replace -- it has to be against the highest mtime this process ever wrote.
+
     Only the heightfield needs this: the scene XML is re-parsed every load, and
     the spec/lookup sidecars go through json/numpy, which cache nothing. The
-    mtime can land up to one second per rebuild in the future, which is bounded
-    by how many times a single process rebuilds one arena.
+    mtime can land up to one second per rebuild in the future, bounded by how
+    many times a single process rebuilds one arena.
     """
-    if replaced_mtime is None:
+    previous = max(_STAMPED_MTIME.get(path, 0.0), replaced_mtime or 0.0)
+    if previous == 0.0:
+        # First time this process has written this name: nothing is cached under
+        # it, so the natural mtime is already distinct.
+        _STAMPED_MTIME[path] = path.stat().st_mtime
         return
-    target = max(time.time(), replaced_mtime + 1.0)
+    target = max(time.time(), previous + 1.0)
     os.utime(path, (target, target))
+    _STAMPED_MTIME[path] = target
 
 
 def write_arena(arena: terrain.Arena, kind: str = "train") -> None:
@@ -138,28 +155,48 @@ def main() -> None:
     p.add_argument("--arena", choices=paths.TERRAIN_KINDS, default="train",
                    help="which file set to write; eval is the fixed "
                         "measurement course (terrain_suite)")
-    p.add_argument("--seed", type=int, default=terrain.DEFAULT_SEED)
-    p.add_argument("--rows", type=int, default=terrain.DEFAULT_N_ROWS)
+    # Default None on the four flags the eval arena owns, so "not given" is
+    # distinguishable from "given the same value the default happens to be".
+    p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--rows", type=int, default=None)
+    p.add_argument("--pad-radius", type=float, default=None)
+    p.add_argument("--ordered", action="store_true", default=None,
+                   help="sorted-column, exact-difficulty layout")
     p.add_argument("--tile-size", type=float, default=terrain.TILE_SIZE)
     p.add_argument("--border", type=float, default=terrain.BORDER)
     p.add_argument("--cell-size", type=float, default=terrain.CELL_SIZE)
-    p.add_argument("--pad-radius", type=float, default=terrain.PAD_RADIUS)
-    p.add_argument("--ordered", action="store_true",
-                   help="sorted-column, exact-difficulty layout")
     p.add_argument("--no-check", action="store_true", help="skip the compile check")
     args = p.parse_args()
 
+    owned = {
+        "--seed": args.seed, "--rows": args.rows,
+        "--pad-radius": args.pad_radius, "--ordered": args.ordered,
+    }
     kwargs = dict(
-        seed=args.seed, n_rows=args.rows, tile_size=args.tile_size,
-        border=args.border, cell_size=args.cell_size, ordered=args.ordered,
-        pad_radius=args.pad_radius,
+        seed=terrain.DEFAULT_SEED if args.seed is None else args.seed,
+        n_rows=terrain.DEFAULT_N_ROWS if args.rows is None else args.rows,
+        pad_radius=terrain.PAD_RADIUS if args.pad_radius is None else args.pad_radius,
+        ordered=bool(args.ordered),
+        tile_size=args.tile_size, border=args.border, cell_size=args.cell_size,
     )
     if args.arena == "eval":
-        # The measurement course is a definition, not a CLI choice: its rows,
-        # column order and pad radius come from the suite.
-        kwargs.update(terrain_suite.eval_arena_kwargs())
+        # The measurement course is a definition, not a CLI choice: its seed,
+        # rows, column order and pad radius come from the suite. Overriding one
+        # of them silently would produce an arena the scan then stamps with the
+        # suite's fingerprint -- numbers filed under a description of a
+        # different terrain -- so a conflicting flag is an error, not a
+        # preference. (terrain_scan.check_arena refuses such an arena too.)
+        suite = terrain_suite.eval_arena_kwargs()
+        conflicts = sorted(flag for flag, given in owned.items() if given is not None)
+        if conflicts:
+            p.error(
+                f"--arena eval defines {', '.join(conflicts)} itself "
+                "(wojtek_rl.terrain_suite); drop them or build a `train` arena"
+            )
+        kwargs.update(suite)
         print(
-            f"eval arena: {len(terrain_suite.DIFFICULTIES)} rows "
+            f"eval arena: seed {terrain_suite.EVAL_SEED}, "
+            f"{len(terrain_suite.DIFFICULTIES)} rows "
             f"{terrain_suite.DIFFICULTIES}, pad {terrain_suite.EVAL_PAD_RADIUS} m"
         )
     arena = terrain.generate(**kwargs)

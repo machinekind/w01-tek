@@ -168,6 +168,42 @@ class WojtekEnv(mjx_env.MjxEnv):
                 f"gitignored and built on demand."
             )
 
+    def _require_current_terrain_geometry(self, spec: dict) -> None:
+        """Refuse an arena built by a different version of the generator.
+
+        The generated files are self-consistent -- their lookup grid matches their
+        own boxes -- so a stale arena raises nothing and trains fine. It just
+        trains on terrain nobody asked for: an arena built before the stair flight
+        went from four steps to six has four-step stairs, and the run's own
+        run.json would say six. Rows, seed and tile size are per-experiment and
+        not checked; the stair geometry is a code constant, so a mismatch is
+        always staleness.
+        """
+        expected = {
+            "n_steps": terrain.N_STEPS,
+            "stair_platform_half": terrain.STAIR_PLATFORM_HALF,
+        }
+        stale = {
+            key: (spec.get(key), value)
+            for key, value in expected.items()
+            if spec.get(key) != value
+        }
+        if stale:
+            detail = "; ".join(
+                f"{k}: arena has {f!r}, this code builds {w!r}"
+                for k, (f, w) in stale.items()
+            )
+            raise ValueError(
+                f"the {self._terrain_arena} terrain arena was built by a "
+                f"different generator ({detail}). Rebuild it: "
+                f"`./training/run.sh build-terrain --arena {self._terrain_arena}"
+                + (
+                    "`"
+                    if self._terrain_arena != "train"
+                    else " [--rows N --seed N]` with this run's own parameters"
+                )
+            )
+
     def _load_terrain(self, terrain_cfg) -> None:
         """Load the terrain files: height grid onto the device, spawn tables,
         curriculum settings."""
@@ -182,6 +218,7 @@ class WojtekEnv(mjx_env.MjxEnv):
         self._terrain_cell_y = (y_max - y_min) / (nrow - 1)
 
         spec = json.loads(self._terrain_files["spec"].read_text())
+        self._require_current_terrain_geometry(spec)
         origin_xy, pad_h = terrain_env.tables_from_spec(spec, terrain.TYPES)
         self._terrain_origin_xy = jp.asarray(origin_xy)
         self._terrain_pad_h = jp.asarray(pad_h)

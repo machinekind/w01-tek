@@ -497,3 +497,30 @@ def test_missing_terrain_assets_raises(monkeypatch, tmp_path, missing):
     with pytest.raises(FileNotFoundError, match="build-terrain") as excinfo:
         wojtek_env.WojtekJoystick(cfg)
     assert files[missing].name in str(excinfo.value)
+
+
+def test_a_stale_arena_is_refused(monkeypatch, tmp_path, small_arena):
+    """An arena built before the stair flight went from four steps to six has
+    four-step stairs, is entirely self-consistent, and would train silently while
+    run.json claimed six. The stair geometry is a code constant, so a mismatch is
+    always staleness."""
+    import json
+
+    from wojtek_rl import build_terrain
+
+    files = paths.terrain_paths(TEST_ARENA)
+    build_terrain.write_arena(small_arena, TEST_ARENA)
+    spec = json.loads(files["spec"].read_text())
+    spec["n_steps"] = 4  # what the generator built before this change
+    stale = tmp_path / "stale_spec.json"
+    stale.write_text(json.dumps(spec))
+    monkeypatch.setattr(
+        paths, "terrain_paths", lambda kind="train": {**files, "spec": stale}
+    )
+    cfg = wojtek_env.default_config()
+    cfg.terrain.enable = True
+    cfg.terrain.arena = TEST_ARENA
+    with pytest.raises(ValueError, match="different generator") as excinfo:
+        wojtek_env.WojtekJoystick(cfg)
+    assert "n_steps" in str(excinfo.value)
+    assert "build-terrain" in str(excinfo.value)

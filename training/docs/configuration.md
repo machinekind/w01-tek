@@ -481,10 +481,31 @@ report from it. `training/hpc/terrain_scan.slurm` is the parameterized job.
 The course, per cell: spawn at the tile centre on a fixed heading, walk out
 until the base is 1.45 m from the centre (one crossing), then the commanded
 forward speed flips sign and the robot walks back to within 0.30 m (the
-second). Four crossings. A run passes when all four finish inside the step
+second). Four crossings. A run passes when all four finish inside its step
 budget with no fall. 8 headings x 4 start offsets = 32 runs per cell and
-commanded speed, at 0.2 / 0.4 / 0.7 m/s: 4128 runs, about 5.1M environment
+commanded speed, at 0.2 / 0.4 / 0.7 m/s: 4128 runs, about 7.0M environment
 steps. Nothing is sampled, so two scans of one checkpoint agree.
+
+Those radii are **Chebyshev** distances from the tile centre — `max(|dx|, |dy|)`,
+not the Euclidean radius — because that is how the terrain is built. Every
+feature is a concentric square: the slope frustum and the stair pit are carved
+against `terrain._cheby`, and the scattered boxes are held inside a square
+reach. Read as a Euclidean radius, 1.45 m on a 45-degree heading leaves the base
+only 1.03 m out in Chebyshev — still on tread 4 of 6 — so half of the eight
+headings would complete a "crossing" without climbing the last two risers, and
+one bar would be covering two different tests.
+
+A diagonal heading therefore walks √2 as far as an axis heading to reach the
+same radius, and each run gets its own step deadline sized on its own distance.
+One shared budget would hand the axis headings that extra slack, which would
+make the speed a run has to sustain — and so the effective difficulty —
+heading-dependent. Every run has to sustain the same 62% of its commanded speed.
+
+One known limitation: at 1.45 m the base is 0.05 m from the tile border, so on an
+axis heading the leading feet reach about 0.2 m into the neighbouring tile at the
+turnaround. That is unavoidable with a six-step flight on a 3 m tile — clearing
+the last riser needs the base at 1.25 + 0.257 = 1.51 m — and the neighbour is
+seamless and at the same difficulty.
 
 Crossings rather than distance walked, because a stair tile is 3 m across and
 its treads only occupy the band from 0.60 m to 1.25 m from the centre -- "half

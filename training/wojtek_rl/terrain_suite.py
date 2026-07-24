@@ -64,12 +64,32 @@ N_HEADINGS = 8
 START_OFFSETS = (-0.03, -0.01, 0.01, 0.03)
 RUNS_PER_CELL_SPEED = N_HEADINGS * len(START_OFFSETS)
 
-# One crossing is a walk out to OUT_RADIUS or a walk back to BACK_RADIUS.
-# OUT_RADIUS clears the outermost stair tread (1.25 m) and the scattered boxes
-# (1.40 m), so a crossing cannot be completed without meeting the obstacle.
+# One crossing is a walk out to OUT_RADIUS or a walk back to BACK_RADIUS, both
+# measured as CHEBYSHEV distance from the tile centre -- max(|dx|, |dy|), not the
+# Euclidean radius.
+#
+# Chebyshev because that is how the terrain is built. Every feature is a
+# concentric square: the slope frustum and the stair pit are carved against
+# terrain._cheby, and the scattered boxes are held inside a square reach. A
+# Euclidean radius therefore means something different on every heading. At
+# Euclidean 1.45 on a 45 degree heading the base is only 1.03 from the centre in
+# Chebyshev -- still on tread 4 of 6 -- so half of the eight headings would have
+# completed a "crossing" without climbing the last two risers, and the pass rate
+# would blend two different tests.
+#
+# OUT_RADIUS clears the outermost stair tread (Chebyshev 1.25 m) and the
+# scattered boxes (1.40 m), so a crossing cannot be completed without meeting the
+# obstacle. Known limitation: at 1.45 the base is 0.05 m from the tile border, so
+# on an axis heading the leading feet reach about 0.2 m into the neighbouring
+# tile at the turnaround. That is unavoidable with a six-step flight on a 3 m
+# tile -- clearing the last riser needs the base at 1.25 + 0.257 = 1.51 m -- and
+# the neighbour is seamless and at the same difficulty.
 CROSSINGS = 4
 OUT_RADIUS = 1.45
 BACK_RADIUS = 0.30
+# Worst case ratio of walked distance to Chebyshev distance, on a 45 degree
+# heading. The step budget has to cover the diagonal headings, not the axes.
+DIAGONAL_STRETCH = math.sqrt(2.0)
 # Skipped at the start of every run, so tracking error and clearance do not
 # measure acceleration from standstill. Same 50 steps the flat battery skips.
 SETTLE_STEPS = 50
@@ -286,20 +306,45 @@ def course() -> tuple[Run, ...]:
 COURSE = course()
 
 
+def heading_stretch(yaw: float) -> float:
+    """How far a heading walks to reach a given Chebyshev radius, per unit radius.
+
+    1 along an axis, sqrt(2) along a diagonal. The radii are Chebyshev, so this
+    is what makes a diagonal run's course longer than an axis run's."""
+    return 1.0 / max(abs(math.cos(yaw)), abs(math.sin(yaw)))
+
+
+def run_distance(run: "Run") -> float:
+    """Metres this particular run walks: out to OUT_RADIUS from its start offset,
+    then three legs between BACK_RADIUS and OUT_RADIUS, at its own heading."""
+    stretch = heading_stretch(run.yaw)
+    out_leg = OUT_RADIUS * stretch + abs(run.offset)
+    return_leg = (OUT_RADIUS - BACK_RADIUS) * stretch
+    return out_leg + (CROSSINGS - 1) * return_leg
+
+
 def course_distance() -> float:
-    """Metres of commanded travel one run asks for: out to OUT_RADIUS from the
-    worst start offset, then three legs between BACK_RADIUS and OUT_RADIUS."""
-    return (OUT_RADIUS + max(abs(o) for o in START_OFFSETS)) + (CROSSINGS - 1) * (
-        OUT_RADIUS - BACK_RADIUS
-    )
+    """The longest run's distance, which is what the batch's hard stop is sized
+    on. Individual runs get their own deadline (`episode_budget`), so an axis
+    heading is not handed the diagonal's extra slack -- that would make the
+    timeout threshold, and so the effective difficulty, heading-dependent."""
+    return max(run_distance(r) for r in COURSE)
 
 
-def episode_budget(speed: float, ctrl_dt: float) -> int:
-    """Control steps one run gets at this commanded speed."""
+def episode_budget(speed: float, ctrl_dt: float, distance: float | None = None) -> int:
+    """Control steps a run gets at this commanded speed.
+
+    `distance` defaults to the longest run's, which is the batch's hard stop;
+    pass `run_distance(run)` for one run's own deadline."""
     if speed == 0:
         raise ValueError(
             "a commanded speed of 0 has no step budget: the course is defined by "
             "distance, and a standing robot never completes a crossing"
         )
-    travel_s = BUDGET_SLACK * course_distance() / abs(speed)
-    return SETTLE_STEPS + math.ceil(travel_s / ctrl_dt)
+    travel_s = BUDGET_SLACK * (course_distance() if distance is None else distance)
+    return SETTLE_STEPS + math.ceil(travel_s / abs(speed) / ctrl_dt)
+
+
+def run_deadlines(speed: float, ctrl_dt: float) -> tuple[int, ...]:
+    """Each run's own step deadline, in COURSE order."""
+    return tuple(episode_budget(speed, ctrl_dt, run_distance(r)) for r in COURSE)

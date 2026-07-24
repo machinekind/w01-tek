@@ -222,6 +222,35 @@ def test_episode_budget_covers_the_course():
     assert all(isinstance(b, int) for b in budgets)
 
 
+def test_every_run_gets_the_same_speed_fraction_not_the_same_budget():
+    """A diagonal heading walks sqrt(2) further to the same Chebyshev radius. One
+    shared budget would hand an axis run that extra slack, so the speed fraction
+    a run has to sustain -- and with it the effective difficulty -- would depend
+    on its heading."""
+    ctrl_dt = 0.02
+    for speed in terrain_suite.SPEEDS:
+        deadlines = terrain_suite.run_deadlines(speed, ctrl_dt)
+        assert len(deadlines) == len(terrain_suite.COURSE)
+        for run, deadline in zip(terrain_suite.COURSE, deadlines):
+            walked = (deadline - terrain_suite.SETTLE_STEPS) * ctrl_dt * speed
+            # the same sustained-speed fraction on every heading, 1/BUDGET_SLACK,
+            # give or take the single step the deadline is rounded up by
+            assert terrain_suite.run_distance(run) / walked == pytest.approx(
+                1.0 / terrain_suite.BUDGET_SLACK, rel=2e-3
+            ), (run, deadline)
+        # the axis headings really do get less time than the diagonals
+        assert min(deadlines) < max(deadlines)
+        # and the hard stop is the longest run's deadline
+        assert max(deadlines) == terrain_suite.episode_budget(speed, ctrl_dt)
+
+
+def test_heading_stretch_is_one_on_axes_and_root_two_on_diagonals():
+    for run in terrain_suite.COURSE:
+        stretch = terrain_suite.heading_stretch(run.yaw)
+        expected = 1.0 if run.heading_index % 2 == 0 else math.sqrt(2.0)
+        assert stretch == pytest.approx(expected)
+
+
 def test_total_scan_size():
     """The scan is 4128 runs; the plan sized the cluster job off this."""
     runs = len(terrain_suite.CELLS) * terrain_suite.RUNS_PER_CELL_SPEED * len(
@@ -231,7 +260,7 @@ def test_total_scan_size():
     steps = sum(
         terrain_suite.episode_budget(s, 0.02) for s in terrain_suite.SPEEDS
     ) * len(terrain_suite.CELLS) * terrain_suite.RUNS_PER_CELL_SPEED
-    assert 4e6 < steps < 7e6, steps
+    assert 5e6 < steps < 9e6, steps
 
 
 # -- 4. Arena kinds ------------------------------------------------------------
@@ -339,12 +368,22 @@ def test_rebuilt_arena_is_not_served_from_cache():
     assert small.spec.hfield.nrow != big.spec.hfield.nrow
     try:
         for first, second in ((small, big), (big, small)):
-            build_terrain.write_arena(first, TEST_ARENA)
-            got_first = mujoco.MjModel.from_xml_path(str(scene)).hfield_nrow[0]
-            build_terrain.write_arena(second, TEST_ARENA)
-            got_second = mujoco.MjModel.from_xml_path(str(scene)).hfield_nrow[0]
-            assert got_first == first.spec.hfield.nrow
-            assert got_second == second.spec.hfield.nrow, "stale cached heightfield"
+            # in place, and with a delete in between -- deleting does NOT clear
+            # MuJoCo's cache entry for the name, so a fresh file with a fresh
+            # same-second mtime collides with what the deleted one left behind.
+            # That is what the fixtures in this suite do at teardown.
+            for delete_between in (False, True):
+                build_terrain.write_arena(first, TEST_ARENA)
+                got_first = mujoco.MjModel.from_xml_path(str(scene)).hfield_nrow[0]
+                if delete_between:
+                    for p in paths.terrain_paths(TEST_ARENA).values():
+                        p.unlink(missing_ok=True)
+                build_terrain.write_arena(second, TEST_ARENA)
+                got_second = mujoco.MjModel.from_xml_path(str(scene)).hfield_nrow[0]
+                assert got_first == first.spec.hfield.nrow
+                assert got_second == second.spec.hfield.nrow, (
+                    f"stale cached heightfield (delete_between={delete_between})"
+                )
     finally:
         for p in paths.terrain_paths(TEST_ARENA).values():
             p.unlink(missing_ok=True)

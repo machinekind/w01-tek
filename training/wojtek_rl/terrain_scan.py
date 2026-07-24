@@ -13,7 +13,12 @@ What a run is (see terrain_suite for the numbers): the robot spawns at a tile
 centre on a fixed heading, walks out until the base is OUT_RADIUS from the
 centre -- one crossing -- then the commanded forward speed flips sign and it
 walks back to within BACK_RADIUS, which is the second. Four crossings. A run
-passes when all four finish inside the step budget with no fall.
+passes when all four finish inside its own step budget with no fall.
+
+Those radii are Chebyshev, matching how the terrain is laid out (concentric
+squares), so "cleared the obstacle band" means the same thing on all eight
+headings. A diagonal walks sqrt(2) further to get there, so each run's deadline
+is sized on its own distance -- see terrain_suite.OUT_RADIUS and run_deadlines.
 
 Crossings, not distance walked: a stair tile is 3 m across and its treads only
 occupy the band from 0.60 m to 1.25 m from the centre, so "half the commanded
@@ -68,17 +73,29 @@ def leg_sign(crossings):
     return 1.0 - 2.0 * (crossings % 2)
 
 
-def crossing_progress(crossings, radius, running, xp=np):
+def tile_distance(xy, centre, xp=np):
+    """Chebyshev distance from the tile centre: max(|dx|, |dy|).
+
+    Not the Euclidean radius. Every feature in the arena is a concentric square
+    -- see terrain._cheby -- so a Euclidean radius would mean something different
+    on every heading. See terrain_suite.OUT_RADIUS.
+    """
+    return xp.max(xp.abs(xy - centre), axis=-1)
+
+
+def crossing_progress(crossings, distance, running, xp=np):
     """Advance the crossing counter by at most one.
 
     An outbound leg finishes at OUT_RADIUS from the tile centre, an inbound leg
-    at BACK_RADIUS. A run that has already fallen or finished never advances
-    again, and the count stops at CROSSINGS. Pure, so the rule is testable
-    without physics; `xp` is numpy or jax.numpy.
+    at BACK_RADIUS, both as the Chebyshev `distance` above. A run that has already
+    fallen or finished never advances again, and the count stops at CROSSINGS.
+    Pure, so the rule is testable without physics; `xp` is numpy or jax.numpy.
     """
     outbound = (crossings % 2) == 0
     leg_done = xp.where(
-        outbound, radius >= terrain_suite.OUT_RADIUS, radius <= terrain_suite.BACK_RADIUS
+        outbound,
+        distance >= terrain_suite.OUT_RADIUS,
+        distance <= terrain_suite.BACK_RADIUS,
     )
     return xp.minimum(crossings + (leg_done & running), terrain_suite.CROSSINGS)
 
@@ -423,8 +440,18 @@ def make_cell_runner(env, inf):
             return jp.zeros((), jp.int32)
         return jp.max(jp.asarray(value)).astype(jp.int32)
 
+    def still_running(i, crossings, fell, deadline):
+        """A run is on its course until it falls, finishes, or passes its own
+        deadline. The deadline is per run because a diagonal heading walks
+        sqrt(2) further to the same Chebyshev radius: one shared budget would
+        hand an axis run that extra slack and make the timeout threshold, and so
+        the effective difficulty, heading-dependent."""
+        return (
+            ~(fell | (crossings >= terrain_suite.CROSSINGS)) & (i < deadline)
+        )
+
     @functools.partial(jax.jit, static_argnames=("budget",))
-    def run(rng, centre, spawn_xy, pad_h, yaw, speed, height, budget):
+    def run(rng, centre, spawn_xy, pad_h, yaw, speed, height, deadline, budget):
         zeros = jp.zeros(n)
 
         def command_at(crossings):
@@ -449,12 +476,12 @@ def make_cell_runner(env, inf):
             state = state.replace(info=info)
             rng, sub = jax.random.split(rng)
             action, _ = inf(state.obs, sub)
-            was_running = ~(fell | (crossings >= terrain_suite.CROSSINGS))
+            was_running = still_running(i, crossings, fell, deadline)
             state = jax.vmap(env.step)(state, action)
             data = state.data
 
-            radius = jp.linalg.norm(data.qpos[:, 0:2] - centre, axis=-1)
-            crossings = crossing_progress(crossings, radius, was_running, xp=jp)
+            distance = tile_distance(data.qpos[:, 0:2], centre, xp=jp)
+            crossings = crossing_progress(crossings, distance, was_running, xp=jp)
             fell = fall_progress(fell, state.done > 0.5, was_running)
 
             # Metrics skip the settle window and stop once a run is over.
@@ -474,8 +501,10 @@ def make_cell_runner(env, inf):
 
         def cond(carry):
             i, _, _, crossings, fell, *_ = carry
-            running = ~(fell | (crossings >= terrain_suite.CROSSINGS))
-            return (i < budget) & jp.any(running)
+            # `budget` is the hard stop (the longest run's deadline); the loop
+            # normally ends earlier, when every run has finished, fallen or run
+            # out of its own time.
+            return (i < budget) & jp.any(still_running(i, crossings, fell, deadline))
 
         init = (
             jp.zeros((), jp.int32), state, rng,
@@ -610,7 +639,12 @@ def scan(
             f"partial scan: {len(cells)} of {len(terrain_suite.CELLS)} cells"
         )
 
-    budgets = {s: terrain_suite.episode_budget(s, float(env.dt)) for s in speeds}
+    dt = float(env.dt)
+    budgets = {s: terrain_suite.episode_budget(s, dt) for s in speeds}
+    deadlines = {
+        s: np.asarray(terrain_suite.run_deadlines(s, dt), dtype=np.int32)
+        for s in speeds
+    }
     t0 = time.perf_counter()
     env_steps = 0
     for cell in cells:
@@ -622,7 +656,7 @@ def scan(
                     cell.row * 1000 + terrain.TYPES.index(cell.terrain_type)
                 ),
                 centre, spawn, pad_h, yaw, float(speed), COMMAND_HEIGHT,
-                budget=budgets[speed],
+                deadlines[speed], budget=budgets[speed],
             )
             out = jax.tree.map(np.asarray, out)
             reduced = reduce_runs(out)

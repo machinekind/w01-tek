@@ -445,3 +445,39 @@ def test_a_cell_where_every_run_died_early_reports_zero_not_nan():
     assert r.measured == 0
     assert r.track_err == 0.0 and r.saturation == 0.0
     assert r.falls == 4 and r.passed == 0
+
+
+def test_crossing_distance_is_chebyshev_not_euclidean():
+    """Every feature in the arena is a concentric square (terrain._cheby), so the
+    crossing has to be measured the same way. Read as a Euclidean radius, an
+    OUT_RADIUS crossing on a 45 degree heading ends on tread 4 of 6 -- half the
+    eight headings would score an easier test under the same bar."""
+    import math
+
+    from wojtek_rl import terrain
+
+    centre = np.zeros(2)
+    for heading in (0.0, math.pi / 4):
+        step = np.array([math.cos(heading), math.sin(heading)])
+        # walk out until the Chebyshev rule says the crossing is done
+        out = next(
+            r / 100
+            for r in range(1, 400)
+            if terrain_scan.tile_distance(step * (r / 100), centre)
+            >= terrain_suite.OUT_RADIUS
+        )
+        cheby = terrain_scan.tile_distance(step * out, centre)
+        assert cheby >= terrain_suite.OUT_RADIUS
+        # and on BOTH headings that clears the outermost tread
+        assert cheby > terrain.stair_pit_half(), heading
+    # the diagonal genuinely walks further to get there, which the budget covers
+    diag = terrain_suite.OUT_RADIUS * terrain_suite.DIAGONAL_STRETCH
+    assert diag == pytest.approx(2.051, abs=0.01)
+    assert terrain_suite.course_distance() > 4 * terrain_suite.OUT_RADIUS
+
+
+def test_tile_distance_is_relative_to_the_tile_centre():
+    centre = np.array([-1.5, -16.5])
+    xy = np.array([[-1.5, -16.5], [-0.5, -16.5], [-1.5, -15.4], [-0.6, -15.6]])
+    got = terrain_scan.tile_distance(xy, centre)
+    np.testing.assert_allclose(got, [0.0, 1.0, 1.1, 0.9], atol=1e-9)

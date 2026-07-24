@@ -22,3 +22,9 @@ def test_joystick_yaml_latency_encoder_match_env_defaults():
     default = wojtek_env.default_config()
     assert task_cfg["env"]["latency"] == default.latency.to_dict()
     assert task_cfg["env"]["encoder"] == default.encoder.to_dict()
+
+
+def test_joystick_yaml_terrain_matches_env_defaults():
+    task_cfg = yaml.safe_load(JOYSTICK_YAML.read_text())
+    default = wojtek_env.default_config()
+    assert task_cfg["env"]["terrain"] == default.terrain.to_dict()

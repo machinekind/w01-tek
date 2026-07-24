@@ -1,0 +1,236 @@
+"""Terrain-scan reduction, gates, and baseline handling.
+
+Everything here is pure: dicts and numpy arrays in, dicts out. No checkpoint,
+no jax rollout -- the rollout itself is exercised by running the scan.
+"""
+
+import json
+
+import numpy as np
+import pytest
+
+from wojtek_rl import terrain_scan, terrain_suite
+
+N = terrain_suite.RUNS_PER_CELL_SPEED
+CROSSINGS = terrain_suite.CROSSINGS
+
+
+def _out(crossings, fell):
+    return {
+        "crossings": np.array(crossings),
+        "fell": np.array(fell, dtype=bool),
+        "saturation": np.full(len(crossings), 0.1),
+        "track_err": np.full(len(crossings), 0.05),
+        "clearance": np.full(len(crossings), 0.01),
+        "counted": np.full(len(crossings), 100.0),
+        "steps": 500,
+        "nacon_max": 77,
+    }
+
+
+# -- reduction -----------------------------------------------------------------
+
+
+def test_pass_requires_all_four_crossings_and_no_fall():
+    crossings = [CROSSINGS, CROSSINGS, CROSSINGS - 1, 0]
+    fell = [False, True, False, True]
+    r = terrain_scan.reduce_runs(_out(crossings, fell))
+    assert r.passed == 1  # only the first
+    assert r.of == 4
+    assert r.falls == 2
+    assert r.timeouts == 1  # ran out of budget mid-course without falling
+    assert r.crossings_mean == pytest.approx((4 + 4 + 3 + 0) / 4)
+    assert r.nacon_max == 77
+
+
+def test_a_completed_course_that_then_fell_is_not_a_pass():
+    """Falling anywhere in the run fails it, even after the fourth crossing --
+    the rule is four crossings AND no fall."""
+    r = terrain_scan.reduce_runs(_out([CROSSINGS], [True]))
+    assert r.passed == 0
+    assert r.falls == 1
+    assert r.timeouts == 0
+
+
+def test_cell_entry_carries_bar_and_provenance():
+    cell = terrain_suite.CELLS_BY_NAME["pyramid_stairs_5cm"]
+    r = terrain_scan.reduce_runs(_out([CROSSINGS] * N, [False] * N))
+    at_plan = terrain_scan.cell_entry(cell, 0.4, r)
+    assert at_plan["passed"] == N and at_plan["of"] == N
+    assert at_plan["bar"] == 26 and at_plan["provenance"] == "plan"
+    assert at_plan["bar_fraction"] == 0.8
+    off_plan = terrain_scan.cell_entry(cell, 0.7, r)
+    assert off_plan["bar"] == 26 and off_plan["provenance"] == "provisional"
+    tracked = terrain_scan.cell_entry(
+        terrain_suite.CELLS_BY_NAME["pyramid_stairs_9cm"], 0.4, r
+    )
+    assert tracked["bar"] is None and tracked["provenance"] == "tracked"
+
+
+# -- absolute gate -------------------------------------------------------------
+
+
+def _cells(entries):
+    """{cell: {speed: entry}} from (cell_name, speed, passed) triples."""
+    out = {}
+    for name, speed, passed in entries:
+        cell = terrain_suite.CELLS_BY_NAME[name]
+        r = terrain_scan.reduce_runs(
+            _out([CROSSINGS] * passed + [0] * (N - passed), [False] * N)
+        )
+        out.setdefault(name, {})[str(speed)] = terrain_scan.cell_entry(cell, speed, r)
+    return out
+
+
+def test_absolute_gate_passes_on_the_bar():
+    """The bar is a floor, not a strict inequality: exactly 26 of 32 passes."""
+    gate = terrain_scan.absolute_gate(_cells([("pyramid_stairs_5cm", 0.4, 26)]))
+    assert gate["verdict"] == "pass"
+    assert gate["checked"] == 1
+
+
+def test_absolute_gate_fails_one_below():
+    gate = terrain_scan.absolute_gate(_cells([("pyramid_stairs_5cm", 0.4, 25)]))
+    assert gate["verdict"] == "fail"
+    assert gate["failures"] == [
+        {
+            "cell": "pyramid_stairs_5cm",
+            "speed": "0.4",
+            "passed": 25,
+            "bar": 26,
+            "provenance": "plan",
+        }
+    ]
+
+
+def test_absolute_gate_ignores_tracked_cells():
+    """A tracked cell with zero passes is data, not a gate failure."""
+    gate = terrain_scan.absolute_gate(
+        _cells([("pyramid_stairs_9cm", 0.4, 0), ("discrete_obstacles_8cm", 0.4, 0)])
+    )
+    assert gate["verdict"] == "pass"
+    assert gate["checked"] == 0
+
+
+def test_absolute_gate_reports_provisional_provenance():
+    """A provisional failure has to be readable as one: the plan sets no bar
+    away from 0.4 m/s."""
+    gate = terrain_scan.absolute_gate(_cells([("pyramid_stairs_5cm", 0.2, 10)]))
+    assert gate["verdict"] == "fail"
+    assert gate["failures"][0]["provenance"] == "provisional"
+
+
+# -- relative gate -------------------------------------------------------------
+
+
+def _scan(cells, engine="warp", arena=None):
+    return {
+        "run": "candidate",
+        "checkpoint": "1",
+        "engine": engine,
+        "arena": arena if arena is not None else terrain_suite.arena_fingerprint(),
+        "cells": cells,
+    }
+
+
+def test_relative_gate_without_a_baseline_says_so():
+    gate = terrain_scan.relative_gate(_scan({}), None)
+    assert gate["verdict"] == "no baseline"
+
+
+def test_relative_gate_allows_a_small_drop():
+    now = _scan(_cells([("pyramid_stairs_5cm", 0.4, 29)]))
+    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 32)]))
+    # 32/32 -> 29/32 is 9.4 points, inside the 10-point limit
+    gate = terrain_scan.relative_gate(now, base)
+    assert gate["verdict"] == "pass", gate
+    assert gate["drops"] == []
+
+
+def test_relative_gate_fails_a_big_drop():
+    now = _scan(_cells([("pyramid_stairs_5cm", 0.4, 28)]))
+    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 32)]))
+    gate = terrain_scan.relative_gate(now, base)  # 12.5 points
+    assert gate["verdict"] == "fail"
+    assert gate["drops"][0]["drop"] == pytest.approx(12.5)
+
+
+def test_relative_gate_gains_are_never_failures():
+    now = _scan(_cells([("pyramid_stairs_5cm", 0.4, 32)]))
+    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 10)]))
+    assert terrain_scan.relative_gate(now, base)["verdict"] == "pass"
+
+
+def test_relative_gate_refuses_a_different_arena():
+    """Scores from two terrains are not comparable, so the gate refuses rather
+    than reporting a difference."""
+    other = dict(terrain_suite.arena_fingerprint(), rows=10)
+    now = _scan(_cells([("pyramid_stairs_5cm", 0.4, 5)]))
+    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 32)]), arena=other)
+    gate = terrain_scan.relative_gate(now, base)
+    assert gate["verdict"] == "refused"
+    assert "arena" in gate["notes"][0]
+
+
+def test_relative_gate_refuses_a_different_engine():
+    now = _scan(_cells([("pyramid_stairs_5cm", 0.4, 5)]), engine="warp")
+    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 32)]), engine="jax")
+    gate = terrain_scan.relative_gate(now, base)
+    assert gate["verdict"] == "refused"
+    assert "engine" in gate["notes"][0]
+
+
+def test_a_new_cell_has_nothing_to_compare_against():
+    """Otherwise the 6.5 cm steps cell fails its own first gate."""
+    now = _scan(
+        _cells([("pyramid_stairs_5cm", 0.4, 30), ("discrete_obstacles_6.5cm", 0.4, 0)])
+    )
+    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 30)]))
+    gate = terrain_scan.relative_gate(now, base)
+    assert gate["verdict"] == "pass"
+    assert gate["unmatched"] == ["discrete_obstacles_6.5cm@0.4"]
+
+
+def test_a_cell_missing_at_one_speed_only_is_unmatched_at_that_speed():
+    now = _scan(
+        _cells([("pyramid_stairs_5cm", 0.4, 10), ("pyramid_stairs_5cm", 0.2, 10)])
+    )
+    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 32)]))
+    gate = terrain_scan.relative_gate(now, base)
+    assert gate["verdict"] == "fail"  # the 0.4 pair dropped
+    assert gate["unmatched"] == ["pyramid_stairs_5cm@0.2"]
+
+
+# -- baseline loading ----------------------------------------------------------
+
+
+def test_load_baseline_from_a_file_and_a_directory(tmp_path):
+    doc = {"run": "keeper", "cells": {}}
+    path = tmp_path / "terrain_scan.json"
+    path.write_text(json.dumps(doc))
+    assert terrain_scan.load_baseline(str(path)) == doc
+    assert terrain_scan.load_baseline(str(tmp_path)) == doc
+    assert terrain_scan.load_baseline(None) is None
+    assert terrain_scan.load_baseline("") is None
+
+
+# -- command box ---------------------------------------------------------------
+
+
+def test_command_box_warnings_flag_extrapolation():
+    """The code default trains vx +-0.6, so the 0.7 cells are extrapolation
+    there; every real preset trains -0.8 to 1.2 and stays quiet."""
+    tight = {"env_config": {"command": {"vx": [-0.6, 0.6], "height": [0.09, 0.17]}}}
+    assert any("0.7" in w for w in terrain_scan.command_box_warnings(tight))
+    real = {"env_config": {"command": {"vx": [-0.8, 1.2], "height": [0.125, 0.125]}}}
+    assert terrain_scan.command_box_warnings(real) == []
+
+
+def test_command_box_warnings_flag_an_unreachable_height():
+    run = {"env_config": {"command": {"vx": [-0.8, 1.2], "height": [0.15, 0.17]}}}
+    warnings = terrain_scan.command_box_warnings(run)
+    assert any("height" in w for w in warnings)
+
+
+def test_command_box_warnings_tolerate_an_old_run():
+    assert terrain_scan.command_box_warnings({}) == []

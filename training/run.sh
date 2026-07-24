@@ -17,6 +17,7 @@ case "${1:-}" in
   eval)  shift; "$PY" -m wojtek_rl.eval "$@" ;;
   battery) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.battery "$@" ;;
   report) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.report "$@" ;;
+  terrain-scan) shift; "$PY" -m wojtek_rl.terrain_scan "$@" ;;  # GPU-sized; --backend jax to cross-check
   export) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.export_policy "$@" ;;
   sysid) shift; "$PY" -m wojtek_rl.sysid "$@" ;;  # engine params from rosbags, docs/sysid.md
   app)   shift; MUJOCO_GL="${MUJOCO_GL:-egl}" "$PY" -m demo.app "$@" ;;

@@ -14,12 +14,12 @@ the policy trained against, and this launch feeds it into the xacro.
 Explicit kp:=/kd:=/max_torque:= override the contract verbatim -- e.g. a
 low max_torque for cautious first tests.
 
-Recording note: the PC's viz.launch.py already records the whole run over
-DDS (all RPi topics are visible there), so on-robot recording is OFF by
-default here. Enable it -- bag:=true bag_cpus:=0,1 -- for a guaranteed
-lossless capture (localhost, no wifi loss), e.g. untethered runs where the
-PC's bag would drop samples. Bags go to bag_dir/run_<timestamp>
-(bag_dir defaults to ~/wojtek_bags).
+Recording note: manual runs of this file do not record by default (record
+on demand: bag:=true bag_cpus:=0,1). The systemd service
+(ros/deploy/wojtek-robot.service) passes exactly those flags, so every
+service-driven run leaves a lossless on-robot bag -- the black box of a
+real run, now that PC viz also records on demand only. Bags go to
+bag_dir/run_<timestamp> (bag_dir defaults to ~/wojtek_bags).
 
 Startup/arming procedure is unchanged from real.launch.py:
   1. Power the motors and launch this file (any robot pose is fine). The
@@ -37,5 +37,6 @@ from wojtek_bringup.launch_common import common_launch_description
 
 
 def generate_launch_description():
-    # RPi service: headless (no RViz), on-robot recording off by default.
+    # Headless (no RViz). Recording is opt-in here; the systemd service
+    # opts in (see the recording note above).
     return common_launch_description(with_rviz=False, bag_default="false")

@@ -224,9 +224,10 @@ def common_launch_description(with_rviz, bag_default):
         # zero matches the folded pose -- see real_io_node.
         DeclareLaunchArgument("boot_pose", default_value="home"),
         # Record the whole run to a rosbag (bag_dir/run_<timestamp>). Default
-        # is per launch: on for the PC (real.launch.py), off for the RPi
-        # service (robot.launch.py), whose PC viz already records over DDS --
-        # see each launch's docstring. bag_dir:=/some/path relocates output.
+        # is per launch: on for the PC (real.launch.py), off for manual
+        # robot.launch.py runs; the RPi service opts in explicitly with
+        # bag:=true bag_cpus:=0,1 (wojtek-robot.service) -- see each launch's
+        # docstring. bag_dir:=/some/path relocates output.
         DeclareLaunchArgument("bag", default_value=bag_default),
         DeclareLaunchArgument("bag_dir", default_value=default_bag_dir),
         # Optional CPU affinity for the recorder (comma list, e.g. "0,1");

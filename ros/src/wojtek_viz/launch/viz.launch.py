@@ -20,11 +20,12 @@ records the WHOLE run from the PC -- one bag, all topics. Off by
 default: bags are ~GB per session and pile up in the wojtek_bags
 volume, and most viz sessions are watching, not experiments worth
 keeping. Caveat when recording: the bag is only as complete as the
-link. Over ethernet (docked) it is
-effectively lossless; over wifi -- especially once the robot is on its
-own AP and moving -- best-effort topics can drop samples and a dropped
-link leaves a gap. For a guaranteed lossless on-robot capture, record
-there instead: robot.launch.py bag:=true (see its bag_cpus note).
+link. Over ethernet (docked) it is effectively lossless; over wifi --
+especially once the robot is on its own AP and moving -- best-effort
+topics can drop samples and a dropped link leaves a gap. The RPi service
+already records every run on-robot losslessly (wojtek-robot.service
+passes bag:=true bag_cpus:=0,1); a manual robot.launch.py run records
+with the same flags.
 Bags land in bag_dir/run_<timestamp> (bag_dir defaults to ~/wojtek_bags).
 
 Teleop needs its own terminal (it reads the keyboard on stdin), so run it

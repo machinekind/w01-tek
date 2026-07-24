@@ -24,11 +24,11 @@ flowchart LR
         RIO["real_io_node\n(offset boot↔abs, arm/zero/rampy)"]
         POL["policy_node\n50 Hz, MLP numpy"]
         RSP["robot_state_publisher"]
+        BAG["rosbag (serwis: cały run)"]
     end
     subgraph PC["PC — kontener dev (viz.launch.py)"]
         RVIZ["RViz"]
         CON["operator console (PyQt5)"]
-        BAG["rosbag (cały run)"]
     end
 
     MD80 --> JSB
@@ -156,7 +156,7 @@ Nie ma topicu statusu arm/enable — konsola śledzi stan lokalnie z odpowiedzi 
 **Launche:**
 
 * `sim.launch.py` — robot_state_publisher + mujoco_sim_node + policy_node (imu_mount_rpy=0, soft_start 0.5 s, bez clamp_knee) + RViz. Argumenty: `rviz`, `initial_pose`.
-* `viz.launch.py` — czyste PC-side dla żywego robota: RViz (czyta `/robot_description` i `/tf` z RPi po DDS), opcjonalnie PlotJuggler, oraz **domyślnie rosbag całego runu** (`bag:=true`, do `~/wojtek_bags/run_<timestamp>`). Zero hardware'u, zero RSP.
+* `viz.launch.py` — czyste PC-side dla żywego robota: RViz (czyta `/robot_description` i `/tf` z RPi po DDS), opcjonalnie PlotJuggler, oraz rosbag całego runu **na żądanie** (`bag:=true`, do `~/wojtek_bags/run_<timestamp>`; domyślnie wyłączony). Zero hardware'u, zero RSP.
 
 ## 4. `md80_hardware_interface` — napędy (C++, plugin ros2_control)
 
@@ -189,4 +189,4 @@ Bez nodów. Źródło prawdy o geometrii:
 2. **Podwójna bramka bezpieczeństwa**: `/wojtek/enable` (czy polityka liczy) jest niezależne od `/wojtek/arm` (czy komendy idą do silników). Na realu `auto_enable:=true`, bo bramką jest arm.
 3. **Kolejność stawów w `forward_position_controller` musi się zgadzać** z `policy_meta.json` — real_io_node publikuje goły `Float64MultiArray` bez nazw.
 4. **RViz na realu** karmiony jest z `/wojtek/joint_states_abs` (remap RSP), nie z surowego `/joint_states` — i to real_io_node dolicza pasywne przeguby czworoboku.
-5. **Bagi**: domyślnie nagrywa PC (`viz.launch.py`, po DDS), on-robot `bag:=true` tylko dla gwarancji bezstratności (np. jazdy bez PC).
+5. **Bagi**: realne jazdy nagrywa robot — serwis przekazuje `bag:=true bag_cpus:=0,1` (bezstratnie, localhost); PC nagrywa na żądanie (`viz.launch.py bag:=true` po DDS, `real.launch.py` domyślnie). Rotacji na razie brak — przed długą jazdą sprawdź wolne miejsce na karcie RPi.

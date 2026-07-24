@@ -12,8 +12,8 @@ from ml_collections import config_dict
 from mujoco import mjx
 from mujoco_playground._src import mjx_env
 
+from wojtek_rl import terrain_env
 from wojtek_rl.base import ABDUCTION_ACTUATORS, KNEE_ACTUATORS, WojtekEnv
-from wojtek_rl.build_model import FOOT_RADIUS
 
 # 3 gyro + 3 gravity + 12 qpos + 12 qvel + 12 last_act + 4 cmd + 8 phase
 OBS_SIZE = 54
@@ -145,6 +145,33 @@ def default_config() -> config_dict.ConfigDict:
         # wrapper it is fixed per env for the whole run, for the same reason
         # as latency above.
         encoder=config_dict.create(enable=False, range=0.02),
+        # Terrain curriculum, off by default. When enabled the env loads the
+        # generated terrain scene (see build-terrain), spawns each env on a
+        # curriculum tile, measures height/clearance/contact against the local
+        # terrain surface, and trains under the terrain auto-reset wrapper
+        # (terrain_wrapper.py) which promotes/demotes tiles between episodes.
+        # Every field is inert when enable=False, so the flat path is
+        # byte-identical (env, rng draws, info layout, wrapping). The obs are
+        # unchanged (still 54-dim, no absolute position): teleporting between
+        # tiles is only valid because the obs carry no world pose.
+        terrain=config_dict.create(
+            enable=False,
+            # Collide the four foot spheres (and the base box) with terrain,
+            # dropping the leg-link collision geoms. Terrain contact sizing.
+            feet_only=True,
+            # Random base yaw at every spawn/respawn (gravity obs is
+            # yaw-invariant, so this adds heading variety at no obs cost).
+            spawn_yaw=True,
+            # xy jitter half-width at the pad centre, m. Kept <= 0.2 so the
+            # settle transient never leaves the 0.6 m spawn pad.
+            pad_jitter=0.15,
+            # Initial level drawn uniformly over the lower `init_level_frac`
+            # of rows (legged_gym starts easy).
+            init_level_frac=0.5,
+            # legged_gym demote rule: an episode that walked less than this
+            # fraction of its commanded planar distance drops a level.
+            demote_fraction=0.5,
+        ),
         # EMA low-pass on actions before the PD targets (0 = off). Kills the
         # noise-driven standing limit cycle structurally; mirror the same
         # one-liner on the robot when deploying a policy trained with it.
@@ -387,6 +414,26 @@ class WojtekJoystick(WojtekEnv):
             anchor + jax.random.uniform(r_pos, (12,), minval=-0.05, maxval=0.05)
         )
         qpos = qpos.at[2].set(command[3])
+        # Terrain spawn: teleport onto a curriculum tile of a fixed random type
+        # at a lower-half starting level, base z lifted by the tile's pad
+        # height (the same base-vs-ground relation the flat reset uses vs
+        # z=0). Disabled by default; the flat branch draws no rng and adds no
+        # info keys, so its trajectory and info layout stay byte-identical.
+        if self._terrain_enabled:
+            rng, r_type, r_level, r_spawn, r_trng = jax.random.split(rng, 5)
+            terrain_type = jax.random.randint(r_type, (), 0, self._terrain_n_types)
+            init_rows = max(
+                1, round(self._terrain_n_rows * self._terrain_init_level_frac)
+            )
+            level = jax.random.randint(r_level, (), 0, init_rows)
+            spawn_xy, pad_height, quat = terrain_env.sample_tile_spawn(
+                r_spawn, terrain_type, level,
+                self._terrain_origin_xy, self._terrain_pad_h,
+                self._terrain_pad_jitter, self._terrain_spawn_yaw,
+            )
+            qpos = qpos.at[0:2].set(spawn_xy)
+            qpos = qpos.at[2].set(pad_height + command[3])
+            qpos = qpos.at[3:7].set(quat)
         data = self._make_data()
         data = data.replace(qpos=qpos, qvel=jp.zeros(self._mj_model.nv), ctrl=anchor)
         data = mjx.forward(self._mjx_model, data)
@@ -429,6 +476,25 @@ class WojtekJoystick(WojtekEnv):
             "encoder_offset": epsilon,
         }
         metrics = {f"reward/{k}": jp.zeros(()) for k in self._config.reward.scales}
+        # Terrain curriculum carry: the tile the env rides for the run
+        # (terrain_type fixed), the current level, where it spawned (spawn_xy)
+        # and how tall above the pad (spawn_height, = first commanded height),
+        # the last base xy, accumulated commanded planar distance, and a
+        # dedicated rng for the auto-reset wrapper's respawn draws. The wrapper
+        # reads and rewrites these on done; the env keeps last_xy/commanded_dist
+        # current each step. terrain_level_per_step surfaces the mean level to
+        # the logs (see train.py).
+        if self._terrain_enabled:
+            info.update(
+                terrain_type=terrain_type,
+                terrain_level=level,
+                spawn_xy=spawn_xy,
+                spawn_height=command[3],
+                last_xy=spawn_xy,
+                commanded_dist=jp.zeros(()),
+                terrain_rng=r_trng,
+            )
+            metrics["terrain_level_per_step"] = level.astype(jp.float32)
         obs = self._get_obs(data, info)
         return mjx_env.State(data, obs, jp.zeros(()), jp.zeros(()), metrics, info)
 
@@ -495,6 +561,16 @@ class WojtekJoystick(WojtekEnv):
         info["last_act"] = action
         info["last_torque"] = data.actuator_force
         info["motor_targets"] = motor_targets
+        # Terrain curriculum bookkeeping: the base xy after the step and the
+        # planar distance this step's command asked for. The auto-reset wrapper
+        # reads both on done (walked vs commanded), then resets them at respawn.
+        # info["command"] is still the command that drove this step (resample
+        # happens below).
+        if self._terrain_enabled:
+            info["last_xy"] = data.qpos[0:2]
+            info["commanded_dist"] = info["commanded_dist"] + (
+                jp.linalg.norm(info["command"][:2]) * self.dt
+            )
         # Master clock advances at the speed the CURRENT command asks for
         # (frozen when standing); per-leg phases come from _leg_phases.
         phase = info["phase"] + self._phase_dt(info["command"])
@@ -517,6 +593,11 @@ class WojtekJoystick(WojtekEnv):
             **state.metrics,
             **{f"reward/{k}": v for k, v in rewards.items()},
         }
+        # Per-step terrain level. Named `_per_step` so brax's evaluator divides
+        # the episode sum by the episode length, surfacing the mean level
+        # directly as eval/episode_terrain_level_per_step (see train.py).
+        if self._terrain_enabled:
+            metrics["terrain_level_per_step"] = info["terrain_level"].astype(jp.float32)
         obs = self._get_obs(data, info, r_noise)
         return mjx_env.State(data, obs, reward, done.astype(jp.float32), metrics, info)
 
@@ -549,13 +630,17 @@ class WojtekJoystick(WojtekEnv):
                       self._config.reward.pose_leg_weight]), 4
         )
 
-        fall = (data.qpos[2] < self._config.fall.min_height) | (
+        # Heights measured against the local terrain surface when terrain is
+        # enabled; both helpers return the flat world-z expression verbatim
+        # otherwise.
+        base_height = self._base_height(data)
+        fall = (base_height < self._config.fall.min_height) | (
             gravity[2] > self._config.fall.max_tilt_gz
         )
 
-        # Foot clearance above the floor vs the duty-aware swing profile,
+        # Foot clearance above the local ground vs the duty-aware swing profile,
         # plus explicit contact/stance schedule matching.
-        foot_clearance = data.geom_xpos[self._foot_geom_ids][:, 2] - FOOT_RADIUS
+        foot_clearance = self._foot_clearance(data)
         target_clearance, stance_mask = self._gait_targets(info)
         phase_err = jp.sum(jp.square(foot_clearance - target_clearance))
         contact_match = jp.mean(
@@ -582,7 +667,7 @@ class WojtekJoystick(WojtekEnv):
             ),
             "tracking_ang_vel": jp.exp(-jp.square(cmd[2] - gyro[2]) / sigma),
             "height_tracking": jp.exp(
-                -jp.square(data.qpos[2] - cmd[3])
+                -jp.square(base_height - cmd[3])
                 / self._config.reward.height_sigma
             ),
             "lin_vel_z": jp.square(linvel[2]),

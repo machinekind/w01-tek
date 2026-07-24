@@ -5,6 +5,8 @@ the joystick env so getup/jump tasks reuse them. Task envs subclass this and
 provide their own config, reset, step, observations and rewards.
 """
 
+import json
+
 import jax
 import jax.numpy as jp
 import mujoco
@@ -13,7 +15,7 @@ from brax import math as brax_math
 from mujoco import mjx
 from mujoco_playground._src import mjx_env
 
-from wojtek_rl import paths
+from wojtek_rl import paths, terrain, terrain_env
 from wojtek_rl.build_model import FOOT_RADIUS
 
 # Actuator indices of the knee cranks (third joints), paths.LEGS order.
@@ -91,9 +93,20 @@ def make_data_fn(backend, mj_model, mjx_model, naconmax_per_env, njmax, num_envs
 class WojtekEnv(mjx_env.MjxEnv):
     def __init__(self, config, config_overrides=None):
         super().__init__(config, config_overrides)
-        self._mj_model = mujoco.MjModel.from_xml_path(str(paths.SCENE_XML))
+        # Terrain is a joystick-only opt-in block; getup/jump configs have no
+        # `terrain` key, so `.get` leaves them on the flat scene untouched.
+        terrain_cfg = self._config.get("terrain")
+        self._terrain_enabled = bool(
+            terrain_cfg is not None and terrain_cfg.get("enable", False)
+        )
+        scene_xml = paths.TERRAIN_SCENE_XML if self._terrain_enabled else paths.SCENE_XML
+        if self._terrain_enabled:
+            self._require_terrain_assets()
+        self._mj_model = mujoco.MjModel.from_xml_path(str(scene_xml))
         self._mj_model.opt.timestep = self.sim_dt
         self._customize_model(self._mj_model)
+        if self._terrain_enabled and terrain_cfg.get("feet_only", True):
+            self._collide_feet_only(self._mj_model)
         sim = self._config.sim
         self._backend = resolve_backend(sim.backend)
         self._mjx_model = mjx.put_model(self._mj_model, impl=self._backend)
@@ -132,6 +145,92 @@ class WojtekEnv(mjx_env.MjxEnv):
             ]
         )
 
+        if self._terrain_enabled:
+            self._load_terrain(terrain_cfg)
+
+    def _require_terrain_assets(self) -> None:
+        missing = [
+            p
+            for p in (
+                paths.TERRAIN_SCENE_XML,
+                paths.TERRAIN_SPEC_JSON,
+                paths.TERRAIN_LOOKUP_NPZ,
+            )
+            if not p.exists()
+        ]
+        if missing:
+            names = ", ".join(p.name for p in missing)
+            raise FileNotFoundError(
+                f"terrain.enable=true but the generated terrain assets are "
+                f"missing ({names}). Run `./training/run.sh build-terrain` "
+                f"first; the sidecars are gitignored and built on demand."
+            )
+
+    def _collide_feet_only(self, m: mujoco.MjModel) -> None:
+        """Drop the leg links out of terrain collision so only the four foot
+        spheres (and the base box, as on flat) pair with the terrain geoms.
+
+        The `*_link_floor` capsules/spheres carry the flat floor's leg-contact
+        semantics; on rough terrain and stair edges they would multiply
+        contacts, so the plan collides feet only (following mujoco_playground's
+        rough-terrain tasks). Patched on the loaded model, never in the
+        generated XML."""
+        for i in range(m.ngeom):
+            name = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, i) or ""
+            if name.endswith("_link_floor"):
+                m.geom_contype[i] = 0
+                m.geom_conaffinity[i] = 0
+
+    def _load_terrain(self, terrain_cfg) -> None:
+        """Build the device-side terrain lookup grid and the per-(row, type)
+        spawn tables from the generated sidecars, plus the curriculum params
+        the reset and the auto-reset wrapper read."""
+        npz = np.load(paths.TERRAIN_LOOKUP_NPZ)
+        x_min, x_max = float(npz["x_min"]), float(npz["x_max"])
+        y_min, y_max = float(npz["y_min"]), float(npz["y_max"])
+        ncol, nrow = int(npz["ncol"]), int(npz["nrow"])
+        self._terrain_lookup = jp.asarray(npz["lookup"], dtype=jp.float32)
+        self._terrain_x_min = x_min
+        self._terrain_y_min = y_min
+        self._terrain_cell_x = (x_max - x_min) / (ncol - 1)
+        self._terrain_cell_y = (y_max - y_min) / (nrow - 1)
+
+        spec = json.loads(paths.TERRAIN_SPEC_JSON.read_text())
+        origin_xy, pad_h = terrain_env.tables_from_spec(spec, terrain.TYPES)
+        self._terrain_origin_xy = jp.asarray(origin_xy)
+        self._terrain_pad_h = jp.asarray(pad_h)
+        self._terrain_n_rows = int(spec["n_rows"])
+        self._terrain_n_types = len(terrain.TYPES)
+        self._terrain_tile_size = float(spec["tile_size"])
+        self._terrain_pad_jitter = float(terrain_cfg.get("pad_jitter", 0.15))
+        self._terrain_spawn_yaw = bool(terrain_cfg.get("spawn_yaw", True))
+        self._terrain_demote_fraction = float(terrain_cfg.get("demote_fraction", 0.5))
+        self._terrain_init_level_frac = float(terrain_cfg.get("init_level_frac", 0.5))
+
+        # Warp reserves one shared contact pool sized from naconmax_per_env;
+        # feet-on-terrain contacts far exceed the flat default, and warp drops
+        # the overflow silently (see check_terrain / docs). The real number is
+        # measured on GPU in step 5; warn loudly if a warp terrain run kept the
+        # untouched flat default.
+        if self._backend == "warp" and self._config.sim.naconmax_per_env <= 32:
+            print(
+                "WARNING: terrain.enable on the warp backend with "
+                f"sim.naconmax_per_env={self._config.sim.naconmax_per_env} "
+                "(the flat default). Terrain contacts overflow this pool "
+                "silently; set ++task.env.sim.naconmax_per_env to ~2x the flat "
+                "default (measure with check-terrain on GPU)."
+            )
+
+    def _terrain_height(self, xy):
+        """Ground-truth terrain surface height under world ``xy`` (``(..., 2)``)
+        by clamped bilinear lookup. Only called when terrain is enabled."""
+        return terrain_env.bilinear_sample(
+            self._terrain_lookup,
+            self._terrain_x_min, self._terrain_cell_x,
+            self._terrain_y_min, self._terrain_cell_y,
+            xy[..., 0], xy[..., 1],
+        )
+
     def _customize_model(self, m: mujoco.MjModel) -> None:
         """Task-specific tweaks applied before the model is put on device."""
 
@@ -142,7 +241,7 @@ class WojtekEnv(mjx_env.MjxEnv):
     # -- MjxEnv plumbing -------------------------------------------------
     @property
     def xml_path(self) -> str:
-        return str(paths.SCENE_XML)
+        return str(paths.TERRAIN_SCENE_XML if self._terrain_enabled else paths.SCENE_XML)
 
     @property
     def action_size(self) -> int:
@@ -174,8 +273,29 @@ class WojtekEnv(mjx_env.MjxEnv):
         return brax_math.rotate(data.qvel[:3], brax_math.quat_inv(self._quat(data)))
 
     def _foot_contact(self, data):
-        z = data.geom_xpos[self._foot_geom_ids][:, 2]
+        foot = data.geom_xpos[self._foot_geom_ids]
+        z = foot[:, 2]
+        if self._terrain_enabled:
+            z = z - self._terrain_height(foot[:, :2])
         return z < FOOT_RADIUS + 0.005
+
+    def _base_height(self, data):
+        """Base height above the local ground: world z on flat, height over the
+        terrain surface under the base when terrain is enabled. The flat return
+        is ``data.qpos[2]`` verbatim, so flat rewards/terminations are
+        unchanged."""
+        if self._terrain_enabled:
+            return data.qpos[2] - self._terrain_height(data.qpos[0:2])
+        return data.qpos[2]
+
+    def _foot_clearance(self, data):
+        """Per-foot clearance of the sphere bottom above the local ground. Flat
+        return matches ``geom_xpos[..., 2] - FOOT_RADIUS`` verbatim."""
+        foot = data.geom_xpos[self._foot_geom_ids]
+        clearance = foot[:, 2] - FOOT_RADIUS
+        if self._terrain_enabled:
+            clearance = clearance - self._terrain_height(foot[:, :2])
+        return clearance
 
     def _noisy(self, rng, clean, scales):
         noise = jax.random.uniform(rng, clean.shape, minval=-1.0, maxval=1.0)

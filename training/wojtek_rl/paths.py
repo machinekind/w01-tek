@@ -30,6 +30,14 @@ def scene_manifest(name: str) -> Path:
 def scene_xml(name: str) -> Path:
     return ROOM_SCENE_XML if name == "room" else MUJOCO_DIR / f"scene_{name}.xml"
 
+# Procedural terrain arena (terrain.py -> build_terrain.py). The heightfield
+# binary must sit next to the scene XML so the MJCF file= path resolves; the
+# JSON/NPZ sidecars ride along for the terrain-aware env in the next PR.
+TERRAIN_SCENE_XML = scene_xml("terrain")
+TERRAIN_HFIELD = MUJOCO_DIR / "terrain_hfield.bin"
+TERRAIN_SPEC_JSON = MUJOCO_DIR / "terrain_spec.json"
+TERRAIN_LOOKUP_NPZ = MUJOCO_DIR / "terrain_lookup.npz"
+
 # Exported NumPy policy runtime (ROS-free), shared with the real robot.
 WOJTEK_POLICY_PKG = REPO_ROOT / "ros/src/wojtek_policy"
 # Default policy reference for sim/demo apps: any form accepted by

@@ -18,6 +18,7 @@ its own per-actuator sample, so weak and soft are no longer the same draw.
 
 import jax
 import jax.numpy as jnp
+import mujoco
 
 from wojtek_rl import paths
 
@@ -58,7 +59,23 @@ def make_domain_randomize(mj_model, dr_cfg=None):
     foot_cfg = _field_cfg(dr_cfg, "foot_friction")
     motor_cfg = _field_cfg(dr_cfg, "motor_strength")
 
-    floor_id = mj_model.geom("floor").id
+    # The flat scene has one "floor" plane; the terrain scene replaces it with
+    # a heightfield plus box geoms and has no geom named "floor". When absent,
+    # the single friction draw applies to every terrain geom instead, keeping
+    # the whole ground surface at one friction like the flat floor.
+    try:
+        floor_id = mj_model.geom("floor").id
+        terrain_ids = None
+    except KeyError:
+        floor_id = None
+        names = [
+            mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_GEOM, i) or ""
+            for i in range(mj_model.ngeom)
+        ]
+        terrain_ids = jnp.array([
+            i for i, n in enumerate(names)
+            if n == "terrain_hfield" or n.startswith("terrain_box_")
+        ])
     root_id = mj_model.body("root").id
     foot_ids = jnp.array(
         [mj_model.geom(f"{leg}_foot_sphere").id for leg in paths.LEGS]
@@ -69,7 +86,10 @@ def make_domain_randomize(mj_model, dr_cfg=None):
         def rand(rng):
             r1, r2, r3, r4, r5 = jax.random.split(rng, 5)
             friction = jax.random.uniform(r1, minval=0.6, maxval=1.2)
-            geom_friction = model.geom_friction.at[floor_id, 0].set(friction)
+            if floor_id is not None:
+                geom_friction = model.geom_friction.at[floor_id, 0].set(friction)
+            else:
+                geom_friction = model.geom_friction.at[terrain_ids, 0].set(friction)
 
             base_scale = jax.random.uniform(r2, minval=0.7, maxval=1.3)
             link_scale = jax.random.uniform(

@@ -44,17 +44,16 @@ env:
     enable: false
     range: 0.02
 
-  # Terrain curriculum. Off by default; enabling loads the generated terrain
-  # scene (build-terrain), spawns each env on a curriculum tile, measures
-  # heights/clearance/contact against the local terrain surface, and trains
-  # under the terrain auto-reset wrapper (promote/demote between episodes).
-  # Requires `./training/run.sh build-terrain` first. The flat path is
+  # Terrain curriculum, off by default. Enabling loads the generated terrain
+  # scene, spawns each env on a curriculum tile, measures heights against the
+  # local terrain surface, and trains under the terrain auto-reset wrapper.
+  # Run `./training/run.sh build-terrain` first. The flat path is
   # byte-identical when enable=false. See docs/configuration.md.
   terrain:
     enable: false
-    feet_only: true # collide the 4 foot spheres + base box with terrain only
-    spawn_yaw: true # random base yaw at every spawn/respawn
-    pad_jitter: 0.15 # xy spawn jitter half-width, m (<= 0.2 keeps settle on pad)
+    feet_only: true # only the 4 foot spheres and the base box collide with terrain
+    spawn_yaw: true # random base yaw at every spawn
+    pad_jitter: 0.15 # xy spawn jitter half-width, m; <= 0.2 keeps the settle on the pad
     init_level_frac: 0.5 # initial level drawn uniform over the lower this-fraction of rows
     demote_fraction: 0.5 # demote if walked < this * commanded planar distance
 

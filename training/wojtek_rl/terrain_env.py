@@ -1,15 +1,12 @@
-"""JAX-side terrain helpers for the terrain-aware joystick env.
+"""JAX terrain helpers shared by the env and the curriculum wrapper.
 
-Pure functions and table builders shared by the env (base.py/env.py) and the
-curriculum auto-reset wrapper (terrain_wrapper.py). Kept free of brax so
-base.py can import it without pulling the training stack in.
+Everything here reads the generated terrain sidecars (``terrain_lookup.npz``
+and ``terrain_spec.json``, written by ``./run.sh build-terrain``). The module
+stays free of brax so base.py can import it without the training stack.
 
-The lookup grid, tile-origin table and pad-height table all come from the
-generated terrain sidecars (``terrain_lookup.npz`` + ``terrain_spec.json``,
-written by ``./run.sh build-terrain``). ``bilinear_sample`` reproduces
-``terrain.lookup_height`` / ``terrain._bilinear`` node-for-node with clamped
-edges, so a foot's terrain height in the env matches the physics geometry the
-same lookup was validated against.
+``bilinear_sample`` reproduces ``terrain._bilinear`` exactly, clamped edges
+included, so heights sampled in the env match the lookup grid the physics
+geometry was validated against.
 """
 
 from __future__ import annotations
@@ -20,9 +17,9 @@ import numpy as np
 
 
 def bilinear_sample(grid, x_min, cell_x, y_min, cell_y, x, y):
-    """Clamped bilinear sample of ``grid`` (row indexes y, col indexes x) at
-    world ``(x, y)``. Matches ``terrain._bilinear`` with ``dx=cell_x`` exactly:
-    fractional indices clamp to the grid, then the four corner nodes blend."""
+    """Bilinear sample of ``grid`` (rows index y, cols index x) at world
+    ``(x, y)``, clamped to the grid edges. Matches ``terrain._bilinear``
+    exactly."""
     nr, nc = grid.shape
     fx = jp.clip((x - x_min) / cell_x, 0.0, nc - 1)
     fy = jp.clip((y - y_min) / cell_y, 0.0, nr - 1)
@@ -47,10 +44,9 @@ def bilinear_sample(grid, x_min, cell_x, y_min, cell_y, x, y):
 def tables_from_spec(spec: dict, types) -> tuple[np.ndarray, np.ndarray]:
     """Per-(row, terrain-type) tile-origin xy and pad height from the spec dict.
 
-    Indexed by terrain TYPE, not column: the arena shuffles the column order
-    per row, so a fixed terrain type sits in a different column each row. The
-    returned arrays are ``(n_rows, n_types)`` shaped, aligned to ``types``
-    order (``terrain.TYPES``)."""
+    The tables are indexed by terrain type because the arena shuffles the
+    column order per row. Both arrays are ``(n_rows, n_types)``, aligned to
+    the ``types`` order."""
     n_rows = int(spec["n_rows"])
     type_idx = {t: i for i, t in enumerate(types)}
     origin_xy = np.zeros((n_rows, len(types), 2), dtype=np.float32)
@@ -64,15 +60,13 @@ def tables_from_spec(spec: dict, types) -> tuple[np.ndarray, np.ndarray]:
 
 
 def sample_tile_spawn(rng, terrain_type, level, origin_xy, pad_h, pad_jitter, yaw_enable):
-    """Spawn pose on the ``(level, terrain_type)`` tile: pad centre plus xy
-    jitter, the tile's pad height, and a base yaw quaternion.
+    """Spawn pose on the ``(level, terrain_type)`` tile.
 
-    ``terrain_type`` and ``level`` are integer scalars; ``origin_xy`` is
-    ``(n_rows, n_types, 2)`` and ``pad_h`` ``(n_rows, n_types)``. ``pad_jitter``
-    (metres) and ``yaw_enable`` are static, closed over by the caller so this
-    stays vmap-friendly on ``(rng, terrain_type, level)``. Jitter stays inside
-    ``pad_jitter`` of the centre so the settle transient never leaves the pad;
-    yaw is uniform about +z when enabled, else identity."""
+    Returns the pad centre plus xy jitter, the tile's pad height, and a base
+    yaw quaternion. ``pad_jitter`` (metres) and ``yaw_enable`` are static
+    Python values, so the function vmaps over ``(rng, terrain_type, level)``.
+    The jitter is small enough that the reset settle transient stays on the
+    flat pad."""
     xy0 = origin_xy[level, terrain_type]
     ph = pad_h[level, terrain_type]
     rj, ry = jax.random.split(rng)
@@ -87,17 +81,16 @@ def sample_tile_spawn(rng, terrain_type, level, origin_xy, pad_h, pad_jitter, ya
 
 
 def curriculum_step(level, walked, commanded_dist, rng, n_rows, tile_size, demote_fraction):
-    """legged_gym promote/demote for one finished episode. Returns
-    ``(new_level, rng_out)``.
+    """legged_gym promote/demote for one finished episode.
 
-    Promote (+1) when the robot crossed its tile — walked more than half a tile
-    edge; demote (-1) when it covered less than ``demote_fraction`` of the
-    distance its command asked for; otherwise hold. Levels clip to
-    ``[0, n_rows-1]``. An env promoting from the top level respawns on a
-    uniformly random row instead, so easy terrain is not forgotten. A standing
-    episode (``commanded_dist`` ~ 0) clears neither threshold, so it is
-    neutral. ``rng`` advances whether or not the random-row branch is taken, so
-    the caller can gate the whole draw on ``done`` with a single where."""
+    An episode that walked more than half a tile edge promotes one level. An
+    episode that covered less than ``demote_fraction`` of its commanded
+    distance demotes one. Anything else holds. A standing episode has a
+    near-zero commanded distance, clears neither threshold, and holds too.
+    Levels clip to ``[0, n_rows-1]``. A promotion from the top level lands on
+    a uniformly random row instead, so easy terrain keeps being trained. The
+    rng advances on every call, so the caller can gate the whole result on
+    ``done`` with one where."""
     promote = walked > 0.5 * tile_size
     demote = walked < demote_fraction * commanded_dist
     delta = jp.where(promote, 1, jp.where(demote, -1, 0))

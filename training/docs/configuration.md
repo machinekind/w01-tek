@@ -359,13 +359,13 @@ training run rather than being re-sampled for every episode.
 
 ## Terrain curriculum
 
-Terrain training exists only on `joystick`, off by default, and does not depend
-on `domain_rand`. When `task.env.terrain.enable=true` the env loads the shared
-terrain arena instead of the flat scene, spawns each parallel env on a
-curriculum tile, measures base height, foot clearance, and foot contact against
-the local terrain surface (so stepping up is not punished as a height error and
-a box top does not read as a fall), and trains under a terrain-aware auto-reset
-wrapper that promotes and demotes tiles between episodes.
+Terrain training exists only on `joystick` and is off by default. With
+`task.env.terrain.enable=true` the env loads the shared terrain arena instead
+of the flat scene, spawns each parallel env on a curriculum tile, and trains
+under a terrain-aware auto-reset wrapper that promotes and demotes tiles
+between episodes. Base height, foot clearance, and foot contact are measured
+against the local terrain surface, so stepping up is not a height error and a
+box top is not a fall.
 
 **Prerequisite: build the arena first.** The scene, heightfield, spec, and
 lookup grid are generated on demand and gitignored:
@@ -383,49 +383,44 @@ Keys (all under `task.env.terrain`):
 | Key | Default | Meaning |
 |---|---:|---|
 | `enable` | `false` | Load the terrain scene and the spawn curriculum. |
-| `feet_only` | `true` | Collide only the four foot spheres (plus the base box) with terrain; the leg-link collision geoms are dropped on the loaded model (never in the XML), following mujoco_playground's rough-terrain contact sizing. |
-| `spawn_yaw` | `true` | Draw a random base yaw at each spawn and respawn. The actor obs carries no heading (gravity is yaw-invariant), so this adds variety at no observation cost. |
-| `pad_jitter` | `0.15` m | xy jitter half-width around the spawn pad centre. Keep `<= 0.2` so the reset settle transient never leaves the 0.6 m flat pad. |
-| `init_level_frac` | `0.5` | Each env's initial level is uniform over the lower this-fraction of rows (legged_gym starts easy). |
-| `demote_fraction` | `0.5` | The legged_gym demote threshold (see below). |
+| `feet_only` | `true` | Only the four foot spheres and the base box collide with terrain. The leg-link collision geoms are dropped on the loaded model, never in the XML. |
+| `spawn_yaw` | `true` | Draw a random base yaw at each spawn. The actor obs carries no heading, so this costs nothing. |
+| `pad_jitter` | `0.15` m | xy jitter half-width around the spawn pad centre. Keep it `<= 0.2` so the reset settle transient stays on the 0.6 m flat pad. |
+| `init_level_frac` | `0.5` | Each env's initial level is uniform over the lower this-fraction of rows. |
+| `demote_fraction` | `0.5` | The demote threshold (see below). |
 
-**Curriculum rule (legged_gym), applied at every episode end — fall or
-timeout.** Per env: `walked = ‖last_xy − spawn_xy‖`.
+**Curriculum rule (legged_gym), applied at every episode end, fall or
+timeout.** Per env, `walked = ‖last_xy − spawn_xy‖`.
 
-- **Promote** one level when `walked > tile_size / 2` (the robot crossed its
-  tile).
-- **Demote** one level when `walked < demote_fraction × commanded_distance`,
-  where `commanded_distance` accumulates `‖command_xy‖ × ctrl_dt` over the
-  episode. A standing episode (near-zero commanded distance) clears neither
-  threshold, so it is neutral.
-- Levels clip to `[0, n_rows − 1]`. An env **promoting from the top level
-  respawns on a uniformly random row** instead of clipping, so easy terrain is
-  not forgotten.
+- **Promote** one level when `walked > tile_size / 2`. The robot crossed its
+  tile.
+- **Demote** one level when `walked < demote_fraction × commanded_distance`.
+  `commanded_distance` accumulates `‖command_xy‖ × ctrl_dt` over the episode.
+  A standing episode has a near-zero commanded distance, clears neither
+  threshold, and holds.
+- Levels clip to `[0, n_rows − 1]`. A promotion from the top level respawns on
+  a uniformly random row instead, so easy terrain keeps being trained.
 
-The env's terrain **type is fixed for the whole run** (one of the eight arena
-types, drawn at first reset); only the difficulty level moves. Respawn is a
-teleport onto the new tile's pad: this is valid precisely because the actor
-observation contains no absolute position or heading. **The observation layout
-is unchanged (still 54-dim actor / 61-dim critic), so a terrain run's
-checkpoint stays layout-compatible** — terrain awareness here is in the
-rewards, terminations, and spawn logic, not the obs (scandots are step 6).
+The env's terrain type is drawn once at first reset and stays fixed for the
+whole run. Only the difficulty level moves. Respawn teleports the base onto
+the new tile's pad. The teleport is valid because the actor observation
+contains no absolute position or heading. The observation layout is unchanged
+at 54-dim actor and 61-dim critic, so a terrain run's checkpoint keeps the
+flat layout. Terrain awareness lives in the rewards, terminations, and spawn
+logic. Scandots come in step 6.
 
-Watching the curriculum: the eval metric `eval/episode_terrain_level_per_step`
-(printed as `terrain_lvl`) is the **eval env's** level. That env is a separate
-instance reset to the initial spawn distribution at every evaluation, so it
-reflects the eval spawn spread — it hovers near the init mean and does **not**
-show the training curriculum climbing. To watch the actual training curriculum,
-run with `++ppo.log_training_metrics=true` (optionally
-`++ppo.training_metrics_steps=<env-steps>`): brax's `EpisodeMetricsLogger` then
-reads the training env's per-episode metrics, divides the `_per_step` value by
-episode length, and reports `episode/terrain_level_per_step` through the same
-progress/WandB path (printed as `terrain_lvl_train`). The step-5 blind-terrain
-preset should set `ppo.log_training_metrics=true` so the mean training level is
-recorded for the run.
+Watching the curriculum: `eval/episode_terrain_level_per_step` (printed as
+`terrain_lvl`) is the eval env's level. The eval env re-draws its levels at
+every evaluation, so this hovers near the init mean and does not show
+training progress. To watch the training curriculum, set
+`++ppo.log_training_metrics=true` (optionally
+`++ppo.training_metrics_steps=<env-steps>`) and read
+`episode/terrain_level_per_step`, printed as `terrain_lvl_train`. The step-5
+blind-terrain preset should set this flag.
 
 **Warp contact budget.** The flat `sim.naconmax_per_env=32` is undersized for
 feet-on-terrain contacts, and warp drops the overflow silently. A warp terrain
-run must set an explicit larger budget — start at roughly 2x the flat default
+run must set a larger budget explicitly. Start at roughly 2x the flat default
 and measure the real number with `check-terrain` on the GPU (step 5):
 
 ```bash

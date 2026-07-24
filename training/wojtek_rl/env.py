@@ -146,21 +146,20 @@ def default_config() -> config_dict.ConfigDict:
         # as latency above.
         encoder=config_dict.create(enable=False, range=0.02),
         # Terrain curriculum, off by default. When enabled the env loads the
-        # generated terrain scene (see build-terrain), spawns each env on a
-        # curriculum tile, measures height/clearance/contact against the local
-        # terrain surface, and trains under the terrain auto-reset wrapper
-        # (terrain_wrapper.py) which promotes/demotes tiles between episodes.
-        # Every field is inert when enable=False, so the flat path is
-        # byte-identical (env, rng draws, info layout, wrapping). The obs are
-        # unchanged (still 54-dim, no absolute position): teleporting between
-        # tiles is only valid because the obs carry no world pose.
+        # generated terrain scene, spawns every env on a curriculum tile,
+        # measures height, clearance and contact against the local terrain
+        # surface, and trains under the auto-reset wrapper in
+        # terrain_wrapper.py, which moves envs between tiles at episode ends.
+        # With enable=False the flat path is byte-identical: same ops, same
+        # rng draws, same info layout, same wrapping. The obs stay 54-dim and
+        # carry no world pose, which is what makes the tile teleports valid.
         terrain=config_dict.create(
             enable=False,
-            # Collide the four foot spheres (and the base box) with terrain,
-            # dropping the leg-link collision geoms. Terrain contact sizing.
+            # Collide only the four foot spheres and the base box with
+            # terrain. The leg-link collision geoms come off the loaded model.
             feet_only=True,
-            # Random base yaw at every spawn/respawn (gravity obs is
-            # yaw-invariant, so this adds heading variety at no obs cost).
+            # Random base yaw at every spawn. The obs carry no heading, so
+            # this costs nothing.
             spawn_yaw=True,
             # xy jitter half-width at the pad centre, m. Kept <= 0.2 so the
             # settle transient never leaves the 0.6 m spawn pad.
@@ -414,11 +413,10 @@ class WojtekJoystick(WojtekEnv):
             anchor + jax.random.uniform(r_pos, (12,), minval=-0.05, maxval=0.05)
         )
         qpos = qpos.at[2].set(command[3])
-        # Terrain spawn: teleport onto a curriculum tile of a fixed random type
-        # at a lower-half starting level, base z lifted by the tile's pad
-        # height (the same base-vs-ground relation the flat reset uses vs
-        # z=0). Disabled by default; the flat branch draws no rng and adds no
-        # info keys, so its trajectory and info layout stay byte-identical.
+        # Terrain spawn: a fixed random terrain type, a starting level in the
+        # lower rows, base z lifted by the tile's pad height. The disabled
+        # branch draws no rng and adds no info keys, so the flat trajectory
+        # and info layout are unchanged.
         if self._terrain_enabled:
             rng, r_type, r_level, r_spawn, r_trng = jax.random.split(rng, 5)
             terrain_type = jax.random.randint(r_type, (), 0, self._terrain_n_types)
@@ -476,14 +474,10 @@ class WojtekJoystick(WojtekEnv):
             "encoder_offset": epsilon,
         }
         metrics = {f"reward/{k}": jp.zeros(()) for k in self._config.reward.scales}
-        # Terrain curriculum carry: the tile the env rides for the run
-        # (terrain_type fixed), the current level, where it spawned (spawn_xy)
-        # and how tall above the pad (spawn_height, = first commanded height),
-        # the last base xy, accumulated commanded planar distance, and a
-        # dedicated rng for the auto-reset wrapper's respawn draws. The wrapper
-        # reads and rewrites these on done; the env keeps last_xy/commanded_dist
-        # current each step. terrain_level_per_step surfaces the mean level to
-        # the logs (see train.py).
+        # Curriculum state for the auto-reset wrapper. terrain_type is fixed
+        # for the run and spawn_height is the first commanded height. The
+        # wrapper rewrites the rest on done. The env updates last_xy and
+        # commanded_dist every step.
         if self._terrain_enabled:
             info.update(
                 terrain_type=terrain_type,
@@ -561,11 +555,10 @@ class WojtekJoystick(WojtekEnv):
         info["last_act"] = action
         info["last_torque"] = data.actuator_force
         info["motor_targets"] = motor_targets
-        # Terrain curriculum bookkeeping: the base xy after the step and the
-        # planar distance this step's command asked for. The auto-reset wrapper
-        # reads both on done (walked vs commanded), then resets them at respawn.
-        # info["command"] is still the command that drove this step (resample
-        # happens below).
+        # Curriculum bookkeeping for the auto-reset wrapper: the base xy after
+        # the step and the planar distance this step's command asked for. The
+        # resample below has not run yet, so info["command"] is the command
+        # that drove this step.
         if self._terrain_enabled:
             info["last_xy"] = data.qpos[0:2]
             info["commanded_dist"] = info["commanded_dist"] + (
@@ -593,9 +586,8 @@ class WojtekJoystick(WojtekEnv):
             **state.metrics,
             **{f"reward/{k}": v for k, v in rewards.items()},
         }
-        # Per-step terrain level. Named `_per_step` so brax's evaluator divides
-        # the episode sum by the episode length, surfacing the mean level
-        # directly as eval/episode_terrain_level_per_step (see train.py).
+        # The `_per_step` suffix makes brax divide the episode sum by the
+        # episode length, so the logged value is the mean level.
         if self._terrain_enabled:
             metrics["terrain_level_per_step"] = info["terrain_level"].astype(jp.float32)
         obs = self._get_obs(data, info, r_noise)
@@ -630,9 +622,8 @@ class WojtekJoystick(WojtekEnv):
                       self._config.reward.pose_leg_weight]), 4
         )
 
-        # Heights measured against the local terrain surface when terrain is
-        # enabled; both helpers return the flat world-z expression verbatim
-        # otherwise.
+        # On terrain both helpers measure against the local surface. On flat
+        # they return the world-z expressions verbatim.
         base_height = self._base_height(data)
         fall = (base_height < self._config.fall.min_height) | (
             gravity[2] > self._config.fall.max_tilt_gz

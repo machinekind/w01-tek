@@ -1,25 +1,24 @@
 """Curriculum auto-reset wrapper for the terrain-aware joystick env.
 
-The playground / brax training stack builds
-``DR-vmap|Vmap -> Episode -> BraxAutoResetWrapper``. Its auto-reset restores a
-cached first state on done and never re-runs ``env.reset``, and truncation-done
-is only set inside ``EpisodeWrapper`` — so a curriculum that must react to every
-episode end (fall or timeout) and teleport the robot to a new tile has to live
-in a replacement for the top auto-reset wrapper.
+The stock training stack is Vmap (or the DR vmap), then EpisodeWrapper, then
+BraxAutoResetWrapper. The stock auto-reset restores a cached first state on
+done and never calls ``env.reset`` again, and only EpisodeWrapper sees timeout
+dones. The curriculum has to react to every episode end and move the robot to
+a new tile, so it lives in a replacement for that top wrapper.
 
-``wrap_for_terrain_brax_training`` builds the same stack but swaps in
-``TerrainAutoResetWrapper``. On done it applies the legged_gym promote/demote
-rule per env, samples a fresh spawn on the env's terrain type at the new level,
-and overwrites the cached first state's base pose (xy, z, yaw) for the done
-envs — the cached qvel is already zeros. Everything it needs rides in the env's
-info (see ``env.py`` reset): ``terrain_type``, ``terrain_level``, ``spawn_xy``,
-``spawn_height``, ``last_xy``, ``commanded_dist``, ``terrain_rng``. It reads the
-tile tables and curriculum params off the unwrapped env, closed over once at
-construction.
+``wrap_for_terrain_brax_training`` builds the same stack with
+``TerrainAutoResetWrapper`` on top. On done the wrapper updates each env's
+level with the legged_gym rule, samples a spawn on the env's terrain type at
+the new level, and rewrites the cached first state's base pose. The cached
+qvel is already zero. The wrapper reads its per-env state from info keys
+written by the env's reset and step: ``terrain_type``, ``terrain_level``,
+``spawn_xy``, ``spawn_height``, ``last_xy``, ``commanded_dist``,
+``terrain_rng``. The tile tables and curriculum parameters come off the
+unwrapped env at construction.
 
 The signature matches ``mujoco_playground.wrapper.wrap_for_brax_training`` so
-train.py can pass it as ``wrap_env_fn``. ``full_reset`` is accepted for
-signature parity but ignored: the terrain teleport is the reset.
+train.py can pass either as ``wrap_env_fn``. ``full_reset`` is accepted and
+ignored.
 """
 
 from __future__ import annotations
@@ -59,13 +58,12 @@ def wrap_for_terrain_brax_training(
 
 
 class TerrainAutoResetWrapper(Wrapper):
-    """Auto-reset that promotes/demotes and teleports on every episode end.
+    """Auto-reset that promotes or demotes and teleports on every episode end.
 
-    Mirrors ``BraxAutoResetWrapper`` (cache first data/obs at reset, restore on
-    done) but, for done envs, rewrites the restored base pose to a fresh
-    curriculum spawn instead of the original one. The cached obs is reused
-    unchanged because it carries no world pose (gravity is yaw-invariant), which
-    is exactly what makes teleporting valid."""
+    Like ``BraxAutoResetWrapper``, it caches the first data and obs at reset
+    and restores them on done. For done envs it then rewrites the restored
+    base pose to the new curriculum spawn. The cached obs stays valid after
+    the move because no observation carries world position or heading."""
 
     def __init__(self, env: Any):
         super().__init__(env)
@@ -86,9 +84,9 @@ class TerrainAutoResetWrapper(Wrapper):
 
     def _respawn(self, done, level, ttype, spawn_xy, last_xy, commanded, spawn_h,
                  cached_qpos, rng):
-        """Per-env teleport. Returns the new base-pose qpos row, the new level,
-        the new spawn xy, and the advanced rng — each gated on ``done`` so a
-        surviving env keeps its level, spawn and rng untouched."""
+        """Per-env teleport. Returns the new qpos row, level, spawn xy, and
+        rng. Each is gated on ``done``, so a surviving env keeps its current
+        values."""
         walked = jp.linalg.norm(last_xy - spawn_xy)
         new_level, rng2 = terrain_env.curriculum_step(
             level, walked, commanded, rng,
@@ -118,7 +116,7 @@ class TerrainAutoResetWrapper(Wrapper):
             state.info.update(steps=steps)
         state = state.replace(done=jp.zeros_like(state.done))
         state = self.env.step(state, action)
-        done = state.done  # fall OR truncation, both visible above EpisodeWrapper
+        done = state.done  # fall or timeout; both are set below this wrapper
 
         info = state.info
         new_qpos, new_level, new_spawn_xy, new_rng = jax.vmap(self._respawn)(

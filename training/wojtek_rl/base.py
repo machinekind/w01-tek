@@ -93,8 +93,8 @@ def make_data_fn(backend, mj_model, mjx_model, naconmax_per_env, njmax, num_envs
 class WojtekEnv(mjx_env.MjxEnv):
     def __init__(self, config, config_overrides=None):
         super().__init__(config, config_overrides)
-        # Terrain is a joystick-only opt-in block; getup/jump configs have no
-        # `terrain` key, so `.get` leaves them on the flat scene untouched.
+        # Terrain is a joystick-only opt-in block. getup/jump configs have no
+        # `terrain` key, so `.get` leaves them on the flat scene.
         terrain_cfg = self._config.get("terrain")
         self._terrain_enabled = bool(
             terrain_cfg is not None and terrain_cfg.get("enable", False)
@@ -167,14 +167,12 @@ class WojtekEnv(mjx_env.MjxEnv):
             )
 
     def _collide_feet_only(self, m: mujoco.MjModel) -> None:
-        """Drop the leg links out of terrain collision so only the four foot
-        spheres (and the base box, as on flat) pair with the terrain geoms.
+        """Drop the `*_link_floor` leg geoms out of collision, so only the four
+        foot spheres and the base box pair with terrain.
 
-        The `*_link_floor` capsules/spheres carry the flat floor's leg-contact
-        semantics; on rough terrain and stair edges they would multiply
-        contacts, so the plan collides feet only (following mujoco_playground's
-        rough-terrain tasks). Patched on the loaded model, never in the
-        generated XML."""
+        The leg geoms would multiply contacts on rough ground and stair edges,
+        and the plan sizes terrain contacts for feet only. The patch applies to
+        the loaded model. The generated XML stays untouched."""
         for i in range(m.ngeom):
             name = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, i) or ""
             if name.endswith("_link_floor"):
@@ -182,9 +180,9 @@ class WojtekEnv(mjx_env.MjxEnv):
                 m.geom_conaffinity[i] = 0
 
     def _load_terrain(self, terrain_cfg) -> None:
-        """Build the device-side terrain lookup grid and the per-(row, type)
-        spawn tables from the generated sidecars, plus the curriculum params
-        the reset and the auto-reset wrapper read."""
+        """Load the generated sidecars into the device lookup grid, the
+        per-(row, type) spawn tables, and the curriculum parameters that reset
+        and the auto-reset wrapper read."""
         npz = np.load(paths.TERRAIN_LOOKUP_NPZ)
         x_min, x_max = float(npz["x_min"]), float(npz["x_max"])
         y_min, y_max = float(npz["y_min"]), float(npz["y_max"])
@@ -207,11 +205,10 @@ class WojtekEnv(mjx_env.MjxEnv):
         self._terrain_demote_fraction = float(terrain_cfg.get("demote_fraction", 0.5))
         self._terrain_init_level_frac = float(terrain_cfg.get("init_level_frac", 0.5))
 
-        # Warp reserves one shared contact pool sized from naconmax_per_env;
-        # feet-on-terrain contacts far exceed the flat default, and warp drops
-        # the overflow silently (see check_terrain / docs). The real number is
-        # measured on GPU in step 5; warn loudly if a warp terrain run kept the
-        # untouched flat default.
+        # Warp sizes one shared contact pool from naconmax_per_env and drops
+        # overflow silently. Terrain contacts exceed the flat default, so a
+        # warp terrain run that kept it gets a loud warning. The real budget
+        # gets measured on GPU (step 5).
         if self._backend == "warp" and self._config.sim.naconmax_per_env <= 32:
             print(
                 "WARNING: terrain.enable on the warp backend with "
@@ -280,17 +277,17 @@ class WojtekEnv(mjx_env.MjxEnv):
         return z < FOOT_RADIUS + 0.005
 
     def _base_height(self, data):
-        """Base height above the local ground: world z on flat, height over the
-        terrain surface under the base when terrain is enabled. The flat return
-        is ``data.qpos[2]`` verbatim, so flat rewards/terminations are
-        unchanged."""
+        """Base height above the local ground. On flat this returns
+        ``data.qpos[2]`` verbatim, so flat rewards and terminations are
+        unchanged. On terrain it subtracts the surface height under the
+        base."""
         if self._terrain_enabled:
             return data.qpos[2] - self._terrain_height(data.qpos[0:2])
         return data.qpos[2]
 
     def _foot_clearance(self, data):
-        """Per-foot clearance of the sphere bottom above the local ground. Flat
-        return matches ``geom_xpos[..., 2] - FOOT_RADIUS`` verbatim."""
+        """Per-foot clearance of the sphere bottom above the local ground. On
+        flat this returns ``geom_xpos[..., 2] - FOOT_RADIUS`` verbatim."""
         foot = data.geom_xpos[self._foot_geom_ids]
         clearance = foot[:, 2] - FOOT_RADIUS
         if self._terrain_enabled:

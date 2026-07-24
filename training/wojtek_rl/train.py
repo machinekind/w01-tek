@@ -181,14 +181,11 @@ def main(cfg: DictConfig) -> None:
             f"steps {num_steps:>12,}  reward {reward:8.2f}  "
             f"ep_len {ep_len:6.0f}  {sps:,.0f} steps/s"
         )
-        # The eval metric is the eval env's level: that env resets to the
-        # initial spawn distribution every evaluation, so this tracks the eval
-        # spawn spread, not the training curriculum climbing (it hovers near
-        # the init mean). The real curriculum signal is the training env's
-        # level, which brax surfaces on a separate progress call under
-        # ppo.log_training_metrics as episode/terrain_level_per_step (its
-        # EpisodeMetricsLogger divides the `_per_step` metric by episode
-        # length). Print both when present, labelled distinctly.
+        # The eval env re-draws its levels at every evaluation, so terrain_lvl
+        # tracks the eval spawn spread and hovers near the init mean. The
+        # training curriculum shows up only under ppo.log_training_metrics,
+        # which reports episode/terrain_level_per_step on a separate progress
+        # call. Print both when present.
         level = metrics.get("eval/episode_terrain_level_per_step")
         if level is not None:
             line += f"  terrain_lvl {float(level):5.2f}"
@@ -199,8 +196,8 @@ def main(cfg: DictConfig) -> None:
         if wb is not None:
             wb.log({**metrics, "perf/steps_per_sec": sps}, step=num_steps)
 
-    # Terrain runs need the curriculum auto-reset wrapper (promote/demote +
-    # teleport on done); the flat path keeps brax's stock wrapper exactly.
+    # Terrain runs need the curriculum auto-reset wrapper. Flat runs keep the
+    # stock wrapper exactly.
     if getattr(env, "_terrain_enabled", False):
         from wojtek_rl.terrain_wrapper import wrap_for_terrain_brax_training
 

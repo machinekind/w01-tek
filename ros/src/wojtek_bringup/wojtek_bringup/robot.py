@@ -41,7 +41,11 @@ SERVICE = os.environ.get("WOJTEK_SERVICE", "wojtek-robot.service")
 # --dry-run has to pass them itself.
 REMOTE_DDS_ENV = (
     f"export ROS_DOMAIN_ID={os.environ.get('ROS_DOMAIN_ID', '42')} "
-    f"RMW_IMPLEMENTATION={os.environ.get('RMW_IMPLEMENTATION', 'rmw_cyclonedds_cpp')}"
+    f"RMW_IMPLEMENTATION={os.environ.get('RMW_IMPLEMENTATION', 'rmw_cyclonedds_cpp')} "
+    # Same pinned-interface profile the service uses (lo + optional
+    # eth0/wlan0) -- without it a manual launch binds to whichever iface the
+    # eth-AP failover currently owns and dies when that link flips.
+    "CYCLONEDDS_URI=file:///etc/cyclonedds-rpi.xml"
 )
 
 _SSH_OPTS = ["-o", "StrictHostKeyChecking=no",
@@ -80,8 +84,10 @@ def main():
     ap.add_argument("--gamepad", action="store_true",
                     help="bluetooth Xbox pad teleop (joy driver + gamepad_teleop): "
                          "left stick vx/yaw, right stick strafe, A arms, "
-                         "D-pad height; combine with --no-console to replace "
-                         "the console entirely")
+                         "D-pad height. Runs ON the RPi against the real robot "
+                         "(pair the pad with the robot); with --sim it runs "
+                         "here (pair with this machine). Combine with "
+                         "--no-console to replace the console entirely")
     ap.add_argument("--plotjuggler", action="store_true", help="also open PlotJuggler")
     args = ap.parse_args()
 
@@ -99,10 +105,12 @@ def main():
         spawn(["ros2", "launch", "wojtek_viz", "sim.launch.py", "rviz:=false"])
     elif args.dry_run:
         print(f">> [BENCH] launching on {RPI_HOST} WITHOUT RT, no torque")
+        gamepad = str(args.gamepad).lower()
         remote = (f"source /opt/ros/{ROS_DISTRO}/setup.bash && "
                   f"source ~/{REMOTE_WS}/install/setup.bash && "
                   f"{REMOTE_DDS_ENV} && "
-                  f"ros2 launch wojtek_bringup robot.launch.py dry_run:=true")
+                  f"ros2 launch wojtek_bringup robot.launch.py dry_run:=true "
+                  f"gamepad:={gamepad}")
         spawn(SSH_TTY + [remote])
         stop_remote = lambda: subprocess.run(SSH + ["pkill -f robot.launch.py"])
     else:
@@ -140,11 +148,20 @@ def main():
 
     # ---- gamepad teleop (bluetooth Xbox pad -> /cmd_vel) --------------------
     # Independent of the console choice: the pad drives, the console (if any)
-    # keeps the pose/jog/telemetry surface.
+    # keeps the pose/jog/telemetry surface. On the real robot the teleop runs
+    # ON the RPi (pair the pad with the robot): the systemd service already
+    # launches with gamepad:=true, and the --dry-run path passes the same arg,
+    # so there is nothing to start here -- and driving survives the PC dropping
+    # off. Only the sim, which lives in this container, reads a pad paired with
+    # this machine.
     if args.gamepad:
-        print(">> launching gamepad teleop (left stick vx/yaw, right stick "
-              "strafe, A arms, D-pad height)")
-        spawn(["ros2", "launch", "wojtek_viz", "gamepad.launch.py"])
+        if args.sim:
+            print(">> launching gamepad teleop (left stick vx/yaw, right stick "
+                  "strafe, A arms, Y/B stand up / lie down, D-pad height)")
+            spawn(["ros2", "launch", "wojtek_teleop", "gamepad.launch.py"])
+        elif not args.dry_run:
+            print(">> gamepad teleop is resident in the RPi service "
+                  "(gamepad:=true) -- pair the pad with the RPi and drive")
 
     if not args.sim:
         print(ARMING_HINT)

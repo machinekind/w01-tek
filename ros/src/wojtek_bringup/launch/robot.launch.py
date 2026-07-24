@@ -6,6 +6,7 @@ nodes -- no RViz, no GUI. Run visualization/debug on the PC separately:
 
     ros2 launch wojtek_bringup robot.launch.py [max_torque:=2.0] [dry_run:=true]
                                                [boot_pose:=home|folded] [bag:=true]
+                                               [gamepad:=true]
 
 Recording note: the PC's viz.launch.py already records the whole run over
 DDS (all RPi topics are visible there), so on-robot recording is OFF by
@@ -31,7 +32,11 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess
+from launch.actions import (
+    DeclareLaunchArgument,
+    ExecuteProcess,
+    IncludeLaunchDescription,
+)
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import (
     Command,
@@ -41,6 +46,7 @@ from launch.substitutions import (
 )
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
+from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
@@ -112,6 +118,23 @@ def generate_launch_description():
             # `taskset -c 2,3` (the isolated RT cores); it sets bag_cpus:=0,1 to
             # keep the recorder's disk I/O off the control loop's cores.
             DeclareLaunchArgument("bag_cpus", default_value=""),
+            # Bluetooth Xbox pad paired with the RPi itself: joy driver +
+            # wojtek_teleop's /cmd_vel mapping, no PC in the loop. Off by
+            # default -- enable once the pad is paired (bluetoothctl; the
+            # bluez/ERTM groundwork comes from deploy/rpi/install.sh). Only
+            # one drive source at a time: with the pad on, leave the web
+            # console's pad/drive alone, both publish the same /cmd_vel.
+            DeclareLaunchArgument("gamepad", default_value="false"),
+            IncludeLaunchDescription(
+                PathJoinSubstitution(
+                    [
+                        FindPackageShare("wojtek_teleop"),
+                        "launch",
+                        "gamepad.launch.py",
+                    ]
+                ),
+                condition=IfCondition(LaunchConfiguration("gamepad")),
+            ),
             Node(
                 package="controller_manager",
                 executable="ros2_control_node",

@@ -27,9 +27,9 @@
        works on macOS / phones). One port: HTTP page + JSON websocket. -->
   <depend>python3-websockets</depend>
 
-  <!-- gamepad.launch.py: the standard joystick driver feeding
-       gamepad_teleop.py (bluetooth Xbox pad -> /cmd_vel). -->
-  <exec_depend>joy</exec_depend>
+  <!-- Gamepad teleop moved to wojtek_teleop (robot-side, no GUI deps);
+       "./sim.sh gamepad mode" launches it from there. -->
+  <exec_depend>wojtek_teleop</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>xacro</exec_depend>
   <exec_depend>rviz2</exec_depend>

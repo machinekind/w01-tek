@@ -24,6 +24,10 @@
   <depend>md80_hardware_interface</depend>
   <depend>bmx160_serial_hardware_interface</depend>
   <depend>bmi160_serial_hardware_interface</depend>
+  <!-- Robot-side pad teleop: an exec_depend keeps it inside deploy.sh's
+       "packages-up-to wojtek_bringup" build, so gamepad:=true has the
+       node available on the RPi. -->
+  <exec_depend>wojtek_teleop</exec_depend>
   <depend>imu_i2c_hardware_interface</depend>
 
   <exec_depend>robot_state_publisher</exec_depend>

@@ -9,7 +9,7 @@ its own; use this to inspect/verify the boot pose, not for clean walking.
 
 Drive with any Twist teleop, e.g.:
     ros2 run teleop_twist_keyboard teleop_twist_keyboard
-    ros2 launch wojtek_viz gamepad.launch.py   # bluetooth Xbox pad
+    ros2 launch wojtek_teleop gamepad.launch.py   # bluetooth Xbox pad
 """
 
 import os

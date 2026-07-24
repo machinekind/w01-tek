@@ -264,3 +264,45 @@ def test_all_fields_enabled_in_axes(mj_model, mjx_model, rng):
     ):
         assert getattr(in_axes, field) == 0
     assert in_axes.qpos0 is None
+
+
+ALL_ENABLED = {
+    "com_offset": {"enable": True},
+    "joint_gains": {"enable": True},
+    "dof": {"enable": True},
+    "foot_friction": {"enable": True},
+    "motor_strength": {"enable": True},
+}
+
+
+@pytest.mark.parametrize(
+    "dr_cfg",
+    [None, ALL_DISABLED, {"foot_friction": {"enable": True}}, ALL_ENABLED],
+    ids=["default", "all_disabled", "foot_friction", "all_enabled"],
+)
+def test_in_axes_is_usable_as_vmap_in_axes(mj_model, mjx_model, rng, dr_cfg):
+    """The returned in_axes has to work as vmap's in_axes for the returned
+    model. That is the only thing the DR wrapper does with the pair
+    (mujoco_playground's BraxDomainRandomizationVmapWrapper), and it is a
+    pytree-structure contract, not a field-by-field one -- which the sibling
+    in_axes tests check instead.
+
+    `foot_friction` writes geom_priority, a STATIC numpy field in mjx and so
+    part of the pytree's metadata rather than its leaves. Writing it after
+    in_axes was built off the original model left two disagreeing treedefs, and
+    jax.vmap rejected in_axes as "not a tree prefix of the corresponding value"
+    -- so every run with dr.foot_friction.enable=true died the moment the env
+    was wrapped. The default is off, and nothing in the repo executed the DR
+    wrapper, so no run and no test ever hit it.
+    """
+    randomize = make_domain_randomize(mj_model, dr_cfg)
+    model_v, in_axes = randomize(mjx_model, rng)
+
+    def read(model, i):
+        del i
+        return model.geom_friction[:, 0].sum() + model.body_mass.sum()
+
+    per_env = jax.vmap(read, in_axes=[in_axes, 0])(model_v, jnp.arange(len(rng)))
+    assert per_env.shape == (len(rng),)
+    # the batched model really is per-env, not one model broadcast 8 times
+    assert len(np.unique(np.array(per_env))) > 1

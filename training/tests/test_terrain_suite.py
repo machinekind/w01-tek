@@ -372,3 +372,14 @@ def test_eval_arena_compiles():
     finally:
         for p in paths.terrain_paths(TEST_ARENA).values():
             p.unlink(missing_ok=True)
+
+
+def test_a_zero_speed_has_no_budget():
+    """The course is defined by distance, so a standing robot never completes a
+    crossing -- better a clear error than a division by zero."""
+    with pytest.raises(ValueError, match="commanded speed of 0"):
+        terrain_suite.episode_budget(0.0, 0.02)
+    # a negative command is the same course walked the other way round
+    assert terrain_suite.episode_budget(-0.4, 0.02) == terrain_suite.episode_budget(
+        0.4, 0.02
+    )

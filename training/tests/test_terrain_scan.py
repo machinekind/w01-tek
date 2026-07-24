@@ -90,6 +90,26 @@ def test_absolute_gate_passes_on_the_bar():
     assert gate["checked"] == 1
 
 
+def test_a_partial_scan_is_incomplete_not_a_pass():
+    """"The four cells I measured are fine" must not read as "the policy
+    passed"."""
+    cells = _cells([("pyramid_stairs_5cm", 0.4, 32)])
+    assert terrain_scan.absolute_gate(cells)["verdict"] == "pass"
+    gate = terrain_scan.absolute_gate(cells, expect_gated=terrain_scan.gated_pairs())
+    assert gate["verdict"] == "incomplete"
+    assert gate["checked"] == 1 and gate["expected"] == 54
+    # a real failure still outranks incompleteness
+    bad = terrain_scan.absolute_gate(
+        _cells([("pyramid_stairs_5cm", 0.4, 1)]), expect_gated=terrain_scan.gated_pairs()
+    )
+    assert bad["verdict"] == "fail"
+
+
+def test_gated_pairs_counts_every_gated_cell_at_every_speed():
+    assert terrain_scan.gated_pairs() == 18 * 3
+    assert terrain_scan.gated_pairs(speeds=(0.4,)) == 18
+
+
 def test_absolute_gate_fails_one_below():
     gate = terrain_scan.absolute_gate(_cells([("pyramid_stairs_5cm", 0.4, 25)]))
     assert gate["verdict"] == "fail"

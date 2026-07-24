@@ -15,7 +15,11 @@ def arena():
     """A generated arena written to the `test` file set, never the one a policy
     trains on, and removed afterwards. Writing over the training arena is how a
     later training run silently collapsed its curriculum to three rungs with no
-    record in run.json."""
+    record in run.json.
+
+    The `test` file set is one shared location, so two pytest processes running
+    at once (a second suite in another shell, or -p xdist) will fight over it.
+    `run.sh test` is a single process."""
     a = terrain.generate(seed=0)
     build_terrain.write_arena(a, TEST_ARENA)
     yield a

@@ -401,6 +401,60 @@ def test_domain_randomization_composes_with_the_curriculum_wrapper(terrain_env_i
     assert saw_done
 
 
+def test_scan_reset_places_a_run_on_its_tile(terrain_env_inst):
+    """The terrain scan's deterministic spawn, on the env the scan would use.
+
+    Lives here rather than in test_terrain_scan.py because it needs a built
+    terrain env, and this module already has one. Everything else about the scan
+    is pure and tested there.
+    """
+    from wojtek_rl import terrain, terrain_scan, terrain_suite
+
+    env = terrain_env_inst
+    cell = terrain_suite.Cell(
+        name="probe", terrain_type="pyramid_stairs", difficulty=0.5, row=1, bar=None
+    )
+    centre, spawn, yaw, pad_h = terrain_scan._spawn_table(env, cell)
+    # the tile the cell names, from the env's own spawn table
+    j = terrain.TYPES.index(cell.terrain_type)
+    np.testing.assert_allclose(centre[0], np.array(env._terrain_origin_xy)[cell.row, j])
+    assert pad_h[0] == pytest.approx(float(np.array(env._terrain_pad_h)[cell.row, j]))
+
+    run = terrain_suite.COURSE[5]
+    command = jp.array([0.4, 0.0, 0.0, terrain_scan.COMMAND_HEIGHT])
+    state = jax.jit(terrain_scan.scan_reset)(
+        env, jax.random.PRNGKey(0), jp.asarray(spawn[5]), pad_h[5],
+        jp.float32(run.yaw), command,
+    )
+
+    qpos = np.array(state.data.qpos)
+    np.testing.assert_allclose(qpos[0:2], spawn[5], atol=1e-6)
+    # base at the commanded height above the tile's pad, not above world zero
+    assert qpos[2] == pytest.approx(pad_h[5] + terrain_scan.COMMAND_HEIGHT, abs=1e-6)
+    assert float(env._base_height(state.data)) == pytest.approx(
+        terrain_scan.COMMAND_HEIGHT, abs=2e-3
+    )
+    # facing the course heading
+    w, x, y, z = qpos[3:7]
+    assert np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)) == pytest.approx(
+        run.yaw, abs=1e-5
+    )
+    # joints on the commanded height's stance anchor, with none of reset's noise
+    np.testing.assert_allclose(
+        qpos[np.array(env._qadr)], np.array(env._height_ctrl(command[3])), atol=1e-6
+    )
+    np.testing.assert_allclose(np.array(state.data.qvel), 0.0, atol=0.0)
+
+    # the OBSERVED command is the course's, not the one env.reset sampled
+    np.testing.assert_allclose(np.array(state.info["command"]), np.array(command))
+    names = env.actor_obs_names
+    catalog = env._obs_catalog(state.data, state.info)
+    offset = sum(catalog[n].shape[0] for n in names[: names.index("command")])
+    np.testing.assert_allclose(
+        np.array(state.obs["state"])[offset : offset + 4], np.array(command), atol=1e-6
+    )
+
+
 def test_flat_env_uses_stock_wrapper():
     """A flat env carries no terrain state, so train.py leaves it on brax's
     stock wrap_for_brax_training (the terrain wrapper is never built)."""

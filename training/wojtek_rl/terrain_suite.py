@@ -296,5 +296,10 @@ def course_distance() -> float:
 
 def episode_budget(speed: float, ctrl_dt: float) -> int:
     """Control steps one run gets at this commanded speed."""
+    if speed == 0:
+        raise ValueError(
+            "a commanded speed of 0 has no step budget: the course is defined by "
+            "distance, and a standing robot never completes a crossing"
+        )
     travel_s = BUDGET_SLACK * course_distance() / abs(speed)
     return SETTLE_STEPS + math.ceil(travel_s / ctrl_dt)

@@ -132,8 +132,19 @@ def cell_entry(cell, speed: float, result: CellResult) -> dict:
     }
 
 
-def absolute_gate(cells: dict) -> dict:
-    """Every gated cell against its bar. Tracked cells are reported, not gated."""
+def gated_pairs(cells=terrain_suite.CELLS, speeds=terrain_suite.SPEEDS) -> int:
+    """How many (cell, speed) pairs a complete scan gates."""
+    return sum(1 for c in cells if not c.tracked) * len(speeds)
+
+
+def absolute_gate(cells: dict, expect_gated: int | None = None) -> dict:
+    """Every gated cell against its bar. Tracked cells are reported, not gated.
+
+    `expect_gated` is how many gated pairs a complete scan would have. A partial
+    scan (`--cells`, or a crash part way) comes back `incomplete` rather than
+    `pass`: "the four cells I measured are fine" must not read as "the policy
+    passed".
+    """
     failures = []
     checked = 0
     for name, per_speed in cells.items():
@@ -151,9 +162,16 @@ def absolute_gate(cells: dict) -> dict:
                         "provenance": r["provenance"],
                     }
                 )
+    if failures:
+        verdict = "fail"
+    elif expect_gated is not None and checked < expect_gated:
+        verdict = "incomplete"
+    else:
+        verdict = "pass"
     return {
-        "verdict": "fail" if failures else "pass",
+        "verdict": verdict,
         "checked": checked,
+        "expected": expect_gated,
         "failures": failures,
     }
 
@@ -301,6 +319,40 @@ def _spawn_table(env, cell) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndar
     )
 
 
+def scan_reset(env, rng, spawn_xy, pad_h, yaw, command):
+    """One run's starting state: env.reset, then the course's pose and command.
+
+    Writing the pose into qpos is safe for the reason the training wrapper's
+    teleport is safe -- the next physics step recomputes kinematics from qpos,
+    and no observation carries world position or heading. The joints are pinned
+    to the commanded height's stance anchor with none of reset's joint noise, so
+    the course is fully deterministic.
+
+    The command goes in BEFORE the observation is rebuilt. `command` is an
+    observed component and env.reset samples its own random one, so leaving it
+    would make the policy's very first action a response to a command the course
+    never issued.
+    """
+    import jax.numpy as jp
+    from mujoco import mjx
+
+    state = env.reset(rng)
+    height = command[3]
+    anchor = env._height_ctrl(height)
+    qpos = env._home_qpos.at[env._qadr].set(anchor)
+    qpos = qpos.at[0:2].set(spawn_xy)
+    qpos = qpos.at[2].set(pad_h + height)
+    qpos = qpos.at[3:7].set(jp.array([jp.cos(yaw / 2), 0.0, 0.0, jp.sin(yaw / 2)]))
+    data = state.data.replace(
+        qpos=qpos, qvel=jp.zeros(env.mj_model.nv), ctrl=anchor
+    )
+    data = mjx.forward(env.mjx_model, data)
+    info = dict(state.info)
+    info["command"] = command
+    info["motor_targets"] = anchor
+    return state.replace(data=data, obs=env._get_obs(data, info), info=info)
+
+
 def make_cell_runner(env, inf):
     """A jitted "score one cell at one speed" function.
 
@@ -316,33 +368,11 @@ def make_cell_runner(env, inf):
 
     import jax
     import jax.numpy as jp
-    from mujoco import mjx
 
     n = terrain_suite.RUNS_PER_CELL_SPEED
     torque_cap = float(np.asarray(env.mj_model.actuator_forcerange[:, 1]).max())
-    nv = env.mj_model.nv
 
-    def reset_one(rng, spawn_xy, pad_h, yaw, height):
-        """env.reset, then the deterministic pose written into qpos.
-
-        Safe for the reason the training wrapper's teleport is safe: the next
-        physics step recomputes kinematics from qpos, and no observation carries
-        world position or heading. The joints are pinned to the height anchor
-        with none of reset's noise, so the course is fully deterministic.
-        """
-        state = env.reset(rng)
-        anchor = env._height_ctrl(height)
-        qpos = env._home_qpos.at[env._qadr].set(anchor)
-        qpos = qpos.at[0:2].set(spawn_xy)
-        qpos = qpos.at[2].set(pad_h + height)
-        qpos = qpos.at[3:7].set(
-            jp.array([jp.cos(yaw / 2), 0.0, 0.0, jp.sin(yaw / 2)])
-        )
-        data = state.data.replace(qpos=qpos, qvel=jp.zeros(nv), ctrl=anchor)
-        data = mjx.forward(env.mjx_model, data)
-        info = dict(state.info)
-        info["motor_targets"] = anchor
-        return state.replace(data=data, obs=env._get_obs(data, info), info=info)
+    reset_one = functools.partial(scan_reset, env)
 
     def nacon_of(data):
         """Warp's live active-contact count, 0 on the jax backend (which has no
@@ -354,17 +384,25 @@ def make_cell_runner(env, inf):
 
     @functools.partial(jax.jit, static_argnames=("budget",))
     def run(rng, centre, spawn_xy, pad_h, yaw, speed, height, budget):
-        state = jax.vmap(reset_one, in_axes=(0, 0, 0, 0, None))(
-            jax.random.split(rng, n), spawn_xy, pad_h, yaw, height
-        )
         zeros = jp.zeros(n)
+
+        def command_at(crossings):
+            """The course's command: forward speed signed by the leg, no lateral
+            or yaw component, the fixed standing height."""
+            return jp.stack(
+                [leg_sign(crossings) * speed, zeros, zeros, jp.full(n, height)],
+                axis=-1,
+            )
+
+        state = jax.vmap(reset_one)(
+            jax.random.split(rng, n), spawn_xy, pad_h, yaw,
+            command_at(jp.zeros(n, jp.int32)),  # the first leg walks out
+        )
 
         def body(carry):
             i, state, rng, crossings, fell, sat, err, clr, counted, nacon = carry
             sign = leg_sign(crossings)
-            command = jp.stack(
-                [sign * speed, zeros, zeros, jp.full(n, height)], axis=-1
-            )
+            command = command_at(crossings)
             info = dict(state.info)
             info["command"] = command
             state = state.replace(info=info)
@@ -569,7 +607,7 @@ def scan(
         )
     baseline = load_baseline(baseline_ref)
     result["gate"] = {
-        "absolute": absolute_gate(result["cells"]),
+        "absolute": absolute_gate(result["cells"], gated_pairs(speeds=speeds)),
         "relative": relative_gate(result, baseline),
     }
     result["timestamp"] = datetime.now().isoformat(timespec="seconds")
@@ -635,7 +673,8 @@ def main() -> None:
         print(f"WARNING: {line}")
     print(f"absolute gate: {gate['absolute']['verdict']} "
           f"({len(gate['absolute']['failures'])} of "
-          f"{gate['absolute']['checked']} gated cell/speed pairs below bar)")
+          f"{gate['absolute']['checked']} gated cell/speed pairs below bar; "
+          f"a complete scan gates {gate['absolute']['expected']})")
     for f in gate["absolute"]["failures"]:
         print(f"  {f['cell']} @ vx {f['speed']}: {f['passed']} < {f['bar']} "
               f"[{f['provenance']}]")

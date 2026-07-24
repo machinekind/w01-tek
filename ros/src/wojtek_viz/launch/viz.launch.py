@@ -1,7 +1,7 @@
 """PC-side visualization/debug for the LIVE robot (running on the RPi).
 
     ros2 launch wojtek_viz viz.launch.py [rviz:=true] [plotjuggler:=false]
-                                         [foxglove:=false] [bag:=false]
+                                         [foxglove:=false] [bag:=true]
 
 foxglove:=true starts foxglove_bridge on ws://localhost:8765 for the native
 Foxglove app -- the way to get a fast UI on macOS, where RViz would have to
@@ -16,9 +16,11 @@ this machine only consumes what the robot publishes:
   - PlotJuggler subscribes to the robot's topics for live plotting.
 
 Because DDS makes every RPi-published topic visible here, `bag:=true`
-(the default) records the WHOLE run from the PC -- one bag, all topics,
-on the machine with disk to spare and no RT budget to protect. Caveat:
-this bag is only as complete as the link. Over ethernet (docked) it is
+records the WHOLE run from the PC -- one bag, all topics. Off by
+default: bags are ~GB per session and pile up in the wojtek_bags
+volume, and most viz sessions are watching, not experiments worth
+keeping. Caveat when recording: the bag is only as complete as the
+link. Over ethernet (docked) it is
 effectively lossless; over wifi -- especially once the robot is on its
 own AP and moving -- best-effort topics can drop samples and a dropped
 link leaves a gap. For a guaranteed lossless on-robot capture, record
@@ -64,9 +66,9 @@ def generate_launch_description():
             DeclareLaunchArgument("rviz", default_value="true"),
             DeclareLaunchArgument("plotjuggler", default_value="false"),
             DeclareLaunchArgument("foxglove", default_value="false"),
-            # Record the whole run (all topics, over DDS) by default; bag:=false
-            # to skip, bag_dir:=/some/path to relocate.
-            DeclareLaunchArgument("bag", default_value="true"),
+            # bag:=true records the whole run (all topics, over DDS);
+            # bag_dir:=/some/path to relocate.
+            DeclareLaunchArgument("bag", default_value="false"),
             DeclareLaunchArgument("bag_dir", default_value=default_bag_dir),
             Node(
                 package="rviz2",

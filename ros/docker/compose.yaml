@@ -22,8 +22,8 @@ services:
     volumes:
       - ../src:/ros2_ws/src
       # Per-run rosbags. This container is the PC dev environment, where
-      # viz.launch.py records the whole run (all RPi topics, over DDS) by
-      # default. The launch default bag_dir is ~/wojtek_bags == /root/wojtek_bags
+      # viz.launch.py bag:=true records the whole run (all RPi topics, over
+      # DDS). The launch default bag_dir is ~/wojtek_bags == /root/wojtek_bags
       # in the container. A named volume (not a bind mount into the repo) so the
       # data lands on the /var/lib/docker partition, which has the space for it
       # -- bags were filling up the root partition. Survives container

@@ -38,7 +38,7 @@
   <exec_depend>foxglove_bridge</exec_depend>
   <exec_depend>plotjuggler</exec_depend>
   <exec_depend>teleop_twist_keyboard</exec_depend>
-  <!-- viz.launch.py records the whole run (ros2 bag record -a) from the PC. -->
+  <!-- viz.launch.py bag:=true records the whole run (ros2 bag record -a) from the PC. -->
   <exec_depend>ros2bag</exec_depend>
   <exec_depend>rosbag2_transport</exec_depend>
   <exec_depend>rosbag2_storage_default_plugins</exec_depend>

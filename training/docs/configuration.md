@@ -180,12 +180,12 @@ Default actor observations are `gyro`, `gravity`, `joint_pos`, `joint_vel`,
 | `task.env.encoder.enable` | `false` | Enable per-joint encoder-zero offsets. |
 | `task.env.encoder.range` | `0.02` rad | Uniform encoder offset is in `[-range, range]`. |
 | `task.env.action_filter` | `0.0` | EMA filter strength on actions (`0` disables it). Mirror this filter on the robot if enabled during training. |
-| `task.env.terrain.enable` | `false` | Train on the generated terrain arena with a spawn curriculum; see [Terrain curriculum](#terrain-curriculum). Requires `build-terrain` first. Flat path is byte-identical when off. |
-| `task.env.terrain.feet_only` | `true` | Collide only the four foot spheres (and the base box) with terrain, dropping the leg-link collision geoms; terrain contact sizing. |
-| `task.env.terrain.spawn_yaw` | `true` | Random base yaw at every spawn/respawn. Free, because the actor obs is yaw-invariant. |
-| `task.env.terrain.pad_jitter` | `0.15` m | xy jitter half-width at the spawn pad centre. Keep `<= 0.2` so the settle transient stays on the 0.6 m pad. |
-| `task.env.terrain.init_level_frac` | `0.5` | Initial difficulty level drawn uniformly over the lower this-fraction of rows (start easy). |
-| `task.env.terrain.demote_fraction` | `0.5` | Demote a level when an episode walked less than this fraction of its commanded planar distance. |
+| `task.env.terrain.enable` | `false` | Train on the terrain arena. Needs `build-terrain` first. See [Terrain curriculum](#terrain-curriculum). |
+| `task.env.terrain.feet_only` | `true` | Only the four feet and the base box collide with terrain. |
+| `task.env.terrain.spawn_yaw` | `true` | Random heading at every spawn. |
+| `task.env.terrain.pad_jitter` | `0.15` m | Spawn scatter around the pad centre. Keep it under 0.2. |
+| `task.env.terrain.init_level_frac` | `0.5` | First spawns come from the easiest half of the rows. |
+| `task.env.terrain.demote_fraction` | `0.5` | Drop a level when the episode walked less than this fraction of its commanded distance. |
 | `task.env.fall.min_height` | `0.06` m | Fall threshold. |
 | `task.env.fall.max_tilt_gz` | `-0.4` | Fall tilt threshold in body-frame gravity z. |
 | `task.env.gait.freq` | `[1.4, 3.0]` Hz | Clock frequency range from slow walking to maximum command speed. |
@@ -359,80 +359,66 @@ training run rather than being re-sampled for every episode.
 
 ## Terrain curriculum
 
-Terrain training exists only on `joystick` and is off by default. With
-`task.env.terrain.enable=true` the env loads the shared terrain arena instead
-of the flat scene, spawns each parallel env on a curriculum tile, and trains
-under a terrain-aware auto-reset wrapper that promotes and demotes tiles
-between episodes. Base height, foot clearance, and foot contact are measured
-against the local terrain surface, so stepping up is not a height error and a
-box top is not a fall.
+Joystick only, off by default. When `task.env.terrain.enable=true`:
 
-**Prerequisite: build the arena first.** The scene, heightfield, spec, and
-lookup grid are generated on demand and gitignored:
+- the env loads the terrain arena instead of the flat floor,
+- every env spawns on a tile, easy rows first,
+- heights and foot contact are measured from the terrain surface, so a step
+  up is not a height error and a box top is not a fall,
+- after each episode the env moves to a harder or easier tile.
+
+Build the arena first. The files are generated and gitignored:
 
 ```bash
 ./training/run.sh build-terrain            # default 10-row arena, seed 0
 ./training/run.sh train task=joystick ++task.env.terrain.enable=true
 ```
 
-`terrain.enable=true` with the assets missing fails at construction with a
-message pointing back at `build-terrain`.
+If the files are missing, the env tells you to run `build-terrain`.
 
-Keys (all under `task.env.terrain`):
+Keys under `task.env.terrain`:
 
 | Key | Default | Meaning |
 |---|---:|---|
-| `enable` | `false` | Load the terrain scene and the spawn curriculum. |
-| `feet_only` | `true` | Only the four foot spheres and the base box collide with terrain. The leg-link collision geoms are dropped on the loaded model, never in the XML. |
-| `spawn_yaw` | `true` | Draw a random base yaw at each spawn. The actor obs carries no heading, so this costs nothing. |
-| `pad_jitter` | `0.15` m | xy jitter half-width around the spawn pad centre. Keep it `<= 0.2` so the reset settle transient stays on the 0.6 m flat pad. |
-| `init_level_frac` | `0.5` | Each env's initial level is uniform over the lower this-fraction of rows. |
-| `demote_fraction` | `0.5` | The demote threshold (see below). |
+| `enable` | `false` | Terrain scene and curriculum on. |
+| `feet_only` | `true` | Only the four feet and the base box collide with terrain. |
+| `spawn_yaw` | `true` | Random heading at every spawn. |
+| `pad_jitter` | `0.15` m | Spawn scatter around the pad centre. Keep it under 0.2 so spawns stay on the pad. |
+| `init_level_frac` | `0.5` | First spawns come from the easiest half of the rows. |
+| `demote_fraction` | `0.5` | See the rule below. |
 
-**Curriculum rule (legged_gym), applied at every episode end, fall or
-timeout.** Per env, `walked = ‖last_xy − spawn_xy‖`.
+The rule, from legged_gym, applied when an episode ends by fall or by
+timeout:
 
-- **Promote** one level when `walked > tile_size / 2`. The robot crossed its
-  tile.
-- **Demote** one level when `walked < demote_fraction × commanded_distance`.
-  `commanded_distance` accumulates `‖command_xy‖ × ctrl_dt` over the episode.
-  A standing episode has a near-zero commanded distance, clears neither
-  threshold, and holds.
-- Levels clip to `[0, n_rows − 1]`. A promotion from the top level respawns on
-  a uniformly random row instead, so easy terrain keeps being trained.
+- Walked further than half a tile: one row harder.
+- Covered less than half the distance the commands asked for: one row
+  easier.
+- Standing episodes stay where they are.
+- Promoted while already at the top row: random row, so easy terrain stays
+  in training.
 
-The env's terrain type is drawn once at first reset and stays fixed for the
-whole run. Only the difficulty level moves. Respawn teleports the base onto
-the new tile's pad. The teleport is valid because the actor observation
-contains no absolute position or heading. The observation layout is unchanged
-at 54-dim actor and 61-dim critic, so a terrain run's checkpoint keeps the
-flat layout. Terrain awareness lives in the rewards, terminations, and spawn
-logic. Scandots come in step 6.
+Each env keeps one terrain type for the whole run. Only the row changes. The
+robot is teleported between tiles. That is safe because no observation
+contains world position or heading. Observations did not change at all, so
+checkpoints stay compatible with flat runs. Scandots come in step 6.
 
-Watching the curriculum: `eval/episode_terrain_level_per_step` (printed as
-`terrain_lvl`) is the eval env's level. The eval env re-draws its levels at
-every evaluation, so this hovers near the init mean and does not show
-training progress. To watch the training curriculum, set
-`++ppo.log_training_metrics=true` (optionally
-`++ppo.training_metrics_steps=<env-steps>`) and read
-`episode/terrain_level_per_step`, printed as `terrain_lvl_train`. The step-5
-blind-terrain preset should set this flag.
+Watching it work: `terrain_lvl` in the logs comes from the eval env, which
+starts fresh at every evaluation, so it will not climb. To watch the real
+curriculum, run with `++ppo.log_training_metrics=true` and read
+`terrain_lvl_train`. The step-5 preset should set this flag.
 
-**Warp contact budget.** The flat `sim.naconmax_per_env=32` is undersized for
-feet-on-terrain contacts, and warp drops the overflow silently. A warp terrain
-run must set a larger budget explicitly. Start at roughly 2x the flat default
-and measure the real number with `check-terrain` on the GPU (step 5):
+Warp needs a bigger contact budget. The flat default
+(`sim.naconmax_per_env=32`) is too small for terrain, and warp drops extra
+contacts silently. Start at about double and measure with `check-terrain` on
+the GPU:
 
 ```bash
-# CPU sanity check that the terrain scene still steps (jax backend).
 ./training/run.sh check-terrain --backend jax --num-envs 4 --steps 50
-# Warp run: raise the contact budget (measure, do not guess).
 ./training/run.sh train task=joystick ++task.env.terrain.enable=true \
   ++task.env.sim.naconmax_per_env=64
 ```
 
-Constructing a terrain env on the warp backend with the untouched flat default
-prints a loud warning to that effect.
+The env prints a warning if a warp terrain run keeps the flat default.
 
 ## PPO configuration
 

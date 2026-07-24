@@ -181,11 +181,9 @@ def main(cfg: DictConfig) -> None:
             f"steps {num_steps:>12,}  reward {reward:8.2f}  "
             f"ep_len {ep_len:6.0f}  {sps:,.0f} steps/s"
         )
-        # The eval env re-draws its levels at every evaluation, so terrain_lvl
-        # tracks the eval spawn spread and hovers near the init mean. The
-        # training curriculum shows up only under ppo.log_training_metrics,
-        # which reports episode/terrain_level_per_step on a separate progress
-        # call. Print both when present.
+        # terrain_lvl comes from the eval env, which starts fresh every
+        # evaluation, so it will not climb. terrain_lvl_train is the real
+        # curriculum; it only exists under ppo.log_training_metrics.
         level = metrics.get("eval/episode_terrain_level_per_step")
         if level is not None:
             line += f"  terrain_lvl {float(level):5.2f}"

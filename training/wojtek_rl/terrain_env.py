@@ -1,12 +1,7 @@
-"""JAX terrain helpers shared by the env and the curriculum wrapper.
+"""JAX helpers for the terrain arena: height lookup, spawn tables, curriculum.
 
-Everything here reads the generated terrain sidecars (``terrain_lookup.npz``
-and ``terrain_spec.json``, written by ``./run.sh build-terrain``). The module
-stays free of brax so base.py can import it without the training stack.
-
-``bilinear_sample`` reproduces ``terrain._bilinear`` exactly, clamped edges
-included, so heights sampled in the env match the lookup grid the physics
-geometry was validated against.
+Everything reads the files written by ``./run.sh build-terrain``. No brax
+imports here, so base.py can use it without the training stack.
 """
 
 from __future__ import annotations
@@ -17,9 +12,8 @@ import numpy as np
 
 
 def bilinear_sample(grid, x_min, cell_x, y_min, cell_y, x, y):
-    """Bilinear sample of ``grid`` (rows index y, cols index x) at world
-    ``(x, y)``, clamped to the grid edges. Matches ``terrain._bilinear``
-    exactly."""
+    """Sample ``grid`` at world ``(x, y)``. Same math as ``terrain._bilinear``,
+    clamped at the edges. Rows index y, columns index x."""
     nr, nc = grid.shape
     fx = jp.clip((x - x_min) / cell_x, 0.0, nc - 1)
     fy = jp.clip((y - y_min) / cell_y, 0.0, nr - 1)
@@ -42,11 +36,10 @@ def bilinear_sample(grid, x_min, cell_x, y_min, cell_y, x, y):
 
 
 def tables_from_spec(spec: dict, types) -> tuple[np.ndarray, np.ndarray]:
-    """Per-(row, terrain-type) tile-origin xy and pad height from the spec dict.
+    """Tile-centre xy and pad height for every (row, type) pair.
 
-    The tables are indexed by terrain type because the arena shuffles the
-    column order per row. Both arrays are ``(n_rows, n_types)``, aligned to
-    the ``types`` order."""
+    Indexed by type, not column, because each row shuffles its column order.
+    Shapes: ``(n_rows, n_types, 2)`` and ``(n_rows, n_types)``."""
     n_rows = int(spec["n_rows"])
     type_idx = {t: i for i, t in enumerate(types)}
     origin_xy = np.zeros((n_rows, len(types), 2), dtype=np.float32)
@@ -60,13 +53,11 @@ def tables_from_spec(spec: dict, types) -> tuple[np.ndarray, np.ndarray]:
 
 
 def sample_tile_spawn(rng, terrain_type, level, origin_xy, pad_h, pad_jitter, yaw_enable):
-    """Spawn pose on the ``(level, terrain_type)`` tile.
+    """Pick a spawn pose on one tile.
 
-    Returns the pad centre plus xy jitter, the tile's pad height, and a base
-    yaw quaternion. ``pad_jitter`` (metres) and ``yaw_enable`` are static
-    Python values, so the function vmaps over ``(rng, terrain_type, level)``.
-    The jitter is small enough that the reset settle transient stays on the
-    flat pad."""
+    Returns the pad centre plus a small xy jitter, the pad's height, and a
+    yaw quaternion. ``pad_jitter`` and ``yaw_enable`` are plain Python
+    values, so the function can be vmapped over (rng, terrain_type, level)."""
     xy0 = origin_xy[level, terrain_type]
     ph = pad_h[level, terrain_type]
     rj, ry = jax.random.split(rng)
@@ -81,16 +72,14 @@ def sample_tile_spawn(rng, terrain_type, level, origin_xy, pad_h, pad_jitter, ya
 
 
 def curriculum_step(level, walked, commanded_dist, rng, n_rows, tile_size, demote_fraction):
-    """legged_gym promote/demote for one finished episode.
+    """Move one env's level after an episode, legged_gym style.
 
-    An episode that walked more than half a tile edge promotes one level. An
-    episode that covered less than ``demote_fraction`` of its commanded
-    distance demotes one. Anything else holds. A standing episode has a
-    near-zero commanded distance, clears neither threshold, and holds too.
-    Levels clip to ``[0, n_rows-1]``. A promotion from the top level lands on
-    a uniformly random row instead, so easy terrain keeps being trained. The
-    rng advances on every call, so the caller can gate the whole result on
-    ``done`` with one where."""
+    Walked more than half a tile: one level up. Covered less than
+    ``demote_fraction`` of the commanded distance: one level down. Otherwise
+    stay, which covers standing episodes too. Levels stay inside
+    ``[0, n_rows-1]``, except going up from the top level lands on a random
+    row, so easy terrain stays in training. The rng always advances, so the
+    caller can gate everything on ``done`` with one where."""
     promote = walked > 0.5 * tile_size
     demote = walked < demote_fraction * commanded_dist
     delta = jp.where(promote, 1, jp.where(demote, -1, 0))

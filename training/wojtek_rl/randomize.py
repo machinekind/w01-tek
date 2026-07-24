@@ -59,10 +59,9 @@ def make_domain_randomize(mj_model, dr_cfg=None):
     foot_cfg = _field_cfg(dr_cfg, "foot_friction")
     motor_cfg = _field_cfg(dr_cfg, "motor_strength")
 
-    # The flat scene has one "floor" plane. The terrain scene has no geom with
-    # that name, only the heightfield and the boxes. There the single friction
-    # draw applies to every terrain geom, so the whole ground still shares one
-    # friction.
+    # The terrain scene has no geom named "floor", only the heightfield and
+    # the boxes. One friction draw covers them all, like the one floor plane
+    # on flat.
     try:
         floor_id = mj_model.geom("floor").id
         terrain_ids = None

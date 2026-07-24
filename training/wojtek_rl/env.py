@@ -145,30 +145,26 @@ def default_config() -> config_dict.ConfigDict:
         # wrapper it is fixed per env for the whole run, for the same reason
         # as latency above.
         encoder=config_dict.create(enable=False, range=0.02),
-        # Terrain curriculum, off by default. When enabled the env loads the
-        # generated terrain scene, spawns every env on a curriculum tile,
-        # measures height, clearance and contact against the local terrain
-        # surface, and trains under the auto-reset wrapper in
-        # terrain_wrapper.py, which moves envs between tiles at episode ends.
-        # With enable=False the flat path is byte-identical: same ops, same
-        # rng draws, same info layout, same wrapping. The obs stay 54-dim and
-        # carry no world pose, which is what makes the tile teleports valid.
+        # Terrain training, off by default. The env then loads the terrain
+        # scene, spawns every env on a tile, measures heights from the
+        # terrain surface, and the wrapper in terrain_wrapper.py moves envs
+        # between tiles after each episode. With enable=False nothing
+        # changes, down to the byte. Observations do not change either;
+        # that is what makes the tile teleports safe.
         terrain=config_dict.create(
             enable=False,
-            # Collide only the four foot spheres and the base box with
-            # terrain. The leg-link collision geoms come off the loaded model.
+            # Only the four feet and the base box collide with terrain.
             feet_only=True,
-            # Random base yaw at every spawn. The obs carry no heading, so
-            # this costs nothing.
+            # Random heading at every spawn. Costs nothing: the obs carry
+            # no heading.
             spawn_yaw=True,
-            # xy jitter half-width at the pad centre, m. Kept <= 0.2 so the
-            # settle transient never leaves the 0.6 m spawn pad.
+            # Spawn scatter around the pad centre, m. Keep under 0.2 so
+            # spawns stay on the 0.6 m pad.
             pad_jitter=0.15,
-            # Initial level drawn uniformly over the lower `init_level_frac`
-            # of rows (legged_gym starts easy).
+            # First spawns come from the easiest half of the rows.
             init_level_frac=0.5,
-            # legged_gym demote rule: an episode that walked less than this
-            # fraction of its commanded planar distance drops a level.
+            # Drop a level when the episode walked less than this fraction
+            # of its commanded distance.
             demote_fraction=0.5,
         ),
         # EMA low-pass on actions before the PD targets (0 = off). Kills the
@@ -413,10 +409,9 @@ class WojtekJoystick(WojtekEnv):
             anchor + jax.random.uniform(r_pos, (12,), minval=-0.05, maxval=0.05)
         )
         qpos = qpos.at[2].set(command[3])
-        # Terrain spawn: a fixed random terrain type, a starting level in the
-        # lower rows, base z lifted by the tile's pad height. The disabled
-        # branch draws no rng and adds no info keys, so the flat trajectory
-        # and info layout are unchanged.
+        # Terrain spawn: random type, easy starting row, base lifted by the
+        # pad height. The disabled branch draws no rng and adds no info
+        # keys, so flat runs are untouched.
         if self._terrain_enabled:
             rng, r_type, r_level, r_spawn, r_trng = jax.random.split(rng, 5)
             terrain_type = jax.random.randint(r_type, (), 0, self._terrain_n_types)
@@ -474,9 +469,8 @@ class WojtekJoystick(WojtekEnv):
             "encoder_offset": epsilon,
         }
         metrics = {f"reward/{k}": jp.zeros(()) for k in self._config.reward.scales}
-        # Curriculum state for the auto-reset wrapper. terrain_type is fixed
-        # for the run and spawn_height is the first commanded height. The
-        # wrapper rewrites the rest on done. The env updates last_xy and
+        # State for the curriculum wrapper. terrain_type never changes; the
+        # wrapper rewrites the rest on done. The env refreshes last_xy and
         # commanded_dist every step.
         if self._terrain_enabled:
             info.update(
@@ -555,10 +549,9 @@ class WojtekJoystick(WojtekEnv):
         info["last_act"] = action
         info["last_torque"] = data.actuator_force
         info["motor_targets"] = motor_targets
-        # Curriculum bookkeeping for the auto-reset wrapper: the base xy after
-        # the step and the planar distance this step's command asked for. The
-        # resample below has not run yet, so info["command"] is the command
-        # that drove this step.
+        # For the curriculum wrapper: where the base is, and how far the
+        # commands asked to go so far. The resample below has not run yet,
+        # so this is the command that drove this step.
         if self._terrain_enabled:
             info["last_xy"] = data.qpos[0:2]
             info["commanded_dist"] = info["commanded_dist"] + (
@@ -586,8 +579,7 @@ class WojtekJoystick(WojtekEnv):
             **state.metrics,
             **{f"reward/{k}": v for k, v in rewards.items()},
         }
-        # The `_per_step` suffix makes brax divide the episode sum by the
-        # episode length, so the logged value is the mean level.
+        # The `_per_step` suffix makes brax report the mean, not the sum.
         if self._terrain_enabled:
             metrics["terrain_level_per_step"] = info["terrain_level"].astype(jp.float32)
         obs = self._get_obs(data, info, r_noise)
@@ -622,8 +614,8 @@ class WojtekJoystick(WojtekEnv):
                       self._config.reward.pose_leg_weight]), 4
         )
 
-        # On terrain both helpers measure against the local surface. On flat
-        # they return the world-z expressions verbatim.
+        # Terrain: measured from the surface. Flat: the old expressions,
+        # unchanged.
         base_height = self._base_height(data)
         fall = (base_height < self._config.fall.min_height) | (
             gravity[2] > self._config.fall.max_tilt_gz

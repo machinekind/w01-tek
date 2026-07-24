@@ -9,6 +9,7 @@
 #   3 RT tuning     : cmdline isolcpus, rtprio limits, cpu governor (--skip-tuning)
 #   4 network       : hostapd/dnsmasq/netplan + failover switch      (--skip-network)
 #   5 robot service : install wojtek-robot.service (left disabled)   (--skip-service)
+#   6 shell env     : ROS env in ~/.bashrc (domain 42 + CycloneDDS)  (--skip-shell-env)
 #
 # Needs the token for phase 2 (RT kernel), passed by deploy.sh from .env:
 #   UBUNTU_PRO_TOKEN=<...> ./install.sh
@@ -22,7 +23,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROS_DISTRO="${ROS_DISTRO:-jazzy}"
 DRY_RUN=0
 DO_REBOOT=0
-SKIP_PACKAGES=0 SKIP_KERNEL=0 SKIP_TUNING=0 SKIP_NETWORK=0 SKIP_SERVICE=0
+SKIP_PACKAGES=0 SKIP_KERNEL=0 SKIP_TUNING=0 SKIP_NETWORK=0 SKIP_SERVICE=0 SKIP_SHELL_ENV=0
 ENABLE_ROBOT=0
 REBOOT_NEEDED=0
 
@@ -34,6 +35,7 @@ for a in "$@"; do case "$a" in
     --skip-tuning) SKIP_TUNING=1 ;;
     --skip-network) SKIP_NETWORK=1 ;;
     --skip-service) SKIP_SERVICE=1 ;;
+    --skip-shell-env) SKIP_SHELL_ENV=1 ;;
     # Opt-in: also start the RT stack automatically on boot. Off by default --
     # `ros2 run wojtek_bringup robot` starts it per-session, and leaving the RPi
     # free lets you run other launches on it during development.
@@ -64,9 +66,12 @@ provision_packages() {
     # ttyACM at startup; without it the driver falls back to "low-speed mode"
     # (see md80 bring-up logs), adding latency to the 400 Hz loop. The PC image
     # already ships it (docker/Dockerfile) -- the RPi is where it actually matters.
-    local tools="python3-colcon-common-extensions python3-rosdep build-essential git setserial"
+    local tools="python3-colcon-common-extensions python3-rosdep build-essential git setserial python3-pip"
     local ap="iw hostapd dnsmasq rfkill"
     run "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ${ros_pkgs} ${tools} ${ap}"
+    # policy_node resolves policies by HF repo id (wojtek_policy/
+    # policy_source.py); same pip3 install the PC image does.
+    run "pip3 install --break-system-packages huggingface_hub"
     if [ ! -f /etc/ros/rosdep/sources.list.d/20-default.list ]; then
         run "sudo rosdep init"
     fi
@@ -181,6 +186,35 @@ provision_service() {
     fi
 }
 
+# ---------------------------------------------------------------- phase 6
+provision_shell_env() {
+    say "Phase 6: ROS env for interactive shells (~/.bashrc)"
+    local marker="# wojtek-ros-env"
+    if grep -qF "$marker" "$HOME/.bashrc" 2>/dev/null; then
+        info "~/.bashrc already has the ROS env block"
+        return
+    fi
+    # Manual shells must match wojtek-robot.service (domain 42 + CycloneDDS);
+    # without this a manual `ros2 topic list` lands on domain 0 / Fast DDS and
+    # sees NOTHING from the running stack (cost us hours once).
+    local block
+    block="$(cat <<EOF
+
+${marker} (added by install.sh; keep in sync with wojtek-robot.service)
+source /opt/ros/${ROS_DISTRO}/setup.bash
+[ -f "\$HOME/wojtek_ws/install/setup.bash" ] && source "\$HOME/wojtek_ws/install/setup.bash"
+export ROS_DOMAIN_ID=42
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+EOF
+)"
+    if [ "$DRY_RUN" = 1 ]; then
+        printf '   [dry-run] append to ~/.bashrc:%s\n' "$block"
+    else
+        info "appending ROS env block to ~/.bashrc"
+        printf '%s\n' "$block" >> "$HOME/.bashrc"
+    fi
+}
+
 # ---------------------------------------------------------------- main
 [ "$DRY_RUN" = 1 ] && say "DRY RUN -- no changes will be made"
 [ "$SKIP_PACKAGES" = 1 ] || provision_packages
@@ -188,6 +222,7 @@ provision_service() {
 [ "$SKIP_TUNING"   = 1 ] || provision_tuning
 [ "$SKIP_NETWORK"  = 1 ] || provision_network
 [ "$SKIP_SERVICE"  = 1 ] || provision_service
+[ "$SKIP_SHELL_ENV" = 1 ] || provision_shell_env
 
 say "Provisioning done."
 if [ "$REBOOT_NEEDED" = 1 ]; then

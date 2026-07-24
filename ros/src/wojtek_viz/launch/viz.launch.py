@@ -1,7 +1,13 @@
 """PC-side visualization/debug for the LIVE robot (running on the RPi).
 
     ros2 launch wojtek_viz viz.launch.py [rviz:=true] [plotjuggler:=false]
-                                         [bag:=false]
+                                         [foxglove:=false] [bag:=false]
+
+foxglove:=true starts foxglove_bridge on ws://localhost:8765 for the native
+Foxglove app -- the way to get a fast UI on macOS, where RViz would have to
+go through X11. Its 3D panel reads /robot_description like RViz (meshes are
+served over the bridge's asset channel), and its Teleop panel publishes
+/cmd_vel, replacing the drive pad of the Qt operator console.
 
 This starts no hardware and no robot_state_publisher -- those run on the
 robot (wojtek_bringup robot.launch.py on the RPi). Over the shared DDS link
@@ -57,6 +63,7 @@ def generate_launch_description():
         [
             DeclareLaunchArgument("rviz", default_value="true"),
             DeclareLaunchArgument("plotjuggler", default_value="false"),
+            DeclareLaunchArgument("foxglove", default_value="false"),
             # Record the whole run (all topics, over DDS) by default; bag:=false
             # to skip, bag_dir:=/some/path to relocate.
             DeclareLaunchArgument("bag", default_value="true"),
@@ -72,6 +79,15 @@ def generate_launch_description():
                 executable="plotjuggler",
                 condition=IfCondition(LaunchConfiguration("plotjuggler")),
             ),
+            # Headless websocket bridge for the native Foxglove app. On macOS
+            # docker/compose.mac.yaml publishes the port to the host (Linux
+            # runs network_mode:host, so it is reachable either way).
+            Node(
+                package="foxglove_bridge",
+                executable="foxglove_bridge",
+                parameters=[{"port": 8765}],
+                condition=IfCondition(LaunchConfiguration("foxglove")),
+            ),
             # bash -c: mkdir the parent (rosbag2 creates the bag dir itself but
             # not missing parents), then exec the recorder. bag_dir/bag_output
             # are passed as argv ($1/$2), not spliced into the script.
@@ -80,6 +96,7 @@ def generate_launch_description():
                 cmd=[
                     "bash", "-c",
                     'mkdir -p "$1"\n'
+                    'echo ">> rosbag: recording to $2"\n'
                     'exec ros2 bag record -a -o "$2"\n',
                     "wojtek_bag_record",  # $0 (shell name in messages)
                     LaunchConfiguration("bag_dir"),  # $1

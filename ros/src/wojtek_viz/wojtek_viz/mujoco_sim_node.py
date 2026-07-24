@@ -1,13 +1,16 @@
 """Real-time MuJoCo simulator node for wojtek.
 
-Steps scene_mjx.xml (the exact physics the policy was trained on: position
-servos kp=20/kd=1, forcerange +/-6, dt=0.004) paced to wall clock and bridges
-it to ROS:
+Steps scene_mjx.xml paced to wall clock and bridges it to ROS. With the
+`policy` parameter set, the servo gains and torque cap come from that
+policy's contract (policy_meta.json pd block), so the simulated plant is
+exactly the one the policy trained against; without it the XML defaults
+(kp=20/kd=1, forcerange +/-6) apply. Topics:
 
   subscribes  /wojtek/joint_targets (JointState, URDF convention)
   publishes   /joint_states (URDF convention, actuated + passive four-bar
               joints -> drives robot_state_publisher / RViz)
-              /imu/data (orientation, gyro, accel of the base, base_link frame)
+              /imu_sensor_broadcaster/imu (orientation, gyro, accel of the
+              base, base_link frame; named like the real broadcaster's topic)
               TF odom -> base_link (ground truth base pose)
               /odom_vel (Twist, ground-truth base velocity, debugging)
   services    /sim/reset (std_srvs/Trigger) -- back to the initial pose
@@ -67,9 +70,30 @@ class MujocoSimNode(Node):
         self.declare_parameter("realtime_factor", 1.0)
         self.declare_parameter("initial_pose", "home")
         self.declare_parameter("folded_knee_rad", poses.FOLDED_KNEE_RAD)
+        # Same reference policy_node gets. When set, the servo gains and
+        # torque cap from the policy's contract are written into the model,
+        # so the simulated plant is the one the policy trained against (the
+        # XML carries the kp=20/kd=1/±6 defaults, wrong for e.g. a kp80
+        # policy).
+        self.declare_parameter("policy", "")
 
         xml = self.get_parameter("model_xml").value or _prepare_model_xml()
         self.model = mujoco.MjModel.from_xml_path(xml)
+        policy_ref = self.get_parameter("policy").value
+        if policy_ref:
+            from wojtek_policy.policy_source import load_meta, pd_settings
+            meta, source = load_meta(policy_ref)
+            pd = pd_settings(meta)
+            self.model.actuator_gainprm[:, 0] = pd["kp"]
+            self.model.actuator_biasprm[:, 1] = -pd["kp"]
+            self.model.actuator_biasprm[:, 2] = -pd["kd"]
+            self.model.actuator_forcerange[:, 0] = -pd["max_torque"]
+            self.model.actuator_forcerange[:, 1] = pd["max_torque"]
+            self.get_logger().info(
+                f"plant matched to {meta['run_name']} ({source}): "
+                f"kp={pd['kp']:g} kd={pd['kd']:g} "
+                f"max_torque={pd['max_torque']:g}"
+            )
         self.data = mujoco.MjData(self.model)
         self.jmap = JointMap(self.get_parameter("joint_map_yaml").value)
 
@@ -106,7 +130,9 @@ class MujocoSimNode(Node):
             JointState, "wojtek/joint_targets", self._on_targets, 10
         )
         self._pub_js = self.create_publisher(JointState, "joint_states", 10)
-        self._pub_imu = self.create_publisher(Imu, "imu/data", 10)
+        # Same topic name the real robot's imu_sensor_broadcaster publishes,
+        # so policy/console subscribe one canonical name in sim and real.
+        self._pub_imu = self.create_publisher(Imu, "imu_sensor_broadcaster/imu", 10)
         self._pub_vel = self.create_publisher(Twist, "odom_vel", 10)
         self._tf = TransformBroadcaster(self)
         self.create_service(Trigger, "sim/reset", self._srv_reset)

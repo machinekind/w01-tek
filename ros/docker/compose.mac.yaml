@@ -1,0 +1,22 @@
+# macOS overrides for compose.yaml (../sim.sh stacks this on Darwin):
+#   docker compose -f compose.yaml -f compose.mac.yaml up -d
+# Docker Desktop's Linux VM breaks two assumptions of the base file:
+#  * network_mode: host only reaches the VM, not the Mac -- so the Foxglove
+#    websocket must be published as a port, which host mode forbids. Use the
+#    default bridge instead. All DDS traffic is container-internal in sim
+#    mode, so nothing else needs host networking.
+#  * the Mac's SSH agent socket can't cross the VM boundary; mount /dev/null
+#    (same target path replaces the base entry) so ssh degrades exactly like
+#    the no-agent case. Sim mode never uses SSH anyway.
+services:
+  wojtek_robot:
+    network_mode: bridge
+    ports:
+      # foxglove_bridge (viz.launch.py foxglove:=true) -- the native Foxglove
+      # app on the Mac connects to ws://localhost:8765.
+      - "8765:8765"
+      # web operator console (wojtek_viz web_console) -- browser opens
+      # http://localhost:8080 (page + JSON websocket on one port).
+      - "8080:8080"
+    volumes:
+      - /dev/null:/ssh-agent

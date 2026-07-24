@@ -183,7 +183,7 @@ def main(argv=None):
     p.add_argument("--vlm-model", default=None)
     p.add_argument("--max-steps", type=int, default=None, help="override backend default")
     p.add_argument("--scene", type=Path, default=paths.ROOM_SCENE_XML)
-    p.add_argument("--policy", type=Path, default=paths.POLICY_NPZ)
+    p.add_argument("--policy", default=paths.DEFAULT_POLICY)
     p.add_argument("--out", type=Path, default=None, help="output dir (default runs/nav_episodes/<ts>)")
     args = p.parse_args(argv)
 

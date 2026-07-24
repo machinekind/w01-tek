@@ -23,10 +23,19 @@
   <depend>wojtek_description</depend>
   <!-- operator_console.py: the Qt operator GUI (arm/pose/jog/drive in one). -->
   <depend>python3-pyqt5</depend>
+  <!-- web_console.py: the browser twin of the Qt console (no X11 needed;
+       works on macOS / phones). One port: HTTP page + JSON websocket. -->
+  <depend>python3-websockets</depend>
 
+  <!-- gamepad.launch.py: the standard joystick driver feeding
+       gamepad_teleop.py (bluetooth Xbox pad -> /cmd_vel). -->
+  <exec_depend>joy</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>xacro</exec_depend>
   <exec_depend>rviz2</exec_depend>
+  <!-- viz.launch.py foxglove:=true: websocket bridge for the native Foxglove
+       app (the macOS path, where X11 RViz is not an option). -->
+  <exec_depend>foxglove_bridge</exec_depend>
   <exec_depend>plotjuggler</exec_depend>
   <exec_depend>teleop_twist_keyboard</exec_depend>
   <!-- viz.launch.py records the whole run (ros2 bag record -a) from the PC. -->

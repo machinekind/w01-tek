@@ -9,8 +9,8 @@ activation" and can be corrected at runtime with /wojtek/zero.
 
 The boot_pose parameter names the reference pose (the robot's position 0):
 
-  boot_pose="home" (default): the home standing pose (policy_meta.json
-    home_ctrl, where /wojtek/stand_up ends).
+  boot_pose="home" (default): the home standing pose (wojtek_policy.poses
+    HOME_CTRL, where /wojtek/stand_up ends).
   boot_pose="folded": robot lying flat on its base, hips straight and knees
     folded against the mechanical stop (folded_knee_rad, policy convention --
     see wojtek_policy.poses). Reproducible by hand without holding the
@@ -60,7 +60,6 @@ from std_msgs.msg import Float64MultiArray
 from std_srvs.srv import SetBool, Trigger
 
 from wojtek_policy.joint_map import JointMap
-from wojtek_policy.policy import WojtekPolicy
 
 from wojtek_policy import poses
 
@@ -69,7 +68,6 @@ class RealIoNode(Node):
     def __init__(self):
         super().__init__("wojtek_real_io")
         share = get_package_share_directory("wojtek_policy")
-        self.declare_parameter("policy_dir", f"{share}/config")
         self.declare_parameter("joint_map_yaml", f"{share}/config/joint_map.yaml")
         self.declare_parameter("max_arm_jump_rad", 0.15)
         self.declare_parameter("dry_run", False)
@@ -78,16 +76,17 @@ class RealIoNode(Node):
         self.declare_parameter("ramp_duration_s", 4.0)
         self.declare_parameter("ramp_rate_hz", 50.0)
 
-        pdir = self.get_parameter("policy_dir").value
-        policy = WojtekPolicy(f"{pdir}/policy.npz")
+        # Joint order and the home pose are robot constants (poses.py), not
+        # properties of whichever policy is loaded -- arming must work the
+        # same with no policy at all.
         self.jmap = JointMap(self.get_parameter("joint_map_yaml").value)
-        self.joint_names = policy.joint_names
+        self.joint_names = list(poses.ACTUATOR_NAMES)
 
         # Named poses in URDF convention.
         folded = poses.folded_ctrl(
             self.joint_names, self.get_parameter("folded_knee_rad").value
         )
-        self.home_urdf = self.jmap.to_urdf(self.joint_names, policy.home_ctrl)
+        self.home_urdf = self.jmap.to_urdf(self.joint_names, poses.HOME_CTRL)
         self.folded_urdf = self.jmap.to_urdf(self.joint_names, folded)
         boot_pose = self.get_parameter("boot_pose").value
         if boot_pose not in ("folded", "home"):

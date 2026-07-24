@@ -39,9 +39,14 @@ TERRAIN_SPEC_JSON = MUJOCO_DIR / "terrain_spec.json"
 TERRAIN_LOOKUP_NPZ = MUJOCO_DIR / "terrain_lookup.npz"
 
 # Exported NumPy policy runtime (ROS-free), shared with the real robot.
-# (policy_meta.json is found by WojtekPolicy next to the npz.)
 WOJTEK_POLICY_PKG = REPO_ROOT / "ros/src/wojtek_policy"
-POLICY_NPZ = WOJTEK_POLICY_PKG / "config/policy.npz"
+# Default policy reference for sim/demo apps: any form accepted by
+# wojtek_policy.policy_source (HF repo id, local dir, path to policy.npz).
+DEFAULT_POLICY = "<HF_ORGANIZATION>/wojtek-springy-locomotion"
+
+# URDF <-> MuJoCo affine joint map, shared with the ROS nodes (sysid bag
+# reader converts recorded signals with the exact same table).
+JOINT_MAP_YAML = WOJTEK_POLICY_PKG / "config/joint_map.yaml"
 
 # XML declaration order. Actuators and joints follow this order.
 LEGS = ("rear_left", "rear_right", "front_right", "front_left")

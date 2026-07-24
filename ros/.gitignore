@@ -27,3 +27,6 @@ deploy/rpi/cache/
 /src/wojtek_description/mujoco/terrain_hfield.bin
 /src/wojtek_description/mujoco/terrain_spec.json
 /src/wojtek_description/mujoco/terrain_lookup.npz
+
+.policies/
+

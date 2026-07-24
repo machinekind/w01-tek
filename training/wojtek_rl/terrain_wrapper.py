@@ -65,6 +65,12 @@ class TerrainAutoResetWrapper(Wrapper):
         self._pad_jitter = base._terrain_pad_jitter
         self._spawn_yaw = base._terrain_spawn_yaw
         self._demote_fraction = base._terrain_demote_fraction
+        # EpisodeWrapper's length, for projecting the demote threshold onto a
+        # full episode. Without one below us there are no truncation dones and
+        # no "steps" key either, so the env's own length is the right fallback.
+        self._episode_length = int(
+            getattr(env, "episode_length", base._config.episode_length)
+        )
 
     def reset(self, rng: jax.Array) -> mjx_env.State:
         state = self.env.reset(rng)
@@ -73,12 +79,12 @@ class TerrainAutoResetWrapper(Wrapper):
         return state
 
     def _respawn(self, done, level, ttype, spawn_xy, last_xy, commanded, spawn_h,
-                 cached_qpos, rng):
+                 steps_lived, cached_qpos, rng):
         """One env's teleport. Everything returned is gated on ``done``; a
         live env keeps its values."""
         walked = jp.linalg.norm(last_xy - spawn_xy)
         new_level, rng2 = terrain_env.curriculum_step(
-            level, walked, commanded, rng,
+            level, walked, commanded, steps_lived, self._episode_length, rng,
             self._n_rows, self._tile_size, self._demote_fraction,
         )
         rng2, r_spawn = jax.random.split(rng2)
@@ -108,6 +114,12 @@ class TerrainAutoResetWrapper(Wrapper):
         done = state.done  # fall or timeout; both are set below this wrapper
 
         info = state.info
+        # Steps in the episode that just ended: zeroed on done above, before
+        # EpisodeWrapper incremented it for this step. A timeout therefore holds
+        # exactly episode_length here.
+        steps_lived = info.get(
+            "steps", jp.full_like(done, self._episode_length, dtype=jp.int32)
+        )
         new_qpos, new_level, new_spawn_xy, new_rng = jax.vmap(self._respawn)(
             done,
             info["terrain_level"],
@@ -116,6 +128,7 @@ class TerrainAutoResetWrapper(Wrapper):
             info["last_xy"],
             info["commanded_dist"],
             info["spawn_height"],
+            steps_lived,
             reset_data.qpos,
             info["terrain_rng"],
         )

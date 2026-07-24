@@ -23,21 +23,26 @@ from wojtek_rl.terrain_wrapper import (
 )
 
 SMALL_ROWS = 3
+TEST_ARENA = "test"
 
 
 @pytest.fixture(scope="module")
 def small_arena():
-    """A small arena written to the real terrain sidecars, so the env loads it
-    from disk the way training does. Deterministic; refreshes the artifacts."""
+    """A small arena written to the `test` file set, so the env loads it from
+    disk the way training does without touching the arena a policy trained on.
+    Deterministic, and removed afterwards."""
     a = terrain.generate(seed=0, n_rows=SMALL_ROWS)
-    build_terrain.write_arena(a)
-    return a
+    build_terrain.write_arena(a, TEST_ARENA)
+    yield a
+    for p in paths.terrain_paths(TEST_ARENA).values():
+        p.unlink(missing_ok=True)
 
 
 @pytest.fixture(scope="module")
 def terrain_config():
     cfg = wojtek_env.default_config()
     cfg.terrain.enable = True
+    cfg.terrain.arena = TEST_ARENA
     return cfg
 
 
@@ -134,11 +139,15 @@ def test_flat_helpers_are_world_z():
 N_ROWS = 10
 TILE = 3.0
 DEMOTE = 0.5
+EPISODE = 1000
 
 
-def _curr(level, walked, commanded, key=0):
+def _curr(level, walked, commanded, key=0, steps_lived=EPISODE, episode=EPISODE):
+    """`steps_lived == episode` by default: a timeout, where the projection
+    factor is 1 and the threshold is the pre-projection one."""
     lvl, _ = terrain_env.curriculum_step(
         jp.int32(level), jp.float32(walked), jp.float32(commanded),
+        jp.int32(steps_lived), episode,
         jax.random.PRNGKey(key), N_ROWS, TILE, DEMOTE,
     )
     return int(lvl)
@@ -169,6 +178,43 @@ def test_curriculum_hold_at_ceiling_without_promote():
     assert _curr(N_ROWS - 1, walked=0.8, commanded=1.0) == N_ROWS - 1
 
 
+def test_curriculum_timeout_threshold_is_unprojected():
+    """A timeout lived the whole episode, so the projection factor is 1 and the
+    rule is exactly what it was before the projection existed."""
+    # 1.2 walked of a 2.0 commanded distance: above the 1.0 threshold, and
+    # below the 1.5 half-tile crossing, so the level holds
+    assert _curr(5, walked=1.2, commanded=2.0) == 5
+    # 0.9 is below the same threshold, so it demotes
+    assert _curr(5, walked=0.9, commanded=2.0) == 4
+
+
+def test_curriculum_early_fall_demotes():
+    """A fall at step 50 of 1000 gets a threshold twenty times the distance
+    commanded so far, so almost any fall demotes -- the escape valve legged_gym
+    has. Without the projection this same episode holds its level."""
+    walked, commanded = 0.2, 0.15  # 50 steps at 0.15 m/s commanded
+    assert _curr(5, walked, commanded, steps_lived=50, episode=1000) == 4
+    # the unprojected threshold is 0.5 * 0.15 = 0.075, below the 0.2 walked
+    assert _curr(5, walked, commanded, steps_lived=1000, episode=1000) == 5
+
+
+def test_curriculum_promote_wins_over_demote():
+    """Both conditions firing is a promote, matching legged_gym's
+    `move_down * ~move_up`."""
+    # crossed half a tile, and the projected threshold is far above that
+    lvl = _curr(5, walked=2.0, commanded=0.02, steps_lived=2, episode=1000)
+    assert lvl == 6
+    # the same episode without the crossing demotes, so both really do fire
+    assert _curr(5, walked=1.4, commanded=0.02, steps_lived=2, episode=1000) == 4
+
+
+def test_curriculum_first_step_division_is_guarded():
+    """steps_lived can be 0 before the first step has run; the level must stay
+    finite rather than come back as a nan-propagated garbage index."""
+    for level in (0, 5, N_ROWS - 1):
+        assert 0 <= _curr(level, walked=0.0, commanded=0.0, steps_lived=0) < N_ROWS
+
+
 def test_curriculum_max_level_random_respawn():
     """Promoting from the top level respawns on a uniformly random row (not a
     clip to the top), so easy terrain is revisited."""
@@ -177,6 +223,7 @@ def test_curriculum_max_level_random_respawn():
     def one(k):
         lvl, _ = terrain_env.curriculum_step(
             jp.int32(N_ROWS - 1), jp.float32(2.0), jp.float32(3.0),
+            jp.int32(EPISODE), EPISODE,
             k, N_ROWS, TILE, DEMOTE,
         )
         return lvl
@@ -258,10 +305,100 @@ def test_wrapper_teleports_to_pads_and_bounds_levels(terrain_env_inst):
         if done.any():
             saw_done = True
             xy = np.array(state.data.qpos[done, 0:2])
-            dist = np.linalg.norm(xy[:, None, :] - origins[None, :, :], axis=-1).min(1)
-            # teleported onto some tile's pad (centre + jitter)
-            assert np.all(dist <= env._terrain_pad_jitter + 1e-4)
+            # Teleported onto some tile's pad (centre + jitter). Bounded per
+            # axis, not by a Euclidean radius: the jitter is drawn on a square,
+            # so a corner draw is jitter*sqrt(2) from the centre and a radial
+            # bound rejects it. Re-running this loop over seeds 0..39 hits
+            # 0.1968 against a 0.15 jitter; it passed only because PRNGKey(0)
+            # happened to land inside the inscribed circle every time.
+            off = np.abs(xy[:, None, :] - origins[None, :, :])
+            nearest = off.max(axis=-1).argmin(axis=-1)
+            per_axis = off[np.arange(len(xy)), nearest]
+            assert np.all(per_axis <= env._terrain_pad_jitter + 1e-4), per_axis
     assert saw_done  # episode_length=3 must have forced truncation dones
+
+
+def _drive_to_a_done(env, episode_length, walked, n_envs=2, level=1, key=3):
+    """Two steps through the wrapper, ending on a fall done, with `walked`
+    metres between the spawn and where the base ends up.
+
+    `spawn_xy` is what the wrapper measures distance from and the env never
+    touches it mid-episode, so writing it is how a specific walked distance is
+    staged; `last_xy` would be overwritten by the next step. The fall is staged
+    by dropping the base to just above the local surface, below
+    `fall.min_height` -- that is the termination the demote rule exists for.
+    """
+    wrapped = wrap_for_terrain_brax_training(env, episode_length=episode_length)
+    step = jax.jit(wrapped.step)
+    state = jax.jit(wrapped.reset)(jax.random.split(jax.random.PRNGKey(key), n_envs))
+    # A live forward command, so commanded_dist accumulates at a known rate.
+    state.info["command"] = jp.tile(jp.array([0.5, 0.0, 0.0, 0.125]), (n_envs, 1))
+    state = step(state, jp.zeros((n_envs, 12)))
+    assert not np.any(np.array(state.done)), "the first step must not terminate"
+    state.info["terrain_level"] = jp.full((n_envs,), level, dtype=jp.int32)
+    xy = state.data.qpos[:, 0:2]
+    state.info["spawn_xy"] = xy + jp.array([walked, 0.0])
+    qpos = state.data.qpos.at[:, 2].set(env._terrain_height(xy) + 0.01)
+    state = state.replace(data=state.data.replace(qpos=qpos))
+    state = step(state, jp.zeros((n_envs, 12)))
+    assert np.all(np.array(state.done) == 1.0), "the staged fall must terminate"
+    return np.array(state.info["terrain_level"])
+
+
+def test_wrapper_demotes_after_an_early_fall(terrain_env_inst):
+    """The behaviour the projected demote threshold adds, through env.step.
+
+    Two steps of a 0.5 m/s command accumulate 0.02 m of commanded distance; the
+    fall lands at step 2 of 1000, so the threshold is 0.5 * 0.02 * 1000/2 =
+    5 m and the 0.02 m walked is far below it. Unprojected, the threshold would
+    be 0.01 m and this episode would hold its level.
+    """
+    levels = _drive_to_a_done(terrain_env_inst, episode_length=1000, walked=0.02)
+    assert np.all(levels == 0), levels
+
+
+def test_wrapper_promote_beats_demote_through_step(terrain_env_inst):
+    """Same staged fall, but the base is 2 m from its spawn: a crossing. Both
+    conditions fire (the projected threshold is 5 m) and promotion wins."""
+    levels = _drive_to_a_done(terrain_env_inst, episode_length=1000, walked=2.0)
+    assert np.all(levels == 2), levels
+
+
+def test_domain_randomization_composes_with_the_curriculum_wrapper(terrain_env_inst):
+    """The DR wrapper actually resets and steps under the terrain auto-reset.
+
+    Nothing else in the repo executes the DR wrapper -- `make_domain_randomize`
+    is tested as a pure function -- and `domain_rand: true` is the default
+    training path, so this composition is what a real run does and what nothing
+    covered. The rng binding mirrors brax's ppo.train, which partials the rng in
+    before handing the callable to wrap_env_fn.
+    """
+    import functools
+
+    from wojtek_rl.randomize import make_domain_randomize
+
+    n = 2
+    randomization_fn = functools.partial(
+        make_domain_randomize(
+            terrain_env_inst.mj_model,
+            {"foot_friction": {"enable": True}, "joint_gains": {"enable": True}},
+        ),
+        rng=jax.random.split(jax.random.PRNGKey(0), n),
+    )
+    wrapped = wrap_for_terrain_brax_training(
+        terrain_env_inst, episode_length=3, randomization_fn=randomization_fn
+    )
+    step = jax.jit(wrapped.step)
+    state = jax.jit(wrapped.reset)(jax.random.split(jax.random.PRNGKey(1), n))
+    saw_done = False
+    for _ in range(8):
+        state = step(state, jp.zeros((n, 12)))
+        saw_done = saw_done or bool(np.any(np.array(state.done)))
+        assert np.all(np.isfinite(np.array(state.obs["state"])))
+        levels = np.array(state.info["terrain_level"])
+        assert np.all((levels >= 0) & (levels < terrain_env_inst._terrain_n_rows))
+    # the teleport-on-done path ran with a per-env randomized model
+    assert saw_done
 
 
 def test_flat_env_uses_stock_wrapper():
@@ -284,11 +421,22 @@ def test_flat_env_uses_stock_wrapper():
 # -- 6. Missing-assets error path ---------------------------------------------
 
 
-def test_missing_terrain_assets_raises(monkeypatch, tmp_path):
-    monkeypatch.setattr(paths, "TERRAIN_SCENE_XML", tmp_path / "nope_scene.xml")
-    monkeypatch.setattr(paths, "TERRAIN_SPEC_JSON", tmp_path / "nope_spec.json")
-    monkeypatch.setattr(paths, "TERRAIN_LOOKUP_NPZ", tmp_path / "nope_lookup.npz")
+@pytest.mark.parametrize(
+    "missing", ["scene", "hfield", "spec", "lookup"]
+)
+def test_missing_terrain_assets_raises(monkeypatch, tmp_path, missing):
+    """Each of the four generated files, heightfield included. Without the
+    heightfield in the check, a missing .bin is a raw MuJoCo compile error
+    instead of the message that names build-terrain."""
+    files = {}
+    for role in ("scene", "hfield", "spec", "lookup"):
+        p = tmp_path / f"terrain_{role}"
+        if role != missing:
+            p.touch()
+        files[role] = p
+    monkeypatch.setattr(paths, "terrain_paths", lambda kind="train": files)
     cfg = wojtek_env.default_config()
     cfg.terrain.enable = True
-    with pytest.raises(FileNotFoundError, match="build-terrain"):
+    with pytest.raises(FileNotFoundError, match="build-terrain") as excinfo:
         wojtek_env.WojtekJoystick(cfg)
+    assert files[missing].name in str(excinfo.value)

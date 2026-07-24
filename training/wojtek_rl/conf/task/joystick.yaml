@@ -48,7 +48,7 @@ env:
   # first. With enable=false nothing changes. Details: docs/configuration.md.
   terrain:
     enable: false
-    feet_only: true # only feet + base box collide with terrain
+    arena: train # train | eval | test; build-terrain --arena <kind>
     spawn_yaw: true # random heading at every spawn
     pad_jitter: 0.15 # spawn scatter around pad centre, m; keep under 0.2
     init_level_frac: 0.5 # first spawns come from the easiest half of rows

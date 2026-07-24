@@ -71,17 +71,43 @@ def sample_tile_spawn(rng, terrain_type, level, origin_xy, pad_h, pad_jitter, ya
     return spawn_xy, ph, quat
 
 
-def curriculum_step(level, walked, commanded_dist, rng, n_rows, tile_size, demote_fraction):
+def curriculum_step(
+    level, walked, commanded_dist, steps_lived, episode_length,
+    rng, n_rows, tile_size, demote_fraction,
+):
     """Move one env's level after an episode, legged_gym style.
 
     Walked more than half a tile: one level up. Covered less than
-    ``demote_fraction`` of the commanded distance: one level down. Otherwise
-    stay, which covers standing episodes too. Levels stay inside
-    ``[0, n_rows-1]``, except going up from the top level lands on a random
-    row, so easy terrain stays in training. The rng always advances, so the
-    caller can gate everything on ``done`` with one where."""
+    ``demote_fraction`` of the distance the commands asked for over a FULL
+    episode: one level down. Otherwise stay, which covers standing episodes
+    too. Levels stay inside ``[0, n_rows-1]``, except going up from the top
+    level lands on a random row, so easy terrain stays in training. Promotion
+    wins when both fire, matching legged_gym's ``move_down * ~move_up``. The
+    rng always advances, so the caller can gate everything on ``done`` with
+    one where.
+
+    The demote threshold is projected onto the full episode. legged_gym
+    compares walked distance against half the commanded speed times the whole
+    episode length, using the command held at reset; this env resamples the
+    command mid-episode, so the equivalent is to scale the commanded distance
+    actually accumulated by ``episode_length / steps_lived``. A timeout has
+    ``steps_lived == episode_length``, so the factor is 1 and the threshold is
+    what it always was. A fall at step 50 of 1000 gets twenty times the
+    distance commanded so far, so almost any fall demotes -- the escape valve
+    legged_gym has, and falling is the dominant termination on terrain.
+
+    Note the asymmetry: the promote threshold is hardcoded at half a tile,
+    while demote is configurable. Half a tile knows nothing about how long the
+    obstacle is, which is what bounds the stair flight at six steps (treads end
+    at 1.25 m of a 1.5 m half-tile). A longer flight needs promotion defined
+    against the feature band instead.
+    """
     promote = walked > 0.5 * tile_size
-    demote = walked < demote_fraction * commanded_dist
+    # steps_lived is 0 only before the first step has run, where commanded_dist
+    # is 0 too and the threshold is 0 either way; the maximum just keeps the
+    # division finite.
+    full_episode = commanded_dist * episode_length / jp.maximum(steps_lived, 1)
+    demote = walked < demote_fraction * full_episode
     delta = jp.where(promote, 1, jp.where(demote, -1, 0))
     stepped = jp.clip(level + delta, 0, n_rows - 1)
     at_max = level >= (n_rows - 1)

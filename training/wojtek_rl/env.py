@@ -153,8 +153,11 @@ def default_config() -> config_dict.ConfigDict:
         # that is what makes the tile teleports safe.
         terrain=config_dict.create(
             enable=False,
-            # Only the four feet and the base box collide with terrain.
-            feet_only=True,
+            # Which generated arena to load: `train` is the shuffled
+            # curriculum arena, `eval` the fixed measurement course, `test`
+            # the test suite's scratch arena. Build it with
+            # `build-terrain --arena <kind>`.
+            arena="train",
             # Random heading at every spawn. Costs nothing: the obs carry
             # no heading.
             spawn_yaw=True,

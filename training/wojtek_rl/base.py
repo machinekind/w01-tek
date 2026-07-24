@@ -99,14 +99,20 @@ class WojtekEnv(mjx_env.MjxEnv):
         self._terrain_enabled = bool(
             terrain_cfg is not None and terrain_cfg.enable
         )
-        scene_xml = paths.TERRAIN_SCENE_XML if self._terrain_enabled else paths.SCENE_XML
+        # Which arena file set to load. Attribute access on purpose: a terrain
+        # run with no `arena` key is a config drift, not a default.
+        self._terrain_arena = str(terrain_cfg.arena) if self._terrain_enabled else ""
+        self._terrain_files = (
+            paths.terrain_paths(self._terrain_arena) if self._terrain_enabled else {}
+        )
         if self._terrain_enabled:
             self._require_terrain_assets()
+            scene_xml = self._terrain_files["scene"]
+        else:
+            scene_xml = paths.SCENE_XML
         self._mj_model = mujoco.MjModel.from_xml_path(str(scene_xml))
         self._mj_model.opt.timestep = self.sim_dt
         self._customize_model(self._mj_model)
-        if self._terrain_enabled and terrain_cfg.feet_only:
-            self._collide_feet_only(self._mj_model)
         sim = self._config.sim
         self._backend = resolve_backend(sim.backend)
         self._mjx_model = mjx.put_model(self._mj_model, impl=self._backend)
@@ -149,37 +155,23 @@ class WojtekEnv(mjx_env.MjxEnv):
             self._load_terrain(terrain_cfg)
 
     def _require_terrain_assets(self) -> None:
-        missing = [
-            p
-            for p in (
-                paths.TERRAIN_SCENE_XML,
-                paths.TERRAIN_SPEC_JSON,
-                paths.TERRAIN_LOOKUP_NPZ,
-            )
-            if not p.exists()
-        ]
+        """All four generated files, heightfield included. The scene XML points
+        at the heightfield binary by relative path, so a missing .bin is a raw
+        MuJoCo compile error rather than the message below."""
+        missing = [p for p in self._terrain_files.values() if not p.exists()]
         if missing:
             names = ", ".join(p.name for p in missing)
             raise FileNotFoundError(
                 f"terrain.enable=true but the generated terrain assets are "
-                f"missing ({names}). Run `./training/run.sh build-terrain` "
-                f"first; the sidecars are gitignored and built on demand."
+                f"missing ({names}). Run `./training/run.sh build-terrain "
+                f"--arena {self._terrain_arena}` first; the sidecars are "
+                f"gitignored and built on demand."
             )
-
-    def _collide_feet_only(self, m: mujoco.MjModel) -> None:
-        """Turn off collision for the `*_link_floor` leg geoms. Only the four
-        feet and the base box touch the terrain then. This keeps the contact
-        count down on rough ground. The XML is not modified."""
-        for i in range(m.ngeom):
-            name = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, i) or ""
-            if name.endswith("_link_floor"):
-                m.geom_contype[i] = 0
-                m.geom_conaffinity[i] = 0
 
     def _load_terrain(self, terrain_cfg) -> None:
         """Load the terrain files: height grid onto the device, spawn tables,
         curriculum settings."""
-        npz = np.load(paths.TERRAIN_LOOKUP_NPZ)
+        npz = np.load(self._terrain_files["lookup"])
         x_min, x_max = float(npz["x_min"]), float(npz["x_max"])
         y_min, y_max = float(npz["y_min"]), float(npz["y_max"])
         ncol, nrow = int(npz["ncol"]), int(npz["nrow"])
@@ -189,7 +181,7 @@ class WojtekEnv(mjx_env.MjxEnv):
         self._terrain_cell_x = (x_max - x_min) / (ncol - 1)
         self._terrain_cell_y = (y_max - y_min) / (nrow - 1)
 
-        spec = json.loads(paths.TERRAIN_SPEC_JSON.read_text())
+        spec = json.loads(self._terrain_files["spec"].read_text())
         origin_xy, pad_h = terrain_env.tables_from_spec(spec, terrain.TYPES)
         self._terrain_origin_xy = jp.asarray(origin_xy)
         self._terrain_pad_h = jp.asarray(pad_h)
@@ -234,7 +226,9 @@ class WojtekEnv(mjx_env.MjxEnv):
     # -- MjxEnv plumbing -------------------------------------------------
     @property
     def xml_path(self) -> str:
-        return str(paths.TERRAIN_SCENE_XML if self._terrain_enabled else paths.SCENE_XML)
+        return str(
+            self._terrain_files["scene"] if self._terrain_enabled else paths.SCENE_XML
+        )
 
     @property
     def action_size(self) -> int:
@@ -266,6 +260,21 @@ class WojtekEnv(mjx_env.MjxEnv):
         return brax_math.rotate(data.qvel[:3], brax_math.quat_inv(self._quat(data)))
 
     def _foot_contact(self, data):
+        """Per-foot contact flag, from a height lookup rather than a contact
+        force.
+
+        It has a blind band on terrain, in two places, and both are one-sided
+        (a foot that IS touching reads as airborne):
+
+        - A foot pressed against the vertical face of a riser sits above the
+          surface the lookup returns for its own xy, so it reads as airborne.
+        - The lookup rasterises a box onto the node grid, so within about one
+          cell of a box edge (0.04 m, and up to ~0.05 m after bilinear
+          interpolation) it returns the box top for ground next to the box, and
+          a foot on that ground reads as airborne.
+
+        Both land on the stair and step tiles the curriculum aims at. Replacing
+        this with real contact forces is the fix; it has not been done."""
         foot = data.geom_xpos[self._foot_geom_ids]
         z = foot[:, 2]
         if self._terrain_enabled:
@@ -319,7 +328,10 @@ class WojtekEnv(mjx_env.MjxEnv):
             "last_act": info["last_act"],
             # Sim-only signals, meant for the privileged critic list:
             "linvel": self._local_linvel(data),
-            "base_height": data.qpos[2:3],
+            # Terrain-relative, like the reward and termination paths. On the
+            # flat scene _base_height IS qpos[2], so getup/jump (which observe
+            # this and have no terrain key) are unchanged.
+            "base_height": jp.atleast_1d(self._base_height(data)),
             "actuator_force": data.actuator_force,
             "foot_contact": self._foot_contact(data).astype(jp.float32),
         }

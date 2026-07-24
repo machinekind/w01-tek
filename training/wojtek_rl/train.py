@@ -181,12 +181,20 @@ def main(cfg: DictConfig) -> None:
             f"steps {num_steps:>12,}  reward {reward:8.2f}  "
             f"ep_len {ep_len:6.0f}  {sps:,.0f} steps/s"
         )
-        # terrain_level_per_step is already per-episode-length normalized by
-        # brax's evaluator (the `_per_step` suffix), so this is the mean
-        # curriculum level across the eval batch.
+        # The eval metric is the eval env's level: that env resets to the
+        # initial spawn distribution every evaluation, so this tracks the eval
+        # spawn spread, not the training curriculum climbing (it hovers near
+        # the init mean). The real curriculum signal is the training env's
+        # level, which brax surfaces on a separate progress call under
+        # ppo.log_training_metrics as episode/terrain_level_per_step (its
+        # EpisodeMetricsLogger divides the `_per_step` metric by episode
+        # length). Print both when present, labelled distinctly.
         level = metrics.get("eval/episode_terrain_level_per_step")
         if level is not None:
             line += f"  terrain_lvl {float(level):5.2f}"
+        train_level = metrics.get("episode/terrain_level_per_step")
+        if train_level is not None:
+            line += f"  terrain_lvl_train {float(train_level):5.2f}"
         print(line)
         if wb is not None:
             wb.log({**metrics, "perf/steps_per_sec": sps}, step=num_steps)

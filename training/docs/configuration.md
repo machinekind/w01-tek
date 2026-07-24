@@ -410,10 +410,18 @@ is unchanged (still 54-dim actor / 61-dim critic), so a terrain run's
 checkpoint stays layout-compatible** — terrain awareness here is in the
 rewards, terminations, and spawn logic, not the obs (scandots are step 6).
 
-Curriculum progress is logged as `eval/episode_terrain_level_per_step` (the
-`_per_step` suffix makes brax's evaluator divide the episode sum by the episode
-length, so the value is the mean terrain level across the eval batch) and
-printed as `terrain_lvl` on the progress line.
+Watching the curriculum: the eval metric `eval/episode_terrain_level_per_step`
+(printed as `terrain_lvl`) is the **eval env's** level. That env is a separate
+instance reset to the initial spawn distribution at every evaluation, so it
+reflects the eval spawn spread — it hovers near the init mean and does **not**
+show the training curriculum climbing. To watch the actual training curriculum,
+run with `++ppo.log_training_metrics=true` (optionally
+`++ppo.training_metrics_steps=<env-steps>`): brax's `EpisodeMetricsLogger` then
+reads the training env's per-episode metrics, divides the `_per_step` value by
+episode length, and reports `episode/terrain_level_per_step` through the same
+progress/WandB path (printed as `terrain_lvl_train`). The step-5 blind-terrain
+preset should set `ppo.log_training_metrics=true` so the mean training level is
+recorded for the run.
 
 **Warp contact budget.** The flat `sim.naconmax_per_env=32` is undersized for
 feet-on-terrain contacts, and warp drops the overflow silently. A warp terrain

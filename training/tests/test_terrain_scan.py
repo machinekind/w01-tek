@@ -335,3 +335,113 @@ def test_a_fall_after_the_course_is_not_recorded():
     assert bool(
         terrain_scan.fall_progress(np.array([True]), np.array([False]), finished)[0]
     )
+
+
+# -- arena validation ----------------------------------------------------------
+
+
+def _eval_spec(**overrides):
+    """A spec dict shaped like terrain_spec.json for the measurement arena."""
+    from wojtek_rl import terrain
+
+    spec = {
+        "seed": terrain_suite.EVAL_SEED,
+        "n_rows": len(terrain_suite.DIFFICULTIES),
+        "ordered": terrain_suite.EVAL_ORDERED,
+        "pad_radius": terrain_suite.EVAL_PAD_RADIUS,
+        "n_steps": terrain.N_STEPS,
+        "stair_platform_half": terrain.STAIR_PLATFORM_HALF,
+        "tiles": [
+            {"row": r, "col": 0, "difficulty": d}
+            for r, d in enumerate(terrain_suite.DIFFICULTIES)
+        ],
+    }
+    spec.update(overrides)
+    return spec
+
+
+def test_check_arena_accepts_the_measurement_course():
+    terrain_scan.check_arena(_eval_spec())
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"seed": 5},
+        {"n_rows": 10},
+        {"ordered": False},
+        {"pad_radius": 0.6},
+        {"n_steps": 4},
+        {"stair_platform_half": 0.7},
+    ],
+    ids=["seed", "rows", "shuffled", "pad", "steps", "platform"],
+)
+def test_check_arena_refuses_a_different_arena(overrides):
+    """The fingerprint the scan records comes from the suite's constants and the
+    gate compares two scans on it, so an arena built with other parameters would
+    file its numbers under a description of something else."""
+    with pytest.raises(ValueError, match="not the measurement course"):
+        terrain_scan.check_arena(_eval_spec(**overrides))
+
+
+def test_check_arena_catches_a_shifted_row_table():
+    """Same row count, different difficulties: the cells are defined by row
+    index, so this is a different terrain, not a rescale."""
+    rows = list(terrain_suite.DIFFICULTIES)
+    rows[3] = rows[3] + 0.05
+    spec = _eval_spec(
+        tiles=[{"row": r, "col": 0, "difficulty": d} for r, d in enumerate(rows)]
+    )
+    with pytest.raises(ValueError, match="difficulties"):
+        terrain_scan.check_arena(spec)
+
+
+def test_check_arena_tolerates_a_spec_without_tiles():
+    """An older spec has no per-tile difficulty to check; the scalar checks still
+    apply and must not raise on the missing list."""
+    terrain_scan.check_arena(_eval_spec(tiles=[]))
+
+
+def test_metrics_average_only_over_runs_that_were_measured():
+    """A run that fell inside the settle window has no metric steps, so its
+    saturation, tracking error and clearance come back as zero. Averaging those
+    in drags a cell's numbers toward zero exactly where falls are common -- the
+    hard cells -- and in the direction that makes hard terrain look easy. On this
+    case the diluted tracking error reads 2.7x better than the survivors'."""
+    n_fell, n_ok = 20, 12
+    counted = np.array([0.0] * n_fell + [900.0] * n_ok)
+    out = {
+        "crossings": np.array([0] * n_fell + [CROSSINGS] * n_ok),
+        "fell": np.array([True] * n_fell + [False] * n_ok),
+        "saturation": np.where(counted > 0, 0.30, 0.0),
+        "track_err": np.where(counted > 0, 0.22, 0.0),
+        "clearance": np.where(counted > 0, 0.02, 0.0),
+        "counted": counted,
+        "steps": 1036,
+        "nacon_max": 90,
+    }
+    r = terrain_scan.reduce_runs(out)
+    assert r.track_err == pytest.approx(0.22)
+    assert r.saturation == pytest.approx(0.30)
+    assert r.clearance == pytest.approx(0.02)
+    assert r.measured == n_ok
+    # outcome counts still cover every run: a fall is a result, not a gap
+    assert r.of == n_fell + n_ok
+    assert r.falls == n_fell
+    assert r.passed == n_ok
+    # and the count is reported, so a thin sample is visible
+    cell = terrain_suite.CELLS_BY_NAME["pyramid_stairs_5cm"]
+    assert terrain_scan.cell_entry(cell, 0.4, r)["measured"] == n_ok
+
+
+def test_a_cell_where_every_run_died_early_reports_zero_not_nan():
+    counted = np.zeros(4)
+    out = {
+        "crossings": np.zeros(4, dtype=int), "fell": np.ones(4, dtype=bool),
+        "saturation": counted, "track_err": counted, "clearance": counted,
+        "counted": counted, "steps": 60, "nacon_max": 0,
+    }
+    r = terrain_scan.reduce_runs(out)
+    assert r.measured == 0
+    assert r.track_err == 0.0 and r.saturation == 0.0
+    assert r.falls == 4 and r.passed == 0

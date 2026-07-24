@@ -402,16 +402,24 @@ def render_terrain_markdown(scan: dict | None) -> list[str]:
         f"cells {arena.get('cells')}",
         f"- runs per cell and speed: {scan.get('runs_per_cell_speed')}",
         "",
-        "| cell | speed | passed | of | bar | provenance | crossings | falls |",
-        "|---|---|---|---|---|---|---|---|",
+        "| cell | speed | passed | of | bar | provenance | crossings | falls "
+        "| track err | measured |",
+        "|---|---|---|---|---|---|---|---|---|---|",
     ]
     for name, per_speed in (scan.get("cells") or {}).items():
         for speed, r in per_speed.items():
             lines.append(
                 f"| {name} | {speed} | {r.get('passed')} | {r.get('of')} | "
                 f"{_fmt(r.get('bar'))} | {r.get('provenance', '-')} | "
-                f"{_fmt(r.get('crossings_mean'))} | {r.get('falls')} |"
+                f"{_fmt(r.get('crossings_mean'))} | {r.get('falls')} | "
+                f"{_fmt(r.get('track_err'), 4)} | {_fmt(r.get('measured'))} |"
             )
+    lines += [
+        "",
+        "`measured` is how many runs the per-step metrics average over: a run "
+        "that fell inside the settle window contributes none, so a low count "
+        "means those numbers describe the survivors, not the cell.",
+    ]
     gate = scan.get("gate")
     if gate:
         lines += [

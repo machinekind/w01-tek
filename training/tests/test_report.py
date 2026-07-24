@@ -239,7 +239,8 @@ def _scan_doc():
     tracked = terrain_suite.CELLS_BY_NAME["pyramid_stairs_9cm"]
     reduced = terrain_scan.CellResult(
         passed=29, of=32, falls=2, timeouts=1, crossings_mean=3.8,
-        saturation=0.12, track_err=0.05, clearance=0.01, nacon_max=88, steps=1036,
+        saturation=0.12, track_err=0.05, clearance=0.01, measured=30,
+        nacon_max=88, steps=1036,
     )
     return {
         "run": "probe", "checkpoint": "1000", "engine": "warp",
@@ -273,6 +274,9 @@ def test_terrain_section_renders_a_scan():
     assert "| pyramid_stairs_5cm | 0.2 | 29 | 32 | 26 | provisional |" in text
     assert "| pyramid_stairs_9cm | 0.4 | 29 | 32 | - | tracked |" in text
     assert "### Gate" in text
+    # how many runs the per-step metrics average over, so a thin sample shows
+    assert "| 30 |" in text
+    assert "measured` is how many runs" in text
 
 
 def test_terrain_section_tolerates_an_incomplete_document():

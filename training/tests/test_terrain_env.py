@@ -422,7 +422,10 @@ def test_scan_reset_places_a_run_on_its_tile(terrain_env_inst):
 
     run = terrain_suite.COURSE[5]
     command = jp.array([0.4, 0.0, 0.0, terrain_scan.COMMAND_HEIGHT])
-    state = jax.jit(terrain_scan.scan_reset)(
+    # Eager, not jitted: the env is a Python object, so it can only ever be a
+    # static argument. make_cell_runner binds it in a closure for exactly that
+    # reason (functools.partial(scan_reset, env)).
+    state = terrain_scan.scan_reset(
         env, jax.random.PRNGKey(0), jp.asarray(spawn[5]), pad_h[5],
         jp.float32(run.yaw), command,
     )

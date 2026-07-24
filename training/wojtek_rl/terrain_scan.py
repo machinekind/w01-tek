@@ -108,6 +108,7 @@ class CellResult:
     saturation: float
     track_err: float
     clearance: float
+    measured: int  # runs that contributed metric steps
     nacon_max: int
     steps: int
 
@@ -127,6 +128,10 @@ def cell_entry(cell, speed: float, result: CellResult) -> dict:
         "saturation": round(result.saturation, 4),
         "track_err": round(result.track_err, 4),
         "clearance": round(result.clearance, 4),
+        # How many of the runs the three metrics above average over. A run that
+        # fell inside the settle window contributes no steps, so a low number
+        # here means those metrics describe the survivors, not the cell.
+        "measured": result.measured,
         "nacon_max": result.nacon_max,
         "steps": result.steps,
     }
@@ -268,6 +273,42 @@ def load_baseline(ref: str | None) -> dict | None:
     repo_id, _, revision = ref.partition("@")
     local = hf_hub_download(repo_id, "terrain_scan.json", revision=revision or None)
     return json.loads(Path(local).read_text())
+
+
+def check_arena(spec: dict) -> None:
+    """Refuse to scan an arena that is not the one the suite defines.
+
+    The recorded fingerprint comes from the suite's constants, and the gate
+    compares two scans on it -- so an arena built with different parameters
+    (`build-terrain --arena eval --seed 5`, or an arena from before a suite
+    change) would produce numbers filed under a fingerprint that describes
+    something else. The cells are defined by row index, so a row table that does
+    not match is not a difficulty mismatch, it is a different terrain.
+    """
+    want = {
+        "seed": terrain_suite.EVAL_SEED,
+        "n_rows": len(terrain_suite.DIFFICULTIES),
+        "ordered": terrain_suite.EVAL_ORDERED,
+        "pad_radius": terrain_suite.EVAL_PAD_RADIUS,
+        "n_steps": terrain.N_STEPS,
+        "stair_platform_half": terrain.STAIR_PLATFORM_HALF,
+    }
+    wrong = {
+        key: (spec.get(key), value)
+        for key, value in want.items()
+        if spec.get(key) != value
+    }
+    rows = [t["difficulty"] for t in spec.get("tiles", []) if t["col"] == 0]
+    if len(rows) == len(terrain_suite.DIFFICULTIES) and not all(
+        abs(a - b) < 1e-6 for a, b in zip(sorted(rows), terrain_suite.DIFFICULTIES)
+    ):
+        wrong["difficulties"] = (sorted(rows), list(terrain_suite.DIFFICULTIES))
+    if wrong:
+        detail = "; ".join(f"{k}: found {f!r}, expected {w!r}" for k, (f, w) in wrong.items())
+        raise ValueError(
+            f"the eval arena is not the measurement course ({detail}). Rebuild "
+            "it: `./training/run.sh build-terrain --arena eval`"
+        )
 
 
 def command_box_warnings(run: dict, speeds=terrain_suite.SPEEDS) -> list[str]:
@@ -460,19 +501,38 @@ def make_cell_runner(env, inf):
 
 
 def reduce_runs(out) -> CellResult:
-    """One cell's 32 run outcomes into its recorded numbers."""
+    """One cell's 32 run outcomes into its recorded numbers.
+
+    The per-step metrics average over the runs that actually contributed steps,
+    not over all 32. A run that fell inside the settle window has no metric steps
+    at all, so its saturation, tracking error and clearance come back as zero --
+    averaging those in drags the cell's numbers toward zero exactly where falls
+    are common, which is the hard cells. On a cell where 20 of 32 runs fall early
+    that reported a tracking error 2.7x better than the survivors', biased in the
+    direction that makes hard terrain look easy.
+
+    Pass, fall and timeout counts are over all 32 runs regardless: a fall is an
+    outcome, not a missing measurement.
+    """
     crossings = np.asarray(out["crossings"])
     fell = np.asarray(out["fell"], dtype=bool)
     finished = crossings >= terrain_suite.CROSSINGS
+    measured = np.asarray(out["counted"]) > 0
+
+    def mean_of(key):
+        values = np.asarray(out[key])[measured]
+        return float(values.mean()) if values.size else 0.0
+
     return CellResult(
         passed=int((finished & ~fell).sum()),
         of=len(crossings),
         falls=int(fell.sum()),
         timeouts=int((~finished & ~fell).sum()),
         crossings_mean=float(crossings.mean()),
-        saturation=float(np.asarray(out["saturation"]).mean()),
-        track_err=float(np.asarray(out["track_err"]).mean()),
-        clearance=float(np.asarray(out["clearance"]).mean()),
+        saturation=mean_of("saturation"),
+        track_err=mean_of("track_err"),
+        clearance=mean_of("clearance"),
+        measured=int(measured.sum()),
         nacon_max=int(out["nacon_max"]),
         steps=int(out["steps"]),
     )
@@ -526,13 +586,7 @@ def scan(
             "command": {"resample_steps": 10**9},
         },
     )
-    spec = json.loads(env._terrain_files["spec"].read_text())
-    if spec["n_rows"] != len(terrain_suite.DIFFICULTIES):
-        raise ValueError(
-            f"the eval arena has {spec['n_rows']} rows, the suite defines "
-            f"{len(terrain_suite.DIFFICULTIES)}. Rebuild it: "
-            "`./training/run.sh build-terrain --arena eval`"
-        )
+    check_arena(json.loads(env._terrain_files["spec"].read_text()))
     runner = make_cell_runner(env, inf)
 
     result = {

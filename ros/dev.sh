@@ -33,5 +33,13 @@ else
   echo "!! no SSH agent ($SSH_AUTH_SOCK) -- SSH to the RPi will prompt for a password"
 fi
 
-docker compose up -d
+# Same file stack as ../sim.sh so the two never recreate the container back
+# and forth over a config diff (macOS needs bridge networking + the published
+# Foxglove port -- see compose.mac.yaml).
+COMPOSE=(docker compose)
+if [ "$(uname -s)" = "Darwin" ]; then
+  COMPOSE+=(-f compose.yaml -f compose.mac.yaml)
+fi
+
+"${COMPOSE[@]}" up -d
 exec docker exec -it wojtek_robot bash

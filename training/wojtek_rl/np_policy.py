@@ -1,8 +1,10 @@
-"""Load the exported NumPy policy runtime (piesek_ws fbb_policy) without ROS.
+"""Load the exported NumPy policy runtime (ros/ wojtek_policy) without ROS.
 
-The deploy workspace ships a pure-NumPy WojtekPolicy (obs assembly + MLP + gait
-clock, no ROS imports) plus the exported fbb_loco_v8 weights. Reuse it here
-for plain-MuJoCo apps instead of duplicating the pipeline.
+The deploy workspace ships a pure-NumPy WojtekPolicy (obs assembly + MLP,
+no ROS imports) and a resolver that turns a policy reference -- a local
+directory, a path to a policy.npz, or a Hugging Face repo id like
+<HF_ORGANIZATION>/wojtek-springy-locomotion[@rev] -- into artifact paths.
+Reuse both here for plain-MuJoCo apps instead of duplicating the pipeline.
 """
 
 from __future__ import annotations
@@ -21,12 +23,24 @@ def _bootstrap() -> None:
         sys.path.insert(0, pkg)
 
 
-def load_fbb_policy(npz: Path = paths.POLICY_NPZ, meta: Path | None = None):
-    """WojtekPolicy from the exported .npz (+ its policy_meta.json)."""
+def load_policy_runtime(ref: str | Path | None = None, meta: Path | None = None):
+    """WojtekPolicy from a policy reference (default: paths.DEFAULT_POLICY).
+
+    `ref` may be a Hugging Face repo id, a directory holding policy.npz +
+    policy_meta.json, or a direct path to a policy.npz (exporter output;
+    the meta is found next to it unless `meta` is given).
+    """
     _bootstrap()
     from wojtek_policy.policy import WojtekPolicy
+    from wojtek_policy.policy_source import resolve_policy
 
-    return WojtekPolicy(npz, meta_path=meta)
+    if ref is None:
+        ref = paths.DEFAULT_POLICY
+    as_path = Path(ref).expanduser() if not isinstance(ref, Path) else ref
+    if as_path.suffix == ".npz":
+        return WojtekPolicy(as_path, meta_path=meta)
+    resolved = resolve_policy(str(ref))
+    return WojtekPolicy(resolved.npz, meta_path=meta or resolved.meta)
 
 
 def gravity_from_quat(qw: float, qx: float, qy: float, qz: float) -> np.ndarray:

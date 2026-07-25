@@ -66,9 +66,12 @@ provision_packages() {
     # ttyACM at startup; without it the driver falls back to "low-speed mode"
     # (see md80 bring-up logs), adding latency to the 400 Hz loop. The PC image
     # already ships it (docker/Dockerfile) -- the RPi is where it actually matters.
-    local tools="python3-colcon-common-extensions python3-rosdep build-essential git setserial"
+    local tools="python3-colcon-common-extensions python3-rosdep build-essential git setserial python3-pip"
     local ap="iw hostapd dnsmasq rfkill"
     run "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ${ros_pkgs} ${tools} ${ap}"
+    # policy_node resolves policies by HF repo id (wojtek_policy/
+    # policy_source.py); same pip3 install the PC image does.
+    run "pip3 install --break-system-packages huggingface_hub"
     if [ ! -f /etc/ros/rosdep/sources.list.d/20-default.list ]; then
         run "sudo rosdep init"
     fi

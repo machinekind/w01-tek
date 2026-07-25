@@ -16,9 +16,10 @@ the nodes already expose -- nothing in wojtek_bringup / wojtek_policy changes:
     ramp -- so we ramp here, nudging the published target toward the slider set-
     point in small steps. Needs: armed + policy DISABLED (else policy_node's own
     joint_targets fight ours). Measured is shown next to each commanded slider.
-  * Drive pad (M4): an XY pad (vx,vy) + a yaw slider publish /cmd_vel (Twist) at
-    a fixed rate; releasing recenters to zero (stop). Needs: armed + policy
-    ENABLED. This is the opposite mode to jog.
+  * Drive pad (M4): an XY pad (vx,yaw) + a strafe slider + a height slider
+    publish /cmd_vel (Twist) at a fixed rate; releasing the pad/strafe
+    recenters to zero (stop), height holds its set-point. Needs: armed +
+    policy ENABLED. This is the opposite mode to jog.
 
 There is NO dedicated arm/enable status topic, so the console tracks that state
 locally from the service responses it gets back.
@@ -27,8 +28,6 @@ Threading: rclpy spins in a background thread; all ROS->GUI updates cross over
 through Qt signals (queued, thread-safe). Service calls are async so the UI
 never blocks.
 """
-import json
-import os
 import signal
 import sys
 import threading
@@ -36,10 +35,6 @@ import xml.etree.ElementTree as ET
 
 import numpy as np
 import rclpy
-from ament_index_python.packages import (
-    PackageNotFoundError,
-    get_package_share_directory,
-)
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile
@@ -63,8 +58,15 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-# Keep in sync with wojtek_policy/policy_node.py CMD_LIMIT = [vx, vy, yaw].
+# Console-side cap on the XY-pad drive commands [vx, vy, yaw]. Deliberately
+# conservative; policy_node additionally clips /cmd_vel to the loaded
+# policy's trained command box.
 CMD_LIMIT = (0.6, 0.4, 0.7)
+# Commanded standing height (m): trained envelope and default stance. Keep in
+# sync with the loaded policy contract's command_height and the training env's
+# command.height range. Published on Twist linear.z (0 = use policy default).
+HEIGHT_RANGE = (0.09, 0.17)
+HEIGHT_DEFAULT = 0.125
 
 # Jog: how fast the published target chases the slider set-point (rad/s), and
 # the publish/ramp tick rate. Deliberately slow -- this drives real motors.
@@ -105,9 +107,10 @@ class RosNode(Node):
         self._pub_targets = self.create_publisher(JointState, "wojtek/joint_targets", 10)
         self._pub_cmd = self.create_publisher(Twist, "cmd_vel", 10)
 
-        # Canonical actuated joint names, straight from policy_meta.json (same
-        # source real_io/policy use). Lets the jog UI build immediately, even in
-        # sim where wojtek/joint_states_abs is never published.
+        # Canonical actuated joint names, from the robot constants in
+        # wojtek_policy.poses (same source real_io uses). Lets the jog UI
+        # build immediately, even in sim where wojtek/joint_states_abs is
+        # never published.
         self.joint_names = self._load_joint_names()
 
         # --- telemetry (M2) ---
@@ -131,11 +134,9 @@ class RosNode(Node):
 
     def _load_joint_names(self):
         try:
-            share = get_package_share_directory("wojtek_policy")
-            meta = json.loads(
-                open(os.path.join(share, "config", "policy_meta.json")).read())
-            return list(meta["actuator_names"])
-        except (PackageNotFoundError, OSError, KeyError, ValueError) as e:
+            from wojtek_policy import poses
+            return list(poses.ACTUATOR_NAMES)
+        except ImportError as e:
             self.get_logger().warning(f"no canonical joint names ({e}); "
                                       "jog will build from telemetry instead")
             return []
@@ -204,9 +205,11 @@ class RosNode(Node):
         msg.position = [float(p) for p in positions]
         self._pub_targets.publish(msg)
 
-    def publish_cmd(self, vx, vy, yaw):
+    def publish_cmd(self, vx, vy, yaw, height=0.0):
         t = Twist()
         t.linear.x, t.linear.y, t.angular.z = float(vx), float(vy), float(yaw)
+        # Standing-height command; policy_node treats 0 as "use the default".
+        t.linear.z = float(height)
         self._pub_cmd.publish(t)
 
 
@@ -214,12 +217,13 @@ class RosNode(Node):
 # Drive pad widget (M4)                                                        #
 # --------------------------------------------------------------------------- #
 class DrivePad(QWidget):
-    """2D pad: drag = (vx, vy) command; release recenters to zero (stop).
+    """2D pad: drag = (vx, yaw) command; release recenters to zero (stop).
 
-    Screen up = +vx (forward), screen right = -vy (ROS +y is left). Normalized
-    to [-1, 1] on each axis; the window scales by CMD_LIMIT before publishing.
+    Screen up = +vx (forward), screen right = -wz (turn right; ROS +z yaw is
+    counter-clockwise). Normalized to [-1, 1] on each axis; the window scales
+    by CMD_LIMIT before publishing.
     """
-    moved = pyqtSignal(float, float)  # normalized (fwd, left) in [-1, 1]
+    moved = pyqtSignal(float, float)  # normalized (fwd, ccw) in [-1, 1]
 
     def __init__(self):
         super().__init__()
@@ -233,7 +237,7 @@ class DrivePad(QWidget):
         self._x = max(-1.0, min(1.0, (pos.x() - cx) / r))
         self._y = max(-1.0, min(1.0, (pos.y() - cy) / r))
         self.update()
-        self.moved.emit(-self._y, -self._x)  # fwd = -screenY, left = -screenX
+        self.moved.emit(-self._y, -self._x)  # fwd = -screenY, ccw = -screenX
 
     def mousePressEvent(self, e):
         self._set_from_pos(e.pos())
@@ -312,6 +316,7 @@ class Console(QWidget):
 
         # drive publish tick
         self._drive_vx = self._drive_vy = self._drive_yaw = 0.0
+        self._drive_height = HEIGHT_DEFAULT
         self._drive_timer = QTimer(self)
         self._drive_timer.timeout.connect(self._drive_tick)
         self._drive_timer.start(int(1000 / DRIVE_TICK_HZ))
@@ -444,14 +449,22 @@ class Console(QWidget):
         self._pad.moved.connect(self._on_pad)
         lay.addWidget(self._pad)
         col = QVBoxLayout()
-        col.addWidget(QLabel("yaw"))
-        self._yaw = QSlider(Qt.Horizontal)
-        self._yaw.setMinimum(-1000)
-        self._yaw.setMaximum(1000)
-        self._yaw.sliderReleased.connect(lambda: self._yaw.setValue(0))
-        self._yaw.valueChanged.connect(self._on_yaw)
-        col.addWidget(self._yaw)
-        self._drive_label = QLabel("vx 0.00  vy 0.00  yaw 0.00")
+        col.addWidget(QLabel("strafe"))
+        self._strafe = QSlider(Qt.Horizontal)
+        self._strafe.setMinimum(-1000)
+        self._strafe.setMaximum(1000)
+        self._strafe.sliderReleased.connect(lambda: self._strafe.setValue(0))
+        self._strafe.valueChanged.connect(self._on_strafe)
+        col.addWidget(self._strafe)
+        col.addWidget(QLabel("height"))
+        self._height = QSlider(Qt.Horizontal)
+        self._height.setMinimum(int(HEIGHT_RANGE[0] * SLIDER_SCALE))
+        self._height.setMaximum(int(HEIGHT_RANGE[1] * SLIDER_SCALE))
+        self._height.setValue(int(HEIGHT_DEFAULT * SLIDER_SCALE))
+        self._height.valueChanged.connect(self._on_height)
+        col.addWidget(self._height)
+        self._drive_label = QLabel(
+            f"vx 0.00  vy 0.00  yaw 0.00  h {HEIGHT_DEFAULT:.3f}")
         col.addWidget(self._drive_label)
         lay.addLayout(col)
         return box
@@ -459,27 +472,35 @@ class Console(QWidget):
     def _on_drive_enable(self, on):
         if not on:
             self._drive_vx = self._drive_vy = self._drive_yaw = 0.0
-            self.node.publish_cmd(0.0, 0.0, 0.0)  # explicit stop
+            # explicit stop; keep the height set-point so the stance holds
+            self.node.publish_cmd(0.0, 0.0, 0.0, self._drive_height)
         elif not self._policy_on:
             self._set_status("drive on, but policy is OFF -- enable policy to move")
 
-    def _on_pad(self, fwd, left):
+    def _on_pad(self, fwd, ccw):
         self._drive_vx = fwd * CMD_LIMIT[0]
-        self._drive_vy = left * CMD_LIMIT[1]
+        self._drive_yaw = ccw * CMD_LIMIT[2]  # pad left = rotate left (+wz)
         self._update_drive_label()
 
-    def _on_yaw(self, val):
-        self._drive_yaw = (val / 1000.0) * CMD_LIMIT[2]
+    def _on_strafe(self, val):
+        # slider right = strafe right = -vy (ROS +y is left)
+        self._drive_vy = -(val / 1000.0) * CMD_LIMIT[1]
+        self._update_drive_label()
+
+    def _on_height(self, val):
+        self._drive_height = val / SLIDER_SCALE
         self._update_drive_label()
 
     def _update_drive_label(self):
         self._drive_label.setText(
-            f"vx {self._drive_vx:+.2f}  vy {self._drive_vy:+.2f}  yaw {self._drive_yaw:+.2f}")
+            f"vx {self._drive_vx:+.2f}  vy {self._drive_vy:+.2f}  "
+            f"yaw {self._drive_yaw:+.2f}  h {self._drive_height:.3f}")
 
     def _drive_tick(self):
         if not self._drive_enable.isChecked():
             return
-        self.node.publish_cmd(self._drive_vx, self._drive_vy, self._drive_yaw)
+        self.node.publish_cmd(
+            self._drive_vx, self._drive_vy, self._drive_yaw, self._drive_height)
 
     # ---- telemetry slots ---------------------------------------------------
     def _on_joints(self, data):

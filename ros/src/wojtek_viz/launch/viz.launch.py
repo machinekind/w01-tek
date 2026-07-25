@@ -1,7 +1,13 @@
 """PC-side visualization/debug for the LIVE robot (running on the RPi).
 
     ros2 launch wojtek_viz viz.launch.py [rviz:=true] [plotjuggler:=false]
-                                         [bag:=false]
+                                         [foxglove:=false] [bag:=true]
+
+foxglove:=true starts foxglove_bridge on ws://localhost:8765 for the native
+Foxglove app -- the way to get a fast UI on macOS, where RViz would have to
+go through X11. Its 3D panel reads /robot_description like RViz (meshes are
+served over the bridge's asset channel), and its Teleop panel publishes
+/cmd_vel, replacing the drive pad of the Qt operator console.
 
 This starts no hardware and no robot_state_publisher -- those run on the
 robot (wojtek_bringup robot.launch.py on the RPi). Over the shared DDS link
@@ -10,13 +16,16 @@ this machine only consumes what the robot publishes:
   - PlotJuggler subscribes to the robot's topics for live plotting.
 
 Because DDS makes every RPi-published topic visible here, `bag:=true`
-(the default) records the WHOLE run from the PC -- one bag, all topics,
-on the machine with disk to spare and no RT budget to protect. Caveat:
-this bag is only as complete as the link. Over ethernet (docked) it is
-effectively lossless; over wifi -- especially once the robot is on its
-own AP and moving -- best-effort topics can drop samples and a dropped
-link leaves a gap. For a guaranteed lossless on-robot capture, record
-there instead: robot.launch.py bag:=true (see its bag_cpus note).
+records the WHOLE run from the PC -- one bag, all topics. Off by
+default: bags are ~GB per session and pile up in the wojtek_bags
+volume, and most viz sessions are watching, not experiments worth
+keeping. Caveat when recording: the bag is only as complete as the
+link. Over ethernet (docked) it is effectively lossless; over wifi --
+especially once the robot is on its own AP and moving -- best-effort
+topics can drop samples and a dropped link leaves a gap. The RPi service
+already records every run on-robot losslessly (wojtek-robot.service
+passes bag:=true bag_cpus:=0,1); a manual robot.launch.py run records
+with the same flags.
 Bags land in bag_dir/run_<timestamp> (bag_dir defaults to ~/wojtek_bags).
 
 Teleop needs its own terminal (it reads the keyboard on stdin), so run it
@@ -57,9 +66,10 @@ def generate_launch_description():
         [
             DeclareLaunchArgument("rviz", default_value="true"),
             DeclareLaunchArgument("plotjuggler", default_value="false"),
-            # Record the whole run (all topics, over DDS) by default; bag:=false
-            # to skip, bag_dir:=/some/path to relocate.
-            DeclareLaunchArgument("bag", default_value="true"),
+            DeclareLaunchArgument("foxglove", default_value="false"),
+            # bag:=true records the whole run (all topics, over DDS);
+            # bag_dir:=/some/path to relocate.
+            DeclareLaunchArgument("bag", default_value="false"),
             DeclareLaunchArgument("bag_dir", default_value=default_bag_dir),
             Node(
                 package="rviz2",
@@ -71,6 +81,15 @@ def generate_launch_description():
                 package="plotjuggler",
                 executable="plotjuggler",
                 condition=IfCondition(LaunchConfiguration("plotjuggler")),
+            ),
+            # Headless websocket bridge for the native Foxglove app. On macOS
+            # docker/compose.mac.yaml publishes the port to the host (Linux
+            # runs network_mode:host, so it is reachable either way).
+            Node(
+                package="foxglove_bridge",
+                executable="foxglove_bridge",
+                parameters=[{"port": 8765}],
+                condition=IfCondition(LaunchConfiguration("foxglove")),
             ),
             # bash -c: mkdir the parent (rosbag2 creates the bag dir itself but
             # not missing parents), then exec the recorder. bag_dir/bag_output

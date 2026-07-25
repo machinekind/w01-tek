@@ -9,6 +9,7 @@ its own; use this to inspect/verify the boot pose, not for clean walking.
 
 Drive with any Twist teleop, e.g.:
     ros2 run teleop_twist_keyboard teleop_twist_keyboard
+    ros2 launch wojtek_viz gamepad.launch.py   # bluetooth Xbox pad
 """
 
 import os
@@ -32,6 +33,12 @@ def generate_launch_description():
         [
             DeclareLaunchArgument("rviz", default_value="true"),
             DeclareLaunchArgument("initial_pose", default_value="home"),
+            # HF repo id (org/name[@revision]) or a local directory with
+            # policy.npz + policy_meta.json -- see wojtek_policy/policy_source.py.
+            DeclareLaunchArgument(
+                "policy",
+                default_value="<HF_ORGANIZATION>/wojtek-stiff-locomotion-v2",
+            ),
             Node(
                 package="robot_state_publisher",
                 executable="robot_state_publisher",
@@ -41,7 +48,14 @@ def generate_launch_description():
                 package="wojtek_viz",
                 executable="mujoco_sim_node",
                 output="screen",
-                parameters=[{"initial_pose": LaunchConfiguration("initial_pose")}],
+                parameters=[
+                    {
+                        "initial_pose": LaunchConfiguration("initial_pose"),
+                        # Match the simulated plant (servo gains, torque cap)
+                        # to the same policy contract policy_node loads.
+                        "policy": LaunchConfiguration("policy"),
+                    }
+                ],
             ),
             Node(
                 package="wojtek_policy",
@@ -49,6 +63,7 @@ def generate_launch_description():
                 output="screen",
                 parameters=[
                     {
+                        "policy": LaunchConfiguration("policy"),
                         "imu_mount_rpy": [0.0, 0.0, 0.0],  # sim IMU is in base_link
                         "auto_enable": True,
                         "soft_start_s": 0.5,

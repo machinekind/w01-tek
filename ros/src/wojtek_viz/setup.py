@@ -14,6 +14,7 @@ setup(
         (f"share/{package_name}/launch", glob("launch/*.launch.py")),
         (f"share/{package_name}/config", glob("config/*")),
         (f"share/{package_name}/urdf", glob("urdf/*.xacro")),
+        (f"share/{package_name}/web", glob("web/*.html")),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
@@ -25,6 +26,8 @@ setup(
         "console_scripts": [
             "mujoco_sim_node = wojtek_viz.mujoco_sim_node:main",
             "console = wojtek_viz.operator_console:main",
+            "web_console = wojtek_viz.web_console:main",
+            "gamepad_teleop = wojtek_viz.gamepad_teleop:main",
             "sysid_excitation = wojtek_viz.sysid_excitation_node:main",
         ],
     },

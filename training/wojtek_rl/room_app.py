@@ -43,7 +43,7 @@ from loguru import logger
 from wojtek_rl import paths
 from wojtek_rl.midlevel import Forward, MidLevelExecutor, Stop, parse_command
 from wojtek_rl.navigation import NavConfig, command_to_target, quat_to_yaw
-from wojtek_rl.np_policy import actuator_addresses, gravity_from_quat, load_fbb_policy
+from wojtek_rl.np_policy import actuator_addresses, gravity_from_quat, load_policy_runtime
 from wojtek_rl.vlm_nav import DEFAULT_MODEL, AnthropicVlmClient, VlmNavigator
 
 ROBOT_KEY = "wojtek"
@@ -89,7 +89,7 @@ class RoomSim:
         if mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, vlm_cam) < 0:
             raise ValueError(f"camera {vlm_cam!r} not in scene (rebuild with run.sh build?)")
         self.data = mujoco.MjData(self.model)
-        self.policy = load_fbb_policy(policy_npz)
+        self.policy = load_policy_runtime(policy_npz)
 
         names = [self.model.actuator(i).name for i in range(self.model.nu)]
         if names != self.policy.joint_names:
@@ -361,7 +361,7 @@ app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
 
 _sim: RoomSim | None = None
 _scene_xml = paths.scene_xml(_scene_name)
-_policy_npz = paths.POLICY_NPZ
+_policy_npz = paths.DEFAULT_POLICY
 _navigator: VlmNavigator | None = None
 _vlm_backend = os.environ.get("VLM_BACKEND", "local")
 _vlm_model = os.environ.get("VLM_MODEL")  # None -> backend default
@@ -592,7 +592,7 @@ def main(argv=None):
     )
     p.add_argument("--scene", type=Path, default=None,
                    help="explicit scene XML path (overrides --scene-name's XML only)")
-    p.add_argument("--policy", type=Path, default=paths.POLICY_NPZ)
+    p.add_argument("--policy", default=paths.DEFAULT_POLICY)
     p.add_argument(
         "--vlm-backend",
         choices=("local", "anthropic", "futurenav"),

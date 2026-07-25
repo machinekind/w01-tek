@@ -14,9 +14,8 @@ pytestmark = pytest.mark.skipif(
     not (
         paths.ROOM_MANIFEST.exists()
         and paths.ROOM_SCENE_XML.exists()
-        and paths.POLICY_NPZ.exists()
     ),
-    reason="room assets or exported policy missing",
+    reason="room assets not built (run.sh room-assets + build-room)",
 )
 
 
@@ -24,7 +23,10 @@ pytestmark = pytest.mark.skipif(
 def sim():
     from wojtek_rl.room_app import RoomSim
 
-    return RoomSim(paths.ROOM_SCENE_XML, paths.POLICY_NPZ)
+    try:
+        return RoomSim(paths.ROOM_SCENE_XML, paths.DEFAULT_POLICY)
+    except Exception as e:  # policy unresolvable (offline, no HF cache/token)
+        pytest.skip(f"policy {paths.DEFAULT_POLICY} unavailable: {e}")
 
 
 def test_forward_command_moves_robot(sim):

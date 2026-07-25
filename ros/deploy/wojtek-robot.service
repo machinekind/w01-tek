@@ -47,15 +47,17 @@ Environment=CYCLONEDDS_URI=file:///etc/cyclonedds-rpi.xml
 # thread to RT internally (enabled by LimitRTPRIO above). If you need to force
 # the whole tree to SCHED_FIFO, prefix with: chrt -f 80
 #
-# Runs are recorded from the PC (wojtek_viz viz.launch.py) over DDS, so on-robot
-# recording is off here. For a lossless localhost capture on untethered runs,
-# append: bag:=true bag_cpus:=0,1  (bag_cpus re-affinitizes the recorder back to
-# the non-isolated cores 0,1, keeping its disk I/O off the RT cores).
+# The service records every run on-robot (bag:=true): PC viz records on demand
+# only, so this bag is the black box of a real run -- and a localhost capture
+# is lossless where the PC's over-DDS bag can drop samples on wifi.
+# bag_cpus:=0,1 re-affinitizes the recorder back to the non-isolated cores,
+# keeping its disk I/O off the RT cores. Nothing rotates ~/wojtek_bags yet --
+# check free space before a long run. Flip to bag:=false to skip recording.
 # gamepad:=true keeps the pad teleop (joy + wojtek_teleop) resident on the
 # robot: a pad paired with the RPi drives with no PC in the loop and survives
 # the cable/ssh dropping. With no pad connected the teleop stays silent on
 # /cmd_vel (it publishes only after the first Joy message).
-ExecStart=/usr/bin/taskset -c 2,3 /bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/rpi/wojtek_ws/install/setup.bash && exec ros2 launch wojtek_bringup robot.launch.py gamepad:=true'
+ExecStart=/usr/bin/taskset -c 2,3 /bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/rpi/wojtek_ws/install/setup.bash && exec ros2 launch wojtek_bringup robot.launch.py gamepad:=true bag:=true bag_cpus:=0,1'
 Restart=on-failure
 RestartSec=2
 

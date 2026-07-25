@@ -39,10 +39,7 @@ import xml.etree.ElementTree as ET
 
 import rclpy
 import websockets
-from ament_index_python.packages import (
-    PackageNotFoundError,
-    get_package_share_directory,
-)
+from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile
@@ -50,11 +47,13 @@ from sensor_msgs.msg import Imu, JointState
 from std_msgs.msg import String
 from std_srvs.srv import SetBool, Trigger
 
+from wojtek_policy.policy_source import load_meta
+
 # The drive controls scale to the loaded policy's trained command box
 # ([vx, vy, wz], per axis and asymmetric -- e.g. stiff_b trained on
-# vx -0.8..+1.2, wz +-1.0) read from policy_meta.json deploy.command_low/
-# high, same source policy_node clips against. These are only the fallbacks
-# for a meta without a deploy box (they match policy.py's own defaults).
+# vx -0.8..+1.2, wz +-1.0) read from the contract of the `policy`
+# parameter's reference, same source policy_node clips against. These are
+# only the fallbacks when no reference is set (or it fails to load).
 DEFAULT_CMD_LOW = (-0.6, -0.4, -0.7)
 DEFAULT_CMD_HIGH = (0.6, 0.4, 0.7)
 # Commanded standing height (m): trained envelope and default stance, also
@@ -90,6 +89,9 @@ class ConsoleNode(Node):
         self._pub_targets = self.create_publisher(JointState, "wojtek/joint_targets", 10)
         self._pub_cmd = self.create_publisher(Twist, "cmd_vel", 10)
 
+        # Same reference policy_node gets (HF repo id or local directory);
+        # empty = the conservative default limits below.
+        self.declare_parameter("policy", "")
         self.cmd_low = list(DEFAULT_CMD_LOW)
         self.cmd_high = list(DEFAULT_CMD_HIGH)
         self.height_range = list(DEFAULT_HEIGHT_RANGE)
@@ -117,22 +119,29 @@ class ConsoleNode(Node):
         self.imu_rpy_gyro = None
 
     def _load_meta(self):
-        try:
-            share = get_package_share_directory("wojtek_policy")
-            meta = json.loads(
-                open(os.path.join(share, "config", "policy_meta.json")).read())
-        except (PackageNotFoundError, OSError, ValueError) as e:
-            self.get_logger().warning(f"no policy meta ({e}); jog builds from "
-                                      "telemetry, drive uses default limits")
+        ref = self.get_parameter("policy").value
+        if not ref:
+            self.get_logger().warning(
+                "no policy reference set; jog builds from telemetry, drive "
+                "uses default limits")
             return []
-        deploy = meta.get("deploy", {})
-        self.cmd_low = list(deploy.get("command_low", DEFAULT_CMD_LOW))[:3]
-        self.cmd_high = list(deploy.get("command_high", DEFAULT_CMD_HIGH))[:3]
-        self.height_range = [
-            deploy.get("command_height_low", DEFAULT_HEIGHT_RANGE[0]),
-            deploy.get("command_height_high", DEFAULT_HEIGHT_RANGE[1]),
-        ]
-        self.height_default = deploy.get("command_height", 0.0) or DEFAULT_HEIGHT
+        try:
+            meta, source = load_meta(ref)
+        except Exception as e:  # resolver/network/file -- stay usable
+            self.get_logger().warning(
+                f"could not load policy contract {ref!r} ({e}); jog builds "
+                "from telemetry, drive uses default limits")
+            return []
+        self.cmd_low = [float(v) for v in meta["command_low"][:3]]
+        self.cmd_high = [float(v) for v in meta["command_high"][:3]]
+        if len(meta["command_low"]) >= 4:
+            self.height_range = [
+                float(meta["command_low"][3]), float(meta["command_high"][3])
+            ]
+        if meta.get("command_fill"):
+            self.height_default = float(meta["command_fill"][0])
+        self.get_logger().info(
+            f"command box from {meta['run_name']} ({source})")
         return list(meta.get("actuator_names", []))
 
     # ---- telemetry callbacks (ROS thread) ----------------------------------

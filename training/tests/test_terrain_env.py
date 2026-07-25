@@ -524,3 +524,18 @@ def test_a_stale_arena_is_refused(monkeypatch, tmp_path, small_arena):
         wojtek_env.WojtekJoystick(cfg)
     assert "n_steps" in str(excinfo.value)
     assert "build-terrain" in str(excinfo.value)
+
+
+def test_contact_floor_is_derived_from_the_model(terrain_env_inst):
+    """The warp contact-budget warning fires against a floor computed from the
+    robot's own collision set, not a rule of thumb. Warp allows four contacts per
+    geom-heightfield pair, so 21 geoms put 84 contacts in the pool before a single
+    box is touched -- which is why the flat default of 32 is not close."""
+    n = terrain_env_inst._count_ground_colliding_geoms()
+    assert n == 21, n  # base box + 4 feet + 16 per-leg proxies
+    assert 4 * n == 84
+    # the same count on the flat scene: it keys on body, so neither the floor
+    # plane nor the generator's terrain geoms are mistaken for robot geoms
+    assert wojtek_env.WojtekJoystick()._count_ground_colliding_geoms() == n
+    # and the flat default really is below the floor
+    assert wojtek_env.default_config().sim.naconmax_per_env < 4 * n

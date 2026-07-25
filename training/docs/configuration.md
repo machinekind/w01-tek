@@ -462,7 +462,10 @@ you what warp needs:
   ++task.env.sim.naconmax_per_env=128
 ```
 
-The env prints a warning if a warp terrain run keeps the flat default.
+A warp terrain run warns when its budget is below that 84-contact floor, which
+the env computes from the robot's own collision set rather than from a rule of
+thumb. The floor is not a budget: boxes add to it, and the real number has to be
+measured.
 
 ## Terrain measurement suite
 

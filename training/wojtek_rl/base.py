@@ -232,17 +232,40 @@ class WojtekEnv(mjx_env.MjxEnv):
         self._terrain_demote_fraction = float(terrain_cfg.demote_fraction)
         self._terrain_init_level_frac = float(terrain_cfg.init_level_frac)
 
-        # Warp has a fixed contact pool and drops overflow silently. The
-        # flat default is too small for terrain, so warn. The real budget
-        # gets measured on GPU (step 5).
-        if self._backend == "warp" and self._config.sim.naconmax_per_env <= 32:
-            print(
-                "WARNING: terrain.enable on the warp backend with "
-                f"sim.naconmax_per_env={self._config.sim.naconmax_per_env} "
-                "(the flat default). Terrain contacts overflow this pool "
-                "silently; set ++task.env.sim.naconmax_per_env to ~2x the flat "
-                "default (measure with check-terrain on GPU)."
-            )
+        # Warp has a fixed contact pool and drops overflow silently, so an
+        # undersized budget is wrong physics with no error. Warn against a floor
+        # derived from the model rather than a rule of thumb: warp allows four
+        # contacts per geom-heightfield pair, so every collision geom on the
+        # robot can put four contacts in the pool before a single box is touched.
+        # That is a floor, not a budget -- measure the real number with
+        # `check-terrain --backend warp` (the jax backend never applies it).
+        if self._backend == "warp":
+            floor = 4 * self._count_ground_colliding_geoms()
+            if self._config.sim.naconmax_per_env < floor:
+                print(
+                    "WARNING: terrain.enable on the warp backend with "
+                    f"sim.naconmax_per_env="
+                    f"{self._config.sim.naconmax_per_env}, below the "
+                    f"heightfield-only floor of {floor} "
+                    f"(4 contacts x {floor // 4} colliding geoms). Warp drops "
+                    "the overflow silently. Measure it: "
+                    "`./training/run.sh check-terrain --backend warp "
+                    f"--arena {self._terrain_arena}`."
+                )
+
+    def _count_ground_colliding_geoms(self) -> int:
+        """Robot geoms that can pair with the terrain.
+
+        Keyed on body, not name: the ground is whatever sits in the worldbody
+        (the flat scene's floor plane, or the generator's heightfield and boxes),
+        and everything on a real body is the robot. 21 on this model -- the base
+        box, the four feet, and four per-leg collision proxies."""
+        m = self._mj_model
+        return sum(
+            1
+            for i in range(m.ngeom)
+            if m.geom_bodyid[i] != 0 and (m.geom_contype[i] or m.geom_conaffinity[i])
+        )
 
     def _terrain_height(self, xy):
         """Terrain surface height under world ``xy`` (``(..., 2)``)."""

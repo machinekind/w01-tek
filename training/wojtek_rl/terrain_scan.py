@@ -100,6 +100,18 @@ def crossing_progress(crossings, distance, running, xp=np):
     return xp.minimum(crossings + (leg_done & running), terrain_suite.CROSSINGS)
 
 
+def still_running(i, crossings, fell, deadline):
+    """Whether each run is still on its course at step `i`.
+
+    A run stops when it falls, when it finishes its four crossings, or when it
+    passes its own deadline. The deadline is per run because a diagonal heading
+    walks sqrt(2) further to the same Chebyshev radius: one shared budget would
+    hand an axis run that extra slack and make the speed a run has to sustain --
+    and so the effective difficulty -- heading-dependent.
+    """
+    return ~(fell | (crossings >= terrain_suite.CROSSINGS)) & (i < deadline)
+
+
 def fall_progress(fell, done, running):
     """Sticky fall flag, recorded only while a run is still on its course.
 
@@ -439,16 +451,6 @@ def make_cell_runner(env, inf):
         if value is None:
             return jp.zeros((), jp.int32)
         return jp.max(jp.asarray(value)).astype(jp.int32)
-
-    def still_running(i, crossings, fell, deadline):
-        """A run is on its course until it falls, finishes, or passes its own
-        deadline. The deadline is per run because a diagonal heading walks
-        sqrt(2) further to the same Chebyshev radius: one shared budget would
-        hand an axis run that extra slack and make the timeout threshold, and so
-        the effective difficulty, heading-dependent."""
-        return (
-            ~(fell | (crossings >= terrain_suite.CROSSINGS)) & (i < deadline)
-        )
 
     @functools.partial(jax.jit, static_argnames=("budget",))
     def run(rng, centre, spawn_xy, pad_h, yaw, speed, height, deadline, budget):

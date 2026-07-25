@@ -481,3 +481,32 @@ def test_tile_distance_is_relative_to_the_tile_centre():
     xy = np.array([[-1.5, -16.5], [-0.5, -16.5], [-1.5, -15.4], [-0.6, -15.6]])
     got = terrain_scan.tile_distance(xy, centre)
     np.testing.assert_allclose(got, [0.0, 1.0, 1.1, 0.9], atol=1e-9)
+
+
+def test_still_running_stops_a_run_three_ways():
+    """The third rule the loop runs on: a run is on its course until it falls,
+    finishes its crossings, or passes its own deadline."""
+    i = 100
+    deadline = np.array([200, 200, 200, 200, 50])
+    crossings = np.array([0, CROSSINGS, 2, 2, 1])
+    fell = np.array([False, False, True, False, False])
+    got = terrain_scan.still_running(i, crossings, fell, deadline)
+    #        fresh  finished  fell   live   past its deadline
+    np.testing.assert_array_equal(got, [True, False, False, True, False])
+
+
+def test_still_running_deadline_is_per_run():
+    """An axis heading must not inherit a diagonal's slack."""
+    crossings, fell = np.zeros(2, dtype=int), np.zeros(2, dtype=bool)
+    axis, diagonal = 1032, 1442  # the real 0.4 m/s deadlines
+    deadline = np.array([axis, diagonal])
+    np.testing.assert_array_equal(
+        terrain_scan.still_running(axis - 1, crossings, fell, deadline), [True, True]
+    )
+    # the axis run is out of time while the diagonal one still has 410 steps
+    np.testing.assert_array_equal(
+        terrain_scan.still_running(axis, crossings, fell, deadline), [False, True]
+    )
+    np.testing.assert_array_equal(
+        terrain_scan.still_running(diagonal, crossings, fell, deadline), [False, False]
+    )

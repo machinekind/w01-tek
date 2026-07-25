@@ -99,12 +99,10 @@ N_STEPS = 6
 
 
 def stair_pit_half(stair_platform_half: float = STAIR_PLATFORM_HALF) -> float:
-    """Outer half-size of the stair terrace region. The inverted pit is carved
-    to this square and both stair types reach flat ground (0) at the rim."""
+    """Outer half-size of the stair terrace region, a CHEBYSHEV half-size: the
+    terraces are concentric squares. The inverted pit is carved to this square
+    and both stair types reach flat ground (0) at the rim."""
     return stair_platform_half + (N_STEPS - 1) * TREAD
-
-
-STAIR_PIT_HALF = stair_pit_half()
 
 # Rough tiles: white noise sampled on this coarse pitch then bilinearly
 # upsampled, so features are foot-scale rolling ground, not per-cell spikes.

@@ -87,9 +87,6 @@ RUNS_PER_CELL_SPEED = N_HEADINGS * len(START_OFFSETS)
 CROSSINGS = 4
 OUT_RADIUS = 1.45
 BACK_RADIUS = 0.30
-# Worst case ratio of walked distance to Chebyshev distance, on a 45 degree
-# heading. The step budget has to cover the diagonal headings, not the axes.
-DIAGONAL_STRETCH = math.sqrt(2.0)
 # Skipped at the start of every run, so tracking error and clearance do not
 # measure acceleration from standstill. Same 50 steps the flat battery skips.
 SETTLE_STEPS = 50

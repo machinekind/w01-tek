@@ -471,7 +471,7 @@ def test_crossing_distance_is_chebyshev_not_euclidean():
         # and on BOTH headings that clears the outermost tread
         assert cheby > terrain.stair_pit_half(), heading
     # the diagonal genuinely walks further to get there, which the budget covers
-    diag = terrain_suite.OUT_RADIUS * terrain_suite.DIAGONAL_STRETCH
+    diag = terrain_suite.OUT_RADIUS * terrain_suite.heading_stretch(math.pi / 4)
     assert diag == pytest.approx(2.051, abs=0.01)
     assert terrain_suite.course_distance() > 4 * terrain_suite.OUT_RADIUS
 

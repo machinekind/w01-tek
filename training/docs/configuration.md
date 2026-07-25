@@ -504,11 +504,17 @@ One shared budget would hand the axis headings that extra slack, which would
 make the speed a run has to sustain — and so the effective difficulty —
 heading-dependent. Every run has to sustain the same 62% of its commanded speed.
 
-One known limitation: at 1.45 m the base is 0.05 m from the tile border, so on an
-axis heading the leading feet reach about 0.2 m into the neighbouring tile at the
+One known limitation, accepted: at 1.45 m the base is 0.05 m from the tile
+border, so the leading feet reach 0.21 m into a neighbouring tile at the
 turnaround. That is unavoidable with a six-step flight on a 3 m tile — clearing
-the last riser needs the base at 1.25 + 0.257 = 1.51 m — and the neighbour is
-seamless and at the same difficulty.
+the last riser needs the base at 1.25 + 0.257 = 1.51 m. On an axis heading the
+neighbour shares the row, so it is a different terrain type at the same
+difficulty; on a diagonal it is the corner tile, which differs in both. Tiles are
+flat to within 2 cm at the border itself, but 0.21 m in the neighbour's own
+features have begun — worst case a steep inverted slope, 10 cm below grade at the
+hardest gated row and 15 cm at the frontier rows. The crossing is already scored
+when the base reaches the radius, so this is the state at the end of a leg, not
+terrain the robot had to cross.
 
 Crossings rather than distance walked, because a stair tile is 3 m across and
 its treads only occupy the band from 0.60 m to 1.25 m from the centre -- "half

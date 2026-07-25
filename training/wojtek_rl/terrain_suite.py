@@ -79,11 +79,19 @@ RUNS_PER_CELL_SPEED = N_HEADINGS * len(START_OFFSETS)
 #
 # OUT_RADIUS clears the outermost stair tread (Chebyshev 1.25 m) and the
 # scattered boxes (1.40 m), so a crossing cannot be completed without meeting the
-# obstacle. Known limitation: at 1.45 the base is 0.05 m from the tile border, so
-# on an axis heading the leading feet reach about 0.2 m into the neighbouring
-# tile at the turnaround. That is unavoidable with a six-step flight on a 3 m
-# tile -- clearing the last riser needs the base at 1.25 + 0.257 = 1.51 m -- and
-# the neighbour is seamless and at the same difficulty.
+# obstacle.
+#
+# Known limitation, accepted: at 1.45 the base is 0.05 m from the tile border, so
+# the leading feet reach 0.21 m into a neighbouring tile at the turnaround. That
+# is unavoidable with a six-step flight on a 3 m tile -- clearing the last riser
+# needs the base at 1.25 + 0.257 = 1.51 m. On an axis heading the neighbour shares
+# the row (same difficulty, different type); on a diagonal it is the corner tile,
+# which differs in BOTH row and column. Tiles are flat to within 2 cm at the
+# border itself (test_tile_borders_seamless), but 0.21 m in the neighbour's own
+# features have begun: worst case is a steep inverted slope, 10 cm below grade at
+# the hardest gated row and 15 cm at the frontier rows. The crossing is already
+# scored when the base reaches the ring, so this is the state at the end of a leg
+# rather than terrain the robot had to cross.
 CROSSINGS = 4
 OUT_RADIUS = 1.45
 BACK_RADIUS = 0.30

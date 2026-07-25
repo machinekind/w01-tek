@@ -3,9 +3,12 @@
 Model loading, actuator address tables and IMU/foot helpers, extracted from
 the joystick env so getup/jump tasks reuse them. Task envs subclass this and
 provide their own config, reset, step, observations and rewards.
-"""
 
-import json
+On the terrain scene this class holds one ``terrain_env.Arena`` (``self._terrain``)
+and asks it for surface heights. Reading the generated files, checking they are
+the arena the code expects, and the height lookup itself all live in
+``terrain_env``; nothing about the terrain file layout belongs here.
+"""
 
 import jax
 import jax.numpy as jp
@@ -15,7 +18,7 @@ from brax import math as brax_math
 from mujoco import mjx
 from mujoco_playground._src import mjx_env
 
-from wojtek_rl import paths, terrain, terrain_env
+from wojtek_rl import paths, terrain_env
 from wojtek_rl.build_model import FOOT_RADIUS
 
 # Actuator indices of the knee cranks (third joints), paths.LEGS order.
@@ -93,23 +96,13 @@ def make_data_fn(backend, mj_model, mjx_model, naconmax_per_env, njmax, num_envs
 class WojtekEnv(mjx_env.MjxEnv):
     def __init__(self, config, config_overrides=None):
         super().__init__(config, config_overrides)
-        # Terrain is opt-in and joystick-only. getup/jump have no terrain
-        # key, so `.get` leaves them on the flat scene.
+        # Terrain is opt-in and joystick-only. getup/jump have no terrain key, so
+        # `.get` leaves them on the flat scene. terrain_env owns the loading,
+        # validation and lookup; this class only asks it for heights.
         terrain_cfg = self._config.get("terrain")
-        self._terrain_enabled = bool(
-            terrain_cfg is not None and terrain_cfg.enable
-        )
-        # Which arena file set to load. Attribute access on purpose: a terrain
-        # run with no `arena` key is a config drift, not a default.
-        self._terrain_arena = str(terrain_cfg.arena) if self._terrain_enabled else ""
-        self._terrain_files = (
-            paths.terrain_paths(self._terrain_arena) if self._terrain_enabled else {}
-        )
-        if self._terrain_enabled:
-            self._require_terrain_assets()
-            scene_xml = self._terrain_files["scene"]
-        else:
-            scene_xml = paths.SCENE_XML
+        enabled = bool(terrain_cfg is not None and terrain_cfg.enable)
+        self._terrain = terrain_env.load(terrain_cfg) if enabled else None
+        scene_xml = self._terrain.files["scene"] if enabled else paths.SCENE_XML
         self._mj_model = mujoco.MjModel.from_xml_path(str(scene_xml))
         self._mj_model.opt.timestep = self.sim_dt
         self._customize_model(self._mj_model)
@@ -152,86 +145,13 @@ class WojtekEnv(mjx_env.MjxEnv):
         )
 
         if self._terrain_enabled:
-            self._load_terrain(terrain_cfg)
+            self._warn_on_small_contact_budget()
 
-    def _require_terrain_assets(self) -> None:
-        """All four generated files, heightfield included. The scene XML points
-        at the heightfield binary by relative path, so a missing .bin is a raw
-        MuJoCo compile error rather than the message below."""
-        missing = [p for p in self._terrain_files.values() if not p.exists()]
-        if missing:
-            names = ", ".join(p.name for p in missing)
-            raise FileNotFoundError(
-                f"terrain.enable=true but the generated terrain assets are "
-                f"missing ({names}). Run `./training/run.sh build-terrain "
-                f"--arena {self._terrain_arena}` first; the sidecars are "
-                f"gitignored and built on demand."
-            )
+    @property
+    def _terrain_enabled(self) -> bool:
+        return self._terrain is not None
 
-    def _require_current_terrain_geometry(self, spec: dict) -> None:
-        """Refuse an arena built by a different version of the generator.
-
-        The generated files are self-consistent -- their lookup grid matches their
-        own boxes -- so a stale arena raises nothing and trains fine. It just
-        trains on terrain nobody asked for: an arena built before the stair flight
-        went from four steps to six has four-step stairs, and the run's own
-        run.json would say six. Rows, seed and tile size are per-experiment and
-        not checked; the stair geometry is a code constant, so a mismatch is
-        always staleness.
-        """
-        expected = {
-            "n_steps": terrain.N_STEPS,
-            "stair_platform_half": terrain.STAIR_PLATFORM_HALF,
-        }
-        stale = {
-            key: (spec.get(key), value)
-            for key, value in expected.items()
-            if spec.get(key) != value
-        }
-        if stale:
-            detail = "; ".join(
-                f"{k}: arena has {f!r}, this code builds {w!r}"
-                for k, (f, w) in stale.items()
-            )
-            raise ValueError(
-                f"the {self._terrain_arena} terrain arena was built by a "
-                f"different generator ({detail}). Rebuild it: "
-                f"`./training/run.sh build-terrain --arena {self._terrain_arena}"
-                + (
-                    "`"
-                    if self._terrain_arena != "train"
-                    else " [--rows N --seed N]` with this run's own parameters"
-                )
-            )
-
-    def _load_terrain(self, terrain_cfg) -> None:
-        """Load the terrain files: height grid onto the device, spawn tables,
-        curriculum settings."""
-        npz = np.load(self._terrain_files["lookup"])
-        x_min, x_max = float(npz["x_min"]), float(npz["x_max"])
-        y_min, y_max = float(npz["y_min"]), float(npz["y_max"])
-        ncol, nrow = int(npz["ncol"]), int(npz["nrow"])
-        self._terrain_lookup = jp.asarray(npz["lookup"], dtype=jp.float32)
-        self._terrain_x_min = x_min
-        self._terrain_y_min = y_min
-        self._terrain_cell_x = (x_max - x_min) / (ncol - 1)
-        self._terrain_cell_y = (y_max - y_min) / (nrow - 1)
-
-        spec = json.loads(self._terrain_files["spec"].read_text())
-        self._require_current_terrain_geometry(spec)
-        origin_xy, pad_h = terrain_env.tables_from_spec(spec, terrain.TYPES)
-        self._terrain_origin_xy = jp.asarray(origin_xy)
-        self._terrain_pad_h = jp.asarray(pad_h)
-        self._terrain_n_rows = int(spec["n_rows"])
-        self._terrain_n_types = len(terrain.TYPES)
-        self._terrain_tile_size = float(spec["tile_size"])
-        # Attribute access on purpose: defaults live in default_config only,
-        # and a missing key should fail loud, not fall back quietly.
-        self._terrain_pad_jitter = float(terrain_cfg.pad_jitter)
-        self._terrain_spawn_yaw = bool(terrain_cfg.spawn_yaw)
-        self._terrain_demote_fraction = float(terrain_cfg.demote_fraction)
-        self._terrain_init_level_frac = float(terrain_cfg.init_level_frac)
-
+    def _warn_on_small_contact_budget(self) -> None:
         # Warp has a fixed contact pool and drops overflow silently, so an
         # undersized budget is wrong physics with no error. Warn against a floor
         # derived from the model rather than a rule of thumb: warp allows four
@@ -250,7 +170,7 @@ class WojtekEnv(mjx_env.MjxEnv):
                     f"(4 contacts x {floor // 4} colliding geoms). Warp drops "
                     "the overflow silently. Measure it: "
                     "`./training/run.sh check-terrain --backend warp "
-                    f"--arena {self._terrain_arena}`."
+                    f"--arena {self._terrain.kind}`."
                 )
 
     def _count_ground_colliding_geoms(self) -> int:
@@ -267,15 +187,6 @@ class WojtekEnv(mjx_env.MjxEnv):
             if m.geom_bodyid[i] != 0 and (m.geom_contype[i] or m.geom_conaffinity[i])
         )
 
-    def _terrain_height(self, xy):
-        """Terrain surface height under world ``xy`` (``(..., 2)``)."""
-        return terrain_env.bilinear_sample(
-            self._terrain_lookup,
-            self._terrain_x_min, self._terrain_cell_x,
-            self._terrain_y_min, self._terrain_cell_y,
-            xy[..., 0], xy[..., 1],
-        )
-
     def _customize_model(self, m: mujoco.MjModel) -> None:
         """Task-specific tweaks applied before the model is put on device."""
 
@@ -287,7 +198,7 @@ class WojtekEnv(mjx_env.MjxEnv):
     @property
     def xml_path(self) -> str:
         return str(
-            self._terrain_files["scene"] if self._terrain_enabled else paths.SCENE_XML
+            self._terrain.files["scene"] if self._terrain_enabled else paths.SCENE_XML
         )
 
     @property
@@ -338,14 +249,14 @@ class WojtekEnv(mjx_env.MjxEnv):
         foot = data.geom_xpos[self._foot_geom_ids]
         z = foot[:, 2]
         if self._terrain_enabled:
-            z = z - self._terrain_height(foot[:, :2])
+            z = z - self._terrain.height(foot[:, :2])
         return z < FOOT_RADIUS + 0.005
 
     def _base_height(self, data):
         """Base height above the ground. Flat: ``data.qpos[2]``, unchanged.
         Terrain: minus the surface height under the base."""
         if self._terrain_enabled:
-            return data.qpos[2] - self._terrain_height(data.qpos[0:2])
+            return data.qpos[2] - self._terrain.height(data.qpos[0:2])
         return data.qpos[2]
 
     def _foot_clearance(self, data):
@@ -354,7 +265,7 @@ class WojtekEnv(mjx_env.MjxEnv):
         foot = data.geom_xpos[self._foot_geom_ids]
         clearance = foot[:, 2] - FOOT_RADIUS
         if self._terrain_enabled:
-            clearance = clearance - self._terrain_height(foot[:, :2])
+            clearance = clearance - self._terrain.height(foot[:, :2])
         return clearance
 
     def _noisy(self, rng, clean, scales):

@@ -428,12 +428,14 @@ Two things worth knowing about the rule:
 Each env keeps one terrain type for the whole run. Only the row changes. The
 robot is teleported between tiles. That is safe because no observation
 contains world position or heading. Observations did not change at all, so
-checkpoints stay compatible with flat runs. Scandots come in step 6.
+checkpoints stay compatible with flat runs. Letting the policy see the
+terrain ahead of it (a height scan in the observations) is a later change;
+today it walks blind and feels the ground only through its own joints.
 
 Watching it work: `terrain_lvl` in the logs comes from the eval env, which
 starts fresh at every evaluation, so it will not climb. To watch the real
 curriculum, run with `++ppo.log_training_metrics=true` and read
-`terrain_lvl_train`. The step-5 preset should set this flag.
+`terrain_lvl_train`. Any terrain training preset should set this flag.
 
 The legs collide with terrain, and there is no option to turn that off. The
 shins are what hit a riser face: without them a leg swings through the step

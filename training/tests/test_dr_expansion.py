@@ -281,19 +281,24 @@ ALL_ENABLED = {
     ids=["default", "all_disabled", "foot_friction", "all_enabled"],
 )
 def test_in_axes_is_usable_as_vmap_in_axes(mj_model, mjx_model, rng, dr_cfg):
-    """The returned in_axes has to work as vmap's in_axes for the returned
-    model. That is the only thing the DR wrapper does with the pair
-    (mujoco_playground's BraxDomainRandomizationVmapWrapper), and it is a
-    pytree-structure contract, not a field-by-field one -- which the sibling
-    in_axes tests check instead.
+    """Check that the (model, in_axes) pair make_domain_randomize returns can
+    actually be handed to jax.vmap.
 
-    `foot_friction` writes geom_priority, a STATIC numpy field in mjx and so
-    part of the pytree's metadata rather than its leaves. Writing it after
-    in_axes was built off the original model left two disagreeing treedefs, and
-    jax.vmap rejected in_axes as "not a tree prefix of the corresponding value"
-    -- so every run with dr.foot_friction.enable=true died the moment the env
-    was wrapped. The default is off, and nothing in the repo executed the DR
-    wrapper, so no run and no test ever hit it.
+    It returns two things: a model whose randomized fields are stacked once per
+    env, and `in_axes`, which tells vmap which fields to map over and which to
+    share. The wrapper that uses them does exactly one thing --
+    `jax.vmap(step, in_axes=[in_axes, 0])` -- and vmap refuses the pair unless
+    the two line up. The other in_axes tests in this file check individual
+    fields; this one checks the pair fits together at all.
+
+    That is not hypothetical. With `foot_friction` on, the randomizer also sets
+    `geom_priority`, so a foot's friction wins over the floor's. mjx stores
+    geom_priority as a plain numpy array, which means jax counts it as part of
+    the model's *shape* rather than as data. Setting it after in_axes had already
+    been built left the two describing different shapes, vmap rejected them, and
+    any run with `dr.foot_friction.enable=true` died the moment the env was
+    wrapped. Nobody noticed because the option is off by default and no test had
+    ever run the DR wrapper.
     """
     randomize = make_domain_randomize(mj_model, dr_cfg)
     model_v, in_axes = randomize(mjx_model, rng)

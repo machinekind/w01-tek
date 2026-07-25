@@ -58,13 +58,13 @@ class TerrainAutoResetWrapper(Wrapper):
     def __init__(self, env: Any):
         super().__init__(env)
         base = env.unwrapped
-        self._origin_xy = base._terrain_origin_xy
-        self._pad_h = base._terrain_pad_h
-        self._n_rows = base._terrain_n_rows
-        self._tile_size = base._terrain_tile_size
-        self._pad_jitter = base._terrain_pad_jitter
-        self._spawn_yaw = base._terrain_spawn_yaw
-        self._demote_fraction = base._terrain_demote_fraction
+        self._origin_xy = base._terrain.origin_xy
+        self._pad_h = base._terrain.pad_h
+        self._n_rows = base._terrain.n_rows
+        self._tile_size = base._terrain.tile_size
+        self._pad_jitter = base._terrain.pad_jitter
+        self._spawn_yaw = base._terrain.spawn_yaw
+        self._demote_fraction = base._terrain.demote_fraction
         # EpisodeWrapper's length, for projecting the demote threshold onto a
         # full episode. Without one below us there are no truncation dones and
         # no "steps" key either, so the env's own length is the right fallback.

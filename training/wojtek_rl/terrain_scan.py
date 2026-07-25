@@ -374,8 +374,8 @@ def _spawn_table(env, cell) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndar
     Offsets run along the heading, so what varies is where in the tread cycle
     the robot first meets the obstacle."""
     type_index = terrain.TYPES.index(cell.terrain_type)
-    centre = np.asarray(env._terrain_origin_xy)[cell.row, type_index]
-    pad_h = float(np.asarray(env._terrain_pad_h)[cell.row, type_index])
+    centre = np.asarray(env._terrain.origin_xy)[cell.row, type_index]
+    pad_h = float(np.asarray(env._terrain.pad_h)[cell.row, type_index])
     yaw = np.array([r.yaw for r in terrain_suite.COURSE], dtype=np.float32)
     offset = np.array([r.offset for r in terrain_suite.COURSE], dtype=np.float32)
     heading = np.stack([np.cos(yaw), np.sin(yaw)], axis=-1)
@@ -617,7 +617,7 @@ def scan(
             "command": {"resample_steps": 10**9},
         },
     )
-    check_arena(json.loads(env._terrain_files["spec"].read_text()))
+    check_arena(json.loads(env._terrain.files["spec"].read_text()))
     runner = make_cell_runner(env, inf)
 
     result = {

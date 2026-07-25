@@ -1,12 +1,23 @@
-"""Terrain-aware joystick env, curriculum wrapper, and JAX terrain helpers.
+"""Tests for training on the terrain arena.
 
-Covers the step-3 additions: the JAX bilinear lookup matching the numpy
-ground-truth, terrain-relative contact/height/clearance wiring, the legged_gym
-promote/demote transition, spawn-on-tile reset, and the curriculum auto-reset
-wrapper. Env/wrapper tests share a small arena written to the real sidecar
-paths (like test_terrain.py) to keep put_model cheap.
+What is covered:
+
+- The height lookup the env uses on the GPU returns the same surface as the
+  numpy one the arena was built with.
+- Height, foot contact and foot clearance are measured from the terrain surface
+  under the robot, not from z = 0.
+- Moving an env to a harder or easier tile after each episode: the rule itself,
+  and the same rule driven through a real `env.step`.
+- Spawning on a tile, and the deterministic spawn the terrain scan uses.
+- Refusing to start when the generated arena files are missing or were built by
+  an older version of the generator.
+
+The env and wrapper tests share one small 3-row arena, written to the `test`
+file set so a test run can never overwrite the arena a policy trained on. Small
+because building the MuJoCo model is the slow part.
 """
 
+import dataclasses
 from types import SimpleNamespace
 
 import jax
@@ -82,12 +93,15 @@ def test_terrain_relative_measurements(terrain_env_inst, monkeypatch):
     """A linear ramp is bilinear-exact, so h(x, y) = a*x + b*y under the env's
     own lookup grid. The three helpers must subtract exactly that surface."""
     env = terrain_env_inst
-    nrow, ncol = env._terrain_lookup.shape
-    xs = env._terrain_x_min + env._terrain_cell_x * np.arange(ncol)
-    ys = env._terrain_y_min + env._terrain_cell_y * np.arange(nrow)
+    nrow, ncol = env._terrain.lookup.shape
+    xs = env._terrain.x_min + env._terrain.cell_x * np.arange(ncol)
+    ys = env._terrain.y_min + env._terrain.cell_y * np.arange(nrow)
     a, b = 0.1, -0.05
     synth = (a * xs[None, :] + b * ys[None, :].T).astype(np.float32)
-    monkeypatch.setattr(env, "_terrain_lookup", jp.asarray(synth))
+    # Arena is frozen, so swap the whole thing for a copy with the synthetic grid.
+    monkeypatch.setattr(
+        env, "_terrain", dataclasses.replace(env._terrain, lookup=jp.asarray(synth))
+    )
 
     def h(x, y):
         return a * x + b * y
@@ -245,18 +259,18 @@ def test_terrain_env_actor_obs_still_54(terrain_env_inst):
 
 def test_terrain_reset_spawns_on_pad(terrain_env_inst):
     env = terrain_env_inst
-    origins = np.array(env._terrain_origin_xy)
-    pads = np.array(env._terrain_pad_h)
+    origins = np.array(env._terrain.origin_xy)
+    pads = np.array(env._terrain.pad_h)
     for seed in range(6):
         state = jax.jit(env.reset)(jax.random.PRNGKey(seed))
         info = state.info
         lvl = int(info["terrain_level"])
         tt = int(info["terrain_type"])
-        assert 0 <= lvl < env._terrain_n_rows
-        assert 0 <= tt < env._terrain_n_types
+        assert 0 <= lvl < env._terrain.n_rows
+        assert 0 <= tt < env._terrain.n_types
         xy = np.array(state.data.qpos[0:2])
         # within the jitter box of the tile's pad centre
-        assert np.all(np.abs(xy - origins[lvl, tt]) <= env._terrain_pad_jitter + 1e-5)
+        assert np.all(np.abs(xy - origins[lvl, tt]) <= env._terrain.pad_jitter + 1e-5)
         z = float(state.data.qpos[2])
         assert z == pytest.approx(pads[lvl, tt] + float(info["spawn_height"]), abs=1e-5)
 
@@ -278,7 +292,7 @@ def test_terrain_initial_level_in_lower_half(terrain_env_inst):
     env = terrain_env_inst
     keys = jax.random.split(jax.random.PRNGKey(1), 32)
     levels = np.array(jax.jit(jax.vmap(env.reset))(keys).info["terrain_level"])
-    init_rows = max(1, round(env._terrain_n_rows * env._terrain_init_level_frac))
+    init_rows = max(1, round(env._terrain.n_rows * env._terrain.init_level_frac))
     assert levels.max() < init_rows
     assert levels.min() >= 0
 
@@ -294,13 +308,13 @@ def test_wrapper_teleports_to_pads_and_bounds_levels(terrain_env_inst):
     state = jax.jit(wrapped.reset)(rng)
     step = jax.jit(wrapped.step)
 
-    origins = np.array(env._terrain_origin_xy).reshape(-1, 2)
+    origins = np.array(env._terrain.origin_xy).reshape(-1, 2)
     saw_done = False
     for _ in range(10):
         state = step(state, jp.zeros((4, 12)))
         done = np.array(state.done).astype(bool)
         levels = np.array(state.info["terrain_level"])
-        assert np.all((levels >= 0) & (levels < env._terrain_n_rows))
+        assert np.all((levels >= 0) & (levels < env._terrain.n_rows))
         assert np.all(np.isfinite(np.array(state.obs["state"])))
         if done.any():
             saw_done = True
@@ -314,7 +328,7 @@ def test_wrapper_teleports_to_pads_and_bounds_levels(terrain_env_inst):
             off = np.abs(xy[:, None, :] - origins[None, :, :])
             nearest = off.max(axis=-1).argmin(axis=-1)
             per_axis = off[np.arange(len(xy)), nearest]
-            assert np.all(per_axis <= env._terrain_pad_jitter + 1e-4), per_axis
+            assert np.all(per_axis <= env._terrain.pad_jitter + 1e-4), per_axis
     assert saw_done  # episode_length=3 must have forced truncation dones
 
 
@@ -338,7 +352,7 @@ def _drive_to_a_done(env, episode_length, walked, n_envs=2, level=1, key=3):
     state.info["terrain_level"] = jp.full((n_envs,), level, dtype=jp.int32)
     xy = state.data.qpos[:, 0:2]
     state.info["spawn_xy"] = xy + jp.array([walked, 0.0])
-    qpos = state.data.qpos.at[:, 2].set(env._terrain_height(xy) + 0.01)
+    qpos = state.data.qpos.at[:, 2].set(env._terrain.height(xy) + 0.01)
     state = state.replace(data=state.data.replace(qpos=qpos))
     state = step(state, jp.zeros((n_envs, 12)))
     assert np.all(np.array(state.done) == 1.0), "the staged fall must terminate"
@@ -396,7 +410,7 @@ def test_domain_randomization_composes_with_the_curriculum_wrapper(terrain_env_i
         saw_done = saw_done or bool(np.any(np.array(state.done)))
         assert np.all(np.isfinite(np.array(state.obs["state"])))
         levels = np.array(state.info["terrain_level"])
-        assert np.all((levels >= 0) & (levels < terrain_env_inst._terrain_n_rows))
+        assert np.all((levels >= 0) & (levels < terrain_env_inst._terrain.n_rows))
     # the teleport-on-done path ran with a per-env randomized model
     assert saw_done
 
@@ -417,8 +431,8 @@ def test_scan_reset_places_a_run_on_its_tile(terrain_env_inst):
     centre, spawn, yaw, pad_h = terrain_scan._spawn_table(env, cell)
     # the tile the cell names, from the env's own spawn table
     j = terrain.TYPES.index(cell.terrain_type)
-    np.testing.assert_allclose(centre[0], np.array(env._terrain_origin_xy)[cell.row, j])
-    assert pad_h[0] == pytest.approx(float(np.array(env._terrain_pad_h)[cell.row, j]))
+    np.testing.assert_allclose(centre[0], np.array(env._terrain.origin_xy)[cell.row, j])
+    assert pad_h[0] == pytest.approx(float(np.array(env._terrain.pad_h)[cell.row, j]))
 
     run = terrain_suite.COURSE[5]
     command = jp.array([0.4, 0.0, 0.0, terrain_scan.COMMAND_HEIGHT])

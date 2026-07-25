@@ -417,15 +417,15 @@ class WojtekJoystick(WojtekEnv):
         # keys, so flat runs are untouched.
         if self._terrain_enabled:
             rng, r_type, r_level, r_spawn, r_trng = jax.random.split(rng, 5)
-            terrain_type = jax.random.randint(r_type, (), 0, self._terrain_n_types)
+            terrain_type = jax.random.randint(r_type, (), 0, self._terrain.n_types)
             init_rows = max(
-                1, round(self._terrain_n_rows * self._terrain_init_level_frac)
+                1, round(self._terrain.n_rows * self._terrain.init_level_frac)
             )
             level = jax.random.randint(r_level, (), 0, init_rows)
             spawn_xy, pad_height, quat = terrain_env.sample_tile_spawn(
                 r_spawn, terrain_type, level,
-                self._terrain_origin_xy, self._terrain_pad_h,
-                self._terrain_pad_jitter, self._terrain_spawn_yaw,
+                self._terrain.origin_xy, self._terrain.pad_h,
+                self._terrain.pad_jitter, self._terrain.spawn_yaw,
             )
             qpos = qpos.at[0:2].set(spawn_xy)
             qpos = qpos.at[2].set(pad_height + command[3])

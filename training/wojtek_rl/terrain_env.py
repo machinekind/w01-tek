@@ -1,14 +1,24 @@
-"""JAX helpers for the terrain arena: height lookup, spawn tables, curriculum.
+"""The terrain arena at runtime: loaded files, height lookup, spawns, curriculum.
 
 Everything reads the files written by ``./run.sh build-terrain``. No brax
 imports here, so base.py can use it without the training stack.
+
+``Arena.load`` owns all of it. An env holds one ``Arena`` (``env._terrain``) and
+asks it for heights and spawn tables; nothing about reading the generated files,
+validating them, or interpreting the config lives in the env classes.
 """
 
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass
+from pathlib import Path
+
 import jax
 import jax.numpy as jp
 import numpy as np
+
+from wojtek_rl import paths, terrain
 
 
 def bilinear_sample(grid, x_min, cell_x, y_min, cell_y, x, y):
@@ -32,6 +42,125 @@ def bilinear_sample(grid, x_min, cell_x, y_min, cell_y, x, y):
         + g01 * tx * (1 - ty)
         + g10 * (1 - tx) * ty
         + g11 * tx * ty
+    )
+
+
+@dataclass(frozen=True)
+class Arena:
+    """One loaded terrain arena, plus the curriculum settings from the config.
+
+    Built by `load`. Everything here comes from the four generated files or from
+    `task.env.terrain`, so an env can hold one of these and never touch the file
+    layout itself.
+    """
+
+    kind: str  # train | eval | test
+    files: dict
+    lookup: jp.ndarray  # ground-truth surface height, on device
+    x_min: float
+    y_min: float
+    cell_x: float
+    cell_y: float
+    origin_xy: jp.ndarray  # (n_rows, n_types, 2) tile centres
+    pad_h: jp.ndarray  # (n_rows, n_types) spawn pad heights
+    n_rows: int
+    n_types: int
+    tile_size: float
+    pad_jitter: float
+    spawn_yaw: bool
+    demote_fraction: float
+    init_level_frac: float
+
+    def height(self, xy):
+        """Terrain surface height under world ``xy`` (``(..., 2)``)."""
+        return bilinear_sample(
+            self.lookup, self.x_min, self.cell_x, self.y_min, self.cell_y,
+            xy[..., 0], xy[..., 1],
+        )
+
+
+def require_assets(files: dict, kind: str) -> None:
+    """All four generated files, heightfield included. The scene XML points at
+    the heightfield binary by relative path, so a missing .bin is a raw MuJoCo
+    compile error rather than the message below."""
+    missing = [p for p in files.values() if not p.exists()]
+    if missing:
+        names = ", ".join(p.name for p in missing)
+        raise FileNotFoundError(
+            f"terrain.enable=true but the generated terrain assets are missing "
+            f"({names}). Run `./training/run.sh build-terrain --arena {kind}` "
+            f"first; the sidecars are gitignored and built on demand."
+        )
+
+
+def require_current_geometry(spec: dict, kind: str) -> None:
+    """Refuse an arena built by a different version of the generator.
+
+    The generated files are self-consistent -- their lookup grid matches their
+    own boxes -- so a stale arena raises nothing and trains fine. It just trains
+    on terrain nobody asked for: an arena built before the stair flight went from
+    four steps to six has four-step stairs, and the run's own run.json would say
+    six. Rows, seed and tile size are per-experiment and not checked; the stair
+    geometry is a code constant, so a mismatch is always staleness.
+    """
+    expected = {
+        "n_steps": terrain.N_STEPS,
+        "stair_platform_half": terrain.STAIR_PLATFORM_HALF,
+    }
+    stale = {
+        key: (spec.get(key), value)
+        for key, value in expected.items()
+        if spec.get(key) != value
+    }
+    if stale:
+        detail = "; ".join(
+            f"{k}: arena has {f!r}, this code builds {w!r}" for k, (f, w) in stale.items()
+        )
+        extra = " [--rows N --seed N]` with this run's own parameters" if kind == "train" else "`"
+        raise ValueError(
+            f"the {kind} terrain arena was built by a different generator "
+            f"({detail}). Rebuild it: `./training/run.sh build-terrain "
+            f"--arena {kind}{extra}"
+        )
+
+
+def load(terrain_cfg) -> Arena:
+    """Read one arena's generated files and the curriculum settings around them.
+
+    Config values are read by attribute on purpose: the defaults live in
+    `default_config` only, so a missing key should fail loud rather than fall
+    back on a second, quieter default here.
+    """
+    kind = str(terrain_cfg.arena)
+    files = paths.terrain_paths(kind)
+    require_assets(files, kind)
+
+    npz = np.load(files["lookup"])
+    x_min, x_max = float(npz["x_min"]), float(npz["x_max"])
+    y_min, y_max = float(npz["y_min"]), float(npz["y_max"])
+    ncol, nrow = int(npz["ncol"]), int(npz["nrow"])
+
+    spec = json.loads(Path(files["spec"]).read_text())
+    require_current_geometry(spec, kind)
+    origin_xy, pad_h = tables_from_spec(spec, terrain.TYPES)
+
+    return Arena(
+        kind=kind,
+        files=files,
+        lookup=jp.asarray(npz["lookup"], dtype=jp.float32),
+        x_min=x_min,
+        y_min=y_min,
+        cell_x=(x_max - x_min) / (ncol - 1),
+        cell_y=(y_max - y_min) / (nrow - 1),
+        origin_xy=jp.asarray(origin_xy),
+        pad_h=jp.asarray(pad_h),
+        n_rows=int(spec["n_rows"]),
+        n_types=len(terrain.TYPES),
+        tile_size=float(spec["tile_size"]),
+        pad_jitter=float(terrain_cfg.pad_jitter),
+        spawn_yaw=bool(terrain_cfg.spawn_yaw),
+        demote_fraction=float(terrain_cfg.demote_fraction),
+        init_level_frac=float(terrain_cfg.init_level_frac),
     )
 
 

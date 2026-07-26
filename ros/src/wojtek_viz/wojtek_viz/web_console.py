@@ -12,7 +12,7 @@ the nodes already expose; nothing in wojtek_bringup / wojtek_policy changes.
 The page also reads a bluetooth gamepad via the browser's Gamepad API (pair
 the pad with the machine running the BROWSER, press any pad button on the
 page): left stick vx/yaw, right stick strafe, A arms, D-pad height -- the
-same mapping as wojtek_viz/gamepad_teleop.py, which is the in-container
+same mapping as wojtek_teleop/gamepad_teleop.py, which is the joy-driver
 (Linux) alternative. All pad traffic rides the existing cmd stream, so the
 dead-man below covers it too.
 

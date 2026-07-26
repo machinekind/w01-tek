@@ -3,7 +3,8 @@
 Both start the same MD80 + IMU + policy node set from a policy reference and
 differ only in two things: whether RViz runs (PC vs the headless RPi service)
 and the rosbag default. Those are the `with_rviz`/`bag_default` parameters
-here; the per-file docstrings document the two workflows.
+here; the per-file docstrings document the two workflows. The robot-side
+launch additionally offers the pad teleop (`with_gamepad`).
 
 Imported by the launch files at launch time. The same environment that lets
 them import wojtek_policy.policy_source makes this sibling module importable.
@@ -14,7 +15,12 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction
+from launch.actions import (
+    DeclareLaunchArgument,
+    ExecuteProcess,
+    IncludeLaunchDescription,
+    OpaqueFunction,
+)
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import (
     Command,
@@ -24,6 +30,7 @@ from launch.substitutions import (
 )
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
+from launch_ros.substitutions import FindPackageShare
 
 from wojtek_policy.policy_source import load_policy
 
@@ -180,11 +187,12 @@ def _launch_setup(context, with_rviz):
     return nodes
 
 
-def common_launch_description(with_rviz, bag_default):
+def common_launch_description(with_rviz, bag_default, with_gamepad=False):
     """LaunchDescription shared by real.launch.py and robot.launch.py.
 
     with_rviz adds the RViz node (and its `rviz` toggle arg); bag_default is
-    the rosbag `bag` default ("true"/"false") for this launch's workflow.
+    the rosbag `bag` default ("true"/"false") for this launch's workflow;
+    with_gamepad offers the robot-side pad teleop (its `gamepad` arg).
     """
     default_bag_dir = os.path.join(os.path.expanduser("~"), "wojtek_bags")
     args = [
@@ -237,6 +245,26 @@ def common_launch_description(with_rviz, bag_default):
     ]
     if with_rviz:
         args.append(DeclareLaunchArgument("rviz", default_value="false"))
+    if with_gamepad:
+        args += [
+            # Bluetooth Xbox pad paired with the RPi itself: joy driver +
+            # wojtek_teleop's /cmd_vel mapping, no PC in the loop. Off by
+            # default -- enable once the pad is paired (bluetoothctl; the
+            # bluez/ERTM groundwork comes from deploy/rpi/install.sh). Only
+            # one drive source at a time: with the pad on, leave the web
+            # console's pad/drive alone, both publish the same /cmd_vel.
+            DeclareLaunchArgument("gamepad", default_value="false"),
+            IncludeLaunchDescription(
+                PathJoinSubstitution(
+                    [
+                        FindPackageShare("wojtek_teleop"),
+                        "launch",
+                        "gamepad.launch.py",
+                    ]
+                ),
+                condition=IfCondition(LaunchConfiguration("gamepad")),
+            ),
+        ]
     args.append(
         OpaqueFunction(function=_launch_setup, kwargs={"with_rviz": with_rviz})
     )

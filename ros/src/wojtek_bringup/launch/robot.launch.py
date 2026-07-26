@@ -7,6 +7,7 @@ nodes -- no RViz, no GUI. Run visualization/debug on the PC separately:
     ros2 launch wojtek_bringup robot.launch.py [policy:=org/name@sha]
                                                [max_torque:=2.0] [dry_run:=true]
                                                [boot_pose:=home|folded] [bag:=true]
+                                               [gamepad:=true]
 
 The servo settings the MD80s run with (impedance kp/kd, torque cap) come
 from the loaded policy's contract: policy_meta.json carries the pd block
@@ -38,5 +39,8 @@ from wojtek_bringup.launch_common import common_launch_description
 
 def generate_launch_description():
     # Headless (no RViz). Recording is opt-in here; the systemd service
-    # opts in (see the recording note above).
-    return common_launch_description(with_rviz=False, bag_default="false")
+    # opts in (see the recording note above). The pad teleop is robot-side
+    # only, so this is the launch that can bring it up (gamepad:=true).
+    return common_launch_description(
+        with_rviz=False, bag_default="false", with_gamepad=True
+    )

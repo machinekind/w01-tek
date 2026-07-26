@@ -127,17 +127,19 @@ def test_ramp_inverses_round_trip():
 
 
 def test_six_step_stair_flight(arena):
-    """Six treads, and they end inside the tile with room for the crossing
-    radius the measurement course walks out to."""
+    """Six risers laying five treads, which end inside the tile with room for
+    the crossing radius the measurement course walks out to."""
     assert terrain.N_STEPS == 6
     assert terrain.stair_pit_half() == pytest.approx(1.25)
     assert terrain.stair_pit_half() < arena.spec.tile_size / 2
-    # 0.78 m of run, against a 0.514 m front-to-rear foot spacing: there is a
-    # window with all four feet on treads. Four treads would be one wheelbase.
-    assert terrain.N_STEPS * terrain.TREAD > 0.514
-    # The base box has to sit below the deepest pit the hardest row digs.
-    deepest = terrain.N_STEPS * terrain.stair_riser(max(1.4, 1.0))
-    assert terrain.HFIELD_BASE_Z > deepest, (terrain.HFIELD_BASE_Z, deepest)
+    # N_STEPS risers lay N_STEPS-1 treads: 0.65 m of run against the 0.514 m
+    # front-to-rear foot spacing, so there is a window with all four feet on
+    # treads. The old four-riser flight's 0.39 m could not clear it.
+    assert (terrain.N_STEPS - 1) * terrain.TREAD > 0.514
+    assert (4 - 1) * terrain.TREAD < 0.514
+    # base_z only has to be positive: the geom frame sits at the arena minimum
+    # (pos_z = hmin), so the solid base clears any pit depth by construction.
+    assert terrain.HFIELD_BASE_Z > 0
 
 
 def test_grid_layout(arena):
@@ -194,6 +196,21 @@ def test_scene_compiles(model, arena):
         if (mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, i) or "").startswith("terrain_box_")
     )
     assert n_boxes == len(arena.boxes)
+
+
+def test_apron_continues_the_border(model):
+    """Ground outside the arena: four strips whose tops sit exactly at the
+    border height (z = 0), with the floor's collision semantics. Without them
+    an env that walks past the border free-falls into a void and the episode
+    scores -- and demotes -- as a fall no observation could warn about."""
+    for side in ("north", "south", "east", "west"):
+        g = model.geom(f"apron_{side}")
+        assert model.geom_type[g.id] == mujoco.mjtGeom.mjGEOM_BOX
+        assert model.geom_contype[g.id] == 1
+        assert model.geom_conaffinity[g.id] == 15
+        assert model.geom_condim[g.id] == 3
+        top = model.geom_pos[g.id][2] + model.geom_size[g.id][2]
+        assert top == pytest.approx(0.0, abs=1e-9)
 
 
 def test_terrain_pairs_like_the_floor(model, arena):

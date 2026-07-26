@@ -240,7 +240,7 @@ def _scan_doc():
     reduced = terrain_scan.CellResult(
         passed=29, of=32, falls=2, timeouts=1, crossings_mean=3.8,
         saturation=0.12, track_err=0.05, clearance=0.01, measured=30,
-        nacon_max=88, steps=1036,
+        nacon_max=88, nefc_max=300, steps=1036,
     )
     return {
         "run": "probe", "checkpoint": "1000", "engine": "warp",
@@ -277,6 +277,17 @@ def test_terrain_section_renders_a_scan():
     # how many runs the per-step metrics average over, so a thin sample shows
     assert "| 30 |" in text
     assert "measured` is how many runs" in text
+    # the scan's own provenance renders, so a stale scan is visible
+    assert "scan: run probe, checkpoint 1000" in text
+
+
+def test_terrain_section_warns_when_the_scan_is_for_another_checkpoint():
+    """The report renders whatever scan file sits in the run dir, and it picks
+    the newest checkpoint itself -- the two can disagree."""
+    lines = report.render_terrain_markdown(_scan_doc(), report_checkpoint="2000")
+    assert any("scan measured checkpoint 1000" in line for line in lines)
+    lines = report.render_terrain_markdown(_scan_doc(), report_checkpoint="1000")
+    assert not any("scan measured checkpoint" in line for line in lines)
 
 
 def test_terrain_section_tolerates_an_incomplete_document():

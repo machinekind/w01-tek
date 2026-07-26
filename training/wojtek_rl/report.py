@@ -219,9 +219,21 @@ def load_terrain_scan(run_dir: Path) -> dict | None:
     The scan is a separate, expensive step (`./run.sh terrain-scan`) that can
     run on a cluster while the report is rendered on a laptop, so the report
     reads its file rather than recomputing it -- the same split the battery
-    already has. A flat run never has one."""
+    already has. A flat run never has one. A scan written by a different
+    schema version is refused rather than rendered as if current."""
+    from wojtek_rl.terrain_scan import SCAN_SCHEMA
+
     path = run_dir / TERRAIN_SCAN_JSON
-    return json.loads(path.read_text()) if path.exists() else None
+    if not path.exists():
+        return None
+    scan = json.loads(path.read_text())
+    if scan.get("schema") != SCAN_SCHEMA:
+        print(
+            f"WARNING: ignoring {path}: scan schema {scan.get('schema')!r}, "
+            f"this code reads {SCAN_SCHEMA}; rescan the checkpoint"
+        )
+        return None
+    return scan
 
 
 def build_report(run_dir: Path) -> dict:
@@ -378,12 +390,16 @@ def render_markdown(report: dict) -> str:
         lines.append(
             f"| {name} | {s['fell']} | {_fmt(s['fell_at'])} | {s['reason'] or '-'} |"
         )
-    lines += render_terrain_markdown(report.get("terrain"))
+    lines += render_terrain_markdown(
+        report.get("terrain"), report_checkpoint=report.get("checkpoint")
+    )
     lines.append("")
     return "\n".join(lines)
 
 
-def render_terrain_markdown(scan: dict | None) -> list[str]:
+def render_terrain_markdown(
+    scan: dict | None, report_checkpoint: str | None = None
+) -> list[str]:
     """The terrain-scan section, or a one-line note when there is no scan.
 
     Each row is one cell at one commanded speed: how many of the 32 fixed runs
@@ -398,11 +414,21 @@ def render_terrain_markdown(scan: dict | None) -> list[str]:
         "",
         "## Terrain",
         "",
+        # The scan's own provenance: the report renders whatever file is in
+        # the run dir, so without these lines a stale scan reads as current.
+        f"- scan: run {scan.get('run', '?')}, checkpoint "
+        f"{scan.get('checkpoint', '?')}, {scan.get('timestamp', '?')}",
         f"- engine: {scan.get('engine', '?')}   arena: seed {arena.get('seed')}, "
         f"{arena.get('rows')} rows, {arena.get('pad_radius')} m pads, "
         f"cells {arena.get('cells')}",
         f"- runs per cell and speed: {scan.get('runs_per_cell_speed')}",
     ]
+    if report_checkpoint and scan.get("checkpoint") != report_checkpoint:
+        lines.append(
+            f"- WARNING: the scan measured checkpoint "
+            f"{scan.get('checkpoint', '?')} but this report describes "
+            f"{report_checkpoint}; rescan for current numbers"
+        )
     # A scan the JSON itself declares invalid must not render as a clean table.
     if contacts.get("overflow"):
         lines.append(

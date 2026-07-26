@@ -5,12 +5,6 @@ PY=.venv/bin/python
 # Headless-render default for eval/app: egl exists only on Linux; macOS
 # must stay unset so mujoco picks its own default (cgl).
 if [[ "$(uname)" == "Linux" ]]; then export MUJOCO_GL="${MUJOCO_GL:-egl}"; fi
-# MJWarp prints this from device code when a heightfield collision exceeds the
-# per-geom-pair contact cap and drops the rest. It goes to the process stdout,
-# never through Python, so the log is the only place to catch it. Same string
-# as wojtek_rl.check_terrain.OVERFLOW_WARNING.
-OVERFLOW_WARNING="height field collision overflow"
-
 case "${1:-}" in
   build) shift; "$PY" -m wojtek_rl.build_model "$@" ;;
   build-terrain) shift; "$PY" -m wojtek_rl.build_terrain "$@" ;;
@@ -18,14 +12,9 @@ case "${1:-}" in
   check) shift; "$PY" -m wojtek_rl.check_model_mjx "$@" ;;
   check-terrain) shift; "$PY" -m wojtek_rl.check_terrain "$@" ;;
   train) shift; "$PY" -m wojtek_rl.train "$@" ;;
-  smoke) shift
-         log="$(mktemp "${TMPDIR:-/tmp}/wojtek_smoke.XXXXXX")"; rc=0
-         JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.train smoke=true wandb.enable=false "$@" 2>&1 | tee "$log" || rc=$?
-         if grep -q "$OVERFLOW_WARNING" "$log"; then
-           echo "smoke FAILED: MJWarp dropped heightfield contacts ('$OVERFLOW_WARNING' in $log)" >&2
-           exit 1
-         fi
-         rm -f "$log"; exit "$rc" ;;
+  # Heightfield contact overflow is a warp/GPU failure mode; this CPU smoke
+  # can never see it. `check-terrain --backend warp` is the gate for that.
+  smoke) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.train smoke=true wandb.enable=false "$@" ;;
   eval)  shift; "$PY" -m wojtek_rl.eval "$@" ;;
   battery) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.battery "$@" ;;
   courses) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.courses "$@" ;;  # path-following benchmark

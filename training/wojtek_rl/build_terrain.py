@@ -5,7 +5,9 @@ Generates the arena with wojtek_rl.terrain and writes, next to the robot XML
   - scene_terrain.xml   -- mirrors build_model.SCENE_XML_TEXT, but the flat
     floor plane is replaced by the heightfield geom plus the terrain boxes,
     all carrying the floor's collision semantics (default contype,
-    conaffinity=15, condim=3) so the robot pairs with terrain as with the floor
+    conaffinity=15, condim=3) so the robot pairs with terrain as with the
+    floor. Four apron strips continue the flat border outward, so walking
+    off the arena lands on ground, not in a void
   - terrain_hfield.bin  -- MuJoCo raw heightfield elevation data
   - terrain_spec.json   -- grid meta, per-tile type/difficulty/origin, pads
   - terrain_lookup.npz  -- ground-truth height grid + extents/resolution
@@ -44,6 +46,34 @@ from wojtek_rl import paths, terrain, terrain_suite
 # attributes match the floor line in build_model.SCENE_XML_TEXT.
 _BOX_RGBA = ("0.55 0.50 0.45 1", "0.45 0.42 0.40 1")
 
+# Flat ground outside the arena, flush with the border (z = 0). The
+# heightfield ends exactly at the arena extent, so without it an env that
+# walks past the border free-falls into a void and is scored -- and demoted --
+# for a fall no observation could warn it about. Four static strips frame the
+# arena; a robot on the tiles never overlaps their AABBs, so they cost nothing
+# until one is actually near an edge. The height lookup clamps to the border
+# height (0) out there, so terrain-relative measurements stay right too.
+APRON_EXTENT = 25.0
+APRON_HALF_Z = 0.5
+
+
+def _apron_geoms(radius_x: float, radius_y: float) -> list[str]:
+    """Four box strips around the arena, tops at z = 0, corners covered."""
+    ox = radius_x + APRON_EXTENT
+    strips = (
+        ("apron_north", 0.0, radius_y + APRON_EXTENT / 2, ox, APRON_EXTENT / 2),
+        ("apron_south", 0.0, -radius_y - APRON_EXTENT / 2, ox, APRON_EXTENT / 2),
+        ("apron_west", -radius_x - APRON_EXTENT / 2, 0.0, APRON_EXTENT / 2, radius_y),
+        ("apron_east", radius_x + APRON_EXTENT / 2, 0.0, APRON_EXTENT / 2, radius_y),
+    )
+    return [
+        f'    <geom name="{name}" type="box" '
+        f'size="{hx:.4f} {hy:.4f} {APRON_HALF_Z}" '
+        f'pos="{cx:.4f} {cy:.4f} {-APRON_HALF_Z}" material="groundplane" '
+        f'condim="3" conaffinity="15"/>'
+        for name, cx, cy, hx, hy in strips
+    ]
+
 
 def _robot_meshdir() -> Path:
     match = re.search(r'meshdir="([^"]+)"', paths.ROBOT_XML.read_text())
@@ -67,7 +97,7 @@ def build_scene_xml(arena: terrain.Arena, hfield_file: str) -> str:
             f'    <geom name="terrain_box_{k}" type="box" size="{half}" '
             f'pos="{pos}"{quat} condim="3" conaffinity="15" rgba="{_BOX_RGBA[k % 2]}"/>'
         )
-    boxes = "\n".join(box_lines)
+    boxes = "\n".join(_apron_geoms(hf.radius_x, hf.radius_y) + box_lines)
     return f"""<mujoco model="wojtek_terrain_scene">
   <include file="wojtek_mjx.xml"/>
   <statistic center="0 0 0.15" extent="0.8"/>

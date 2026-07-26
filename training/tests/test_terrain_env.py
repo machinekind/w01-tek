@@ -222,11 +222,18 @@ def test_curriculum_promote_wins_over_demote():
     assert _curr(5, walked=1.4, commanded=0.02, steps_lived=2, episode=1000) == 4
 
 
-def test_curriculum_first_step_division_is_guarded():
-    """steps_lived can be 0 before the first step has run; the level must stay
-    finite rather than come back as a nan-propagated garbage index."""
+def test_curriculum_first_step_holds_the_level_exactly():
+    """steps_lived is 0 only before the first step has run, where
+    commanded_dist is 0 too, so the projected threshold is a guarded 0/0.
+    The observable contract is that such an episode holds its level exactly:
+    no demote off a degenerate threshold, no promote. (The returned level is
+    an int32 by construction -- a nan can only reach the boolean comparisons
+    -- so "stays in range" would hold even with the guard deleted; equality
+    is the assertion that means something.)"""
     for level in (0, 5, N_ROWS - 1):
-        assert 0 <= _curr(level, walked=0.0, commanded=0.0, steps_lived=0) < N_ROWS
+        assert _curr(level, walked=0.0, commanded=0.0, steps_lived=0) == level
+        # a small drift below the promote threshold must not demote either
+        assert _curr(level, walked=0.3, commanded=0.0, steps_lived=0) == level
 
 
 def test_curriculum_max_level_random_respawn():
@@ -341,7 +348,8 @@ def test_wrapper_teleports_to_pads_and_bounds_levels(terrain_env_inst):
     state = jax.jit(wrapped.reset)(rng)
     step = jax.jit(wrapped.step)
 
-    origins = np.array(env._terrain.origin_xy).reshape(-1, 2)
+    origins = np.array(env._terrain.origin_xy)  # (rows, types, 2)
+    pads = np.array(env._terrain.pad_h)
     saw_done = False
     for _ in range(10):
         state = step(state, jp.zeros((4, 12)))
@@ -351,17 +359,24 @@ def test_wrapper_teleports_to_pads_and_bounds_levels(terrain_env_inst):
         assert np.all(np.isfinite(np.array(state.obs["state"])))
         if done.any():
             saw_done = True
+            # The pad of the tile the wrapper SAYS it moved to -- the
+            # post-transition level and the env's own type -- not just some
+            # pad. Indexed on [level, type], this is what catches a respawn
+            # drawn from the pre-transition level.
+            lvl = levels[done]
+            ttype = np.array(state.info["terrain_type"])[done]
             xy = np.array(state.data.qpos[done, 0:2])
-            # Teleported onto some tile's pad (centre + jitter). Bounded per
-            # axis, not by a Euclidean radius: the jitter is drawn on a square,
-            # so a corner draw is jitter*sqrt(2) from the centre and a radial
-            # bound rejects it. Re-running this loop over seeds 0..39 hits
-            # 0.1968 against a 0.15 jitter; it passed only because PRNGKey(0)
-            # happened to land inside the inscribed circle every time.
-            off = np.abs(xy[:, None, :] - origins[None, :, :])
-            nearest = off.max(axis=-1).argmin(axis=-1)
-            per_axis = off[np.arange(len(xy)), nearest]
-            assert np.all(per_axis <= env._terrain.pad_jitter + 1e-4), per_axis
+            # Bounded per axis, not by a Euclidean radius: the jitter is drawn
+            # on a square, so a corner draw is jitter*sqrt(2) from the centre
+            # and a radial bound rejects it. Re-running this loop over seeds
+            # 0..39 hits 0.1968 against a 0.15 jitter; it passed only because
+            # PRNGKey(0) happened to land inside the inscribed circle.
+            off = np.abs(xy - origins[lvl, ttype])
+            assert np.all(off <= env._terrain.pad_jitter + 1e-4), off
+            # and the base-height write really happened, at the new tile's pad
+            z = np.array(state.data.qpos[done, 2])
+            spawn_h = np.array(state.info["spawn_height"])[done]
+            np.testing.assert_allclose(z, pads[lvl, ttype] + spawn_h, atol=1e-4)
     assert saw_done  # episode_length=3 must have forced truncation dones
 
 
@@ -398,8 +413,12 @@ def _drive_to_a_done(env, episode_length, walked, n_envs=2, level=1, key=3):
     `spawn_xy` is what the wrapper measures distance from and the env never
     touches it mid-episode, so writing it is how a specific walked distance is
     staged; `last_xy` would be overwritten by the next step. The fall is staged
-    by dropping the base to just above the local surface, below
-    `fall.min_height` -- that is the termination the demote rule exists for.
+    by rolling the base 90 degrees, past `fall.max_tilt_gz` -- one control
+    step of physics cannot right that. (Staging a height fall by dropping the
+    base into the ground injects a violent penetration impulse, and whether
+    the ejection leaves the base above or below `min_height` after 0.02 s is
+    knife-edge: it flipped when the arena apron changed the scene's contact
+    ordering.)
     """
     wrapped = wrap_for_terrain_brax_training(env, episode_length=episode_length)
     step = jax.jit(wrapped.step)
@@ -411,7 +430,8 @@ def _drive_to_a_done(env, episode_length, walked, n_envs=2, level=1, key=3):
     state.info["terrain_level"] = jp.full((n_envs,), level, dtype=jp.int32)
     xy = state.data.qpos[:, 0:2]
     state.info["spawn_xy"] = xy + jp.array([walked, 0.0])
-    qpos = state.data.qpos.at[:, 2].set(env._terrain.height(xy) + 0.01)
+    roll90 = jp.array([jp.cos(jp.pi / 4), jp.sin(jp.pi / 4), 0.0, 0.0])
+    qpos = state.data.qpos.at[:, 3:7].set(roll90)
     state = state.replace(data=state.data.replace(qpos=qpos))
     state = step(state, jp.zeros((n_envs, 12)))
     assert np.all(np.array(state.done) == 1.0), "the staged fall must terminate"
@@ -570,6 +590,19 @@ def test_missing_terrain_assets_raises(monkeypatch, tmp_path, missing):
     with pytest.raises(FileNotFoundError, match="build-terrain") as excinfo:
         wojtek_env.WojtekJoystick(cfg)
     assert files[missing].name in str(excinfo.value)
+
+
+def test_spawn_scatter_must_fit_the_pad(small_arena):
+    """The eval arena's pads are 0.40 m by design, which the default 0.15 m
+    pad_jitter plus the 0.36 m standing footprint does not fit -- a training
+    run pointed at it would spawn with feet on the features. The guard turns
+    that into a message naming both numbers."""
+    cfg = wojtek_env.default_config()
+    cfg.terrain.enable = True
+    cfg.terrain.arena = TEST_ARENA
+    cfg.terrain.pad_jitter = 0.3  # 0.3 + 0.36 > the test arena's 0.6 m pad
+    with pytest.raises(ValueError, match="pad_jitter"):
+        wojtek_env.WojtekJoystick(cfg)
 
 
 def test_a_stale_arena_is_refused(monkeypatch, tmp_path, small_arena):

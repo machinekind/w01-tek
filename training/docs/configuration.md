@@ -128,7 +128,7 @@ All three tasks support these paths through their `default_config()`:
 | `task.env.sim_dt` | `0.004` s | Physics timestep. Keep control and simulation timing compatible; the joystick latency limit is the resulting substep count. |
 | `task.env.sim.backend` | `auto` | `auto`, `jax`, or `warp`. `auto` selects the primary MJWarp CUDA path when available and MJX/JAX otherwise; forcing Warp on an unsupported host fails loudly. Example: `+task.env.sim.backend=warp`. |
 | `task.env.sim.naconmax_per_env` | `32` | Warp contact budget per environment. See [the MJWarp report](../../docs/plans/mjwarp-phase0-report.md). |
-| `task.env.sim.njmax` | `320` | Warp constraint-row budget per world. |
+| `task.env.sim.njmax` | `320` | Warp constraint-row budget per world. Rows past it apply no force with no warning anywhere; a condim-4 contact costs ~6 rows, so this ceiling is nearer than it looks. `check-terrain` and `terrain-scan` record the peak (`nefc_max`), which is what sizes it. |
 | `task.env.sim.num_envs` | `1` | Do not set for training: `train.py` replaces it with `max(ppo.num_envs, ppo.num_eval_envs)`. Set `++ppo.num_envs` instead. |
 | `task.env.episode_length` | task-specific | Explicitly override only when PPO's `episode_length` is also understood; absent PPO override, the trainer mirrors this value. |
 | `task.env.action_scale` | `0.5` rad | Scales policy action to motor-target displacement. `joystick` additionally accepts a 3-vector `[abduction, hip, knee]` tiled over the 4 legs, giving joints different command authority (e.g. `'task.env.action_scale=[0.25,0.5,0.5]'`); `getup` and `jump` take the scalar only. |
@@ -425,6 +425,11 @@ Two things worth knowing about the rule:
   17 percent of timeout episodes because resampled command directions cancel,
   so the commanded distance exceeds the net displacement. Harmless for drift,
   worth remembering when reading `terrain_lvl_train`.
+- The walked distance is Euclidean while every feature is a concentric square,
+  so on a diagonal heading 1.5 m is only 1.06 m out in Chebyshev terms — tread
+  4 of 6. About a quarter of headings promote without crossing the whole
+  flight. Kept as-is because it is legged_gym's rule; the measurement scan
+  uses Chebyshev radii for exactly this reason.
 
 Each env keeps one terrain type for the whole run. Only the row changes. The
 robot is teleported between tiles. That is safe because no observation
@@ -437,6 +442,13 @@ Watching it work: `terrain_lvl` in the logs comes from the eval env, which
 starts fresh at every evaluation, so it will not climb. To watch the real
 curriculum, run with `++ppo.log_training_metrics=true` and read
 `terrain_lvl_train`. Any terrain training preset should set this flag.
+
+For the curriculum to ratchet at all, the envs must survive between epochs:
+the Go1 baseline's `ppo.num_resets_per_eval=10` rebuilds every env ten times
+per evaluation, and each rebuild re-randomises the level the env had climbed
+to. `train.py` therefore pins `ppo.num_resets_per_eval=0` for terrain runs
+(the evaluations still happen; epochs just run longer between resets). An
+explicit `++ppo.num_resets_per_eval` override wins over the pin.
 
 The legs collide with terrain, and there is no option to turn that off. The
 shins are what hit a riser face: without them a leg swings through the step
@@ -469,6 +481,14 @@ A warp terrain run warns when its budget is below that 88-contact floor, which
 the env computes from the robot's own collision set rather than from a rule of
 thumb. The floor is not a budget: boxes add to it, and the real number has to be
 measured.
+
+There is a second, quieter budget: `sim.njmax`, the constraint rows per world.
+Rows past it apply no force with no warning anywhere — no printf, no counter in
+the step — and one contact costs about 6 rows at `condim=4` with the default
+pyramidal cone, so the flat-scene 320 covers only ~50 simultaneous contacts.
+`check-terrain` and `terrain-scan` both record the peak (`nefc_max`) next to
+the contact peak; size `sim.njmax` for a training run from that measurement,
+the same way `naconmax_per_env` is sized from `nacon_max`.
 
 ## Terrain measurement suite
 
@@ -509,10 +529,12 @@ heading-dependent. Every run has to sustain the same 62% of its commanded speed.
 
 One known limitation, accepted: at 1.45 m the base is 0.05 m from the tile
 border, so the leading feet reach 0.21 m into a neighbouring tile at the
-turnaround. That is unavoidable with a six-step flight on a 3 m tile — clearing
-the last riser needs the base at 1.25 + 0.257 = 1.51 m. On an axis heading the
-neighbour shares the row, so it is a different terrain type at the same
-difficulty; on a diagonal it is the corner tile, which differs in both. Tiles are
+turnaround (0.255 m on a diagonal, where the foot corner leads). That is
+unavoidable with a six-step flight on a 3 m tile — clearing the last riser
+needs the base at 1.25 + 0.257 = 1.51 m. Which neighbour depends on the
+heading: along x it shares the row (same difficulty, different type); along y
+it is the same type one row over — a harder or easier difficulty, the worst
+case; on a diagonal it is the corner tile, which differs in both. Tiles are
 flat to within 2 cm at the border itself, but 0.21 m in the neighbour's own
 features have begun — worst case a steep inverted slope, 10 cm below grade at the
 hardest gated row and 15 cm at the frontier rows. The crossing is already scored
@@ -599,7 +621,7 @@ Brax trainer):
 | `ppo.num_evals` | `10` |
 | `ppo.num_eval_envs` | `128` upstream default | Optional: not present in the baseline map, but supported by the current Brax trainer. The training env allocates for `max(num_envs, num_eval_envs)`. |
 | `ppo.num_minibatches` | `32` |
-| `ppo.num_resets_per_eval` | `10` |
+| `ppo.num_resets_per_eval` | `10` | Terrain runs pin this to 0 (`train.py`): each periodic reset rebuilds every env and re-randomises its curriculum level, so at 10 the curriculum never ratchets. An explicit override still wins. |
 | `ppo.num_timesteps` | `200000000` |
 | `ppo.num_updates_per_batch` | `4` |
 | `ppo.reward_scaling` | `1.0` |

@@ -105,9 +105,12 @@ def test_main_passes_when_there_are_no_warnings(tmp_path, monkeypatch):
     assert sentinel.read_text().strip() == "OK"
 
 
-def test_smoke_path_greps_for_the_same_string():
-    """run.sh cannot import the constant, so the two copies are checked here."""
-    assert WARNING in (paths.PROJECT_DIR / "run.sh").read_text()
+def test_smoke_path_does_not_pretend_to_gate_the_warp_warning():
+    """The smoke run is pinned to JAX_PLATFORMS=cpu, where MJWarp never
+    executes and the warning cannot appear -- a grep for it there is a gate
+    that can never fire. check-terrain --backend warp is the real gate, so
+    run.sh must not carry a dead copy of the string that reads as one."""
+    assert WARNING not in (paths.PROJECT_DIR / "run.sh").read_text()
 
 
 def _patched_run_sh(tmp_path, stub_body: str):
@@ -124,21 +127,6 @@ def _patched_run_sh(tmp_path, stub_body: str):
     )
     script.chmod(0o755)
     return script
-
-
-def test_smoke_fails_when_the_warning_appears_in_the_run_output(tmp_path):
-    script = _patched_run_sh(tmp_path, f'echo "Warning: {WARNING} [cell 7]"')
-    # run.sh keeps the log on failure, on purpose -- its message names the file.
-    # TMPDIR points it at tmp_path so the test does not litter the real one.
-    result = subprocess.run(
-        [str(script), "smoke"],
-        capture_output=True,
-        text=True,
-        env={**os.environ, "TMPDIR": str(tmp_path)},
-    )
-    assert result.returncode == 1
-    assert "smoke FAILED" in result.stderr
-    assert list(tmp_path.glob("wojtek_smoke.*"))  # the log it points at exists
 
 
 def test_smoke_passes_a_clean_run_through(tmp_path):

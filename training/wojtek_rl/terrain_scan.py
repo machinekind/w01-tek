@@ -146,6 +146,7 @@ class CellResult:
     clearance: float
     measured: int  # runs that contributed metric steps
     nacon_max: int
+    nefc_max: int
     steps: int
 
 
@@ -169,6 +170,7 @@ def cell_entry(cell, speed: float, result: CellResult) -> dict:
         # here means those metrics describe the survivors, not the cell.
         "measured": result.measured,
         "nacon_max": result.nacon_max,
+        "nefc_max": result.nefc_max,
         "steps": result.steps,
     }
 
@@ -328,6 +330,11 @@ def check_arena(spec: dict) -> None:
         "pad_radius": terrain_suite.EVAL_PAD_RADIUS,
         "n_steps": terrain.N_STEPS,
         "stair_platform_half": terrain.STAIR_PLATFORM_HALF,
+        # build-terrain passes these three through for every arena kind, so
+        # this gate is the only place a non-default eval geometry is caught.
+        "tile_size": terrain.TILE_SIZE,
+        "border": terrain.BORDER,
+        "cell_size": terrain.CELL_SIZE,
     }
     wrong = {
         key: (spec.get(key), value)
@@ -440,6 +447,13 @@ def make_cell_runner(env, inf):
     sized by the number of environments, so a varying batch size means a new
     allocation. Which tile, which heading and which direction are numbers fed
     into the same program.
+
+    Known perf ceiling, accepted for now: the cell axis could ride in the batch
+    too (43 x 32 worlds is still one fixed shape), and the 129 sequential
+    dispatches of a 32-world batch are why the measured scan runs ~200x below
+    what the physics sustains at training batch sizes. Folding cells in changes
+    nothing measured, only the wall clock, but it reshapes this whole rollout
+    and needs GPU validation -- a follow-up, not a review-fix edit.
     """
     import functools
 
@@ -456,6 +470,19 @@ def make_cell_runner(env, inf):
         contact budget to overflow)."""
         value = getattr(data._impl, "nacon", None)
         if value is None:
+            return jp.zeros((), jp.int32)
+        return jp.max(jp.asarray(value)).astype(jp.int32)
+
+    def nefc_of(data):
+        """Warp's live constraint-row count, max over worlds; 0 on the jax
+        backend. Rows past sim.njmax apply no force with no warning anywhere,
+        so the peak has to be recorded to make an overflow visible -- the
+        nacon counter above cannot see it (contacts vs rows are different
+        budgets)."""
+        value = getattr(data._impl, "nefc", None)
+        # The jax impl keeps nefc as a static buffer size, not a per-step
+        # count; only warp's per-world array is a measurement.
+        if value is None or getattr(value, "ndim", 0) == 0:
             return jp.zeros((), jp.int32)
         return jp.max(jp.asarray(value)).astype(jp.int32)
 
@@ -477,7 +504,7 @@ def make_cell_runner(env, inf):
         )
 
         def body(carry):
-            i, state, rng, crossings, fell, sat, err, clr, counted, nacon = carry
+            i, state, rng, crossings, fell, sat, err, clr, counted, nacon, nefc = carry
             sign = leg_sign(crossings)
             command = command_at(crossings)
             info = dict(state.info)
@@ -506,6 +533,7 @@ def make_cell_runner(env, inf):
             return (
                 i + 1, state, rng, crossings, fell, sat, err, clr,
                 counted + w, jp.maximum(nacon, nacon_of(data)),
+                jp.maximum(nefc, nefc_of(data)),
             )
 
         def cond(carry):
@@ -518,9 +546,10 @@ def make_cell_runner(env, inf):
         init = (
             jp.zeros((), jp.int32), state, rng,
             jp.zeros(n, jp.int32), jp.zeros(n, bool),
-            zeros, zeros, zeros, zeros, jp.zeros((), jp.int32),
+            zeros, zeros, zeros, zeros,
+            jp.zeros((), jp.int32), jp.zeros((), jp.int32),
         )
-        i, state, _, crossings, fell, sat, err, clr, counted, nacon = (
+        i, state, _, crossings, fell, sat, err, clr, counted, nacon, nefc = (
             jax.lax.while_loop(cond, body, init)
         )
         per_step = jp.maximum(counted, 1.0)
@@ -533,6 +562,7 @@ def make_cell_runner(env, inf):
             "counted": counted,
             "steps": i,
             "nacon_max": nacon,
+            "nefc_max": nefc,
         }
 
     return run
@@ -572,6 +602,7 @@ def reduce_runs(out) -> CellResult:
         clearance=mean_of("clearance"),
         measured=int(measured.sum()),
         nacon_max=int(out["nacon_max"]),
+        nefc_max=int(out["nefc_max"]),
         steps=int(out["steps"]),
     )
 
@@ -581,6 +612,7 @@ def scan(
     *,
     backend: str = "auto",
     naconmax_per_env: int = DEFAULT_NACONMAX_PER_ENV,
+    njmax: int | None = None,
     cell_names: list[str] | None = None,
     speeds=terrain_suite.SPEEDS,
     baseline_ref: str | None = None,
@@ -599,6 +631,20 @@ def scan(
         if unknown:
             raise KeyError(f"unknown cell(s) {sorted(unknown)}")
 
+    # Resolved before the rollout on purpose: it is pure IO, and a bad
+    # reference must not throw away a finished scan.
+    baseline = load_baseline(baseline_ref)
+
+    sim_overrides = {
+        "backend": backend,
+        "num_envs": terrain_suite.RUNS_PER_CELL_SPEED,
+        # Warp allocates its contact pool up front and drops overflow
+        # silently. The recorded nacon_max is what says whether the
+        # budget was enough.
+        "naconmax_per_env": naconmax_per_env,
+    }
+    if njmax is not None:
+        sim_overrides["njmax"] = njmax
     run, env, ckpt, inf = load_checkpoint_policy(
         run_dir,
         flat=False,
@@ -611,14 +657,7 @@ def scan(
                 "pad_jitter": 0.0,
                 "spawn_yaw": False,
             },
-            "sim": {
-                "backend": backend,
-                "num_envs": terrain_suite.RUNS_PER_CELL_SPEED,
-                # Warp allocates its contact pool up front and drops overflow
-                # silently. The recorded nacon_max is what says whether the
-                # budget was enough.
-                "naconmax_per_env": naconmax_per_env,
-            },
+            "sim": sim_overrides,
             # The course drives the command itself; a mid-episode resample would
             # walk the robot off the tile.
             "command": {"resample_steps": 10**9},
@@ -640,12 +679,18 @@ def scan(
         "saturation_threshold_frac": SATURATION_FRAC,
         "command_height": COMMAND_HEIGHT,
         "naconmax_per_env": naconmax_per_env,
+        "njmax": int(env._config.sim.njmax),
         "warnings": command_box_warnings(run, speeds),
         "cells": {},
     }
     if cell_names:
         result["warnings"].append(
             f"partial scan: {len(cells)} of {len(terrain_suite.CELLS)} cells"
+        )
+    if tuple(speeds) != tuple(terrain_suite.SPEEDS):
+        result["warnings"].append(
+            f"partial scan: speeds {sorted(speeds)} of "
+            f"{sorted(terrain_suite.SPEEDS)}"
         )
 
     dt = float(env.dt)
@@ -689,6 +734,10 @@ def scan(
         (r["nacon_max"] for per in result["cells"].values() for r in per.values()),
         default=0,
     )
+    nefc_max = max(
+        (r["nefc_max"] for per in result["cells"].values() for r in per.values()),
+        default=0,
+    )
     capacity = naconmax_per_env * terrain_suite.RUNS_PER_CELL_SPEED
     result["contacts"] = {
         "nacon_max": nacon_max,
@@ -696,15 +745,30 @@ def scan(
         # Warp discards overflow silently, so a scan that hit the ceiling is not
         # a measurement of the policy.
         "overflow": bool(env._backend == "warp" and nacon_max >= capacity),
+        # The second budget: constraint rows per world. Rows past sim.njmax
+        # apply no force, silently -- one contact costs 6 rows at condim=4
+        # with a pyramidal cone, so this ceiling is nearer than it looks.
+        "nefc_max": nefc_max,
+        "njmax": result["njmax"],
+        "rows_overflow": bool(
+            env._backend == "warp" and nefc_max >= result["njmax"]
+        ),
     }
     if result["contacts"]["overflow"]:
         result["warnings"].append(
             f"contact pool overflowed ({nacon_max} >= {capacity}); raise "
             "--naconmax-per-env and rescan, the numbers above are not valid"
         )
-    baseline = load_baseline(baseline_ref)
+    if result["contacts"]["rows_overflow"]:
+        result["warnings"].append(
+            f"constraint rows overflowed ({nefc_max} >= {result['njmax']}); "
+            "raise --njmax and rescan, the numbers above are not valid"
+        )
     result["gate"] = {
-        "absolute": absolute_gate(result["cells"], gated_pairs(speeds=speeds)),
+        # The completeness reference is the FULL suite, whatever subset this
+        # scan measured: "the pairs I measured are fine" must not read as
+        # "the policy passed", on the speed axis as much as the cell axis.
+        "absolute": absolute_gate(result["cells"], gated_pairs()),
         "relative": relative_gate(result, baseline),
     }
     result["timestamp"] = datetime.now().isoformat(timespec="seconds")
@@ -721,6 +785,12 @@ def main() -> None:
         help=f"warp contact pool per env (default {DEFAULT_NACONMAX_PER_ENV}, "
              "the training value); the scan records the peak so an overflow is "
              "visible instead of silent",
+    )
+    ap.add_argument(
+        "--njmax", type=int, default=None,
+        help="warp constraint rows per world (default: the env's own, 320). "
+             "Rows past it apply no force with no warning; the scan records "
+             "the peak (nefc_max) so this overflow is visible too",
     )
     ap.add_argument(
         "--cells", default=None,
@@ -754,6 +824,7 @@ def main() -> None:
         Path(args.run),
         backend=args.backend,
         naconmax_per_env=args.naconmax_per_env,
+        njmax=args.njmax,
         cell_names=args.cells.split(",") if args.cells else None,
         speeds=(
             tuple(float(s) for s in args.speeds.split(","))

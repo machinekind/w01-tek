@@ -99,6 +99,21 @@ def main(cfg: DictConfig) -> None:
     _apply_ppo_overrides(ppo_params, task_ppo_overrides)
     _apply_ppo_overrides(ppo_params, ppo_overrides)
 
+    # The Go1 baseline rebuilds every env between epochs (num_resets_per_eval
+    # =10). The terrain level lives in env state, so each rebuild would throw
+    # the whole population back onto random easy rows and the curriculum would
+    # never ratchet. Terrain runs train without periodic resets; an explicit
+    # ppo override still wins.
+    terrain_on = bool((env_overrides.get("terrain") or {}).get("enable"))
+    if (
+        terrain_on
+        and "num_resets_per_eval" not in task_ppo_overrides
+        and "num_resets_per_eval" not in ppo_overrides
+    ):
+        ppo_params.num_resets_per_eval = 0
+        print("terrain: ppo.num_resets_per_eval=0 (a periodic env reset "
+              "re-randomizes every env's curriculum level)")
+
     # The eval wrapper vmaps num_eval_envs worlds through the same env, so
     # the warp contact budget covers the larger of the two batches.
     env_overrides.setdefault("sim", {})["num_envs"] = int(
@@ -198,29 +213,38 @@ def main(cfg: DictConfig) -> None:
     t_last = [time.time(), 0]
 
     def progress(num_steps: int, metrics: dict) -> None:
-        now = time.time()
-        sps = (num_steps - t_last[1]) / max(now - t_last[0], 1e-9)
-        t_last[0], t_last[1] = now, num_steps
-        reward = metrics.get("eval/episode_reward", float("nan"))
-        # avg_episode_length exposes die-and-reset reward hacking that the
-        # reward number alone hides (trot_v1 post-mortem, 2026-07-05).
-        ep_len = metrics.get("eval/avg_episode_length", float("nan"))
-        line = (
-            f"steps {num_steps:>12,}  reward {reward:8.2f}  "
-            f"ep_len {ep_len:6.0f}  {sps:,.0f} steps/s"
-        )
-        # terrain_lvl comes from the eval env, which starts fresh every
-        # evaluation, so it will not climb. terrain_lvl_train is the real
-        # curriculum; it only exists under ppo.log_training_metrics.
-        level = metrics.get("eval/episode_terrain_level_per_step")
-        if level is not None:
-            line += f"  terrain_lvl {float(level):5.2f}"
+        # Two producers share this callback: brax's evaluator (eval/* keys)
+        # and, under ppo.log_training_metrics, the EpisodeMetricsLogger
+        # (episode/* keys only). Formatting eval keys on a training call
+        # would print nan and reset the steps/s clock mid-interval.
+        wb_extra = {}
+        if "eval/episode_reward" in metrics:
+            now = time.time()
+            sps = (num_steps - t_last[1]) / max(now - t_last[0], 1e-9)
+            t_last[0], t_last[1] = now, num_steps
+            reward = metrics["eval/episode_reward"]
+            # avg_episode_length exposes die-and-reset reward hacking that the
+            # reward number alone hides (trot_v1 post-mortem, 2026-07-05).
+            ep_len = metrics.get("eval/avg_episode_length", float("nan"))
+            line = (
+                f"steps {num_steps:>12,}  reward {reward:8.2f}  "
+                f"ep_len {ep_len:6.0f}  {sps:,.0f} steps/s"
+            )
+            # terrain_lvl comes from the eval env, which starts fresh every
+            # evaluation, so it will not climb. terrain_lvl_train is the real
+            # curriculum; it only exists under ppo.log_training_metrics.
+            level = metrics.get("eval/episode_terrain_level_per_step")
+            if level is not None:
+                line += f"  terrain_lvl {float(level):5.2f}"
+            wb_extra["perf/steps_per_sec"] = sps
+        else:
+            line = f"steps {num_steps:>12,}  [train]"
         train_level = metrics.get("episode/terrain_level_per_step")
         if train_level is not None:
             line += f"  terrain_lvl_train {float(train_level):5.2f}"
         print(line)
         if wb is not None:
-            wb.log({**metrics, "perf/steps_per_sec": sps}, step=num_steps)
+            wb.log({**metrics, **wb_extra}, step=num_steps)
 
     # Terrain runs need the curriculum auto-reset wrapper. Flat runs keep the
     # stock wrapper exactly.

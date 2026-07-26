@@ -61,9 +61,11 @@ BORDER = 2.0
 # cap at this cell size. Splitting the base collision box (build_model.py) is
 # what keeps each geom pair under it.
 CELL_SIZE = 0.04
-# The base box lifts to this below the arena floor, so nothing falls through
-# even where slope/stair tiles dig below z = 0. The deepest pit is the inverted
-# six-step flight at the hardest measurement row: 6 x 11.8 cm = 71 cm.
+# Thickness of the heightfield's solid base, measured downward from the geom
+# frame -- which the scene generator places at the arena's minimum height
+# (pos_z = hmin), so the solid already extends below the deepest pit whatever
+# this value is. The only real constraint is that it is positive, and the
+# MJCF compiler enforces that; pit depth never has to be added here.
 HFIELD_BASE_Z = 1.0
 
 # Flat circular spawn pad at every tile centre (>= 0.5 m per the brief). The
@@ -87,13 +89,16 @@ EDGE_TAPER = 0.25
 SLOPE_PLATFORM_HALF = 0.6
 # Stair tiles: flat square platform, then concentric 0.13 m treads.
 #
-# Six steps, not the physical rig's four. The feet sit 0.257 m fore and aft of
-# the base centre, so four 13 cm treads (0.52 m) are exactly one wheelbase and
-# the robot always has feet on flat ground at one end or the other -- four
-# steps measures entering and leaving a staircase, never walking one. Six give
-# 0.78 m of run, so there is a window with all four feet on treads and more
-# treads ahead. A 0.60 m platform leaves 0.90 m of tile radius, which is the
-# six treads; it cannot shrink below 0.51 m while spawn jitter stays at 0.15 m.
+# Six risers, not the physical rig's four. N_STEPS counts risers; the flight
+# lays N_STEPS - 1 treads between the platform and the tile ground. Four
+# risers give 3 x 0.13 = 0.39 m of tread run against the 0.514 m fore/aft
+# foot spacing (feet sit 0.257 m fore and aft of the base centre), so the
+# robot always has feet on flat ground at one end or the other -- four steps
+# measures entering and leaving a staircase, never walking one. Six risers
+# give 0.65 m of run: a 0.136 m window with all four feet on treads. The
+# five treads end 1.25 m from the tile centre on a 1.50 m half-tile; the
+# platform cannot shrink below 0.51 m while spawn jitter stays at 0.15 m
+# (jitter plus the 0.36 m standing footprint).
 STAIR_PLATFORM_HALF = 0.6
 TREAD = 0.13
 N_STEPS = 6
@@ -234,16 +239,22 @@ class Arena:
 
 def _bilinear(
     grid: np.ndarray, x0: float, dx: float, y0: float, dy: float,
-    x: np.ndarray, y: np.ndarray,
+    x: np.ndarray, y: np.ndarray, xp=np,
 ) -> np.ndarray:
-    """Sample grid (row indexes y, col indexes x) at world (x, y), clamped."""
+    """Sample grid (row indexes y, col indexes x) at world (x, y), clamped.
+
+    `xp` is numpy or jax.numpy: the generator and its tests sample with numpy,
+    while the env samples the same grid on device (terrain_env.bilinear_sample
+    binds jax.numpy). One body, so the two cannot drift -- this function is
+    the ground truth that base height, foot contact and fall termination all
+    read through."""
     nr, nc = grid.shape
-    fx = np.clip((x - x0) / dx, 0.0, nc - 1)
-    fy = np.clip((y - y0) / dy, 0.0, nr - 1)
-    cx0 = np.floor(fx).astype(int)
-    ry0 = np.floor(fy).astype(int)
-    cx1 = np.minimum(cx0 + 1, nc - 1)
-    ry1 = np.minimum(ry0 + 1, nr - 1)
+    fx = xp.clip((x - x0) / dx, 0.0, nc - 1)
+    fy = xp.clip((y - y0) / dy, 0.0, nr - 1)
+    cx0 = xp.floor(fx).astype(xp.int32)
+    ry0 = xp.floor(fy).astype(xp.int32)
+    cx1 = xp.minimum(cx0 + 1, nc - 1)
+    ry1 = xp.minimum(ry0 + 1, nr - 1)
     tx = fx - cx0
     ty = fy - ry0
     g00 = grid[ry0, cx0]

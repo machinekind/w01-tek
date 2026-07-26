@@ -25,6 +25,7 @@ def _out(crossings, fell):
         "counted": np.full(len(crossings), 100.0),
         "steps": 500,
         "nacon_max": 77,
+        "nefc_max": 300,
     }
 
 
@@ -41,6 +42,7 @@ def test_pass_requires_all_four_crossings_and_no_fall():
     assert r.timeouts == 1  # ran out of budget mid-course without falling
     assert r.crossings_mean == pytest.approx((4 + 4 + 3 + 0) / 4)
     assert r.nacon_max == 77
+    assert r.nefc_max == 300
 
 
 def test_a_fall_fails_the_run():
@@ -351,6 +353,9 @@ def _eval_spec(**overrides):
         "pad_radius": terrain_suite.EVAL_PAD_RADIUS,
         "n_steps": terrain.N_STEPS,
         "stair_platform_half": terrain.STAIR_PLATFORM_HALF,
+        "tile_size": terrain.TILE_SIZE,
+        "border": terrain.BORDER,
+        "cell_size": terrain.CELL_SIZE,
         "tiles": [
             {"row": r, "col": 0, "difficulty": d}
             for r, d in enumerate(terrain_suite.DIFFICULTIES)
@@ -373,8 +378,17 @@ def test_check_arena_accepts_the_measurement_course():
         {"pad_radius": 0.6},
         {"n_steps": 4},
         {"stair_platform_half": 0.7},
+        # build-terrain passes these three through for every arena kind, so
+        # this gate is the only thing standing between a resized eval arena
+        # and the suite's fingerprint.
+        {"tile_size": 2.5},
+        {"border": 1.0},
+        {"cell_size": 0.05},
     ],
-    ids=["seed", "rows", "shuffled", "pad", "steps", "platform"],
+    ids=[
+        "seed", "rows", "shuffled", "pad", "steps", "platform",
+        "tile-size", "border", "cell-size",
+    ],
 )
 def test_check_arena_refuses_a_different_arena(overrides):
     """The fingerprint the scan records comes from the suite's constants and the
@@ -419,6 +433,7 @@ def test_metrics_average_only_over_runs_that_were_measured():
         "counted": counted,
         "steps": 1036,
         "nacon_max": 90,
+        "nefc_max": 310,
     }
     r = terrain_scan.reduce_runs(out)
     assert r.track_err == pytest.approx(0.22)
@@ -439,7 +454,7 @@ def test_a_cell_where_every_run_died_early_reports_zero_not_nan():
     out = {
         "crossings": np.zeros(4, dtype=int), "fell": np.ones(4, dtype=bool),
         "saturation": counted, "track_err": counted, "clearance": counted,
-        "counted": counted, "steps": 60, "nacon_max": 0,
+        "counted": counted, "steps": 60, "nacon_max": 0, "nefc_max": 0,
     }
     r = terrain_scan.reduce_runs(out)
     assert r.measured == 0

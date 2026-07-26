@@ -58,9 +58,10 @@ SPEEDS = (0.2, PLAN_SPEED, 0.7)
 N_HEADINGS = 8
 # Offsets along the heading, m. Small on purpose: the pad is 0.40 m and the
 # standing footprint reaches 0.36 m, so this is the room there is while all
-# four feet stay on flat ground (test_terrain_suite pins it). It still sweeps
-# most of a 13 cm tread, which is the foot-placement variable a riser is
-# sensitive to.
+# four feet stay on flat ground (test_terrain_suite pins it). The 0.06 m span
+# sweeps 46% of a 13 cm tread on an axis heading; on a diagonal it projects to
+# 0.06/sqrt(2) = 0.042 m of Chebyshev radius, a third of a tread. That phase
+# is the foot-placement variable a riser is sensitive to.
 START_OFFSETS = (-0.03, -0.01, 0.01, 0.03)
 RUNS_PER_CELL_SPEED = N_HEADINGS * len(START_OFFSETS)
 
@@ -82,16 +83,18 @@ RUNS_PER_CELL_SPEED = N_HEADINGS * len(START_OFFSETS)
 # obstacle.
 #
 # Known limitation, accepted: at 1.45 the base is 0.05 m from the tile border, so
-# the leading feet reach 0.21 m into a neighbouring tile at the turnaround. That
-# is unavoidable with a six-step flight on a 3 m tile -- clearing the last riser
-# needs the base at 1.25 + 0.257 = 1.51 m. On an axis heading the neighbour shares
-# the row (same difficulty, different type); on a diagonal it is the corner tile,
-# which differs in BOTH row and column. Tiles are flat to within 2 cm at the
-# border itself (test_tile_borders_seamless), but 0.21 m in the neighbour's own
-# features have begun: worst case is a steep inverted slope, 10 cm below grade at
-# the hardest gated row and 15 cm at the frontier rows. The crossing is already
-# scored when the base reaches the ring, so this is the state at the end of a leg
-# rather than terrain the robot had to cross.
+# the leading feet reach 0.21 m into a neighbouring tile at the turnaround (0.255
+# m on a diagonal, where the foot corner leads). That is unavoidable with a
+# six-step flight on a 3 m tile -- clearing the last riser needs the base at
+# 1.25 + 0.257 = 1.51 m. Which neighbour depends on the heading: along x it
+# shares the row (same difficulty, different type); along y it is the SAME type
+# one row over, i.e. a harder or easier difficulty -- the worst case; on a
+# diagonal it is the corner tile, which differs in both. Tiles are flat to within
+# 2 cm at the border itself (test_tile_borders_seamless), but 0.21 m in the
+# neighbour's own features have begun: worst case is a steep inverted slope,
+# 10 cm below grade at the hardest gated row and 15 cm at the frontier rows. The
+# crossing is already scored when the base reaches the ring, so this is the state
+# at the end of a leg rather than terrain the robot had to cross.
 CROSSINGS = 4
 OUT_RADIUS = 1.45
 BACK_RADIUS = 0.30
@@ -321,9 +324,15 @@ def heading_stretch(yaw: float) -> float:
 
 def run_distance(run: "Run") -> float:
     """Metres this particular run walks: out to OUT_RADIUS from its start offset,
-    then three legs between BACK_RADIUS and OUT_RADIUS, at its own heading."""
+    then three legs between BACK_RADIUS and OUT_RADIUS, at its own heading.
+
+    The offset is signed: a positive offset spawns the robot ahead along the
+    heading it walks out on, so its first leg is SHORTER by the offset. Getting
+    the sign wrong hands the +offset runs more time than their course needs,
+    and at a speed where the timeout is the deciding factor that turns the
+    start offset into a pass/fail variable."""
     stretch = heading_stretch(run.yaw)
-    out_leg = OUT_RADIUS * stretch + abs(run.offset)
+    out_leg = OUT_RADIUS * stretch - run.offset
     return_leg = (OUT_RADIUS - BACK_RADIUS) * stretch
     return out_leg + (CROSSINGS - 1) * return_leg
 

@@ -1,8 +1,14 @@
 """Auto-reset wrapper that runs the terrain curriculum.
 
-The stock auto-reset restores one cached state on done and never calls
-``env.reset`` again. Timeout dones appear only above EpisodeWrapper. So tile
-switching has to happen here, in a replacement for the top wrapper.
+Playground's stock auto-reset has two modes. The default restores one cached
+state on done and never calls ``env.reset`` again, so a level held in env info
+would stay frozen at its reset value. ``full_reset=True`` does re-run
+``env.reset`` on done and preserves info for exactly this kind of curriculum
+-- but it pays a full reset (kinematics, obs rebuild) inside every training
+step. This wrapper takes the cheap path instead: restore the cached state,
+then teleport the base to the new curriculum spawn. Timeout dones appear only
+above EpisodeWrapper, so the tile switch has to live here, in a replacement
+for the top wrapper.
 
 On done, the wrapper moves the env's level (``curriculum_step``), picks a
 spawn on the new tile, and writes that pose into the restored cached state.
@@ -10,7 +16,8 @@ It reads and updates the ``terrain_*`` info keys the env creates at reset.
 
 ``wrap_for_terrain_brax_training`` has the same signature as playground's
 ``wrap_for_brax_training``, so train.py can pass either one. ``full_reset``
-is ignored.
+is refused rather than ignored: the teleport IS this wrapper's reset, and
+swallowing the flag would read as supporting both modes.
 """
 
 from __future__ import annotations
@@ -39,7 +46,12 @@ def wrap_for_terrain_brax_training(
     full_reset: bool = False,
 ) -> Wrapper:
     """Playground training stack with the terrain curriculum auto-reset."""
-    del full_reset  # the terrain respawn is the reset
+    if full_reset:
+        raise ValueError(
+            "wrap_for_terrain_brax_training does not support full_reset: the "
+            "curriculum teleport replaces the reset. Use playground's "
+            "wrap_for_brax_training if a true full reset is wanted."
+        )
     if randomization_fn is None:
         env = brax_training.VmapWrapper(env)
     else:

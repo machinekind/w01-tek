@@ -191,9 +191,10 @@ def test_course_offsets_keep_every_foot_on_the_pad():
         step = np.array([math.cos(run.yaw), math.sin(run.yaw)]) * run.offset
         reach = np.linalg.norm(foot + step, axis=1).max() + foot_radius
         assert reach < terrain_suite.EVAL_PAD_RADIUS, (run, reach)
-    # and the sweep is worth having: it covers most of a 13 cm tread
+    # and the sweep is worth having: 46% of a 13 cm tread on an axis heading,
+    # a third on a diagonal (the span projects to Chebyshev by 1/sqrt(2))
     span = max(terrain_suite.START_OFFSETS) - min(terrain_suite.START_OFFSETS)
-    assert 0.3 * terrain.TREAD < span < terrain.TREAD
+    assert 0.3 * terrain.TREAD < span / math.sqrt(2) < span < terrain.TREAD
 
 
 def test_crossing_radii_clear_the_obstacles():
@@ -320,13 +321,15 @@ def test_eval_arena_pads_flat_under_the_smaller_radius(eval_arena):
 
 
 def test_eval_arena_holds_the_deepest_pit(eval_arena):
-    """The frontier row digs a 71 cm pit; the heightfield's base box has to sit
-    below it or the robot falls through."""
+    """The frontier row digs a 71 cm pit, and what absorbs it is the geom
+    frame: pos_z sits at the arena minimum, so the hfield's solid base extends
+    below the pit floor for any positive base_z. base_z itself only has to be
+    positive (the MJCF compiler enforces that); pit depth never adds to it."""
     hf = eval_arena.spec.hfield
     deepest = terrain.N_STEPS * terrain.stair_riser(max(terrain_suite.DIFFICULTIES))
     assert deepest == pytest.approx(0.708, abs=1e-3)
     assert hf.pos_z == pytest.approx(-deepest, abs=1e-6)
-    assert hf.base_z > deepest, (hf.base_z, deepest)
+    assert hf.base_z > 0
 
 
 def test_eval_arena_seams_have_no_cliff(eval_arena):

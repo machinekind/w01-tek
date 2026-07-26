@@ -22,27 +22,10 @@ from wojtek_rl import paths, terrain
 
 
 def bilinear_sample(grid, x_min, cell_x, y_min, cell_y, x, y):
-    """Sample ``grid`` at world ``(x, y)``. Same math as ``terrain._bilinear``,
-    clamped at the edges. Rows index y, columns index x."""
-    nr, nc = grid.shape
-    fx = jp.clip((x - x_min) / cell_x, 0.0, nc - 1)
-    fy = jp.clip((y - y_min) / cell_y, 0.0, nr - 1)
-    cx0 = jp.floor(fx).astype(jp.int32)
-    ry0 = jp.floor(fy).astype(jp.int32)
-    cx1 = jp.minimum(cx0 + 1, nc - 1)
-    ry1 = jp.minimum(ry0 + 1, nr - 1)
-    tx = fx - cx0
-    ty = fy - ry0
-    g00 = grid[ry0, cx0]
-    g01 = grid[ry0, cx1]
-    g10 = grid[ry1, cx0]
-    g11 = grid[ry1, cx1]
-    return (
-        g00 * (1 - tx) * (1 - ty)
-        + g01 * tx * (1 - ty)
-        + g10 * (1 - tx) * ty
-        + g11 * tx * ty
-    )
+    """Sample ``grid`` at world ``(x, y)`` on device: ``terrain._bilinear``
+    bound to jax.numpy, so the sampler the physics-side lookups run through is
+    the same body the generator and its ground-truth tests use."""
+    return terrain._bilinear(grid, x_min, cell_x, y_min, cell_y, x, y, xp=jp)
 
 
 @dataclass(frozen=True)
@@ -144,6 +127,21 @@ def load(terrain_cfg) -> Arena:
     require_current_geometry(spec, kind)
     origin_xy, pad_h = tables_from_spec(spec, terrain.TYPES)
 
+    # A coarse fit check: the spawn scatter plus the standing footprint has to
+    # fit the arena's flat pad, or spawns start with feet on the features. The
+    # linear sum ignores corner draws, but the pad's taper band absorbs that
+    # fringe; what this catches is a category error -- training with the
+    # default 0.15 m jitter on the eval arena's deliberately small 0.40 m pads.
+    pad_jitter = float(terrain_cfg.pad_jitter)
+    pad_radius = float(spec["pad_radius"])
+    if pad_jitter + terrain.FOOTPRINT_REACH > pad_radius:
+        raise ValueError(
+            f"terrain.pad_jitter={pad_jitter} scatters spawns off the {kind} "
+            f"arena's flat pad: jitter + the {terrain.FOOTPRINT_REACH} m "
+            f"standing footprint exceeds the {pad_radius} m pad radius. "
+            f"Lower pad_jitter or rebuild with a larger --pad-radius."
+        )
+
     return Arena(
         kind=kind,
         files=files,
@@ -157,7 +155,7 @@ def load(terrain_cfg) -> Arena:
         n_rows=int(spec["n_rows"]),
         n_types=len(terrain.TYPES),
         tile_size=float(spec["tile_size"]),
-        pad_jitter=float(terrain_cfg.pad_jitter),
+        pad_jitter=pad_jitter,
         spawn_yaw=bool(terrain_cfg.spawn_yaw),
         demote_fraction=float(terrain_cfg.demote_fraction),
         init_level_frac=float(terrain_cfg.init_level_frac),
@@ -230,6 +228,13 @@ def curriculum_step(
     obstacle is, which is what bounds the stair flight at six steps (treads end
     at 1.25 m of a 1.5 m half-tile). A longer flight needs promotion defined
     against the feature band instead.
+
+    The threshold is heading-dependent for the same reason: ``walked`` is a
+    Euclidean distance while every feature is a concentric square, so 1.5 m on
+    a diagonal is only 1.06 m out in Chebyshev terms -- tread 4 of 6. About a
+    quarter of headings promote without crossing the whole flight. Kept as-is
+    because it is legged_gym's rule; the measurement scan uses Chebyshev radii
+    for exactly this reason.
     """
     promote = walked > 0.5 * tile_size
     # steps_lived is 0 only before the first step has run, where commanded_dist

@@ -486,6 +486,10 @@ class WojtekJoystick(WojtekEnv):
                 terrain_rng=r_trng,
             )
             metrics["terrain_level_per_step"] = level.astype(jp.float32)
+            # Diagnostic, written every step below. Zero here: the spawn stands
+            # on a flat pad and no episode has run yet.
+            metrics["base_contact_alive_per_step"] = jp.zeros(())
+            metrics["base_contact_at_done"] = jp.zeros(())
         obs = self._get_obs(data, info)
         return mjx_env.State(data, obs, jp.zeros(()), jp.zeros(()), metrics, info)
 
@@ -585,6 +589,17 @@ class WojtekJoystick(WojtekEnv):
         # The `_per_step` suffix makes brax report the mean, not the sum.
         if self._terrain_enabled:
             metrics["terrain_level_per_step"] = info["terrain_level"].astype(jp.float32)
+            # Which states put the base on the terrain, which is where the
+            # MJWarp heightfield contact cap gets hit. Belly-dragging while the
+            # episode runs is the one that grows with the curriculum; a base
+            # down on the terminating step is an ordinary fall. Split so the
+            # two are not read as one number. The second has no `_per_step`
+            # suffix on purpose: brax reports its episode sum, which for this
+            # indicator is 1 exactly when the episode ended with the base down.
+            base_down = self._base_terrain_contact(data).astype(jp.float32)
+            terminated = done.astype(jp.float32)
+            metrics["base_contact_alive_per_step"] = base_down * (1.0 - terminated)
+            metrics["base_contact_at_done"] = base_down * terminated
         obs = self._get_obs(data, info, r_noise)
         return mjx_env.State(data, obs, reward, done.astype(jp.float32), metrics, info)
 

@@ -451,8 +451,8 @@ land on the stair and step tiles the curriculum aims at.
 
 Warp needs a bigger contact budget. The flat default
 (`sim.naconmax_per_env=32`) is too small for terrain, and warp drops extra
-contacts silently. Warp allows four contacts per geom-heightfield pair and 21
-of the robot's geoms touch the field, so 84 heightfield contacts before any box
+contacts silently. Warp allows four contacts per geom-heightfield pair and 22
+of the robot's geoms touch the field, so 88 heightfield contacts before any box
 contact. Measure it, on the GPU and with `--backend warp` -- the jax backend
 sizes its own buffers and never applies the budget, so a jax run cannot tell
 you what warp needs:
@@ -464,7 +464,7 @@ you what warp needs:
   ++task.env.sim.naconmax_per_env=128
 ```
 
-A warp terrain run warns when its budget is below that 84-contact floor, which
+A warp terrain run warns when its budget is below that 88-contact floor, which
 the env computes from the robot's own collision set rather than from a rule of
 thumb. The floor is not a budget: boxes add to it, and the real number has to be
 measured.

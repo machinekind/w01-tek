@@ -55,10 +55,11 @@ DEFAULT_SEED = 0
 DEFAULT_N_ROWS = 10
 TILE_SIZE = 3.0
 BORDER = 2.0
-# 0.04 m keeps the elevation file and lookup npz in the low single MB, and
-# keeps the base box's footprint (0.34 x 0.16 m) over few enough heightfield
-# sub-cells that the MJWarp per-pair contact accumulator does not overflow;
-# finer cells are the documented failure mode there.
+# 0.04 m keeps the elevation file and lookup npz in the low single MB while
+# still resolving a 3 cm stair riser. It has nothing to do with the MJWarp
+# per-pair contact cap: a GPU run on 2026-07-25 measured the base box over the
+# cap at this cell size. Splitting the base collision box (build_model.py) is
+# what keeps each geom pair under it.
 CELL_SIZE = 0.04
 # The base box lifts to this below the arena floor, so nothing falls through
 # even where slope/stair tiles dig below z = 0. The deepest pit is the inverted

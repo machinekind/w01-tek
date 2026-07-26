@@ -19,7 +19,7 @@ from mujoco import mjx
 from mujoco_playground._src import mjx_env
 
 from wojtek_rl import paths, terrain_env
-from wojtek_rl.build_model import FOOT_RADIUS
+from wojtek_rl.build_model import BASE_BOX_NAMES, FOOT_RADIUS
 
 # Actuator indices of the knee cranks (third joints), paths.LEGS order.
 KNEE_ACTUATORS = (2, 5, 8, 11)
@@ -29,6 +29,11 @@ ABDUCTION_ACTUATORS = (0, 3, 6, 9)
 # (the foot flips above the trunk). Recovery/jump policies must not command
 # targets on the far branch; crossing it under load can break the linkage.
 KNEE_SINGULARITY = 3.2
+# A base half-box counts as touching the terrain when its lowest corner sits
+# within this of the surface. Looser than the foot threshold because the
+# surface comes from the bilinear lookup, which is smoother than the
+# heightfield prisms the physics actually collides against.
+BASE_CONTACT_TOL = 0.01
 
 
 def resolve_backend(backend: str) -> str:
@@ -132,6 +137,10 @@ class WojtekEnv(mjx_env.MjxEnv):
         self._ctrlrange = jp.array(m.actuator_ctrlrange)
         self._foot_geom_ids = np.array(
             [m.geom(f"{leg}_foot_sphere").id for leg in paths.LEGS]
+        )
+        self._base_geom_ids = np.array([m.geom(n).id for n in BASE_BOX_NAMES])
+        self._base_geom_half = jp.array(
+            m.geom_size[self._base_geom_ids][:, :3]
         )
         self._sensor_adr = {
             name: m.sensor(name).adr[0]
@@ -251,6 +260,26 @@ class WojtekEnv(mjx_env.MjxEnv):
         if self._terrain_enabled:
             z = z - self._terrain.height(foot[:, :2])
         return z < FOOT_RADIUS + 0.005
+
+    def _base_terrain_contact(self, data):
+        """Whether either half of the base collision box is down on the terrain.
+
+        Diagnostic only: no observation, reward or termination reads it. Like
+        ``_foot_contact`` it works off the height lookup rather than contact
+        forces, and inherits that method's blind bands. A box has no single
+        lowest point, so it takes the lowest corner -- the centre minus the
+        box's own extent along world z -- and compares it against the surface
+        under the centre, which is the height ``_base_height`` already uses.
+
+        Terrain only; the flat scene has no lookup to read.
+        """
+        centre = data.geom_xpos[self._base_geom_ids]
+        # geom_xmat rows are the geom frame's axes in world coordinates, so
+        # row 2 against the half-sizes is the box's half-extent along world z.
+        rot = data.geom_xmat[self._base_geom_ids].reshape(-1, 3, 3)
+        reach = jp.sum(jp.abs(rot[:, 2, :]) * self._base_geom_half, axis=-1)
+        gap = (centre[:, 2] - reach) - self._terrain.height(centre[:, :2])
+        return jp.any(gap < BASE_CONTACT_TOL)
 
     def _base_height(self, data):
         """Base height above the ground. Flat: ``data.qpos[2]``, unchanged.

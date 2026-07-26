@@ -10,6 +10,10 @@ Everything lands in a JSON report. On any failure the report carries the
 traceback, the optional sentinel gets "FAIL <reason>", and the process
 exits nonzero; on success the sentinel gets "OK".
 
+A heightfield contact overflow counts as a failure. Warp reports it from
+device code and then drops the contacts, so a check that prints it measured
+something other than the model. The count goes in the report either way.
+
 CPU:  ./run.sh check-terrain --backend jax --num-envs 4 --steps 10
 GPU:  ./run.sh check-terrain --backend warp --arena eval
 """
@@ -17,8 +21,11 @@ GPU:  ./run.sh check-terrain --backend warp --arena eval
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import os
 import sys
+import tempfile
 import time
 import traceback
 from pathlib import Path
@@ -38,6 +45,50 @@ SEED = 0
 # (32/320) size a real training run once nacon is known.
 NACONMAX_PER_ENV = 256
 NJMAX = 320
+# What MJWarp prints when a heightfield collision exceeds mjMAXCONPAIR and
+# drops the contacts it cannot store. Those contacts are gone from the physics,
+# so a run that prints this measured a different robot than the model says.
+OVERFLOW_WARNING = "height field collision overflow"
+
+
+def count_overflow_warnings(text: str) -> int:
+    """Occurrences of the heightfield overflow warning in captured output."""
+    return text.count(OVERFLOW_WARNING)
+
+
+@contextlib.contextmanager
+def capture_os_stdout(enabled: bool):
+    """Collect writes to file descriptor 1, then re-emit them.
+
+    The warning comes from ``wp.printf`` in device code, which writes to the
+    process's stdout descriptor. Python never sees the string, so
+    ``contextlib.redirect_stdout`` does not catch it and only ``dup2`` does.
+    Everything captured is written out again afterwards, so redirecting hides
+    nothing.
+
+    Yields a one-element list; it holds the captured text once the block ends.
+    Disabled, it yields an empty capture and leaves the descriptor alone.
+    """
+    holder = [""]
+    if not enabled:
+        yield holder
+        return
+    tmp = tempfile.TemporaryFile(mode="w+")
+    sys.stdout.flush()
+    saved = os.dup(1)
+    try:
+        os.dup2(tmp.fileno(), 1)
+        yield holder
+    finally:
+        sys.stdout.flush()
+        os.dup2(saved, 1)
+        os.close(saved)
+        tmp.seek(0)
+        holder[0] = tmp.read()
+        tmp.close()
+        if holder[0]:
+            sys.stdout.write(holder[0])
+            sys.stdout.flush()
 
 
 def _contact_dist(data):
@@ -143,11 +194,14 @@ def run_check(args) -> dict:
     def run(d):
         return jax.lax.scan(body, d, None, length=args.steps)
 
-    jax.block_until_ready(run(data))  # compile the scan
-    t = time.perf_counter()
-    final, metrics = run(data)
-    jax.block_until_ready((final, metrics))
-    steady_s = time.perf_counter() - t
+    # Both scans run inside the capture: they step the same physics, so a
+    # warning from either one is the same finding. Only warp emits it.
+    with capture_os_stdout(backend == "warp") as captured:
+        jax.block_until_ready(run(data))  # compile the scan
+        t = time.perf_counter()
+        final, metrics = run(data)
+        jax.block_until_ready((final, metrics))
+        steady_s = time.perf_counter() - t
 
     result["steady_state_s"] = steady_s
     result["steps_per_s"] = args.steps / steady_s
@@ -170,6 +224,9 @@ def run_check(args) -> dict:
         # jax computes every candidate contact, so there is no overflow to
         # report; ncon is the static buffer size, not a per-step count.
         contacts["overflow"] = False
+    # Separate from the pool overflow above: this one is the per-geom-pair cap
+    # inside the heightfield routine, which no counter in mjx.Data records.
+    contacts["hfield_overflow_warnings"] = count_overflow_warnings(captured[0])
     result["contacts"] = contacts
 
     result["status"] = "ok"
@@ -214,9 +271,22 @@ def main() -> None:
     out = Path(args.out)
     try:
         result = run_check(args)
+        c = result["contacts"]
+        dropped = c["hfield_overflow_warnings"]
+        if dropped:
+            reason = (
+                f"{dropped} heightfield contact overflow warnings; contacts "
+                "past the per-pair cap were dropped, so these numbers are not "
+                "this model's physics"
+            )
+            result["status"] = "fail"
+            result["error"] = reason
+            _write(out, result)
+            _sentinel(args.sentinel, f"FAIL {reason}")
+            print(f"check-terrain FAILED: {reason} -> {out}", file=sys.stderr)
+            sys.exit(1)
         _write(out, result)
         _sentinel(args.sentinel, "OK")
-        c = result["contacts"]
         print(
             f"check-terrain OK  {result['backend']}  "
             f"{result['steps_per_s']:.1f} steps/s  "

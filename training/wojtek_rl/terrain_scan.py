@@ -57,6 +57,13 @@ COMMAND_HEIGHT = 0.125
 # A cell may not drop more than this many percentage points against the
 # baseline keeper.
 RELATIVE_DROP_LIMIT = 10.0
+# Warp contact pool per env: the env's own model-derived floor (22 geoms
+# collide with the heightfield at 4 contacts per pair), and still 7x the
+# per-env peak of 12 contacts measured on the GPU. The pool is allocated up
+# front for the whole batch, so a bigger one is not free -- a 256 pool is what
+# ran check-terrain out of device memory at 4096 envs. The scan records the peak
+# it actually reached, so too small shows up as a recorded overflow.
+DEFAULT_NACONMAX_PER_ENV = 88
 SCAN_SCHEMA = 1
 
 
@@ -573,7 +580,7 @@ def scan(
     run_dir: Path,
     *,
     backend: str = "auto",
-    naconmax_per_env: int = 256,
+    naconmax_per_env: int = DEFAULT_NACONMAX_PER_ENV,
     cell_names: list[str] | None = None,
     speeds=terrain_suite.SPEEDS,
     baseline_ref: str | None = None,
@@ -608,8 +615,8 @@ def scan(
                 "backend": backend,
                 "num_envs": terrain_suite.RUNS_PER_CELL_SPEED,
                 # Warp allocates its contact pool up front and drops overflow
-                # silently. Generous here on purpose, and the recorded nacon_max
-                # is what says whether it was enough.
+                # silently. The recorded nacon_max is what says whether the
+                # budget was enough.
                 "naconmax_per_env": naconmax_per_env,
             },
             # The course drives the command itself; a mid-episode resample would
@@ -710,9 +717,10 @@ def main() -> None:
     ap.add_argument("--out", default=None, help="default: <run>/terrain_scan.json")
     ap.add_argument("--backend", choices=["auto", "warp", "jax"], default="auto")
     ap.add_argument(
-        "--naconmax-per-env", type=int, default=256,
-        help="warp contact pool per env; the scan records the peak so an "
-             "overflow is visible instead of silent",
+        "--naconmax-per-env", type=int, default=DEFAULT_NACONMAX_PER_ENV,
+        help=f"warp contact pool per env (default {DEFAULT_NACONMAX_PER_ENV}, "
+             "the training value); the scan records the peak so an overflow is "
+             "visible instead of silent",
     )
     ap.add_argument(
         "--cells", default=None,

@@ -129,6 +129,34 @@ def main(cfg: DictConfig) -> None:
     ckpt_dir = run_dir / "checkpoints"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
+    # run.json before the first step, not only after the last. eval, report,
+    # export and the terrain scan all rebuild the env from this file, so a run
+    # that crashes or gets preempted is otherwise unreadable from checkpoints
+    # it did write. Everything those readers need is known now; only the final
+    # reward is not, and it is filled in by the rewrite after training.
+    # kp/kd are the effective post-customize gains, uniform across actuators
+    # and before domain randomization.
+    run_record = {
+        "run_name": run_name,
+        "task": task,
+        "status": "running",
+        "num_timesteps": int(ppo_params.num_timesteps),
+        "final_reward": None,
+        "checkpoint_dir": str(ckpt_dir),
+        "env_config": env._config.to_dict(),
+        "ppo_config": ppo_params.to_dict(),
+        "hydra_config": OmegaConf.to_container(cfg, resolve=True),
+        "kp": float(env.mj_model.actuator_gainprm[0, 0]),
+        "kd": float(-env.mj_model.actuator_biasprm[0, 2]),
+    }
+
+    def write_run_json() -> None:
+        (run_dir / "run.json").write_text(
+            json.dumps(run_record, indent=2, default=str)
+        )
+
+    write_run_json()
+
     training_params = dict(ppo_params)
     network_factory_cfg = training_params.pop("network_factory")
     network_factory = functools.partial(
@@ -217,30 +245,12 @@ def main(cfg: DictConfig) -> None:
         environment=env, eval_env=eval_env
     )
 
-    # Effective post-customize gains (uniform across actuators; DR excluded).
-    kp_eff = float(env.mj_model.actuator_gainprm[0, 0])
-    kd_eff = float(-env.mj_model.actuator_biasprm[0, 2])
-
-    (run_dir / "run.json").write_text(
-        json.dumps(
-            {
-                "run_name": run_name,
-                "task": task,
-                "num_timesteps": int(ppo_params.num_timesteps),
-                "final_reward": float(
-                    metrics.get("eval/episode_reward", float("nan"))
-                ),
-                "checkpoint_dir": str(ckpt_dir),
-                "env_config": env._config.to_dict(),
-                "ppo_config": ppo_params.to_dict(),
-                "hydra_config": OmegaConf.to_container(cfg, resolve=True),
-                "kp": kp_eff,
-                "kd": kd_eff,
-            },
-            indent=2,
-            default=str,
-        )
+    # The two fields that only exist once training returns.
+    run_record["status"] = "complete"
+    run_record["final_reward"] = float(
+        metrics.get("eval/episode_reward", float("nan"))
     )
+    write_run_json()
     print(f"done -> {run_dir}")
     if wb is not None:
         wb.finish()

@@ -297,6 +297,39 @@ def test_terrain_initial_level_in_lower_half(terrain_env_inst):
     assert levels.min() >= 0
 
 
+def test_base_terrain_contact_reads_the_lowest_corner(terrain_env_inst, monkeypatch):
+    """The base box is split in two and a tilted box reaches further down than
+    a level one, so the diagnostic has to use the box's extent along world z,
+    not its centre height."""
+    env = terrain_env_inst
+    flat = jp.zeros_like(env._terrain.lookup)  # surface at z = 0 everywhere
+    monkeypatch.setattr(
+        env, "_terrain", dataclasses.replace(env._terrain, lookup=flat)
+    )
+    hx, _, hz = np.array(env._base_geom_half)[0]
+    level = np.eye(3)
+    # 90 degrees about y: the box's long axis now points down, so its reach
+    # below the centre is hx instead of hz.
+    on_end = np.array([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]])
+
+    def contact(z_front, z_rear, rot_front=level, rot_rear=level):
+        ngeom = env.mj_model.ngeom
+        xpos = np.zeros((ngeom, 3), dtype=np.float32)
+        xmat = np.zeros((ngeom, 3, 3), dtype=np.float32)
+        front, rear = env._base_geom_ids
+        xpos[front, 2], xpos[rear, 2] = z_front, z_rear
+        xmat[front], xmat[rear] = rot_front, rot_rear
+        data = SimpleNamespace(geom_xpos=jp.asarray(xpos), geom_xmat=jp.asarray(xmat))
+        return bool(env._base_terrain_contact(data))
+
+    assert not contact(hz + 0.05, hz + 0.05)  # both halves well clear
+    assert contact(hz + 0.005, hz + 0.05)  # one half down is contact
+    # Level at this height clears; standing on its end at the same height does
+    # not, because the corner is hx below the centre rather than hz.
+    assert not contact(hx + 0.005, hx + 0.05)
+    assert contact(hx + 0.005, hx + 0.05, rot_front=on_end)
+
+
 # -- 5. Curriculum auto-reset wrapper -----------------------------------------
 
 
@@ -330,6 +363,32 @@ def test_wrapper_teleports_to_pads_and_bounds_levels(terrain_env_inst):
             per_axis = off[np.arange(len(xy)), nearest]
             assert np.all(per_axis <= env._terrain.pad_jitter + 1e-4), per_axis
     assert saw_done  # episode_length=3 must have forced truncation dones
+
+
+def test_base_contact_metrics_reach_the_brax_episode_accumulator(terrain_env_inst):
+    """brax's EpisodeWrapper builds its per-episode accumulator from the env's
+    metric keys at reset and indexes it by key on every step, so a metric added
+    above that wrapper raises KeyError on the first step. These two are added in
+    the env, below it, which is what makes them land in `episode/`."""
+    env = terrain_env_inst
+    wrapped = wrap_for_terrain_brax_training(env, episode_length=3, action_repeat=1)
+    state = jax.jit(wrapped.reset)(jax.random.split(jax.random.PRNGKey(0), 2))
+    names = ("base_contact_alive_per_step", "base_contact_at_done")
+    assert all(n in state.metrics for n in names)
+    assert all(n in state.info["episode_metrics"] for n in names)
+
+    step = jax.jit(wrapped.step)
+    for _ in range(4):
+        state = step(state, jp.zeros((2, 12)))
+        for n in names:
+            assert np.all(np.isfinite(np.array(state.metrics[n])))
+            assert np.all(np.array(state.info["episode_metrics"][n]) >= 0.0)
+    # A live env is never counted as terminated and vice versa: the two are
+    # disjoint by construction, which is what makes them readable apart.
+    both = np.array(state.metrics["base_contact_alive_per_step"]) * np.array(
+        state.metrics["base_contact_at_done"]
+    )
+    assert not np.any(both)
 
 
 def _drive_to_a_done(env, episode_length, walked, n_envs=2, level=1, key=3):
@@ -543,11 +602,11 @@ def test_a_stale_arena_is_refused(monkeypatch, tmp_path, small_arena):
 def test_contact_floor_is_derived_from_the_model(terrain_env_inst):
     """The warp contact-budget warning fires against a floor computed from the
     robot's own collision set, not a rule of thumb. Warp allows four contacts per
-    geom-heightfield pair, so 21 geoms put 84 contacts in the pool before a single
+    geom-heightfield pair, so 22 geoms put 88 contacts in the pool before a single
     box is touched -- which is why the flat default of 32 is not close."""
     n = terrain_env_inst._count_ground_colliding_geoms()
-    assert n == 21, n  # base box + 4 feet + 16 per-leg proxies
-    assert 4 * n == 84
+    assert n == 22, n  # 2 base half-boxes + 4 feet + 16 per-leg proxies
+    assert 4 * n == 88
     # the same count on the flat scene: it keys on body, so neither the floor
     # plane nor the generator's terrain geoms are mistaken for robot geoms
     assert wojtek_env.WojtekJoystick()._count_ground_colliding_geoms() == n

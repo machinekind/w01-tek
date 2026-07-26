@@ -8,6 +8,9 @@ controller_manager:
     imu_sensor_broadcaster:
       type: imu_sensor_broadcaster/IMUSensorBroadcaster
 
+    magnetometer_broadcaster:
+      type: magnetometer_broadcaster/MagnetometerBroadcaster
+
     forward_position_controller:
       type: position_controllers/JointGroupPositionController
 
@@ -20,6 +23,14 @@ imu_sensor_broadcaster:
     sensor_name: imu
     frame_id: imu_link
     publish_rate: 100.0
+
+magnetometer_broadcaster:
+  ros__parameters:
+    # Publish rate = per-controller update_rate (controller_manager); the
+    # LIS3MDL runs at 80 Hz, so publishing faster only duplicates samples.
+    update_rate: 100
+    sensor_name: imu
+    frame_id: imu_link
 
 # Joint order MUST match the policy actuator order (policy_meta.json):
 # rear_left, rear_right, front_right, front_left x (first, second, third).

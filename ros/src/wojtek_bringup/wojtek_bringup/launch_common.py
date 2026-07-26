@@ -81,6 +81,7 @@ def _launch_setup(context, with_rviz):
             package="controller_manager",
             executable="spawner",
             arguments=["joint_state_broadcaster", "imu_sensor_broadcaster",
+                       "magnetometer_broadcaster",
                        "forward_position_controller"],
             condition=IfCondition(use_imu),
         ),
@@ -210,10 +211,9 @@ def common_launch_description(with_rviz, bag_default):
         DeclareLaunchArgument("bus", default_value="spi"),
         DeclareLaunchArgument("can_baud", default_value="8"),
         # IMU is the Adafruit 5543 (LSM6DS3TR-C + LIS3MDL) straight on I2C1 --
-        # imu_i2c_hardware_interface, bench-tested but not yet exercised
-        # through ros2_control on the robot, hence off by default until that
-        # first hardware test passes.
-        DeclareLaunchArgument("use_imu", default_value="false"),
+        # imu_i2c_hardware_interface. On by default; use_imu:=false brings the
+        # stack up with the sensor absent/unwired.
+        DeclareLaunchArgument("use_imu", default_value="true"),
         DeclareLaunchArgument("imu_bus", default_value="/dev/i2c-1"),
         # 0x6B/0x1E if the board's SDO pins are pulled high.
         DeclareLaunchArgument("imu_addr_ag", default_value="0x6A"),

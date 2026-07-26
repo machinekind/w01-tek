@@ -120,6 +120,21 @@ provision_tuning() {
         info "WARN: $cmdline not found -- skipping core-isolation"
     fi
 
+    # IMU I2C at Fast Mode 400 kHz (both LSM6DS3TR-C and LIS3MDL support it).
+    # The default 100 kHz makes the 23-byte status+data burst in the driver's
+    # read() take ~2.3 ms -- right at the 400 Hz controller_manager budget
+    # (overruns seen on hardware); 400 kHz brings it down to ~0.6 ms.
+    local bootcfg=/boot/firmware/config.txt
+    if [ -f "$bootcfg" ] && grep -q "i2c_arm_baudrate=400000" "$bootcfg"; then
+        info "i2c 400 kHz already configured"
+    elif [ -f "$bootcfg" ]; then
+        info "setting i2c_arm baudrate 400 kHz in $bootcfg (reboot needed)"
+        run "printf 'dtparam=i2c_arm=on,i2c_arm_baudrate=400000\n' | sudo tee -a '${bootcfg}' >/dev/null"
+        REBOOT_NEEDED=1
+    else
+        info "WARN: $bootcfg not found -- skipping i2c baudrate"
+    fi
+
     local limits=/etc/security/limits.d/99-realtime.conf
     if [ -f "$limits" ] && grep -q "rtprio" "$limits"; then
         info "rtprio/memlock limits already present"

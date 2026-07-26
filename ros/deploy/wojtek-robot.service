@@ -16,8 +16,16 @@
 
 [Unit]
 Description=Wojtek robot control stack (ros2_control + wojtek_policy)
-After=network-online.target
-Wants=network-online.target
+# NOT ordered on network-online.target: the control loop (pad -> policy ->
+# motors) lives entirely on the RPi and needs no network -- that target is
+# only for the PC to observe/teleop. Worse, standalone (no cable) it is never
+# reached: eth0 is optional+down and wlan0 belongs to hostapd, so networkd
+# never reports "online" and the stack would hang ~120s or not start at all
+# (seen: cable reboot starts the robot, standalone reboot does not).
+# Order after the net-failover switch so the link/AP IP tends to exist before
+# CycloneDDS binds, but as a soft best-effort -- the stack must start even if
+# the network never comes up.
+After=wojtek-net.service
 
 [Service]
 Type=simple
@@ -28,20 +36,28 @@ LimitRTPRIO=99
 LimitMEMLOCK=infinity
 Environment=ROS_DOMAIN_ID=42
 Environment=RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-# If wifi multicast discovery is unreliable, point this at the unicast profile
-# (rsynced under src/../docker/config, or copy it locally):
-# Environment=CYCLONEDDS_URI=file:///home/rpi/wojtek_ws/cyclonedds_link.xml
+# Pinned interface profile (lo required + eth0/wlan0 best-effort), installed
+# by install.sh. Without it CycloneDDS auto-selects whichever iface carries
+# 10.42.0.2 at start, and the eth-AP failover then yanks it away mid-run,
+# killing even on-robot node-to-node discovery (pad pipeline dead).
+Environment=CYCLONEDDS_URI=file:///etc/cyclonedds-rpi.xml
 #
 # taskset pins the whole robot stack to the isolated cores 2,3 (spatial
 # isolation); the OS/wifi keep cores 0,1. ros2_control raises its own update
 # thread to RT internally (enabled by LimitRTPRIO above). If you need to force
 # the whole tree to SCHED_FIFO, prefix with: chrt -f 80
 #
-# Runs are recorded from the PC (wojtek_viz viz.launch.py) over DDS, so on-robot
-# recording is off here. For a lossless localhost capture on untethered runs,
-# append: bag:=true bag_cpus:=0,1  (bag_cpus re-affinitizes the recorder back to
-# the non-isolated cores 0,1, keeping its disk I/O off the RT cores).
-ExecStart=/usr/bin/taskset -c 2,3 /bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/rpi/wojtek_ws/install/setup.bash && exec ros2 launch wojtek_bringup robot.launch.py'
+# The service records every run on-robot (bag:=true): PC viz records on demand
+# only, so this bag is the black box of a real run -- and a localhost capture
+# is lossless where the PC's over-DDS bag can drop samples on wifi.
+# bag_cpus:=0,1 re-affinitizes the recorder back to the non-isolated cores,
+# keeping its disk I/O off the RT cores. Nothing rotates ~/wojtek_bags yet --
+# check free space before a long run. Flip to bag:=false to skip recording.
+# gamepad:=true keeps the pad teleop (joy + wojtek_teleop) resident on the
+# robot: a pad paired with the RPi drives with no PC in the loop and survives
+# the cable/ssh dropping. With no pad connected the teleop stays silent on
+# /cmd_vel (it publishes only after the first Joy message).
+ExecStart=/usr/bin/taskset -c 2,3 /bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/rpi/wojtek_ws/install/setup.bash && exec ros2 launch wojtek_bringup robot.launch.py gamepad:=true bag:=true bag_cpus:=0,1'
 Restart=on-failure
 RestartSec=2
 

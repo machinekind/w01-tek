@@ -35,6 +35,12 @@ public:
     double accel_x, accel_y, accel_z;  // m/s^2
     double gyro_x, gyro_y, gyro_z;     // rad/s
     double mag_x, mag_y, mag_z;        // uT
+    // Data-ready flags: the caller polls faster (400 Hz controller loop)
+    // than the sensors sample (LSM6 104 Hz, LIS3 80 Hz), so each read
+    // reports which blocks are actually new since the previous one.  The
+    // orientation ESKF steps only on fresh samples.
+    bool accel_gyro_fresh;
+    bool mag_fresh;
   };
 
   ImuI2C(std::string bus_path, int addr_ag, int addr_mag);
@@ -50,9 +56,10 @@ public:
   // instead of aborting the whole ros2_control_node.
   bool initialize();
 
-  // Reads one accel+gyro+mag sample. Returns false on an I2C transaction
-  // error and leaves data untouched -- the caller decides whether to hold
-  // the last known-good values.
+  // Reads one accel+gyro+mag sample, skipping blocks whose data-ready
+  // status bit is clear (the *_fresh flags say what was updated). Returns
+  // false on an I2C transaction error and leaves data untouched -- the
+  // caller decides whether to hold the last known-good values.
   bool read_sample(SensorData & data);
 
   const std::string & last_error() const { return last_error_; }

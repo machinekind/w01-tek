@@ -1,14 +1,29 @@
 """Named robot poses shared by the real bringup and the MuJoCo sim.
 
-Poses are expressed in the policy/MuJoCo actuator convention (same as
-policy_meta.json home_ctrl); convert with wojtek_policy.joint_map.JointMap
-where URDF angles are needed.
+Poses are expressed in the policy/MuJoCo actuator convention; convert with
+wojtek_policy.joint_map.JointMap where URDF angles are needed. These are
+robot constants (the MJCF home keyframe and actuator order) -- independent
+of whichever policy is loaded.
 """
 
 import numpy as np
 
+# Canonical actuated-joint order: the MJCF actuator order every policy,
+# joint-target message, and pose in this stack uses. A property of the
+# robot model, not of any one policy; policy_node cross-checks a loaded
+# policy's actuator_names against this list.
+ACTUATOR_NAMES = [
+    f"{leg}_{joint}_joint"
+    for leg in ("rear_left", "rear_right", "front_right", "front_left")
+    for joint in ("first", "second", "third")
+]
+
+# Standing home pose (the MJCF "home" keyframe ctrl), policy/MuJoCo
+# convention: abduction 0, hip -0.2, knee 3.1 on every leg.
+HOME_CTRL = np.array([0.0, -0.2, 3.1] * 4)
+
 # Knee (third joint) angle against the folding mechanical stop, policy/MuJoCo
-# convention. This is ctrl_low from policy_meta.json: the near-branch end of
+# convention. This is the model ctrlrange lower bound: the near-branch end of
 # the four-bar range, i.e. the lower leg folded flat against the upper leg.
 FOLDED_KNEE_RAD = 0.425
 

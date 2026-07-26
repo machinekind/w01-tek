@@ -11,6 +11,13 @@ docs/2026-07-12-reward-redesign.md:
       600 steps.
   walk_to_stop — vx=0.5 for 250 steps, then the command drops to all-zero
       and holds for 300 steps. 550 steps.
+  arc — stand 100 steps; constant-curvature holds vx=0.4 with wz=+0.6 for
+      300 steps, then wz=-0.6 for 300 steps. 700 steps. Added 2026-07-23
+      for the phase-C rotation/arc work; absent from earlier baselines.
+  height_step — stand at 0.125, step the height command to 0.105 then
+      0.155 while standing, then walk vx=0.4 at each height. 800 steps.
+      Added 2026-07-23 for the phase-C height command; absent from
+      earlier baselines.
 
 Metrics: falls; per-speed-band velocity tracking error; height error;
 vibration index (>5 Hz joint-velocity power); foot slip; splay (p95
@@ -184,10 +191,12 @@ def plant_step(contacts, switch_idx, hold=25):
 def battery_scenarios():
     """name -> (cmd_at(i), n_steps). Split out so report.py (and eval.py's
     --scenario) can reuse the exact same battery scenarios. Height is
-    pinned at 0.125 throughout every scenario -- the redesign drops the
-    height command (docs/2026-07-12-reward-redesign.md), but the env still
-    takes a 4-vector [vx, vy, wz, height], so cmd_at keeps sending the
-    anchor value."""
+    pinned at 0.125 in the original four scenarios -- the redesign drops
+    the height command (docs/2026-07-12-reward-redesign.md), but the env
+    still takes a 4-vector [vx, vy, wz, height], so cmd_at keeps sending
+    the anchor value. height_step is the exception: it exercises the
+    phase-C height command (a fixed-height policy simply gets its anchor
+    shifted under it, which is a fair baseline)."""
     H = 0.125
 
     def stand_to_trot_ramp(i):
@@ -217,11 +226,35 @@ def battery_scenarios():
         vx = 0.5 if i < 250 else 0.0
         return jp.array([vx, 0.0, 0.0, H])
 
+    def arc(i):
+        if i < 100:
+            vx, wz = 0.0, 0.0
+        elif i < 400:
+            vx, wz = 0.4, 0.6
+        else:
+            vx, wz = 0.4, -0.6
+        return jp.array([vx, 0.0, wz, H])
+
+    def height_step(i):
+        if i < 100:
+            vx, h = 0.0, H
+        elif i < 250:
+            vx, h = 0.0, 0.105
+        elif i < 400:
+            vx, h = 0.0, 0.155
+        elif i < 600:
+            vx, h = 0.4, 0.105
+        else:
+            vx, h = 0.4, 0.155
+        return jp.array([vx, 0.0, 0.0, h])
+
     return {
         "stand_to_trot_ramp": (stand_to_trot_ramp, 750),
         "turn": (turn, 750),
         "strafe": (strafe, 600),
         "walk_to_stop": (walk_to_stop, 550),
+        "arc": (arc, 700),
+        "height_step": (height_step, 800),
     }
 
 
@@ -424,6 +457,42 @@ def scenario_result(name, rec, fell_at, dt, torque_cap):
             r["ang_vel_err_spin"] = round(
                 float(np.abs(rec["cmd_wz"][spin] - rec["wz"][spin]).mean()), 3
             )
+
+    if name == "arc":
+        # 50-step settle after each wz switch; guarded like turn's slices
+        # because a fall truncates rec. Forward speed must be read in the
+        # body frame here: the heading rotates continuously on an arc, so
+        # the world-frame vx the generic vel_err bands use systematically
+        # under-reads it (vel_err_overall on this scenario is an artifact;
+        # use vx_err_local instead).
+        if len(rec["wz"]) >= 400:
+            w = slice(150, 400)
+            r["ang_vel_err_left"] = round(
+                float(np.abs(rec["cmd_wz"][w] - rec["wz"][w]).mean()), 3
+            )
+        if len(rec["wz"]) >= 700:
+            w = slice(450, 700)
+            r["ang_vel_err_right"] = round(
+                float(np.abs(rec["cmd_wz"][w] - rec["wz"][w]).mean()), 3
+            )
+        if len(rec["vx_local"]) > 150:
+            w = slice(150, len(rec["vx_local"]))
+            r["vx_err_local"] = round(
+                float(np.abs(rec["cmd_vx"][w] - rec["vx_local"][w]).mean()), 3
+            )
+
+    if name == "height_step":
+        # Per-window commanded-height error, 25-step settle after each
+        # command switch; windows match battery_scenarios' height_step.
+        for label, lo, hi in [
+            ("stand_low", 125, 250), ("stand_high", 275, 400),
+            ("walk_low", 425, 600), ("walk_high", 625, 800),
+        ]:
+            if len(rec["h"]) >= hi:
+                w = slice(lo, hi)
+                r[f"height_err_{label}"] = round(
+                    float(np.abs(rec["cmd_h"][w] - rec["h"][w]).mean()), 4
+                )
 
     if name == "strafe" and len(rec["vy_local"]) > 100:
         # both strafe windows pooled; the stand phase (steps 0:100) excluded

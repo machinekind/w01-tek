@@ -5,10 +5,10 @@
   Mechanically identical to wojtek_description's wojtek.urdf.xacro
   (same leg macros), but the ros2_control block differs:
     * command interface `position` -> MD80 IMPEDANCE mode
-    * impedance gains kp/kd and max_torque default to the values the shipped
-      policy was trained against (kp=40, kd=1.6, +/-9 Nm -- the pd block in
-      wojtek_policy/config/policy_meta.json). Override via xacro args for
-      cautious first tests, e.g. max_torque:=2
+    * impedance gains kp/kd and max_torque are xacro args. The launch files
+      feed them from the loaded policy's contract (policy_meta.json pd
+      block); the defaults here (kp=40, kd=1.6, +/-9 Nm) only apply when the
+      xacro is used directly.
     * the IMU I2C ros2_control sensor is instantiated when use_imu:=true (it
       is commented out in the original description).
 -->
@@ -30,10 +30,9 @@
   <xacro:arg name="dry_run" default="false" />
   <!-- The serial IMU (loaner BMI160 behind an MCU + CP2102 bridge) was retired
        2026-07-17 in favor of the Adafruit 5543 (LSM6DS3TR-C + LIS3MDL) wired
-       straight to the Pi's I2C1: bench-tested (ros/hw_tests/imu_i2c), not
-       yet run through ros2_control on the robot. use_imu still defaults to
-       false until that first hardware test passes. -->
-  <xacro:arg name="use_imu" default="false" />
+       straight to the Pi's I2C1 (imu_i2c_hardware_interface). On by default;
+       use_imu:=false brings the stack up with the sensor absent/unwired. -->
+  <xacro:arg name="use_imu" default="true" />
   <xacro:arg name="imu_bus" default="/dev/i2c-1" />
   <xacro:arg name="imu_addr_ag" default="0x6A" />
   <xacro:arg name="imu_addr_mag" default="0x1C" />

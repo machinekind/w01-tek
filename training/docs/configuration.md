@@ -499,7 +499,7 @@ using the preset.
 | `battery` | `./training/run.sh battery --run runs/<name> [--out FILE --alpha A --lag-tau T]`; writes the fixed comparison battery. `--alpha`/`--lag-tau` are eval-only plant perturbations, see "Robustness grid (eval-only)" below. |
 | `courses` | `./training/run.sh courses --run runs/<name> [--seeds N --only NAME... --video --paths --out FILE --list]`; writes the path-following course benchmark. `--list` prints the catalogue without loading a run. See "Course benchmark" below. |
 | `report` | `./training/run.sh report --run runs/<name> [--out-json FILE --out-md FILE]`; writes battery, torque, power, impact proxy, and termination summary. |
-| `export` | `./training/run.sh export --run runs/<name> [--out DIR]`; validates and writes deployment `.npz` plus metadata. |
+| `export` | `./training/run.sh export --run runs/<name> [--out DIR]`; writes `policy.npz` plus `policy_meta.json`, the schema-2 deployment contract built from the run's env (`wojtek_rl/deploy_contract.py`), and validates the deploy runtime end-to-end against the env before writing. |
 | `app` | `./training/run.sh app [--host HOST --port PORT]`; runs the interactive navigation demo. `WOJTEK_RUN_DIR`, `HOST`, and `PORT` environment variables supply defaults; see [demo README](../demo/README.md). |
 | `test` | `./training/run.sh test [pytest args]`; runs `training/tests/unit` — model-free, ~3 s, safe in an edit loop. |
 | `test-slow` | `./training/run.sh test-slow [pytest args]`; runs `training/tests/integration` — builds and steps real MJX models, 6m23s cold. Sets `JAX_COMPILATION_CACHE_DIR=training/.jax_cache` so repeat runs reuse compiled executables (measured on one file: 45s cold, 16s warm; the whole suite's warm time was not measured). |
@@ -521,6 +521,14 @@ candidate for deployment:
 ./training/run.sh eval --run runs/my_locomotion --x-vel 0.3 --height 0.125
 ./training/run.sh export --run runs/my_locomotion --out runs/my_locomotion/deploy
 ```
+
+For a keeper, upload the exported pair to its Hugging Face model repo next
+to the checkpoint (`hf upload <HF_ORGANIZATION>/<keeper> <deploy-dir> . --include
+"policy*"`). The ROS stack loads policies by reference -- an HF repo id or a
+local directory -- via the `policy` launch argument (see
+`ros/src/wojtek_policy/wojtek_policy/policy_source.py`); keepers exported
+before the schema-2 contract are regenerated with
+`wojtek_rl/migrate_keeper_meta.py`.
 
 ## Course benchmark (path following)
 
@@ -585,7 +593,7 @@ so a policy that only sometimes falls cannot pass by luck. Results go to
 `<run>/courses/`.
 
 Cost: a single-env Python rollout loop, so measured ~30 s per 2600-step course
-per seed on CPU — roughly half an hour for the full 16 x 8 matrix, up to an
+per seed on CPU — roughly half an hour for the full 20 x 8 matrix, up to an
 hour if most scenarios time out rather than finish. Use `--only NAME...
 --seeds 1` while iterating.
 

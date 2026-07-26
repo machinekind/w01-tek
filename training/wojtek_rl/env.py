@@ -121,6 +121,14 @@ def default_config() -> config_dict.ConfigDict:
             # training. Same fix as pure_wz_prob — the uniform box almost
             # never draws pure lateral, so strafing stays undertrained.
             pure_vy_prob=0.0,
+            # With this prob command a forward arc: vx redrawn from arc_vx,
+            # vy zeroed, wz kept. Same fix family as the two above — the
+            # uniform box rarely holds a clean sustained curve (vy crabs it
+            # sideways, vx is often near zero), so arc following stays
+            # undertrained. Applied after pure_wz/pure_vy (an arc draw
+            # overrides them) and before zeroing (standing still wins).
+            arc_prob=0.0,
+            arc_vx=(0.3, 0.8),
         ),
         push=config_dict.create(enable=True, interval_steps=200, vel=0.4),
         action_delay=1,  # control steps of latency between policy and motors
@@ -293,6 +301,18 @@ class WojtekJoystick(WojtekEnv):
         # pure-strafe training: keep vy, zero vx and wz
         pure_vy = jax.random.bernoulli(r7, c.get("pure_vy_prob", 0.0))
         vel = jp.where(pure_vy, jp.array([0.0, vel[1], 0.0]), vel)
+        # forward-arc training: redraw vx from arc_vx, zero vy, keep wz.
+        # Gated on the static config value and keyed off a fold_in of the
+        # incoming rng, so presets with arc_prob=0 draw nothing extra and
+        # keep their sampling stream (and trajectories) bit-identical.
+        arc_p = c.get("arc_prob", 0.0)
+        if arc_p:
+            r8, r9 = jax.random.split(jax.random.fold_in(rng, 1))
+            arc = jax.random.bernoulli(r8, arc_p)
+            vx_arc = jax.random.uniform(
+                r9, minval=c.arc_vx[0], maxval=c.arc_vx[1]
+            )
+            vel = jp.where(arc, jp.array([vx_arc, 0.0, vel[2]]), vel)
         zero = jax.random.bernoulli(r4, c.zero_prob)
         vel = jp.where(zero, jp.zeros(3), vel)
         height = jax.random.uniform(r5, minval=c.height[0], maxval=c.height[1])

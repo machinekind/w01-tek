@@ -73,20 +73,25 @@
   </xacro:macro>
 
   <!-- Adafruit 5543 (LSM6DS3TR-C + LIS3MDL) straight on the Pi's I2C bus:
-       no MCU/firmware bridge, no onboard fusion. orientation.* is exported
-       (imu_sensor_broadcaster requires it) but the driver always writes
-       (0,0,0,0); wojtek_policy's IMU callback treats that as "no fusion"
-       and runs its own accel+gyro complementary filter instead. addr_ag/
-       addr_mag default to the board's un-jumpered addresses; bump to
-       0x6B/0x1E if SDO is pulled high. See ros/hw_tests/imu_i2c for the
+       no MCU/firmware bridge, no onboard fusion. orientation.* carries the
+       quaternion from the driver's error-state Kalman filter (gyro
+       prediction + accel roll/pitch + mag yaw, orientation_eskf.hpp); it
+       reads (0,0,0,0) only until the filter sees its first accel+mag pair,
+       which wojtek_policy treats as "no fusion yet" and bridges with its
+       own complementary filter. mag_calib_file points at the ellipsoid
+       calibration produced by ros/hw_tests/imu_i2c/mag_calib.py (the
+       shipped default is an identity placeholder; usable, uncalibrated).
+       addr_ag/addr_mag default to the board's un-jumpered addresses; bump
+       to 0x6B/0x1E if SDO is pulled high. See ros/hw_tests/imu_i2c for the
        bench test this register map/init sequence was validated against. -->
-  <xacro:macro name="wojtek_imu_i2c_ros2_control" params="bus:=/dev/i2c-1 addr_ag:=0x6A addr_mag:=0x1C">
+  <xacro:macro name="wojtek_imu_i2c_ros2_control" params="bus:=/dev/i2c-1 addr_ag:=0x6A addr_mag:=0x1C mag_calib_file:='$(find wojtek_bringup)/config/mag_calib.yaml'">
     <ros2_control name="imu" type="sensor">
       <hardware>
         <plugin>imu_i2c_hardware_interface/ImuI2CHardwareInterface</plugin>
         <param name="bus">${bus}</param>
         <param name="addr_ag">${addr_ag}</param>
         <param name="addr_mag">${addr_mag}</param>
+        <param name="mag_calib_file">${mag_calib_file}</param>
       </hardware>
       <sensor name="imu">
         <state_interface name="orientation.x" />

@@ -123,3 +123,9 @@ For wider repository checks, use `make verify-static` first and
 
 Generated training outputs live below `training/runs/` and are intentionally
 ignored by Git.  Do not commit checkpoints, videos, or WandB artifacts.
+Policy artifacts are never vendored into `ros/` either: `export` writes a
+self-contained `policy.npz` + `policy_meta.json` (the schema-2 deployment
+contract), keepers publish that pair to their Hugging Face repo, and the
+ROS stack loads a policy by reference -- `policy:=<org/name[@rev] | dir>`
+on the launch files.  Changing the deployed policy is a config change, not
+a code change.

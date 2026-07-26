@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """One-command robot bring-up, run FROM the PC dev container.
 
-    ros2 run wojtek_bringup robot [--dry-run] [--sim] [--no-viz] [--plotjuggler]
+    ros2 run wojtek_bringup robot [--dry-run] [--sim] [--no-viz] [--foxglove]
+                                  [--plotjuggler] [--gamepad]
 
 You work from one container shell (./dev.sh). This starts BOTH sides for a
 session and tears them down on Ctrl-C:
@@ -40,7 +41,11 @@ SERVICE = os.environ.get("WOJTEK_SERVICE", "wojtek-robot.service")
 # --dry-run has to pass them itself.
 REMOTE_DDS_ENV = (
     f"export ROS_DOMAIN_ID={os.environ.get('ROS_DOMAIN_ID', '42')} "
-    f"RMW_IMPLEMENTATION={os.environ.get('RMW_IMPLEMENTATION', 'rmw_cyclonedds_cpp')}"
+    f"RMW_IMPLEMENTATION={os.environ.get('RMW_IMPLEMENTATION', 'rmw_cyclonedds_cpp')} "
+    # Same pinned-interface profile the service uses (lo + optional
+    # eth0/wlan0) -- without it a manual launch binds to whichever iface the
+    # eth-AP failover currently owns and dies when that link flips.
+    "CYCLONEDDS_URI=file:///etc/cyclonedds-rpi.xml"
 )
 
 _SSH_OPTS = ["-o", "StrictHostKeyChecking=no",
@@ -68,9 +73,28 @@ def main():
                     help="BENCH: launch on the RPi WITHOUT RT, no torque (testing)")
     ap.add_argument("--sim", action="store_true", help="MuJoCo sim locally; no RPi, no SSH")
     ap.add_argument("--no-viz", action="store_true", help="skip RViz/PlotJuggler")
+    ap.add_argument("--foxglove", action="store_true",
+                    help="foxglove_bridge instead of RViz (native Foxglove app on "
+                         "ws://localhost:8765; the fast path on macOS, no X11)")
     ap.add_argument("--no-console", action="store_true",
-                    help="skip the operator console GUI (arm/pose/jog/drive)")
+                    help="skip the operator console (arm/pose/jog/drive)")
+    ap.add_argument("--web-console", action="store_true",
+                    help="browser operator console on http://localhost:8080 "
+                         "instead of the Qt window (no X11 needed)")
+    ap.add_argument("--gamepad", action="store_true",
+                    help="bluetooth Xbox pad teleop (joy driver + gamepad_teleop): "
+                         "left stick vx/yaw, right stick strafe, A arms, "
+                         "D-pad height. Runs ON the RPi against the real robot "
+                         "(pair the pad with the robot); with --sim it runs "
+                         "here (pair with this machine). Combine with "
+                         "--no-console to replace the console entirely")
     ap.add_argument("--plotjuggler", action="store_true", help="also open PlotJuggler")
+    ap.add_argument("--policy", default=None,
+                    help="policy reference for policy_node: HF repo id "
+                         "(org/name[@revision]) or a local artifact directory; "
+                         "default = the launch file's pinned default. Ignored "
+                         "by the systemd RT path, which uses the service's "
+                         "own launch arguments.")
     args = ap.parse_args()
 
     procs = []
@@ -82,18 +106,26 @@ def main():
         return p
 
     # ---- robot side --------------------------------------------------------
+    policy_arg = [f"policy:={args.policy}"] if args.policy else []
     if args.sim:
         print(">> [sim] MuJoCo sim (local, in container)")
-        spawn(["ros2", "launch", "wojtek_viz", "sim.launch.py", "rviz:=false"])
+        spawn(["ros2", "launch", "wojtek_viz", "sim.launch.py", "rviz:=false"]
+              + policy_arg)
     elif args.dry_run:
         print(f">> [BENCH] launching on {RPI_HOST} WITHOUT RT, no torque")
+        gamepad = str(args.gamepad).lower()
+        remote_policy = f" {policy_arg[0]}" if policy_arg else ""
         remote = (f"source /opt/ros/{ROS_DISTRO}/setup.bash && "
                   f"source ~/{REMOTE_WS}/install/setup.bash && "
                   f"{REMOTE_DDS_ENV} && "
-                  f"ros2 launch wojtek_bringup robot.launch.py dry_run:=true")
+                  f"ros2 launch wojtek_bringup robot.launch.py dry_run:=true "
+                  f"gamepad:={gamepad}{remote_policy}")
         spawn(SSH_TTY + [remote])
         stop_remote = lambda: subprocess.run(SSH + ["pkill -f robot.launch.py"])
     else:
+        if args.policy:
+            print(">> NOTE: --policy does not reach the systemd RT stack; "
+                  "set it in the service's launch arguments on the RPi")
         # Default: start the RT stack via its systemd service (RT-pinned), for
         # this session only. Stopped again on exit.
         print(f">> starting RPi RT stack on {RPI_HOST} (systemd, RT-pinned)")
@@ -104,16 +136,50 @@ def main():
     # ---- PC viz (local, in this container) ---------------------------------
     if not args.no_viz:
         pj = str(args.plotjuggler).lower()
-        print(f">> launching visualization (rviz, plotjuggler={pj})")
-        spawn(["ros2", "launch", "wojtek_viz", "viz.launch.py", f"plotjuggler:={pj}"])
+        fox = str(args.foxglove).lower()
+        rviz = str(not args.foxglove).lower()
+        print(f">> launching visualization (rviz={rviz}, foxglove={fox}, plotjuggler={pj})")
+        spawn(["ros2", "launch", "wojtek_viz", "viz.launch.py",
+               f"rviz:={rviz}", f"foxglove:={fox}", f"plotjuggler:={pj}"])
+        if args.foxglove:
+            print(">> foxglove_bridge up -- open the Foxglove app and connect to "
+                  "ws://localhost:8765 (3D panel reads /robot_description; "
+                  "Teleop panel drives /cmd_vel)")
 
     # ---- operator console (local GUI: arm/pose/jog/drive) ------------------
     # The manual-control surface for this session; comes up alongside viz so the
     # operator never types raw `ros2 service call`. GUI, so it needs the X mount
     # ../dev.sh sets up -- same as RViz.
+    # The consoles/teleop read their command box from the same policy
+    # contract; without --policy they fall back to conservative defaults.
+    console_policy = (
+        ["--ros-args", "-p", f"policy:={args.policy}"] if args.policy else []
+    )
     if not args.no_console:
-        print(">> launching operator console (ros2 run wojtek_viz console)")
-        spawn(["ros2", "run", "wojtek_viz", "console"])
+        if args.web_console:
+            print(">> launching web operator console -- open http://localhost:8080")
+            spawn(["ros2", "run", "wojtek_viz", "web_console"] + console_policy)
+        else:
+            print(">> launching operator console (ros2 run wojtek_viz console)")
+            spawn(["ros2", "run", "wojtek_viz", "console"])
+
+    # ---- gamepad teleop (bluetooth Xbox pad -> /cmd_vel) --------------------
+    # Independent of the console choice: the pad drives, the console (if any)
+    # keeps the pose/jog/telemetry surface. On the real robot the teleop runs
+    # ON the RPi (pair the pad with the robot): the systemd service already
+    # launches with gamepad:=true, and the --dry-run path passes the same arg,
+    # so there is nothing to start here -- and driving survives the PC dropping
+    # off. Only the sim, which lives in this container, reads a pad paired with
+    # this machine.
+    if args.gamepad:
+        if args.sim:
+            print(">> launching gamepad teleop (left stick vx/yaw, right stick "
+                  "strafe, A arms, Y/B stand up / lie down, D-pad height)")
+            spawn(["ros2", "launch", "wojtek_teleop", "gamepad.launch.py"]
+                  + policy_arg)
+        elif not args.dry_run:
+            print(">> gamepad teleop is resident in the RPi service "
+                  "(gamepad:=true) -- pair the pad with the RPi and drive")
 
     if not args.sim:
         print(ARMING_HINT)

@@ -11,7 +11,7 @@ import mujoco
 import numpy as np
 import pytest
 
-from test_terrain import pad_flatness  # sibling test module, same tests/ dir
+from test_terrain import pad_flatness  # sibling test module, same directory
 
 from wojtek_rl import build_terrain, paths, terrain, terrain_suite
 

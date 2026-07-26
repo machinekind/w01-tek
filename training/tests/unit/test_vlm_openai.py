@@ -6,11 +6,15 @@ Async code runs via asyncio.run(), matching tests/test_vlm_nav.py.
 
 import asyncio
 
-import httpx
 import pytest
 
-from wojtek_eval.navigator import EVAL_ACTIONS
-from wojtek_eval.vlm_openai import OpenAIVlmClient, parse_decision
+# httpx ships with the `eval` extra, not the default install. Skip rather
+# than error out on collection, so a missing optional dep cannot break the
+# fast unit suite for everyone.
+httpx = pytest.importorskip("httpx")
+
+from wojtek_eval.navigator import EVAL_ACTIONS  # noqa: E402
+from wojtek_eval.vlm_openai import OpenAIVlmClient, parse_decision  # noqa: E402
 
 POSE = (0.0, 0.0, 0.0)
 

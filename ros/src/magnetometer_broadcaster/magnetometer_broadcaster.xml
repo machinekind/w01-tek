@@ -1,0 +1,10 @@
+<library path="magnetometer_broadcaster">
+  <class name="magnetometer_broadcaster/MagnetometerBroadcaster"
+         type="magnetometer_broadcaster::MagnetometerBroadcaster"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>
+      Publishes a sensor's magnetometer.{x,y,z} state interfaces as
+      sensor_msgs/MagneticField.
+    </description>
+  </class>
+</library>

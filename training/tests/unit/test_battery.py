@@ -21,7 +21,7 @@ def test_battery_scenarios_step_counts():
     scenarios = battery_scenarios()
     assert set(scenarios.keys()) == {
         "stand_to_trot_ramp", "turn", "strafe", "walk_to_stop",
-        # added 2026-07-23 for the phase-C rotation/arc and height work;
+        # added by the phase-C rotation/arc and height work;
         # absent from earlier baselines
         "arc", "height_step",
     }

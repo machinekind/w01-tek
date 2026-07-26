@@ -15,7 +15,7 @@ users:
   - name: rpi
     # Passwordless sudo, matching the existing setup. Key-only SSH.
     sudo: ALL=(ALL) NOPASSWD:ALL
-    groups: [adm, dialout, sudo, plugdev, netdev, gpio, i2c, spi]
+    groups: [adm, dialout, sudo, plugdev, netdev, gpio, i2c, spi, input]
     shell: /bin/bash
     lock_passwd: false
     ssh_authorized_keys:

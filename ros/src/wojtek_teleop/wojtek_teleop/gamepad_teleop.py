@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Xbox-gamepad teleop -- drive Wojtek with a bluetooth pad.
 
-    ros2 launch wojtek_viz gamepad.launch.py      # joy driver + this node
+    ros2 launch wojtek_teleop gamepad.launch.py   # joy driver + this node
+
+Lives in wojtek_teleop (no GUI deps) so it runs on the RPi as well as the
+PC container: pair the pad with whichever machine runs this launch.
 
 Sits behind the standard ROS `joy` driver (sensor_msgs/Joy in) and speaks the
 SAME surface the operator consoles do -- /cmd_vel out (height on linear.z),
@@ -15,7 +18,13 @@ another driver enumerates differently):
                left/right  yaw (left = positive wz, i.e. turn left)
   right stick  left/right  vy (strafe; left = positive vy)
   A                        toggle /wojtek/arm
+  Y                        /wojtek/stand_up (ramp to standing pose)
+  B                        /wojtek/lie_down (ramp down to folded)
   D-pad up/down            standing height +- height_step (held set-point)
+
+The Y/B ramps mirror the operator consoles' Stand up / Lie down buttons --
+same services, same rule that real_io_node refuses them while ARMED, so a
+mid-walk Y/B press is rejected server-side rather than fought over.
 
 Driving is ALWAYS live -- there is no drive on/off gate like the consoles
 have; the sticks command velocity whenever the stack accepts it. Two rails
@@ -31,7 +40,7 @@ import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from sensor_msgs.msg import Joy
-from std_srvs.srv import SetBool
+from std_srvs.srv import SetBool, Trigger
 
 from wojtek_policy.policy_source import load_meta
 
@@ -56,6 +65,8 @@ class GamepadTeleop(Node):
         self._ax_vy = self.declare_parameter("vy_axis", 3).value
         self._ax_dpad_y = self.declare_parameter("dpad_y_axis", 7).value
         self._btn_arm = self.declare_parameter("arm_button", 0).value
+        self._btn_stand = self.declare_parameter("stand_button", 3).value  # Y
+        self._btn_lie = self.declare_parameter("lie_button", 1).value      # B
         # Extra deadzone on top of the joy driver's own, rescaled so full
         # deflection still reaches the box edge (bluetooth pads idle off-center).
         self._deadzone = self.declare_parameter("deadzone", 0.1).value
@@ -72,16 +83,21 @@ class GamepadTeleop(Node):
         self._joy_stamp = None
         self._deadman_hit = False
         self._arm_btn_prev = 0
+        self._stand_btn_prev = 0
+        self._lie_btn_prev = 0
         self._dpad_y_prev = 0.0
         self._armed = False           # last state we successfully commanded
 
         self._arm_cli = self.create_client(SetBool, "wojtek/arm")
+        self._stand_cli = self.create_client(Trigger, "wojtek/stand_up")
+        self._lie_cli = self.create_client(Trigger, "wojtek/lie_down")
         self._pub_cmd = self.create_publisher(Twist, "cmd_vel", 10)
         self.create_subscription(Joy, "joy", self._on_joy, 10)
         self.create_timer(1.0 / DRIVE_TICK_HZ, self._tick)
         self.get_logger().info(
             "gamepad teleop up -- left stick vx/yaw, right stick strafe, "
-            f"A toggles arm, D-pad height +-{self._height_step * 1000:.0f} mm "
+            "A toggles arm, Y stand up, B lie down, "
+            f"D-pad height +-{self._height_step * 1000:.0f} mm "
             f"({self.height_range[0]:.3f}..{self.height_range[1]:.3f} m)"
         )
 
@@ -139,6 +155,17 @@ class GamepadTeleop(Node):
             self._toggle_arm()
         self._arm_btn_prev = btn
 
+        # Y / B: the consoles' stand-up / lie-down ramps, on the press edge.
+        btn = msg.buttons[self._btn_stand] if self._btn_stand < len(msg.buttons) else 0
+        if btn and not self._stand_btn_prev:
+            self._call_trigger(self._stand_cli, "stand_up")
+        self._stand_btn_prev = btn
+
+        btn = msg.buttons[self._btn_lie] if self._btn_lie < len(msg.buttons) else 0
+        if btn and not self._lie_btn_prev:
+            self._call_trigger(self._lie_cli, "lie_down")
+        self._lie_btn_prev = btn
+
         # D-pad up/down: step the held height set-point on the press edge
         # (the hat reports -1/0/+1, +1 = up).
         dpad = self._axis(msg, self._ax_dpad_y)
@@ -169,19 +196,47 @@ class GamepadTeleop(Node):
             level(f"arm({target}): {resp.message}")
         fut.add_done_callback(done)
 
+    def _call_trigger(self, client, name):
+        """Fire one of real_io_node's Trigger ramps and log its verdict."""
+        if not client.service_is_ready():
+            self.get_logger().warning(f"wojtek/{name} service unavailable "
+                                      "(sim runs without real_io_node)")
+            return
+        fut = client.call_async(Trigger.Request())
+
+        def done(f):
+            try:
+                resp = f.result()
+            except Exception as e:  # noqa: BLE001 -- surface any RPC failure
+                self.get_logger().error(f"{name} call failed: {e}")
+                return
+            level = self.get_logger().info if resp.success else self.get_logger().error
+            level(f"{name}: {resp.message}")
+        fut.add_done_callback(done)
+
     # ---- drive tick ------------------------------------------------------------
     def _tick(self):
-        stale = (
-            self._joy_stamp is None
-            or (self.get_clock().now() - self._joy_stamp).nanoseconds
-            > self._cmd_timeout * 1e9
-        )
+        # Publish nothing until the pad has spoken at least once: this node is
+        # resident in the robot service (gamepad:=true), so at boot with no
+        # pad connected a padless teleop spamming zeroed /cmd_vel would
+        # override whatever else (web console) drives. The dead-man below
+        # only makes sense once there was input to lose.
+        if self._joy_stamp is None:
+            return
+        age_s = (self.get_clock().now() - self._joy_stamp).nanoseconds / 1e9
+        stale = age_s > self._cmd_timeout
+        if stale and age_s > self._cmd_timeout + 2.0:
+            # Pad gone for good (powered off / out of range): after the
+            # zeroing burst below, go silent so another source (web console)
+            # can take over /cmd_vel without being fought.
+            return
         if stale:
             # Dead-man: zero the motion, hold the stance height. Publishing
-            # (not going silent) keeps the last non-zero stick from sticking
-            # in policy_node, which latches the last received command.
+            # (not going silent immediately) keeps the last non-zero stick
+            # from sticking in policy_node, which latches the last received
+            # command.
             vx = vy = yaw = 0.0
-            if not self._deadman_hit and self._joy_stamp is not None:
+            if not self._deadman_hit:
                 self.get_logger().warning("joy input stale -- zeroing /cmd_vel")
         else:
             # Normalized [-1,1] -> the trained (asymmetric) command box:

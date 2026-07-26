@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>wojtek_teleop</name>
+  <version>0.1.0</version>
+  <description>
+    Robot-side teleop input for wojtek: bluetooth Xbox pad behind the
+    standard joy driver, publishing the same /cmd_vel surface the operator
+    consoles use. Split out of wojtek_viz (PC-only, GUI deps) so the RPi
+    build can carry it -- pair the pad with the ROBOT and drive without a
+    PC in the loop.
+  </description>
+  <maintainer email="kchmielewski707@gmail.com">Jakub Chmielewski</maintainer>
+  <license>MIT</license>
+
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_srvs</depend>
+  <!-- gamepad_teleop scales sticks into the trained command box read from
+       wojtek_policy's policy_meta.json (same source the consoles use). -->
+  <depend>wojtek_policy</depend>
+
+  <!-- gamepad.launch.py: the standard joystick driver feeding
+       gamepad_teleop (bluetooth Xbox pad -> /cmd_vel). -->
+  <exec_depend>joy</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

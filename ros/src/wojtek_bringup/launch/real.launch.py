@@ -1,9 +1,8 @@
 """Policy on the real robot: MD80 (IMPEDANCE) + IMU via ros2_control.
 
     IMU is the Adafruit 5543 (LSM6DS3TR-C + LIS3MDL) on the Pi's I2C1 -- see
-    imu_i2c_hardware_interface and wojtek_real.urdf.xacro. use_imu:=false by
-    default until this has run through ros2_control on the robot (bench
-    tests in ros/hw_tests/imu_i2c already pass).
+    imu_i2c_hardware_interface and wojtek_real.urdf.xacro. On by default;
+    use_imu:=false brings the stack up with the sensor absent/unwired.
 
     ros2 launch wojtek_bringup real.launch.py [policy:=org/name@sha]
                                               [max_torque:=2.0] [dry_run:=true]

@@ -9,10 +9,14 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
+  <depend>eigen</depend>
   <depend>hardware_interface</depend>
   <depend>pluginlib</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
+  <depend>yaml_cpp_vendor</depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

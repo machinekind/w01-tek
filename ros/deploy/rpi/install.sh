@@ -24,7 +24,7 @@ ROS_DISTRO="${ROS_DISTRO:-jazzy}"
 DRY_RUN=0
 DO_REBOOT=0
 SKIP_PACKAGES=0 SKIP_KERNEL=0 SKIP_TUNING=0 SKIP_NETWORK=0 SKIP_SERVICE=0 SKIP_SHELL_ENV=0
-ENABLE_ROBOT=0
+ENABLE_ROBOT=1
 REBOOT_NEEDED=0
 
 for a in "$@"; do case "$a" in
@@ -36,10 +36,11 @@ for a in "$@"; do case "$a" in
     --skip-network) SKIP_NETWORK=1 ;;
     --skip-service) SKIP_SERVICE=1 ;;
     --skip-shell-env) SKIP_SHELL_ENV=1 ;;
-    # Opt-in: also start the RT stack automatically on boot. Off by default --
-    # `ros2 run wojtek_bringup robot` starts it per-session, and leaving the RPi
-    # free lets you run other launches on it during development.
+    # The RT stack auto-starts on boot by default (the robot just runs when
+    # powered -- pad paired, DISARMED until /wojtek/arm). Opt out with
+    # --no-enable-robot to keep the RPi free for per-session dev launches.
     --enable-robot) ENABLE_ROBOT=1 ;;
+    --no-enable-robot) ENABLE_ROBOT=0 ;;
     *) echo "unknown arg: $a" >&2; exit 2 ;;
 esac; done
 
@@ -61,17 +62,46 @@ provision_packages() {
         info "ROS 2 apt repo already present"
     fi
     run "sudo apt-get update -qq"
-    local ros_pkgs="ros-${ROS_DISTRO}-ros-base ros-${ROS_DISTRO}-ros2-control ros-${ROS_DISTRO}-ros2-controllers ros-${ROS_DISTRO}-rmw-cyclonedds-cpp ros-${ROS_DISTRO}-xacro ros-${ROS_DISTRO}-robot-state-publisher ros-${ROS_DISTRO}-realtime-tools"
+    # ros-joy: the joystick driver behind wojtek_teleop's pad teleop
+    # (robot.launch.py gamepad:=true) -- the pad pairs with the RPi itself.
+    local ros_pkgs="ros-${ROS_DISTRO}-ros-base ros-${ROS_DISTRO}-ros2-control ros-${ROS_DISTRO}-ros2-controllers ros-${ROS_DISTRO}-rmw-cyclonedds-cpp ros-${ROS_DISTRO}-xacro ros-${ROS_DISTRO}-robot-state-publisher ros-${ROS_DISTRO}-realtime-tools ros-${ROS_DISTRO}-joy"
     # setserial: candle runs `setserial <port> low_latency` on the CANdle's
     # ttyACM at startup; without it the driver falls back to "low-speed mode"
     # (see md80 bring-up logs), adding latency to the 400 Hz loop. The PC image
     # already ships it (docker/Dockerfile) -- the RPi is where it actually matters.
     local tools="python3-colcon-common-extensions python3-rosdep build-essential git setserial python3-pip"
     local ap="iw hostapd dnsmasq rfkill"
-    run "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ${ros_pkgs} ${tools} ${ap}"
+    # Xbox pad over bluetooth: bluez for pairing (one-time, manual --
+    # bluetoothctl: scan on -> pair -> trust -> connect), joystick/evtest to
+    # verify the /dev/input device afterwards.
+    local pad="bluez joystick evtest"
+    run "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ${ros_pkgs} ${tools} ${ap} ${pad}"
     # policy_node resolves policies by HF repo id (wojtek_policy/
     # policy_source.py); same pip3 install the PC image does.
     run "pip3 install --break-system-packages huggingface_hub"
+
+    # joy_node reads the pad's /dev/input/event* (root:input 0660) -- without
+    # the input group it opens nothing and /joy just stays silent (seen on
+    # hardware: pad connected, nodes up, zero messages). Takes effect on the
+    # next login, which every `robot` ssh session is.
+    if id -nG rpi | grep -qw input; then
+        info "rpi already in the input group"
+    else
+        info "adding rpi to the input group (joystick event devices)"
+        run "sudo usermod -aG input rpi"
+    fi
+
+    # Xbox pads refuse to stay connected while bluetooth ERTM is on -- the
+    # standard fix is to turn it off module-wide (takes effect after reboot
+    # or btusb reload; pairing before that just keeps disconnecting).
+    local ertm=/etc/modprobe.d/xbox-pad-bt.conf
+    if [ -f "$ertm" ]; then
+        info "bluetooth ERTM already disabled for the pad"
+    else
+        info "writing $ertm (disable_ertm=1, reboot needed)"
+        run "echo 'options bluetooth disable_ertm=1' | sudo tee '${ertm}' >/dev/null"
+        REBOOT_NEEDED=1
+    fi
     if [ ! -f /etc/ros/rosdep/sources.list.d/20-default.list ]; then
         run "sudo rosdep init"
     fi
@@ -120,6 +150,21 @@ provision_tuning() {
         info "WARN: $cmdline not found -- skipping core-isolation"
     fi
 
+    # IMU I2C at Fast Mode 400 kHz (both LSM6DS3TR-C and LIS3MDL support it).
+    # The default 100 kHz makes the 23-byte status+data burst in the driver's
+    # read() take ~2.3 ms -- right at the 400 Hz controller_manager budget
+    # (overruns seen on hardware); 400 kHz brings it down to ~0.6 ms.
+    local bootcfg=/boot/firmware/config.txt
+    if [ -f "$bootcfg" ] && grep -q "i2c_arm_baudrate=400000" "$bootcfg"; then
+        info "i2c 400 kHz already configured"
+    elif [ -f "$bootcfg" ]; then
+        info "setting i2c_arm baudrate 400 kHz in $bootcfg (reboot needed)"
+        run "printf 'dtparam=i2c_arm=on,i2c_arm_baudrate=400000\n' | sudo tee -a '${bootcfg}' >/dev/null"
+        REBOOT_NEEDED=1
+    else
+        info "WARN: $bootcfg not found -- skipping i2c baudrate"
+    fi
+
     local limits=/etc/security/limits.d/99-realtime.conf
     if [ -f "$limits" ] && grep -q "rtprio" "$limits"; then
         info "rtprio/memlock limits already present"
@@ -149,6 +194,11 @@ provision_network() {
     # hostapd/dnsmasq are driven on-demand by the switch -- never auto-start.
     run "sudo systemctl disable hostapd dnsmasq 2>/dev/null || true"
 
+    # CycloneDDS interface pinning (lo + optional eth0/wlan0): survives the
+    # eth-AP failover moving 10.42.0.2 between ifaces. Keep in sync with the
+    # CYCLONEDDS_URI lines in wojtek-robot.service and the bashrc block.
+    run "sudo install -m644 '${HERE}/cyclonedds-rpi.xml' /etc/cyclonedds-rpi.xml"
+
     # netplan: static eth0 (.2), wlan0 handed to hostapd. Only (re)apply when
     # the effective config differs, and refuse the disruptive first switch if
     # we're reachable over the very eth we'd renumber (that must be done by
@@ -174,15 +224,15 @@ provision_service() {
     say "Phase 5: robot control service"
     run "sudo install -m644 '${HERE}/../wojtek-robot.service' /etc/systemd/system/wojtek-robot.service"
     run "sudo systemctl daemon-reload"
-    # NOT auto-started on boot by default: `ros2 run wojtek_bringup robot` starts
-    # the RT stack per-session (via this service), and leaving the RPi free lets
-    # you run other launches on it during development. Opt into boot auto-start
-    # with --enable-robot if you ever want it always-on.
+    # Auto-start on boot by default: the robot's native "run at power-on" is
+    # this systemd unit (RT limits, DDS env, taskset, restart baked in). It
+    # comes up DISARMED -- no torque until /wojtek/arm -- so boot auto-start
+    # is safe. --no-enable-robot keeps the RPi free for per-session dev.
     if [ "${ENABLE_ROBOT}" = 1 ]; then
         run "sudo systemctl enable wojtek-robot.service"
-        info "installed + ENABLED on boot (--enable-robot; DISARMED until /wojtek/arm)"
+        info "installed + ENABLED on boot (DISARMED until /wojtek/arm)"
     else
-        info "installed, not enabled -- started per-session by 'ros2 run wojtek_bringup robot'"
+        info "installed, not enabled (--no-enable-robot) -- start per-session with 'ros2 run wojtek_bringup robot'"
     fi
 }
 
@@ -191,7 +241,13 @@ provision_shell_env() {
     say "Phase 6: ROS env for interactive shells (~/.bashrc)"
     local marker="# wojtek-ros-env"
     if grep -qF "$marker" "$HOME/.bashrc" 2>/dev/null; then
-        info "~/.bashrc already has the ROS env block"
+        # Upgrade path: the block predates the pinned CycloneDDS profile.
+        if ! grep -qF "CYCLONEDDS_URI" "$HOME/.bashrc"; then
+            info "adding CYCLONEDDS_URI to the existing ~/.bashrc block"
+            run "printf 'export CYCLONEDDS_URI=file:///etc/cyclonedds-rpi.xml\n' >> '$HOME/.bashrc'"
+        else
+            info "~/.bashrc already has the ROS env block"
+        fi
         return
     fi
     # Manual shells must match wojtek-robot.service (domain 42 + CycloneDDS);
@@ -205,6 +261,7 @@ source /opt/ros/${ROS_DISTRO}/setup.bash
 [ -f "\$HOME/wojtek_ws/install/setup.bash" ] && source "\$HOME/wojtek_ws/install/setup.bash"
 export ROS_DOMAIN_ID=42
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export CYCLONEDDS_URI=file:///etc/cyclonedds-rpi.xml
 EOF
 )"
     if [ "$DRY_RUN" = 1 ]; then
@@ -223,6 +280,12 @@ EOF
 [ "$SKIP_NETWORK"  = 1 ] || provision_network
 [ "$SKIP_SERVICE"  = 1 ] || provision_service
 [ "$SKIP_SHELL_ENV" = 1 ] || provision_shell_env
+
+# Flush everything provisioned to disk NOW: a hard power cut minutes after
+# provisioning once left /etc/netplan/60-wojtek.yaml and the robot unit as
+# 0-byte files (ext4 delayed allocation) -- the RPi then booted with no
+# network config and no runnable service.
+run "sync"
 
 say "Provisioning done."
 if [ "$REBOOT_NEEDED" = 1 ]; then

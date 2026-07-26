@@ -16,10 +16,11 @@ not the physics engine.
 
 Backend selection is local to the host that constructs the environment:
 training creates both train and evaluation environments with it, while
-`eval`, `battery`, and `report` rebuild the saved environment configuration
-and resolve `auto` again. Pin `+task.env.sim.backend=warp` or `jax` when a
-specific backend matters. `smoke`, `battery`, `report`, and `export` force CPU
-execution, so `auto` resolves to JAX for those commands.
+`eval`, `battery`, `courses`, and `report` rebuild the saved environment
+configuration and resolve `auto` again. Pin `+task.env.sim.backend=warp` or
+`jax` when a specific backend matters. `smoke`, `battery`, `courses`,
+`report`, and `export` force CPU execution, so `auto` resolves to JAX for
+those commands.
 
 ## Naming
 
@@ -722,10 +723,13 @@ using the preset.
 | `smoke` | `./training/run.sh smoke [Hydra overrides]`; tiny CPU pipeline check with WandB disabled. A selected preset can override smoke's short PPO budget, so use `++ppo.num_timesteps=100000` when combining a preset with smoke. |
 | `eval` | `./training/run.sh eval --run runs/<name> [--x-vel V --y-vel V --yaw-vel W --height H --steps N --out FILE]`; renders a rollout. |
 | `battery` | `./training/run.sh battery --run runs/<name> [--out FILE --alpha A --lag-tau T]`; writes the fixed comparison battery. `--alpha`/`--lag-tau` are eval-only plant perturbations, see "Robustness grid (eval-only)" below. |
+| `courses` | `./training/run.sh courses --run runs/<name> [--seeds N --only NAME... --video --paths --out FILE --list]`; writes the path-following course benchmark. `--list` prints the catalogue without loading a run. See "Course benchmark" below. |
 | `report` | `./training/run.sh report --run runs/<name> [--out-json FILE --out-md FILE]`; writes battery, torque, power, impact proxy, and termination summary. |
 | `export` | `./training/run.sh export --run runs/<name> [--out DIR]`; writes `policy.npz` plus `policy_meta.json`, the schema-2 deployment contract built from the run's env (`wojtek_rl/deploy_contract.py`), and validates the deploy runtime end-to-end against the env before writing. |
 | `app` | `./training/run.sh app [--host HOST --port PORT]`; runs the interactive navigation demo. `WOJTEK_RUN_DIR`, `HOST`, and `PORT` environment variables supply defaults; see [demo README](../demo/README.md). |
-| `test` | `./training/run.sh test [pytest args]`; runs `training/tests`. |
+| `test` | `./training/run.sh test [pytest args]`; runs `training/tests/unit` — model-free, ~3 s, safe in an edit loop. |
+| `test-slow` | `./training/run.sh test-slow [pytest args]`; runs `training/tests/integration` — builds and steps real MJX models, 6m23s cold. Sets `JAX_COMPILATION_CACHE_DIR=training/.jax_cache` so repeat runs reuse compiled executables (measured on one file: 45s cold, 16s warm; the whole suite's warm time was not measured). |
+| `test-all` | `./training/run.sh test-all [pytest args]`; both suites, with the same compilation cache. |
 
 The live dashboard is a direct Python module, not a `run.sh` mode. Supply a
 log path explicitly because its source default is developer-local:
@@ -751,6 +755,91 @@ local directory -- via the `policy` launch argument (see
 `ros/src/wojtek_policy/wojtek_policy/policy_source.py`); keepers exported
 before the schema-2 contract are regenerated with
 `wojtek_rl/migrate_keeper_meta.py`.
+
+## Course benchmark (path following)
+
+The `wojtek_rl/courses/` package answers a different question from
+`battery.py`. The
+battery drives the policy with *open-loop* velocity commands and measures gait
+quality. The course benchmark closes the loop: a frozen pure-pursuit follower
+turns the base pose into the `[vx, vy, wz, height]` command, and each scenario
+scores how faithfully the robot walked a geometric path.
+
+```bash
+./training/run.sh courses --list                       # the catalogue, no run needed
+./training/run.sh courses --run runs/my_locomotion     # 20 scenarios x 8 seeds
+./training/run.sh courses --run runs/my_locomotion \
+  --only circle_r075 u_turn --seeds 4 --paths          # iterate on two rows
+./training/run.sh courses --run runs/my_locomotion --video --paths
+```
+
+Twenty scenarios in five families, each varying exactly one thing off the
+nominal (flat floor, model friction, 0.5 m/s, no disturbance) so a bad row has
+a single interpretation: eight path geometries (`straight_10m`,
+`arc_r3_90deg`, `circle_r2`, `circle_r075`, `figure_eight_r15`, `square_3m`,
+`slalom_05m`, `u_turn`), four speed rows (`straight_slow`, `straight_fast`,
+`circle_r2_fast`, `speed_steps_straight`), two friction rows
+(`straight_slippery`, `circle_r1_slippery` at `mu = 0.4`), two impulse rows
+(`straight_push`, `straight_push_fast`), and four rotate-in-place rows
+(`spin_left`/`spin_right` isolating chirality at 0.8 rad/s — a policy can be
+asymmetric; the stiff_b keeper shipped unable to spin right because nothing
+tested it — and `spin_slow`/`spin_fast` isolating rate at 0.4/1.2 rad/s CCW).
+
+Each scenario's score is the **weakest** of five sub-scores, every one a
+measured error divided into a *physical* reference -- so there is no
+calibration file, no hand-tuned cutoff, and nothing to re-baseline:
+
+| sub-score | formula | 1.0 means |
+|---|---|---|
+| `tracking` | `0.174 / RMS cross-track error` | off the path by a full stance half-width |
+| `speed` | `mean commanded speed / RMS along-path speed error` | speed error as large as the command |
+| `height` | `0.129 / RMS height error` | height error equal to the whole standing height |
+| `grip` | `base distance / foot-slip distance` | feet slide as far as the body moved |
+| `smoothness` | `1 / vibration_index` | all joint-velocity power above 5 Hz |
+
+The spin rows have no path and no forward travel, so tracking/speed/grip are
+replaced by two rotate-specific sub-scores with the same construction:
+`rotation` = `|commanded wz| / RMS yaw-rate error` and `drift` =
+`0.174 / max planar drift from the start`; height and smoothness are shared.
+Their completion gate is one full rotation, accumulated in the commanded
+direction, within the time budget.
+
+Higher is always better and there is no ceiling (`SUBSCORE_CAP` clips only so
+the JSON stays finite). `min` rather than a weighted average, so one bad axis
+cannot be diluted by four good ones -- the binding sub-score is reported next
+to every score. Completion is a **gate**, not a sub-score: a fall or an
+unfinished course scores 0 and the rollout is abandoned there, because any
+sub-score capped at 1.0 would cap the whole `min`. Raw metres-and-m/s metrics
+are kept alongside the sub-scores so a zero is still diagnosable.
+
+Each scenario runs `--seeds` rollouts (default 8) and reports median and worst,
+so a policy that only sometimes falls cannot pass by luck. Results go to
+`<run>/courses.json`; `--video` writes one mp4 per scenario (seed 0) and
+`--paths` one overhead commanded-vs-actual PNG per scenario, both into
+`<run>/courses/`.
+
+Cost: a single-env Python rollout loop, so measured ~30 s per 2600-step course
+per seed on CPU — roughly half an hour for the full 20 x 8 matrix, up to an
+hour if most scenarios time out rather than finish. Use `--only NAME...
+--seeds 1` while iterating.
+
+The follower's constants (`LOOKAHEAD_M`, `YAW_MAX`, `SPIN_ENTER_RAD`/
+`SPIN_EXIT_RAD`, `GOAL_RADIUS_M`, `GOAL_MIN_PROGRESS_M`) are deliberately
+**not** `navigation.py`'s `NavConfig`:
+tuning the demo's go-to-point gains must never move benchmark numbers. It is
+non-holonomic on purpose (`vy` is always 0) -- letting it strafe would let the
+robot crab through the turning courses without ever testing turning. Changing
+any of these invalidates every score previously recorded;
+`tests/unit/test_courses.py` asserts them so the change is loud.
+
+The package is modular so scenarios stay cheap to add: waypoint builders in
+`courses/geometry.py`, the `Course` dataclass and shared nominals in
+`courses/spec.py`, the frozen follower in `courses/follower.py`, rollout and
+scoring in `courses/rollout.py` / `courses/scoring.py`, and the catalogue in
+`courses/families/` — one module per family, one entry per scenario (`Course` for paths, `SpinCourse` for rotate-in-place).
+Adding a scenario is appending a `Course` to the right family's `COURSES`
+list (or adding a new family module and listing it in
+`families/__init__.py`'s `FAMILY_MODULES`).
 
 ## Robustness grid (eval-only)
 
@@ -850,6 +939,6 @@ way a command runs:
 | Scope | Default behavior |
 |---|---|
 | `train` | Sets `XLA_FLAGS=--xla_gpu_triton_gemm_any=true` and `XLA_PYTHON_CLIENT_MEM_FRACTION=0.9` only when those variables are not already set. |
-| `smoke`, `battery`, `report`, `export` | `run.sh` sets `JAX_PLATFORMS=cpu`; `sim.backend=auto` therefore resolves to the MJX/JAX backend. |
+| `smoke`, `battery`, `courses`, `report`, `export` | `run.sh` sets `JAX_PLATFORMS=cpu`; `sim.backend=auto` therefore resolves to the MJX/JAX backend. |
 | `eval`, `app` | `run.sh` defaults `MUJOCO_GL=egl` on Linux only; macOS leaves it unset so mujoco picks its native GL. Set it explicitly to override. |
 | `app` | Defaults `WOJTEK_RUN_DIR=policies/fbb_v3`, `HOST=127.0.0.1`, and `PORT=8010`. The demo is a joystick-specific presentation layer, not a generic evaluator for arbitrary task/configuration shapes. |

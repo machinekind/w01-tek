@@ -33,7 +33,10 @@ constexpr uint8_t LSM6_WHO_AM_I = 0x0F;
 constexpr uint8_t LSM6_CTRL1_XL = 0x10;  // accel ODR/FS
 constexpr uint8_t LSM6_CTRL2_G = 0x11;   // gyro ODR/FS
 constexpr uint8_t LSM6_CTRL3_C = 0x12;   // BDU, IF_INC, SW_RESET
+constexpr uint8_t LSM6_STATUS_REG = 0x1E;  // bit0 XLDA, bit1 GDA
 constexpr uint8_t LSM6_OUTX_L_G = 0x22;  // gyro xyz (6B) then accel xyz (6B)
+
+constexpr uint8_t LSM6_XLDA_GDA = 0x03;  // both accel and gyro data ready
 
 constexpr uint8_t LSM6_ID = 0x6A;
 constexpr uint8_t LSM6_SW_RESET = 0x01;
@@ -50,7 +53,10 @@ constexpr uint8_t LIS3_CTRL_REG1 = 0x20;
 constexpr uint8_t LIS3_CTRL_REG2 = 0x21;
 constexpr uint8_t LIS3_CTRL_REG3 = 0x22;
 constexpr uint8_t LIS3_CTRL_REG4 = 0x23;
+constexpr uint8_t LIS3_STATUS_REG = 0x27;  // bit3 ZYXDA
 constexpr uint8_t LIS3_OUT_X_L = 0x28;
+
+constexpr uint8_t LIS3_ZYXDA = 0x08;
 constexpr uint8_t LIS3_AUTOINC = 0x80;  // ST mag: sub-address MSb enables multi-byte reads
 
 constexpr uint8_t LIS3_ID = 0x3D;
@@ -181,26 +187,41 @@ bool ImuI2C::initialize()
 
 bool ImuI2C::read_sample(SensorData & data)
 {
-  uint8_t ag[12];
-  if (!read_regs(addr_ag_, LSM6_OUTX_L_G, ag, sizeof(ag))) {
+  data.accel_gyro_fresh = false;
+  data.mag_fresh = false;
+
+  // One transaction per chip, status and data together: the caller sits in
+  // the 400 Hz controller_manager read() with a ~2.5 ms budget, and every
+  // extra I2C start/stop at 100 kHz costs real time (separate status reads
+  // were seen pushing read() to 3.3 ms -> overruns).  IF_INC auto-increment
+  // rolls STATUS_REG (0x1E) through reserved/temp (0x1F-0x21) into the
+  // gyro+accel block (0x22-0x2D) in a single 16-byte burst.
+  uint8_t ag[16];
+  if (!read_regs(addr_ag_, LSM6_STATUS_REG, ag, sizeof(ag))) {
     return false;
   }
-  data.gyro_x = s16(ag[0], ag[1]) * GYR_RAD_PER_LSB;
-  data.gyro_y = s16(ag[2], ag[3]) * GYR_RAD_PER_LSB;
-  data.gyro_z = s16(ag[4], ag[5]) * GYR_RAD_PER_LSB;
-  data.accel_x = s16(ag[6], ag[7]) * ACC_MS2_PER_LSB;
-  data.accel_y = s16(ag[8], ag[9]) * ACC_MS2_PER_LSB;
-  data.accel_z = s16(ag[10], ag[11]) * ACC_MS2_PER_LSB;
+  if ((ag[0] & LSM6_XLDA_GDA) == LSM6_XLDA_GDA) {
+    data.gyro_x = s16(ag[4], ag[5]) * GYR_RAD_PER_LSB;
+    data.gyro_y = s16(ag[6], ag[7]) * GYR_RAD_PER_LSB;
+    data.gyro_z = s16(ag[8], ag[9]) * GYR_RAD_PER_LSB;
+    data.accel_x = s16(ag[10], ag[11]) * ACC_MS2_PER_LSB;
+    data.accel_y = s16(ag[12], ag[13]) * ACC_MS2_PER_LSB;
+    data.accel_z = s16(ag[14], ag[15]) * ACC_MS2_PER_LSB;
+    data.accel_gyro_fresh = true;
+  }
 
   // A dropped mag read is not fatal on its own -- accel/gyro (the fields
   // wojtek_policy actually consumes) already succeeded above, so surface
   // that frame rather than discard it; magnetometer.* just holds its last
-  // value for this cycle.
-  uint8_t mag[6];
-  if (read_regs(addr_mag_, LIS3_OUT_X_L | LIS3_AUTOINC, mag, sizeof(mag))) {
-    data.mag_x = s16(mag[0], mag[1]) * MAG_UT_PER_LSB;
-    data.mag_y = s16(mag[2], mag[3]) * MAG_UT_PER_LSB;
-    data.mag_z = s16(mag[4], mag[5]) * MAG_UT_PER_LSB;
+  // value for this cycle.  Same trick: STATUS_REG (0x27) + xyz (0x28-0x2D)
+  // in one 7-byte burst.
+  uint8_t mag[7];
+  if (read_regs(addr_mag_, LIS3_STATUS_REG | LIS3_AUTOINC, mag, sizeof(mag)) &&
+      (mag[0] & LIS3_ZYXDA)) {
+    data.mag_x = s16(mag[1], mag[2]) * MAG_UT_PER_LSB;
+    data.mag_y = s16(mag[3], mag[4]) * MAG_UT_PER_LSB;
+    data.mag_z = s16(mag[5], mag[6]) * MAG_UT_PER_LSB;
+    data.mag_fresh = true;
   }
 
   return true;

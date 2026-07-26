@@ -14,6 +14,7 @@ case "${1:-}" in
   smoke) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.train smoke=true wandb.enable=false "$@" ;;
   eval)  shift; "$PY" -m wojtek_rl.eval "$@" ;;
   battery) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.battery "$@" ;;
+  courses) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.courses "$@" ;;  # path-following benchmark
   report) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.report "$@" ;;
   export) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.export_policy "$@" ;;
   sysid) shift; "$PY" -m wojtek_rl.sysid "$@" ;;  # engine params from rosbags, docs/sysid.md
@@ -24,6 +25,16 @@ case "${1:-}" in
   grid)  shift; "$PY" -m wojtek_eval.gridmap "$@" ;;
   nav-eval) shift; MUJOCO_GL="${MUJOCO_GL:-$([ "$(uname)" = Linux ] && echo egl || echo cgl)}" "$PY" -m wojtek_eval.runner "$@" ;;
   nav-episode) shift; MUJOCO_GL="${MUJOCO_GL:-$([ "$(uname)" = Linux ] && echo egl || echo cgl)}" "$PY" -m wojtek_rl.nav_episode "$@" ;;  # headless VLM goal runner
-  test)  shift; "$PY" -m pytest tests -q "$@" ;;
-  *) echo "usage: run.sh {build|pose|check|train|smoke|eval|app|test} [args]"; exit 1 ;;
+  # tests/unit is model-free by construction: no env instantiation, no
+  # mjx.put_model, no MjModel.from_xml_* -- so the whole set is seconds, and
+  # `test` stays usable in an edit loop. tests/integration builds and steps
+  # real MJX models; those cost tens of seconds each even warm.
+  test)  shift; "$PY" -m pytest tests/unit -q "$@" ;;
+  test-slow) shift; JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-$PWD/.jax_cache}" \
+             JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0 \
+             "$PY" -m pytest tests/integration -q "$@" ;;
+  test-all)  shift; JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-$PWD/.jax_cache}" \
+             JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0 \
+             "$PY" -m pytest tests -q "$@" ;;
+  *) echo "usage: run.sh {build|pose|check|train|smoke|eval|courses|app|test|test-slow|test-all} [args]"; exit 1 ;;
 esac

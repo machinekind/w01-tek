@@ -4,7 +4,7 @@
 # The reorg is ~pure moves + repaths + deletions, so this checks the three
 # things a move can break, cheapest-first:
 #   T0  static + equivalence  — no ghost paths/imports, nothing lost, model byte-identical to baseline
-#   T1  python resolve        — wojtek_rl/demo import, paths.py resolves, MJCF loads (CPU), pytest
+#   T1  python resolve        — wojtek_rl/demo import, paths.py resolves, MJCF loads (CPU), pytest unit (+integration unless --quick)
 #   T2  python liveness (CPU) — run.sh build (idempotent) + smoke train + eval render
 #   T3  ROS 2 build           — docker image build == colcon build of all 6 packages
 #
@@ -150,8 +150,13 @@ t1(){
   # scripts are syntactically valid
   for s in training/run.sh training/hpc/_common.sh training/hpc/train.slurm ros/build.sh ros/dev.sh verify.sh; do
     ok "syntax ok: $s" bash -n "$s"; done
-  # test suite
-  if ok "pytest training/tests" bash -c "cd training && ./.venv/bin/python -m pytest tests -q"; then :; fi
+  # Test suites are split: tests/unit is model-free and runs in seconds, so it
+  # belongs in every tier-1 pass. tests/integration builds and steps real MJX
+  # models (minutes, even with the compilation cache warm), so --quick skips it
+  # the same way it skips the T2 smoke/eval steps.
+  if ok "pytest training/tests/unit" bash -c "cd training && ./.venv/bin/python -m pytest tests/unit -q"; then :; fi
+  if [ "$QUICK" = 1 ]; then skip "pytest training/tests/integration" "--quick"; return; fi
+  if ok "pytest training/tests/integration" bash -c "cd training && ./run.sh test-slow"; then :; fi
 }
 
 # =======================================================================

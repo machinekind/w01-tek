@@ -5,6 +5,7 @@ no jax rollout -- the rollout itself is exercised by running the scan.
 """
 
 import json
+import sys
 
 import numpy as np
 import pytest
@@ -235,6 +236,73 @@ def test_load_baseline_from_a_file_and_a_directory(tmp_path):
     assert terrain_scan.load_baseline(str(tmp_path)) == doc
     assert terrain_scan.load_baseline(None) is None
     assert terrain_scan.load_baseline("") is None
+
+
+# -- the eval seed -------------------------------------------------------------
+
+
+def _raw_key(cell):
+    """The key expression the scan used before --eval-seed existed."""
+    import jax
+
+    from wojtek_rl import terrain
+
+    return jax.random.PRNGKey(
+        cell.row * 1000 + terrain.TYPES.index(cell.terrain_type)
+    )
+
+
+@pytest.mark.parametrize(
+    "name", ["pyramid_stairs_5cm", "discrete_obstacles_8cm", "rough_uniform_2.5cm"]
+)
+def test_seed_zero_is_the_historical_stream(name):
+    """Every scan taken so far ran on seed 0, and those numbers are the
+    baselines the relative gate compares against."""
+    cell = terrain_suite.CELLS_BY_NAME[name]
+    raw = np.asarray(_raw_key(cell))
+    np.testing.assert_array_equal(np.asarray(terrain_scan.cell_key(cell, 0)), raw)
+    # the default is the historical stream too
+    np.testing.assert_array_equal(np.asarray(terrain_scan.cell_key(cell)), raw)
+
+
+def test_each_eval_seed_is_a_different_draw():
+    cell = terrain_suite.CELLS_BY_NAME["pyramid_stairs_5cm"]
+    keys = [np.asarray(terrain_scan.cell_key(cell, s)) for s in (0, 1, 2, 3)]
+    for i, a in enumerate(keys):
+        for b in keys[i + 1:]:
+            assert not np.array_equal(a, b)
+
+
+def test_cells_still_differ_from_each_other_under_one_seed():
+    """The per-cell key is what keeps two cells from sharing a noise draw; the
+    eval seed must not collapse that."""
+    keys = [
+        tuple(np.asarray(terrain_scan.cell_key(c, 7)).tolist())
+        for c in terrain_suite.CELLS
+    ]
+    assert len(set(keys)) == len(terrain_suite.CELLS)
+
+
+def test_a_baseline_on_another_seed_is_flagged():
+    assert terrain_scan.baseline_seed_warnings({"eval_seed": 0}, 0) == []
+    assert terrain_scan.baseline_seed_warnings(None, 3) == []
+    warnings = terrain_scan.baseline_seed_warnings({"eval_seed": 0}, 3)
+    assert len(warnings) == 1
+    assert "test-retest" in warnings[0]
+
+
+def test_a_baseline_from_before_the_option_counts_as_seed_zero():
+    assert terrain_scan.baseline_seed_warnings({"run": "keeper"}, 0) == []
+    assert terrain_scan.baseline_seed_warnings({"run": "keeper"}, 2) != []
+
+
+def test_the_cli_takes_an_eval_seed(monkeypatch, capsys):
+    """scan() needs a checkpoint, so the result dict it assembles is out of
+    reach in a unit test; the flag that fills it is not."""
+    monkeypatch.setattr(sys, "argv", ["terrain-scan", "--help"])
+    with pytest.raises(SystemExit):
+        terrain_scan.main()
+    assert "--eval-seed" in capsys.readouterr().out
 
 
 # -- command box ---------------------------------------------------------------

@@ -32,7 +32,9 @@ turning instead of climbing. Every real preset trains forward speed from -0.8 to
 1.2, so walking backwards is inside the trained command box.
 
 Nothing is sampled. Eight headings, four start offsets, three speeds, one fixed
-arena: two scans of one checkpoint return the same numbers.
+arena: two scans of one checkpoint at the same ``--eval-seed`` return the same
+numbers. A different ``--eval-seed`` redraws the rollout's noise on the same
+course, which is how the score's test-retest spread gets measured.
 """
 
 from __future__ import annotations
@@ -288,6 +290,42 @@ def relative_gate(scan: dict, baseline: dict | None) -> dict:
         "unmatched": unmatched,
         "notes": notes,
     }
+
+
+def cell_key(cell, eval_seed: int = 0):
+    """One cell's rollout key: which draw of the policy's noise it runs on.
+
+    Seed 0 has to return the base key unchanged -- every scan taken so far ran
+    on it, and those numbers are the baselines the relative gate compares
+    against. Any other seed is a fresh draw of the same course.
+    """
+    import jax
+
+    base = jax.random.PRNGKey(
+        cell.row * 1000 + terrain.TYPES.index(cell.terrain_type)
+    )
+    if eval_seed == 0:
+        return base
+    return jax.random.fold_in(base, eval_seed)
+
+
+def baseline_seed_warnings(baseline: dict | None, eval_seed: int) -> list[str]:
+    """Flag a baseline measured on a different noise draw.
+
+    The two are still comparable -- same course, same policy input -- but part
+    of any gap is then the scan's own test-retest spread rather than the
+    policy. A baseline from before this option carries no seed and ran on 0.
+    """
+    if baseline is None:
+        return []
+    base_seed = int(baseline.get("eval_seed", 0))
+    if base_seed == eval_seed:
+        return []
+    return [
+        f"baseline was scanned at eval seed {base_seed}, this scan at "
+        f"{eval_seed}; part of any difference between them is the scan's own "
+        "test-retest spread, not the policy"
+    ]
 
 
 def load_baseline(ref: str | None) -> dict | None:
@@ -616,6 +654,7 @@ def scan(
     cell_names: list[str] | None = None,
     speeds=terrain_suite.SPEEDS,
     baseline_ref: str | None = None,
+    eval_seed: int = 0,
 ) -> dict:
     """Score `run_dir`'s latest checkpoint on the measurement course."""
     import jax
@@ -678,6 +717,7 @@ def scan(
         "settle_steps": terrain_suite.SETTLE_STEPS,
         "saturation_threshold_frac": SATURATION_FRAC,
         "command_height": COMMAND_HEIGHT,
+        "eval_seed": eval_seed,
         "naconmax_per_env": naconmax_per_env,
         "njmax": int(env._config.sim.njmax),
         "warnings": command_box_warnings(run, speeds),
@@ -692,6 +732,7 @@ def scan(
             f"partial scan: speeds {sorted(speeds)} of "
             f"{sorted(terrain_suite.SPEEDS)}"
         )
+    result["warnings"].extend(baseline_seed_warnings(baseline, eval_seed))
 
     dt = float(env.dt)
     budgets = {s: terrain_suite.episode_budget(s, dt) for s in speeds}
@@ -706,9 +747,7 @@ def scan(
         per_speed = {}
         for speed in speeds:
             out = runner(
-                jax.random.PRNGKey(
-                    cell.row * 1000 + terrain.TYPES.index(cell.terrain_type)
-                ),
+                cell_key(cell, eval_seed),
                 centre, spawn, pad_h, yaw, float(speed), COMMAND_HEIGHT,
                 deadlines[speed], budget=budgets[speed],
             )
@@ -803,6 +842,13 @@ def main() -> None:
              f"{','.join(str(s) for s in terrain_suite.SPEEDS)})",
     )
     ap.add_argument(
+        "--eval-seed", type=int, default=0,
+        help="which noise draw the rollout runs on: re-scan one checkpoint at "
+             "1, 2, 3 to measure the score's test-retest spread. 0 (the "
+             "default) is the historical stream every scan so far ran on. The "
+             "arena and the course are fixed either way",
+    )
+    ap.add_argument(
         "--baseline", default=None,
         help="previous keeper's scan: a path, a directory holding "
              "terrain_scan.json, or an HF reference org/name[@rev]",
@@ -831,6 +877,7 @@ def main() -> None:
             if args.speeds else terrain_suite.SPEEDS
         ),
         baseline_ref=args.baseline,
+        eval_seed=args.eval_seed,
     )
     out = Path(args.out) if args.out else Path(args.run) / "terrain_scan.json"
     out.parent.mkdir(parents=True, exist_ok=True)

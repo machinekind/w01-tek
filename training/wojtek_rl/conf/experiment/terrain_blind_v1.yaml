@@ -1,0 +1,116 @@
+# @package _global_
+# terrain_blind_v1 — first blind terrain curriculum run (locomotion plan
+# step 5). Blind means no exteroception: the observations are unchanged from
+# flat locomotion and the policy feels the ground only through its own
+# joints. A height scan in the observations is plan step 6, a separate
+# preset. The training target is the tiled train arena's mini stairs, risers
+# 3-9 cm, plus rough ground, slopes and discrete steps.
+# Operating point: the frozen kp80c keeper locomotion_stiff_kp80_v1
+# (run wojtek_stiff_kp80c_20260719_105503, 4.4B cumulative flat steps),
+# repeated here verbatim rather than composed, so terrain changes nothing
+# but the scene, the curriculum and the warp budgets. That keeper is the
+# safe-without-compensation one: it survives a 1.58x Kt miscalibration
+# uncompensated. Artifacts:
+# https://huggingface.co/<HF_ORGANIZATION>/wojtek-stiff-kp80-locomotion
+# Restoring from the kp80c checkpoint is a launch-time flag (restore=...),
+# not set in this preset. train.py pins ppo.num_resets_per_eval=0 whenever
+# terrain is on, because a rebuilt env loses the level it climbed to.
+# Launch notes:
+#   ./training/run.sh build-terrain --arena train   # generated, gitignored
+#   XLA_PYTHON_CLIENT_PREALLOC=false ./training/run.sh train \
+#     +experiment=terrain_blind_v1
+# PREALLOC=false is mandatory on terrain, not a tuning preference. Warp
+# allocates its EPA scratch outside the XLA pool on every narrowphase call,
+# and train.py's default XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 leaves it a
+# tenth of the card; the 2026-07-25 GPU report measured a mid-run OOM at 52M
+# steps that way.
+# DEPLOYMENT MUST MATCH: kp=80 / kd=2.26 / +-9 Nm on the robot
+# (wojtek_real.urdf.xacro + launch max_torque), same contract as
+# locomotion_stiff_kp80_v1.
+# Usage: ./run.sh train +experiment=terrain_blind_v1
+defaults:
+  - override /task: joystick
+
+task:
+  env:
+    action_scale: [0.25, 0.5, 0.5]
+    pd_kp: 80.0
+    pd_kd: 2.26
+    max_torque: 9.0
+    abduction_ctrl_limit: 0.44
+    knee_target_max: 3.15
+    latency:
+      enable: true
+    encoder:
+      enable: true
+    obs:
+      include:
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+    command:
+      vx: [-0.8, 1.2]
+      vy: [-0.5, 0.5]
+      wz: [-1.0, 1.0]
+      height: [0.125, 0.125]
+      zero_prob: 0.25
+      pure_wz_prob: 0.25
+      pure_vy_prob: 0.2
+    push:
+      vel: 0.8
+    gait:
+      swing_height: 0.08
+      air_time_cap: 0.35
+    reward:
+      tracking_sigma: 0.1
+      pose_leg_weight: 0.1
+      scales:
+        tracking_lin_vel: 4.0
+        tracking_ang_vel: 1.6
+        height_tracking: 0.0
+        lin_vel_z: 0.0
+        ang_vel_xy: 0.0
+        orientation: -5.0
+        torques: -6.0e-4
+        torque_rate: -0.02
+        torque_limit: -0.1
+        action_rate: -0.25
+        action_accel: 0.0
+        energy: 0.0
+        pose: -1.0
+        feet_air_time: 4.0
+        feet_slip: -0.35
+        feet_phase: 0.0
+        contact_match: 0.0
+        high_step: 4.0
+        stand_still: -2.5
+        stand_feet_down: -30.0
+        termination: -1.0
+    terrain:
+      enable: true
+      arena: train
+    sim:
+      # The post-split floor the env computes from the robot's own collision
+      # set: 22 geoms that can pair with the heightfield, 4 contacts each.
+      # Confirmed or adjusted by the 2026-07-26 GPU measurement session.
+      naconmax_per_env: 88
+      # Provisional: about 6 constraint rows per condim-4 contact times the
+      # 88-contact floor, plus margin. The measured nefc_max from the
+      # 2026-07-26 GPU session replaces this number.
+      njmax: 768
+
+dr:
+  motor_strength: { enable: true, range: [0.5, 1.1] }
+  joint_gains: { enable: true, gain_pct: 0.2, kd_pct: 0.2 }
+
+ppo:
+  # terrain_lvl_train is the curriculum signal. The eval env starts fresh at
+  # every evaluation, so its terrain_lvl never climbs (configuration.md,
+  # Terrain curriculum).
+  log_training_metrics: true
+  # Provisional: the H100 sizing session owns the real budget, sized from the
+  # locomotion plan's step 5 measurements.
+  num_timesteps: 800000000
+
+run_name: wojtek_terrain_blind_v1

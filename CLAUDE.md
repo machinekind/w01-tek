@@ -29,7 +29,9 @@ keep the command, seed, and resulting run directory together.
 
 - [Training configuration reference](training/docs/configuration.md) — every
   Hydra group, root setting, task setting, domain-randomization switch, PPO
-  setting, experiment preset, and command-mode usage.
+  setting, experiment preset, and command-mode usage.  Its "Course benchmark"
+  section defines the path-following scores and the frozen follower constants
+  that must not be retuned.
 - [Training lessons](skills/brax-locomotion-training/references/wojtek-training-lessons.md)
   — evidence from previous locomotion iterations; consult it before changing
   rewards, observations, or gait behavior.
@@ -85,12 +87,22 @@ git diff --check
 
 # Training config or Python change
 ./training/run.sh train --cfg job --resolve
-./training/run.sh test
+./training/run.sh test        # tests/unit: model-free, ~3 s
+
+# Anything touching the env, the model, DR, or the latency path
+./training/run.sh test-slow   # tests/integration: real MJX, minutes
 
 # Model-generation change (inspect generated XML before committing it)
 ./training/run.sh build
 ./training/run.sh check
 ```
+
+`test` and `test-slow` are a hard split: `tests/unit` never instantiates an
+env or puts a model on device (a guard test enforces it), which is why it
+stays fast enough to run on every edit.  `tests/integration` pays real MJX
+compile time (6m23s measured cold); it sets a persistent JAX compilation
+cache so repeat runs skip recompilation.  Run it before claiming an env/model
+change is validated.
 
 For wider repository checks, use `make verify-static` first and
 `make verify-quick` when its prerequisites are available.  A full
@@ -104,6 +116,7 @@ For wider repository checks, use `make verify-static` first and
 
 # Evaluate, compare, and prepare a completed joystick policy for ROS
 ./training/run.sh report --run runs/wojtek_locomotion
+./training/run.sh courses --run runs/wojtek_locomotion   # path-following score per scenario
 ./training/run.sh eval --run runs/wojtek_locomotion --x-vel 0.3 --height 0.125
 ./training/run.sh export --run runs/wojtek_locomotion
 ```

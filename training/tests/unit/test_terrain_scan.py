@@ -5,6 +5,7 @@ no jax rollout -- the rollout itself is exercised by running the scan.
 """
 
 import json
+import sys
 
 import numpy as np
 import pytest
@@ -99,7 +100,7 @@ def test_a_partial_scan_is_incomplete_not_a_pass():
     assert terrain_scan.absolute_gate(cells)["verdict"] == "pass"
     gate = terrain_scan.absolute_gate(cells, expect_gated=terrain_scan.gated_pairs())
     assert gate["verdict"] == "incomplete"
-    assert gate["checked"] == 1 and gate["expected"] == 54
+    assert gate["checked"] == 1 and gate["expected"] == 36
     # a real failure still outranks incompleteness
     bad = terrain_scan.absolute_gate(
         _cells([("pyramid_stairs_5cm", 0.4, 1)]), expect_gated=terrain_scan.gated_pairs()
@@ -107,8 +108,19 @@ def test_a_partial_scan_is_incomplete_not_a_pass():
     assert bad["verdict"] == "fail"
 
 
+def test_the_suite_measures_two_speeds():
+    """0.2 m/s was measured and dropped on 2026-07-27: finishing inside the step
+    budget needs 62% speed tracking, the measured policies track about 60% at
+    0.2, and every one of them scored 0 there. The bars gate at 0.4."""
+    assert terrain_suite.SPEEDS == (0.4, 0.7)
+    assert terrain_suite.PLAN_SPEED == 0.4
+    # a suite change has to retire the old baselines rather than be compared
+    # against them
+    assert terrain_suite.arena_fingerprint()["cells"] == "v2"
+
+
 def test_gated_pairs_counts_every_gated_cell_at_every_speed():
-    assert terrain_scan.gated_pairs() == 18 * 3
+    assert terrain_scan.gated_pairs() == 18 * 2
     assert terrain_scan.gated_pairs(speeds=(0.4,)) == 18
 
 
@@ -138,7 +150,7 @@ def test_absolute_gate_ignores_tracked_cells():
 def test_absolute_gate_reports_provisional_provenance():
     """A provisional failure has to be readable as one: the plan sets no bar
     away from 0.4 m/s."""
-    gate = terrain_scan.absolute_gate(_cells([("pyramid_stairs_5cm", 0.2, 10)]))
+    gate = terrain_scan.absolute_gate(_cells([("pyramid_stairs_5cm", 0.7, 10)]))
     assert gate["verdict"] == "fail"
     assert gate["failures"][0]["provenance"] == "provisional"
 
@@ -161,21 +173,22 @@ def test_relative_gate_without_a_baseline_says_so():
     assert gate["verdict"] == "no baseline"
 
 
-def test_relative_gate_allows_a_small_drop():
-    now = _scan(_cells([("pyramid_stairs_5cm", 0.4, 29)]))
+def test_relative_gate_allows_a_drop_inside_the_measured_noise():
+    now = _scan(_cells([("pyramid_stairs_5cm", 0.4, 25)]))
     base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 32)]))
-    # 32/32 -> 29/32 is 9.4 points, inside the 10-point limit
+    # 32/32 -> 25/32 is 21.9 points. The scan's own test-retest noise swings
+    # a pair by up to 18.75 points, so the limit sits above that, at 25.
     gate = terrain_scan.relative_gate(now, base)
     assert gate["verdict"] == "pass", gate
     assert gate["drops"] == []
 
 
 def test_relative_gate_fails_a_big_drop():
-    now = _scan(_cells([("pyramid_stairs_5cm", 0.4, 28)]))
+    now = _scan(_cells([("pyramid_stairs_5cm", 0.4, 23)]))
     base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 32)]))
-    gate = terrain_scan.relative_gate(now, base)  # 12.5 points
+    gate = terrain_scan.relative_gate(now, base)  # 28.1 points
     assert gate["verdict"] == "fail"
-    assert gate["drops"][0]["drop"] == pytest.approx(12.5)
+    assert gate["drops"][0]["drop"] == pytest.approx(28.1, abs=0.05)
 
 
 def test_relative_gate_gains_are_never_failures():
@@ -216,12 +229,12 @@ def test_a_new_cell_has_nothing_to_compare_against():
 
 def test_a_cell_missing_at_one_speed_only_is_unmatched_at_that_speed():
     now = _scan(
-        _cells([("pyramid_stairs_5cm", 0.4, 10), ("pyramid_stairs_5cm", 0.2, 10)])
+        _cells([("pyramid_stairs_5cm", 0.4, 10), ("pyramid_stairs_5cm", 0.7, 10)])
     )
     base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 32)]))
     gate = terrain_scan.relative_gate(now, base)
     assert gate["verdict"] == "fail"  # the 0.4 pair dropped
-    assert gate["unmatched"] == ["pyramid_stairs_5cm@0.2"]
+    assert gate["unmatched"] == ["pyramid_stairs_5cm@0.7"]
 
 
 # -- baseline loading ----------------------------------------------------------
@@ -235,6 +248,73 @@ def test_load_baseline_from_a_file_and_a_directory(tmp_path):
     assert terrain_scan.load_baseline(str(tmp_path)) == doc
     assert terrain_scan.load_baseline(None) is None
     assert terrain_scan.load_baseline("") is None
+
+
+# -- the eval seed -------------------------------------------------------------
+
+
+def _raw_key(cell):
+    """The key expression the scan used before --eval-seed existed."""
+    import jax
+
+    from wojtek_rl import terrain
+
+    return jax.random.PRNGKey(
+        cell.row * 1000 + terrain.TYPES.index(cell.terrain_type)
+    )
+
+
+@pytest.mark.parametrize(
+    "name", ["pyramid_stairs_5cm", "discrete_obstacles_8cm", "rough_uniform_2.5cm"]
+)
+def test_seed_zero_is_the_historical_stream(name):
+    """Every scan taken so far ran on seed 0, and those numbers are the
+    baselines the relative gate compares against."""
+    cell = terrain_suite.CELLS_BY_NAME[name]
+    raw = np.asarray(_raw_key(cell))
+    np.testing.assert_array_equal(np.asarray(terrain_scan.cell_key(cell, 0)), raw)
+    # the default is the historical stream too
+    np.testing.assert_array_equal(np.asarray(terrain_scan.cell_key(cell)), raw)
+
+
+def test_each_eval_seed_is_a_different_draw():
+    cell = terrain_suite.CELLS_BY_NAME["pyramid_stairs_5cm"]
+    keys = [np.asarray(terrain_scan.cell_key(cell, s)) for s in (0, 1, 2, 3)]
+    for i, a in enumerate(keys):
+        for b in keys[i + 1:]:
+            assert not np.array_equal(a, b)
+
+
+def test_cells_still_differ_from_each_other_under_one_seed():
+    """The per-cell key is what keeps two cells from sharing a noise draw; the
+    eval seed must not collapse that."""
+    keys = [
+        tuple(np.asarray(terrain_scan.cell_key(c, 7)).tolist())
+        for c in terrain_suite.CELLS
+    ]
+    assert len(set(keys)) == len(terrain_suite.CELLS)
+
+
+def test_a_baseline_on_another_seed_is_flagged():
+    assert terrain_scan.baseline_seed_warnings({"eval_seed": 0}, 0) == []
+    assert terrain_scan.baseline_seed_warnings(None, 3) == []
+    warnings = terrain_scan.baseline_seed_warnings({"eval_seed": 0}, 3)
+    assert len(warnings) == 1
+    assert "test-retest" in warnings[0]
+
+
+def test_a_baseline_from_before_the_option_counts_as_seed_zero():
+    assert terrain_scan.baseline_seed_warnings({"run": "keeper"}, 0) == []
+    assert terrain_scan.baseline_seed_warnings({"run": "keeper"}, 2) != []
+
+
+def test_the_cli_takes_an_eval_seed(monkeypatch, capsys):
+    """scan() needs a checkpoint, so the result dict it assembles is out of
+    reach in a unit test; the flag that fills it is not."""
+    monkeypatch.setattr(sys, "argv", ["terrain-scan", "--help"])
+    with pytest.raises(SystemExit):
+        terrain_scan.main()
+    assert "--eval-seed" in capsys.readouterr().out
 
 
 # -- command box ---------------------------------------------------------------

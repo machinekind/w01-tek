@@ -248,7 +248,7 @@ def _scan_doc():
         "runs_per_cell_speed": 32,
         "cells": {
             cell.name: {"0.4": terrain_scan.cell_entry(cell, 0.4, reduced),
-                        "0.2": terrain_scan.cell_entry(cell, 0.2, reduced)},
+                        "0.7": terrain_scan.cell_entry(cell, 0.7, reduced)},
             tracked.name: {"0.4": terrain_scan.cell_entry(tracked, 0.4, reduced)},
         },
         "gate": {
@@ -271,7 +271,7 @@ def test_terrain_section_renders_a_scan():
     assert "engine: warp" in text
     # one row per cell and speed, with the bar and where its number came from
     assert "| pyramid_stairs_5cm | 0.4 | 29 | 32 | 26 | plan |" in text
-    assert "| pyramid_stairs_5cm | 0.2 | 29 | 32 | 26 | provisional |" in text
+    assert "| pyramid_stairs_5cm | 0.7 | 29 | 32 | 26 | provisional |" in text
     assert "| pyramid_stairs_9cm | 0.4 | 29 | 32 | - | tracked |" in text
     assert "### Gate" in text
     # how many runs the per-step metrics average over, so a thin sample shows

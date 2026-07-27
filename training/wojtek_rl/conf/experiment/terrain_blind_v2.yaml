@@ -1,0 +1,136 @@
+# @package _global_
+# terrain_blind_v2 -- the terrain family's founding preset. Blind means no
+# exteroception: no height scan, the robot feels the ground through its own
+# joints. The IMU is in the observations. It trains from scratch. Family rule
+# (Marcin, 2026-07-27): terrain policies never start from a flat keeper, and a
+# terrain policy fine-tunes only from another terrain policy. terrain_blind_v1
+# is the verification-only predecessor that the 2026-07-27 GPU session ran; it
+# predates the rule. This is the preset to launch a real terrain run from.
+# Base: the phase-C operating point of the kp40 line (stiff_phase_c), which is
+# that line's current head and the deployed flat policy, published as
+# https://huggingface.co/<HF_ORGANIZATION>/wojtek-stiff-locomotion-v2. Its
+# effective config is flattened here, gains through reward scales, so
+# stiff_phase_c and locomotion_stiff_v1 can keep evolving without moving this
+# preset under a running family. v2 is also the scan comparison baseline, so
+# sitting on its operating point leaves terrain and the IMU as the only
+# differences between the two policies.
+# Training target: the tiled train arena's mini stairs, risers 3-9 cm, plus
+# rough ground, slopes and discrete steps.
+# Launch notes:
+#   ./training/run.sh build-terrain --arena train   # generated, gitignored
+#   XLA_PYTHON_CLIENT_PREALLOC=false ./training/run.sh train \
+#     +experiment=terrain_blind_v2
+# PREALLOC=false is mandatory on terrain, not a tuning preference. Warp
+# allocates its EPA scratch outside the XLA pool on every narrowphase call,
+# and train.py's default XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 leaves it a tenth
+# of the card; the 2026-07-25 GPU report measured a mid-run OOM at 52M steps
+# that way. train.py pins ppo.num_resets_per_eval=0 whenever terrain is on,
+# because a rebuilt env loses the level it climbed to; this preset does not
+# set it. Scan baseline: score the v2 keeper once on the eval arena
+# (./training/run.sh terrain-scan --run <v2 checkpoint>) before gating any
+# terrain policy, so there is a bar to compare against.
+# DEPLOYMENT MUST MATCH: kp=40 / kd=1.6 / +-9 Nm on the robot
+# (wojtek_real.urdf.xacro + launch max_torque), the same contract as
+# stiff_phase_c. Two more deployment prerequisites: the policy node needs the
+# IMU wired in (see the obs comment) and, because the live height command
+# comes along from phase C, it needs the per-command height anchor that
+# stiff_phase_c documents.
+# Usage: ./run.sh train +experiment=terrain_blind_v2
+defaults:
+  - override /task: joystick
+
+task:
+  env:
+    action_scale: [0.25, 0.5, 0.5]
+    pd_kp: 40.0
+    pd_kd: 1.6
+    max_torque: 9.0
+    abduction_ctrl_limit: 0.44
+    knee_target_max: 3.15
+    latency:
+      enable: true
+    encoder:
+      enable: true
+    obs:
+      # The terrain family's frozen obs layout: the kp40 line's joint, action
+      # and command channels plus the IMU (gyro and gravity, named as in
+      # conf/obs/full.yaml). It is deliberately incompatible with every flat
+      # checkpoint. Before this family can run on the robot, the deployment
+      # side has to wire the CANdle-hat BMI (PR #75) into the policy node.
+      include:
+        - gyro
+        - gravity
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+    command:
+      vx: [-0.8, 1.2]
+      vy: [-0.5, 0.5]
+      wz: [-1.5, 1.5]
+      height: [0.10, 0.16]
+      zero_prob: 0.25
+      pure_wz_prob: 0.25
+      pure_vy_prob: 0.2
+      arc_prob: 0.2
+      arc_vx: [0.3, 0.8]
+    push:
+      vel: 0.8
+    gait:
+      swing_height: 0.08
+      air_time_cap: 0.35
+    reward:
+      tracking_sigma: 0.1
+      pose_leg_weight: 0.1
+      scales:
+        tracking_lin_vel: 4.0
+        tracking_ang_vel: 2.4
+        height_tracking: 1.0
+        lin_vel_z: 0.0
+        ang_vel_xy: 0.0
+        orientation: -5.0
+        torques: -6.0e-4
+        torque_rate: -0.02
+        torque_limit: -0.1
+        action_rate: -0.25
+        action_accel: 0.0
+        energy: 0.0
+        pose: -1.0
+        feet_air_time: 4.0
+        feet_slip: -0.35
+        feet_phase: 0.0
+        contact_match: 0.0
+        high_step: 4.0
+        stand_still: -2.5
+        stand_feet_down: -30.0
+        termination: -1.0
+    terrain:
+      enable: true
+      arena: train
+    sim:
+      # The post-split floor the env computes from the robot's own collision
+      # set: 22 geoms that can pair with the heightfield, 4 contacts each.
+      # Confirmed 2026-07-27: scan peak is 12 contacts/env and no instrument
+      # tripped the pool at 88, checks up to 4096 envs included
+      # (docs/plans/terrain-training/2026-07-27-step5-validation-report.md).
+      naconmax_per_env: 88
+      # Sized from the same session: worst measured nefc_max is 228, in
+      # forced-fall states on the eval arena; walking scans peak near 97.
+      # 512 is 2.2x the worst observation.
+      njmax: 512
+
+dr:
+  motor_strength: { enable: true, range: [0.5, 1.1] }
+  joint_gains: { enable: true, gain_pct: 0.2, kd_pct: 0.2 }
+
+ppo:
+  # terrain_lvl_train is the curriculum signal. The eval env starts fresh at
+  # every evaluation, so its terrain_lvl never climbs (configuration.md,
+  # Terrain curriculum).
+  log_training_metrics: true
+  # From-scratch budget at the scale the flat keeper lineage needed: the kp40
+  # keeper reached its operating point in 2.0B steps. The launch session owns
+  # the final number.
+  num_timesteps: 2000000000
+
+run_name: wojtek_terrain_blind_v2

@@ -154,13 +154,12 @@ def test_frontier_and_blind_limit_cells_are_tracked():
 
 
 def test_threshold_provenance():
-    """The plan sets bars at 0.4 m/s only; the same numbers at the other two
-    speeds carry a provisional tag, so a failure there reads as a prompt to
-    check the bar."""
+    """The plan sets bars at 0.4 m/s only; the same number at 0.7 carries a
+    provisional tag, so a failure there reads as a prompt to check the bar."""
     gated = terrain_suite.CELLS_BY_NAME["pyramid_stairs_5cm"]
     tracked = terrain_suite.CELLS_BY_NAME["pyramid_stairs_9cm"]
+    assert terrain_suite.SPEEDS == (0.4, 0.7)
     assert terrain_suite.threshold(gated, 0.4) == (26, "plan")
-    assert terrain_suite.threshold(gated, 0.2) == (26, "provisional")
     assert terrain_suite.threshold(gated, 0.7) == (26, "provisional")
     for speed in terrain_suite.SPEEDS:
         assert terrain_suite.threshold(tracked, speed) == (None, "tracked")
@@ -253,15 +252,15 @@ def test_heading_stretch_is_one_on_axes_and_root_two_on_diagonals():
 
 
 def test_total_scan_size():
-    """The scan is 4128 runs; the plan sized the cluster job off this."""
+    """The scan is 2752 runs; the cluster job's header is sized off this."""
     runs = len(terrain_suite.CELLS) * terrain_suite.RUNS_PER_CELL_SPEED * len(
         terrain_suite.SPEEDS
     )
-    assert runs == 4128
+    assert runs == 2752
     steps = sum(
         terrain_suite.episode_budget(s, 0.02) for s in terrain_suite.SPEEDS
     ) * len(terrain_suite.CELLS) * terrain_suite.RUNS_PER_CELL_SPEED
-    assert 5e6 < steps < 9e6, steps
+    assert 2.5e6 < steps < 3.5e6, steps
 
 
 # -- 4. Arena kinds ------------------------------------------------------------

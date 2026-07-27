@@ -1,9 +1,11 @@
 # @package _global_
 # terrain_blind_v1 — first blind terrain curriculum run (locomotion plan
-# step 5). Blind means no exteroception: the observations are unchanged from
-# flat locomotion and the policy feels the ground only through its own
-# joints. A height scan in the observations is plan step 6, a separate
-# preset. The training target is the tiled train arena's mini stairs, risers
+# step 5). Blind means no exteroception: the policy sees no terrain. The
+# observations stay the keeper's: joint pos/vel, action history, command.
+# The robot does have an IMU (the CANdle-hat BMI, PR #75), but no keeper
+# observes it, and this preset must repeat the kp80c obs layout exactly or
+# its checkpoint cannot be restored. A height scan in the observations is
+# plan step 6, a separate preset. The training target is the tiled train arena's mini stairs, risers
 # 3-9 cm, plus rough ground, slopes and discrete steps.
 # Operating point: the frozen kp80c keeper locomotion_stiff_kp80_v1
 # (run wojtek_stiff_kp80c_20260719_105503, 4.4B cumulative flat steps),

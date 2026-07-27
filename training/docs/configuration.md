@@ -128,7 +128,7 @@ All three tasks support these paths through their `default_config()`:
 | `task.env.sim_dt` | `0.004` s | Physics timestep. Keep control and simulation timing compatible; the joystick latency limit is the resulting substep count. |
 | `task.env.sim.backend` | `auto` | `auto`, `jax`, or `warp`. `auto` selects the primary MJWarp CUDA path when available and MJX/JAX otherwise; forcing Warp on an unsupported host fails loudly. Example: `+task.env.sim.backend=warp`. |
 | `task.env.sim.naconmax_per_env` | `32` | Warp contact budget per environment. See [the MJWarp report](../../docs/plans/mjwarp-phase0-report.md). |
-| `task.env.sim.njmax` | `320` | Warp constraint-row budget per world. |
+| `task.env.sim.njmax` | `320` | Warp constraint-row budget per world. Rows past it apply no force with no warning anywhere; a condim-4 contact costs ~6 rows, so this ceiling is nearer than it looks. `check-terrain` and `terrain-scan` record the peak (`nefc_max`), which is what sizes it. |
 | `task.env.sim.num_envs` | `1` | Do not set for training: `train.py` replaces it with `max(ppo.num_envs, ppo.num_eval_envs)`. Set `++ppo.num_envs` instead. |
 | `task.env.episode_length` | task-specific | Explicitly override only when PPO's `episode_length` is also understood; absent PPO override, the trainer mirrors this value. |
 | `task.env.action_scale` | `0.5` rad | Scales policy action to motor-target displacement. `joystick` additionally accepts a 3-vector `[abduction, hip, knee]` tiled over the 4 legs, giving joints different command authority (e.g. `'task.env.action_scale=[0.25,0.5,0.5]'`); `getup` and `jump` take the scalar only. |
@@ -181,6 +181,12 @@ Default actor observations are `gyro`, `gravity`, `joint_pos`, `joint_vel`,
 | `task.env.encoder.enable` | `false` | Enable per-joint encoder-zero offsets. |
 | `task.env.encoder.range` | `0.02` rad | Uniform encoder offset is in `[-range, range]`. |
 | `task.env.action_filter` | `0.0` | EMA filter strength on actions (`0` disables it). Mirror this filter on the robot if enabled during training. |
+| `task.env.terrain.enable` | `false` | Train on the terrain arena. Needs `build-terrain` first. See [Terrain curriculum](#terrain-curriculum). |
+| `task.env.terrain.arena` | `train` | Which generated arena to load: `train`, `eval` (the fixed measurement course) or `test`. Build it with `build-terrain --arena <kind>`. |
+| `task.env.terrain.spawn_yaw` | `true` | Random heading at every spawn. |
+| `task.env.terrain.pad_jitter` | `0.15` m | Spawn scatter around the pad centre. Keep it under 0.2. |
+| `task.env.terrain.init_level_frac` | `0.5` | First spawns come from the easiest half of the rows. |
+| `task.env.terrain.demote_fraction` | `0.5` | Drop a level when the episode walked less than this fraction of the distance its commands asked for over a full episode. |
 | `task.env.fall.min_height` | `0.06` m | Fall threshold. |
 | `task.env.fall.max_tilt_gz` | `-0.4` | Fall tilt threshold in body-frame gravity z. |
 | `task.env.gait.freq` | `[1.4, 3.0]` Hz | Clock frequency range from slow walking to maximum command speed. |
@@ -352,6 +358,257 @@ training run rather than being re-sampled for every episode.
   task.env.encoder.enable=true task.env.encoder.range=0.02
 ```
 
+## Terrain curriculum
+
+Joystick only, off by default. When `task.env.terrain.enable=true`:
+
+- the env loads the terrain arena instead of the flat floor,
+- every env spawns on a tile, easy rows first,
+- heights and foot contact are measured from the terrain surface, so a step
+  up is not a height error and a box top is not a fall,
+- after each episode the env moves to a harder or easier tile.
+
+Build the arena first. The files are generated and gitignored:
+
+```bash
+./training/run.sh build-terrain            # default 10-row arena, seed 0
+./training/run.sh train task=joystick ++task.env.terrain.enable=true
+```
+
+If any of the four generated files is missing, the env tells you to run
+`build-terrain`.
+
+There are three arena kinds, each with its own file set next to the robot XML:
+`train` (the shuffled curriculum arena), `eval` (the fixed measurement course,
+see [Terrain measurement suite](#terrain-measurement-suite)) and `test` (the
+test suite's scratch arena). Separate sets are what keeps a measurement or a
+test run from overwriting the arena a policy trained on.
+
+Keys under `task.env.terrain`:
+
+| Key | Default | Meaning |
+|---|---:|---|
+| `enable` | `false` | Terrain scene and curriculum on. |
+| `arena` | `train` | Which generated file set to load: `train`, `eval` or `test`. |
+| `spawn_yaw` | `true` | Random heading at every spawn. |
+| `pad_jitter` | `0.15` m | Spawn scatter around the pad centre. Keep it under 0.2: the pad is 0.6 m in radius and a standing robot needs 0.36 m of it. |
+| `init_level_frac` | `0.5` | First spawns come from the easiest half of the rows. |
+| `demote_fraction` | `0.5` | See the rule below. |
+
+The rule, from legged_gym, applied when an episode ends by fall or by
+timeout:
+
+- Walked further than half a tile: one row harder.
+- Covered less than `demote_fraction` of the distance the commands asked for
+  over a **full episode**: one row easier. The commanded distance actually
+  accumulated is scaled by `episode_length / steps_lived`, because this env
+  resamples the command mid-episode and legged_gym's literal rule (half the
+  reset command's speed times the whole episode) is not available. A timeout
+  lived the whole episode, so its threshold is unchanged; a fall at step 50 of
+  1000 gets twenty times the distance commanded so far, so almost any fall
+  demotes. That is the escape valve legged_gym has, and falling is the dominant
+  termination on terrain.
+- Standing episodes stay where they are.
+- Promotion wins when both fire, matching legged_gym's `move_down * ~move_up`.
+- Promoted while already at the top row: random row, so easy terrain stays
+  in training.
+
+Two things worth knowing about the rule:
+
+- The promote threshold is hardcoded at half a tile while demote is
+  configurable. Half a tile knows nothing about how long the obstacle is, which
+  is what bounds the stair flight at six steps: treads end 1.25 m from the tile
+  centre and promotion needs 1.5 m, so an env crosses the flight and then
+  reaches the threshold on flat ground. A longer flight needs promotion defined
+  against the feature band first.
+- Timeouts produce some spurious demotions. A perfect tracker demotes on 14 to
+  17 percent of timeout episodes because resampled command directions cancel,
+  so the commanded distance exceeds the net displacement. Harmless for drift,
+  worth remembering when reading `terrain_lvl_train`.
+- The walked distance is Euclidean while every feature is a concentric square,
+  so on a diagonal heading 1.5 m is only 1.06 m out in Chebyshev terms — tread
+  4 of 6. About a quarter of headings promote without crossing the whole
+  flight. Kept as-is because it is legged_gym's rule; the measurement scan
+  uses Chebyshev radii for exactly this reason.
+
+Each env keeps one terrain type for the whole run. Only the row changes. The
+robot is teleported between tiles. That is safe because no observation
+contains world position or heading. Observations did not change at all, so
+checkpoints stay compatible with flat runs. Letting the policy see the
+terrain ahead of it (a height scan in the observations) is a later change;
+today it walks blind and feels the ground only through its own joints.
+
+Watching it work: `terrain_lvl` in the logs comes from the eval env, which
+starts fresh at every evaluation, so it will not climb. To watch the real
+curriculum, run with `++ppo.log_training_metrics=true` and read
+`terrain_lvl_train`. Any terrain training preset should set this flag;
+`terrain_blind_v1` is the one that does.
+
+For the curriculum to ratchet at all, the envs must survive between epochs:
+the Go1 baseline's `ppo.num_resets_per_eval=10` rebuilds every env ten times
+per evaluation, and each rebuild re-randomises the level the env had climbed
+to. `train.py` therefore pins `ppo.num_resets_per_eval=0` for terrain runs
+(the evaluations still happen; epochs just run longer between resets). An
+explicit `++ppo.num_resets_per_eval` override wins over the pin.
+
+The legs collide with terrain, and there is no option to turn that off. The
+shins are what hit a riser face: without them a leg swings through the step
+wall and the foot lands on the tread, which is a way up the stairs the robot
+does not have. It costs contacts and step rate, both measured rather than
+assumed.
+
+Foot contact is a height lookup, not a contact force, and that has a blind
+band on terrain. A foot pressed against a riser face reads as airborne, and so
+does a foot on the ground within about one heightfield cell (0.04 m) of a box
+edge, where the lookup returns the box top. Both errors are one-sided and both
+land on the stair and step tiles the curriculum aims at.
+
+Warp needs a bigger contact budget. The flat default
+(`sim.naconmax_per_env=32`) is too small for terrain, and warp drops extra
+contacts silently. Warp allows four contacts per geom-heightfield pair and 22
+of the robot's geoms touch the field, so 88 heightfield contacts before any box
+contact. Measure it, on the GPU and with `--backend warp` -- the jax backend
+sizes its own buffers and never applies the budget, so a jax run cannot tell
+you what warp needs:
+
+```bash
+./training/run.sh check-terrain --backend warp --arena train
+./training/run.sh check-terrain --backend warp --arena eval   # measurement course
+./training/run.sh train task=joystick ++task.env.terrain.enable=true \
+  ++task.env.sim.naconmax_per_env=128
+```
+
+A warp terrain run warns when its budget is below that 88-contact floor, which
+the env computes from the robot's own collision set rather than from a rule of
+thumb. The floor is not a budget: boxes add to it, and the real number has to be
+measured.
+
+There is a second, quieter budget: `sim.njmax`, the constraint rows per world.
+Rows past it apply no force with no warning anywhere — no printf, no counter in
+the step — and one contact costs about 6 rows at `condim=4` with the default
+pyramidal cone, so the flat-scene 320 covers only ~50 simultaneous contacts.
+`check-terrain` and `terrain-scan` both record the peak (`nefc_max`) next to
+the contact peak; size `sim.njmax` for a training run from that measurement,
+the same way `naconmax_per_env` is sized from `nacon_max`.
+
+## Terrain measurement suite
+
+`./run.sh terrain-scan` scores a checkpoint on a fixed course and writes
+`runs/<name>/terrain_scan.json`. `report` reads that file rather than
+recomputing it, so a scan can run on the cluster and a laptop can render the
+report from it. `training/hpc/terrain_scan.slurm` is the parameterized job.
+
+```bash
+./training/run.sh build-terrain --arena eval          # 12 rows, 0.40 m pads
+./training/run.sh terrain-scan --run runs/wojtek_terrain_v2 \
+  --baseline <HF_ORGANIZATION>/wojtek-terrain-v1
+./training/run.sh terrain-scan --list-cells           # the 43 cells and bars
+```
+
+The course, per cell: spawn at the tile centre on a fixed heading, walk out
+until the base is 1.45 m from the centre (one crossing), then the commanded
+forward speed flips sign and the robot walks back to within 0.30 m (the
+second). Four crossings. A run passes when all four finish inside its step
+budget with no fall. 8 headings x 4 start offsets = 32 runs per cell and
+commanded speed, at 0.4 / 0.7 m/s: 2752 runs, about 3.1M environment steps.
+Nothing is sampled, so two scans of one checkpoint agree. A third speed, 0.2
+m/s, was measured and dropped on 2026-07-27: finishing inside the step budget
+needs 62% speed tracking, the measured policies track about 60% at 0.2, and
+every one of them scored 0 there.
+
+Those radii are **Chebyshev** distances from the tile centre — `max(|dx|, |dy|)`,
+not the Euclidean radius — because that is how the terrain is built. Every
+feature is a concentric square: the slope frustum and the stair pit are carved
+against `terrain._cheby`, and the scattered boxes are held inside a square
+reach. Read as a Euclidean radius, 1.45 m on a 45-degree heading leaves the base
+only 1.03 m out in Chebyshev — still on tread 4 of 6 — so half of the eight
+headings would complete a "crossing" without climbing the last two risers, and
+one bar would be covering two different tests.
+
+A diagonal heading therefore walks √2 as far as an axis heading to reach the
+same radius, and each run gets its own step deadline sized on its own distance.
+One shared budget would hand the axis headings that extra slack, which would
+make the speed a run has to sustain — and so the effective difficulty —
+heading-dependent. Every run has to sustain the same 62% of its commanded speed.
+
+One known limitation, accepted: at 1.45 m the base is 0.05 m from the tile
+border, so the leading feet reach 0.21 m into a neighbouring tile at the
+turnaround (0.255 m on a diagonal, where the foot corner leads). That is
+unavoidable with a six-step flight on a 3 m tile — clearing the last riser
+needs the base at 1.25 + 0.257 = 1.51 m. Which neighbour depends on the
+heading: along x it shares the row (same difficulty, different type); along y
+it is the same type one row over — a harder or easier difficulty, the worst
+case; on a diagonal it is the corner tile, which differs in both. Tiles are
+flat to within 2 cm at the border itself, but 0.21 m in the neighbour's own
+features have begun — worst case a steep inverted slope, 10 cm below grade at the
+hardest gated row and 15 cm at the frontier rows. The crossing is already scored
+when the base reaches the radius, so this is the state at the end of a leg, not
+terrain the robot had to cross.
+
+Crossings rather than distance walked, because a stair tile is 3 m across and
+its treads only occupy the band from 0.60 m to 1.25 m from the centre -- "half
+the commanded distance" can be walked on the flat pad without meeting the
+obstacle. Counting crossings also gives a failure a reason: the robot fell, or
+it never reached 1.45 m, and on a stair those are different problems.
+
+The reversal is deliberate. A 180 degree turn on a 13 cm tread might be the
+hardest thing in the suite, and the number would then measure turning instead
+of climbing. Walking backwards is inside every real preset's command box.
+
+43 cells, 18 of them gated:
+
+| Family | Cells | Bar |
+|---|---|---|
+| Rough | 1 / 2.5 / 4 cm | 95 / 80 / 60 % |
+| Slope up and down | 8 / 15 / 22 deg | 95 / 80 / 60 % |
+| Stairs up and down | 3 / 5 / 7 cm riser | 95 / 80 / 60 % |
+| Stairs up and down | 9 cm riser | tracked |
+| Steps | 2.5 / 5 / 6.5 cm | 95 / 80 / 60 % |
+| Steps | 8 cm | tracked |
+| Rubble and wave | 3 rows each | tracked |
+| Every type at difficulty 1.2 and 1.4 | 16 cells | tracked |
+
+As counts out of 32 runs the bars are 31, 26 and 20. Every threshold is
+printed with where its number came from: `plan` at 0.4 m/s, which is the only
+speed the terrain plan sets bars for, and `provisional` at 0.7, where the same
+numbers were carried across rather than invented. A provisional failure is a
+prompt to check the bar. After the first terrain keeper, measured numbers
+replace them.
+
+The 8 cm step is tracked, not gated at 60 % as the plan has it: 8 cm is 0.64 of
+this robot's 12.5 cm hip height, above the 0.5-0.6 the same document calls the
+blind limit. A 6.5 cm cell takes the 60 % bar instead. The 8 cm number is still
+measured and reported.
+
+Cell names (`pyramid_stairs_5cm`) are stable identifiers: a gate compares them
+against a baseline, so renaming one retires its history.
+
+Two gates. The absolute bars above, and the relative rule from the terrain
+plan, resized to the scan's measured noise: no cell drops more than 25 points
+against the previous keeper. The terrain plan wrote 10, but three scans of one
+checkpoint on different `--eval-seed` draws swung a single cell/speed pair by
+up to 18.75 points, so 10 fails on noise alone; the whole-course pass total
+moved only ~2% in the same test, which is where a tighter gate should live
+(2026-07-27 validation report). The
+baseline is an input, published with the keeper it came from, not a file this
+repository keeps -- a best-ever number held in the repo hides which run set the
+bar, so a rejected policy could leave a bar behind nobody can trace.
+`--baseline` takes a path, a directory holding `terrain_scan.json`, or an HF
+reference `org/name[@rev]`. Three rules keep the comparison honest: a cell the
+baseline never measured counts as nothing to compare against rather than a
+failure; a baseline from a different arena is refused, because scores from two
+terrains are not comparable; and a baseline from a different engine is refused
+until the cross-engine spread is measured, since warp is float32 with a contact
+budget and CPU MuJoCo is float64 with none.
+
+Warp on the GPU produces the reported numbers. MJX-jax is a cross-check on a
+few cells (`--backend jax --cells ...`): it has no contact budget, so a
+disagreement points at the budget. The scan records the peak `nacon` it saw and
+refuses to call an overflowed run a measurement.
+
+What the suite does not measure: it is the nominal plant only, with no pushes
+and no randomized dynamics. Robustness on terrain needs its own protocol.
+
 ## PPO configuration
 
 The baseline is `mujoco_playground.config.locomotion_params`' tuned Go1 PPO
@@ -373,7 +630,7 @@ Brax trainer):
 | `ppo.num_evals` | `10` |
 | `ppo.num_eval_envs` | `128` upstream default | Optional: not present in the baseline map, but supported by the current Brax trainer. The training env allocates for `max(num_envs, num_eval_envs)`. |
 | `ppo.num_minibatches` | `32` |
-| `ppo.num_resets_per_eval` | `10` |
+| `ppo.num_resets_per_eval` | `10` | Terrain runs pin this to 0 (`train.py`): each periodic reset rebuilds every env and re-randomises its curriculum level, so at 10 the curriculum never ratchets. An explicit override still wins. |
 | `ppo.num_timesteps` | `200000000` |
 | `ppo.num_updates_per_batch` | `4` |
 | `ppo.reward_scaling` | `1.0` |
@@ -435,6 +692,8 @@ so command-line values can still override it.
 | `stiff_ladder_kp100` | springy_phase_b | Rung 6, extending the ladder further: `pd_kp=100`/`pd_kd=2.53`, restored from the accepted kp90 rung. |
 | `locomotion_stiff_kp80_v1` | joystick | Keeper v2, safe-without-compensation: consolidated stiffness-ladder rung kp80/kd2.26 (+800M steps beyond the ladder). Self-contained; does not inherit `springy_phase_*`/`stiff_ladder_*`. |
 | `locomotion_stiff_kp90_v1` | joystick | Keeper v2, maximum stiffness (sim ceiling at the 9 Nm cap): consolidated stiffness-ladder rung kp90/kd2.40 (+800M steps beyond the ladder). Self-contained; does not inherit `springy_phase_*`/`stiff_ladder_*`. Deploy only after matching the real actuators' stand-sag alpha — see the preset file's deployment contract. |
+| `terrain_blind_v1` | joystick | Verification only — the preset the 2026-07-27 GPU validation session ran; do not launch a real terrain run from it. Terrain policies never start from a flat keeper: the family starts from scratch with the IMU in the observations, and terrain policies fine-tune from terrain policies only (family rule, 2026-07-27). This preset keeps the kp80c obs layout (no IMU) so that session could restore the kp80c checkpoint. Its measured warp budgets carry over to the real terrain preset. |
+| `terrain_blind_v2` | joystick | The terrain family's founding preset, and the one to launch a real terrain run from; `terrain_blind_v1` is its verification-only predecessor. Blind locomotion on the tiled train arena, trained from scratch with the IMU in the observations, on the flattened phase-C kp40 operating point (`stiff_phase_c`, published as `<HF_ORGANIZATION>/wojtek-stiff-locomotion-v2`). Self-contained; does not inherit `stiff_phase_c`/`locomotion_stiff_v1`. |
 
 Read the matching file in [`conf/experiment`](../wojtek_rl/conf/experiment)
 before choosing a historical version: the comments explain its intended
@@ -480,6 +739,8 @@ than infer them from a historical run name:
 | `stiff_ladder_kp100` | `wojtek_stiff_kp100` | Inherits `springy_phase_b`. Ladder rung 6: `task.env.{pd_kp,pd_kd,max_torque}={100.0,2.53,9.0}` (`pd_kd=1.6*sqrt(kp/40)`); enables `dr.joint_gains` (`gain_pct=0.2`, `kd_pct=0.2`, per-joint); `ppo.num_timesteps=400000000`. Launched with `restore=<stiff_ladder_kp90 accepted checkpoint>`; the preset itself does not set `restore`. |
 | `locomotion_stiff_kp80_v1` | `wojtek_loco_stiff_kp80_v1` | Frozen keeper, self-contained (no `springy_phase_*`/`stiff_ladder_*` inheritance): reproduces `wojtek_stiff_kp80c_20260719_105503`'s effective config verbatim — `task.env.{action_scale,pd_kp,pd_kd,max_torque,abduction_ctrl_limit,knee_target_max}={[0.25,0.5,0.5],80.0,2.26,9.0,0.44,3.15}`; `task.env.{latency,encoder}.enable=true`; `task.env.obs.include=[joint_pos,joint_vel,last_act,command]`; command/push/gait/reward blocks identical to `locomotion_stiff_v1`/`springy_phase_b`; `dr.motor_strength.enable=true` (`range=[0.5,1.1]`) and `dr.joint_gains.enable=true` (`gain_pct=0.2`, `kd_pct=0.2`); `ppo.num_timesteps=800000000` (the consolidation budget only — lineage is the `locomotion_stiff_v1` keeper (2.0B steps) → ladder rungs kp50→60→70→80 (+400M each) → this +800M consolidation, 4.4B cumulative). FROZEN from the trained run `wojtek_stiff_kp80c_20260719_105503` (job NNNNNNN, seed 1), consolidation restored from `wojtek_stiff_kp80_20260718_100225/checkpoints/000412876800`. Battery mean `track_err_rms` 0.05788 (pre-consolidation 0.06305, −8.2%); zero falls in 4/4 scenarios; max torque saturation 3.2%. Robustness grid gates 1-4 all PASS: `alpha=1.58` (uncompensated Kt miscalibration) → mean 0.0527; torque envelope `5,12` → mean 0.0579; actuator lag ≤10 ms harmless (proven on the pre-consolidation rung). Role: the safe-without-compensation keeper. Deployment must match: `pd_kp=80`/`pd_kd=2.26`/`max_torque=9.0` on the robot. |
 | `locomotion_stiff_kp90_v1` | `wojtek_loco_stiff_kp90_v1` | Frozen keeper, self-contained (no `springy_phase_*`/`stiff_ladder_*` inheritance): reproduces `wojtek_stiff_kp90c_20260719_105503`'s effective config verbatim — `task.env.{action_scale,pd_kp,pd_kd,max_torque,abduction_ctrl_limit,knee_target_max}={[0.25,0.5,0.5],90.0,2.40,9.0,0.44,3.15}`; `task.env.{latency,encoder}.enable=true`; `task.env.obs.include=[joint_pos,joint_vel,last_act,command]`; command/push/gait/reward blocks identical to `locomotion_stiff_v1`/`springy_phase_b`; `dr.motor_strength.enable=true` (`range=[0.5,1.1]`) and `dr.joint_gains.enable=true` (`gain_pct=0.2`, `kd_pct=0.2`); `ppo.num_timesteps=800000000` (the consolidation budget only — lineage is the `locomotion_stiff_v1` keeper (2.0B steps) → ladder rungs kp50→60→70→80→90 (+400M each; kp90 restored from the kp80 ladder winner, `wojtek_stiff_kp80_20260718_100225`) → this +800M consolidation, 4.8B cumulative). FROZEN from the trained run `wojtek_stiff_kp90c_20260719_105503` (job NNNNNNN, seed 1), consolidation restored from `wojtek_stiff_kp90_20260718_141500/checkpoints/000412876800`. Battery mean `track_err_rms` 0.05468 (pre-consolidation 0.059125, −7.5%); zero falls in 4/4 scenarios; max torque saturation 4.3%. Robustness grid gates 1-4 all PASS: `alpha=1.58` → mean 0.0498, turn `vel_err_overall` 0.16 (consolidation fixed the pre-consolidation rung's marginal `alpha=1.58` result — turn `vel_err_overall` 0.21-0.23 across lag 0/5/10 ms, over gate 2's 0.2 threshold); torque envelope `5,12` → mean 0.0546. kp100 (one rung further) was rejected at 5.7% saturation, over the ladder's 5% gate — kp90 is the stiffest accepted operating point at the 9 Nm cap. **DEPLOYMENT CONTRACT:** deploy ONLY after measuring the real actuators' stand-sag `alpha`; command `pd_kp/alpha`, `pd_kd/alpha`, and torque cap `9/alpha` so the physical plant matches training. `wojtek_real.urdf.xacro` and the launch file's `max_torque` MUST carry the matched values before any robot use; `HEIGHT_TABLE` must be re-measured at the matched operating point. |
+| `terrain_blind_v1` | `wojtek_terrain_blind_v1` | Self-contained (no `locomotion_stiff_kp80_v1` inheritance): repeats that keeper's operating point verbatim — `task.env.{action_scale,pd_kp,pd_kd,max_torque,abduction_ctrl_limit,knee_target_max}={[0.25,0.5,0.5],80.0,2.26,9.0,0.44,3.15}`; `task.env.{latency,encoder}.enable=true`; `task.env.obs.include=[joint_pos,joint_vel,last_act,command]`; command/push/gait/reward blocks identical to `locomotion_stiff_kp80_v1`; `dr.motor_strength.enable=true` (`range=[0.5,1.1]`) and `dr.joint_gains.enable=true` (`gain_pct=0.2`, `kd_pct=0.2`). Terrain on top: `task.env.terrain={enable:true,arena:train}`, `task.env.sim.naconmax_per_env=88` (the env's heightfield-only floor, 22 colliding geoms × 4 contacts), `task.env.sim.njmax=512` (measured: worst `nefc_max` anywhere is 228, in forced-fall states on the eval arena — 512 is 2.2× that), `ppo.log_training_metrics=true` (for `terrain_lvl_train`), `ppo.num_timesteps=800000000` (provisional — the H100 sizing session owns the real budget). Budget measurements: `docs/plans/terrain-training/2026-07-27-step5-validation-report.md`. `train.py` pins `ppo.num_resets_per_eval=0` for terrain runs; the preset does not set it. The session launched it with `restore=<kp80c keeper checkpoint>` and `XLA_PYTHON_CLIENT_PREALLOC=false`; the preset itself sets neither. Verification only: terrain policies never start from a flat keeper — the family starts from scratch with the IMU in the observations, and fine-tunes within itself (family rule, 2026-07-27). This preset predates the rule. Deployment must match: `pd_kp=80`/`pd_kd=2.26`/`max_torque=9.0` on the robot. |
+| `terrain_blind_v2` | `wojtek_terrain_blind_v2` | The terrain family's founding preset. Self-contained (no `stiff_phase_c`/`locomotion_stiff_v1` inheritance): flattens phase C's effective config, the current head of the kp40 line and the deployed flat policy (`<HF_ORGANIZATION>/wojtek-stiff-locomotion-v2`) — `task.env.{action_scale,pd_kp,pd_kd,max_torque,abduction_ctrl_limit,knee_target_max}={[0.25,0.5,0.5],40.0,1.6,9.0,0.44,3.15}`; `task.env.{latency,encoder}.enable=true`; `task.env.command.{vx,vy,wz,height,zero_prob,pure_wz_prob,pure_vy_prob,arc_prob,arc_vx}={[-0.8,1.2],[-0.5,0.5],[-1.5,1.5],[0.10,0.16],0.25,0.25,0.2,0.2,[0.3,0.8]}`; `task.env.push.vel=0.8`; `task.env.gait.{swing_height,air_time_cap}={0.08,0.35}`; `task.env.reward.{tracking_sigma,pose_leg_weight}={0.1,0.1}` and phase C's scales (`tracking_ang_vel=2.4`, `height_tracking=1.0`, the rest as in `locomotion_stiff_v1`); `dr.motor_strength.enable=true` (`range=[0.5,1.1]`) and `dr.joint_gains.enable=true` (`gain_pct=0.2`, `kd_pct=0.2`). Family obs layout: `task.env.obs.include=[gyro,gravity,joint_pos,joint_vel,last_act,command]` — the IMU is in, which makes the layout incompatible with every flat checkpoint, so the family trains from scratch and fine-tunes only from other terrain policies (family rule, 2026-07-27). Terrain on top: `task.env.terrain={enable:true,arena:train}`, `task.env.sim.naconmax_per_env=88`, `task.env.sim.njmax=512` (both measured in `docs/plans/terrain-training/2026-07-27-step5-validation-report.md`, same basis as `terrain_blind_v1`), `ppo.log_training_metrics=true` (for `terrain_lvl_train`), `ppo.num_timesteps=2000000000` (from-scratch budget at the kp40 keeper's 2.0B scale; the launch session owns the final number). No `restore`, by family rule. Launch it with `./training/run.sh build-terrain --arena train` first and `XLA_PYTHON_CLIENT_PREALLOC=false`; `train.py` pins `ppo.num_resets_per_eval=0` for terrain runs. Scan baseline: score the v2 keeper once on the eval arena before gating any terrain policy. Deployment must match: `pd_kp=40`/`pd_kd=1.6`/`max_torque=9.0` on the robot, plus the IMU wired into the policy node (CANdle-hat BMI, PR #75) and phase C's per-command height anchor. |
 
 `run_v2`'s restore path is an artifact dependency, not a guaranteed portable
 starting point. Its config comments note that the historical checkpoint no

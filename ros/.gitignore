@@ -22,11 +22,16 @@ deploy/rpi/cache/
 /src/wojtek_description/mujoco/scene_room.xml
 /src/wojtek_description/mujoco/scene_apartment.xml
 
-# Generated terrain arena (training: ./run.sh build-terrain)
+# Generated terrain arenas (training: ./run.sh build-terrain [--arena KIND]).
+# One file set per kind: train (unsuffixed), eval, test -- see paths.py.
 /src/wojtek_description/mujoco/scene_terrain.xml
+/src/wojtek_description/mujoco/scene_terrain_*.xml
 /src/wojtek_description/mujoco/terrain_hfield.bin
 /src/wojtek_description/mujoco/terrain_spec.json
 /src/wojtek_description/mujoco/terrain_lookup.npz
+/src/wojtek_description/mujoco/terrain_*_hfield.bin
+/src/wojtek_description/mujoco/terrain_*_spec.json
+/src/wojtek_description/mujoco/terrain_*_lookup.npz
 
 .policies/
 

@@ -64,6 +64,10 @@ TRAINING_ONLY_KEYS = {
     "fall",
     "gait",
     "reward",
+    # Terrain shapes the training scene, spawn, and curriculum only; it leaves
+    # the observation layout unchanged (no world position/heading reaches the
+    # actor), so nothing about it changes what the robot does with the policy.
+    "terrain",
 }
 
 # Sub-keys of `command` that define the trained command box (contract) vs

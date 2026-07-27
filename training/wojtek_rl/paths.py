@@ -30,13 +30,32 @@ def scene_manifest(name: str) -> Path:
 def scene_xml(name: str) -> Path:
     return ROOM_SCENE_XML if name == "room" else MUJOCO_DIR / f"scene_{name}.xml"
 
-# Procedural terrain arena (terrain.py -> build_terrain.py). The heightfield
-# binary must sit next to the scene XML so the MJCF file= path resolves; the
-# JSON/NPZ sidecars ride along for the terrain-aware env in the next PR.
-TERRAIN_SCENE_XML = scene_xml("terrain")
-TERRAIN_HFIELD = MUJOCO_DIR / "terrain_hfield.bin"
-TERRAIN_SPEC_JSON = MUJOCO_DIR / "terrain_spec.json"
-TERRAIN_LOOKUP_NPZ = MUJOCO_DIR / "terrain_lookup.npz"
+# Procedural terrain arenas (terrain.py -> build_terrain.py). One file set per
+# arena kind: `train` is what policies train on, `eval` is the fixed
+# measurement course, `test` belongs to the test suite. Every set sits next to
+# the robot XML, because the scene includes the robot by relative path and
+# MuJoCo resolves <hfield file=> against the robot's mesh directory -- an arena
+# written to a temporary directory does not compile. Separate sets are what
+# keeps a measurement or a test run from overwriting the arena a policy
+# trained on.
+TERRAIN_KINDS = ("train", "eval", "test")
+
+
+def terrain_paths(kind: str = "train") -> dict[str, Path]:
+    """The four generated files for one arena kind: scene XML, heightfield
+    binary, spec JSON, lookup NPZ. `train` keeps the original unsuffixed
+    names, so an arena built before the kinds existed still loads."""
+    if kind not in TERRAIN_KINDS:
+        raise ValueError(
+            f"terrain arena kind must be one of {TERRAIN_KINDS}, got {kind!r}"
+        )
+    tag = "" if kind == "train" else f"_{kind}"
+    return {
+        "scene": MUJOCO_DIR / f"scene_terrain{tag}.xml",
+        "hfield": MUJOCO_DIR / f"terrain{tag}_hfield.bin",
+        "spec": MUJOCO_DIR / f"terrain{tag}_spec.json",
+        "lookup": MUJOCO_DIR / f"terrain{tag}_lookup.npz",
+    }
 
 # Exported NumPy policy runtime (ROS-free), shared with the real robot.
 WOJTEK_POLICY_PKG = REPO_ROOT / "ros/src/wojtek_policy"

@@ -256,6 +256,12 @@ def main() -> None:
         help="keep the training env's random pushes; default is push-free, "
         "matching the battery's measurement convention",
     )
+    ap.add_argument(
+        "--flat",
+        action="store_true",
+        help="force the flat scene for a policy trained on terrain; default "
+        "renders the scene it trained on",
+    )
     args = ap.parse_args()
 
     # Imported lazily: wojtek_rl.env and wojtek_rl.train pull in brax/mjx and may
@@ -289,7 +295,10 @@ def main() -> None:
     env_cfg = dict(run.get("env_config") or {})
     if not args.push:
         env_cfg["push"] = {**env_cfg.get("push", {}), "enable": False}
+    if args.flat and "terrain" in env_cfg:
+        env_cfg["terrain"] = {**env_cfg["terrain"], "enable": False}
     env = make_env(task, env_cfg)
+    print(f"scene: {env.xml_path}")
     # run.json may carry the training host's absolute checkpoint path
     # (cluster runs); fall back to the run dir itself.
     ckpt_dir = Path(run["checkpoint_dir"])
@@ -326,7 +335,11 @@ def main() -> None:
             rng, act_rng = jax.random.split(rng)
             action, _ = inference(state.obs, act_rng)
             state = step(state, action)
-            vels.append(float(state.data.qvel[0]))
+            # Body-frame forward speed, not world qvel[0]. A terrain env spawns
+            # on a random heading, so the world-frame x velocity is not the
+            # robot's forward speed at all; on an arc it under-reads for the
+            # same reason (see battery.py's vx_err_local).
+            vels.append(float(env._local_linvel(state.data)[0]))
             torques.append(np.asarray(state.data.actuator_force))
             # The joystick env applies ctrl one step late (action_delay);
             # info holds the target the policy just issued, which is the
@@ -392,9 +405,12 @@ def main() -> None:
 
     mediapy.write_video(args.out, frames, fps=fps)
     if args.scenario:
-        print(f"scenario {args.scenario}  mean vx {np.mean(vels):+.2f}")
+        print(f"scenario {args.scenario}  mean forward vx {np.mean(vels):+.2f}")
     else:
-        print(f"commanded vx {args.x_vel:+.2f}  achieved vx {np.mean(vels):+.2f}")
+        print(
+            f"commanded vx {args.x_vel:+.2f}  achieved forward vx "
+            f"{np.mean(vels):+.2f}"
+        )
     print(f"wrote {args.out} ({len(frames)} frames)")
 
 

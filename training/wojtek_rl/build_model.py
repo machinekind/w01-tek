@@ -3,7 +3,8 @@
 Reads the original wojtek.xml, applies the training edits from the
 spec, and writes wojtek_mjx.xml plus scene_mjx.xml next to it. The
 original files stay untouched. Edits:
-  - every mesh geom stops colliding; feet get spheres, the base gets a box
+  - every mesh geom stops colliding; feet get spheres, the base gets a
+    box in two halves
   - the base gets an explicit inertial so the total mass hits a parameter
   - the 12 torque motors become PD position actuators (gain/bias overwrite,
     the same trick as 3_jaxpot_robotics/jaxpot_robotics/race_scene.py)
@@ -36,6 +37,30 @@ DEFAULT_TOTAL_MASS = 14.0
 FORCERANGE = 9.0
 # Base collision box half-sizes, eyeballed from the mesh footprint.
 BASE_BOX_HALFSIZE = (0.17, 0.08, 0.05)
+# The base collides as two boxes split across x, not as one. MJWarp caps a
+# heightfield collision at mjMAXCONPAIR = 50 contacts per geom pair and drops
+# the rest without an error. The count is real contacts, so it scales with the
+# footprint area over the 4 cm terrain cells: a full box lying on terrain
+# measured 68-100 contacts, one half about 34. Two geoms are two pairs, so each
+# half gets its own 50. The halves are pulled apart by this much so their seam
+# faces cannot both claim the same contact point.
+BASE_BOX_SEAM_GAP = 0.001
+BASE_BOX_NAMES = ("base_box_front", "base_box_rear")
+
+
+def base_box_halves():
+    """(name, x of the centre, half-sizes) for the two halves of the base box.
+
+    The outer faces stay where the single box's were; only the seam moves in.
+    """
+    hx, hy, hz = BASE_BOX_HALFSIZE
+    half_x = (hx - BASE_BOX_SEAM_GAP / 2) / 2
+    offset = hx - half_x
+    front, rear = BASE_BOX_NAMES
+    return (
+        (front, offset, (half_x, hy, hz)),
+        (rear, -offset, (half_x, hy, hz)),
+    )
 
 # Onboard forward camera (the future VLM's eyes): just past the base box's
 # front face, optical axis along body +x pitched ~15 deg down, wide FOV.
@@ -179,17 +204,18 @@ def build_spec(
                 **kw,
             )
 
-    # 3. One contact box for the base.
+    # 3. Contact boxes for the base, one per half.
     root = spec.body("root")
-    root.add_geom(
-        name="base_box",
-        type=mujoco.mjtGeom.mjGEOM_BOX,
-        size=list(BASE_BOX_HALFSIZE),
-        pos=[0, 0, 0],
-        contype=1,
-        conaffinity=15,
-        group=3,
-    )
+    for name, x, size in base_box_halves():
+        root.add_geom(
+            name=name,
+            type=mujoco.mjtGeom.mjGEOM_BOX,
+            size=list(size),
+            pos=[x, 0, 0],
+            contype=1,
+            conaffinity=15,
+            group=3,
+        )
 
     # 3b. Onboard cameras (physics-inert; rendered by room_app / eval).
     for cam in (EGO_CAM, BENCH_CAM):
@@ -200,7 +226,9 @@ def build_spec(
             quat=_xyaxes_to_quat(cam["xyaxes"]),
         )
 
-    # 4. Explicit base inertial. Box formula over the collision box dims.
+    # 4. Explicit base inertial. Box formula over the FULL base box dims: the
+    # split above is a collision detail and does not move any mass, so a half
+    # box here would silently change the dynamics of every run.
     base_mass = float(total_mass - non_base_mass)
     if base_mass <= 0:
         raise ValueError(f"total_mass {total_mass} below link mass {non_base_mass}")

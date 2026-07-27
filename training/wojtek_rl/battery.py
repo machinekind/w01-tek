@@ -258,14 +258,24 @@ def battery_scenarios():
     }
 
 
-def load_checkpoint_policy(run_dir: Path):
+def load_checkpoint_policy(run_dir: Path, *, flat: bool = True, env_overrides=None):
     """Load a run's measurement env + latest-checkpoint policy.
 
-    Shared by run_battery and report.py, so "which checkpoint is latest"
-    and "no random pushes while measuring" can't drift between the two.
-    Returns (run, env, ckpt, inf, foot_radius) where inf = jax.jit(policy).
+    Shared by run_battery, report.py and terrain_scan.py, so "which checkpoint
+    is latest" and "no random pushes while measuring" can't drift between them.
+    Returns (run, env, ckpt, inf) where inf = jax.jit(policy).
+
+    `flat` forces `terrain.enable=false`, which is the default and what the
+    fixed battery wants: its scenarios are a comparison against flat keepers,
+    and they are only comparable on the flat scene. A terrain policy still
+    measures fine there -- the terrain config shapes the training scene and
+    curriculum, not the network. Pass `flat=False` (with `env_overrides`, e.g. a
+    different arena) to measure ON terrain; that is what the terrain scan does.
+
+    `env_overrides` is merged over the run's stored env config, one level of
+    nesting deep (`{"terrain": {...}, "sim": {...}}`), after the terrain and
+    push handling above.
     """
-    from wojtek_rl.build_model import FOOT_RADIUS
     from wojtek_rl.policy_io import load_policy
     from wojtek_rl.registry import make_env
     from wojtek_rl.train import build_ppo_params
@@ -275,6 +285,21 @@ def load_checkpoint_policy(run_dir: Path):
     # stand metrics; robustness is trained, not measured here).
     env_cfg = dict(run.get("env_config") or {})
     env_cfg["push"] = {**env_cfg.get("push", {}), "enable": False}
+    if "terrain" in env_cfg:
+        if flat:
+            env_cfg["terrain"] = {**env_cfg["terrain"], "enable": False}
+    elif not flat:
+        raise ValueError(
+            f"{run_dir}/run.json has no terrain config, so it cannot be "
+            "measured on terrain (it predates terrain training)"
+        )
+    for key, value in (env_overrides or {}).items():
+        current = env_cfg.get(key)
+        env_cfg[key] = (
+            {**current, **value}
+            if isinstance(current, dict) and isinstance(value, dict)
+            else value
+        )
     env = make_env(run.get("task", "joystick"), env_cfg)
     ckpt_dir = Path(run["checkpoint_dir"])
     if not ckpt_dir.exists():
@@ -284,10 +309,10 @@ def load_checkpoint_policy(run_dir: Path):
         key=lambda p: int(p.name),
     )
     policy = load_policy(ckpt, env, build_ppo_params([], smoke=False))
-    return run, env, ckpt, jax.jit(policy), FOOT_RADIUS
+    return run, env, ckpt, jax.jit(policy)
 
 
-def rollout(env, reset, step, inf, cmd_at, n, foot_radius, seed=0):
+def rollout(env, reset, step, inf, cmd_at, n, seed=0):
     """Roll out `n` steps of `cmd_at` under `inf` in `env`.
 
     `reset`/`step` are `jax.jit(env.reset)`/`jax.jit(env.step)` -- passed in
@@ -301,6 +326,14 @@ def rollout(env, reset, step, inf, cmd_at, n, foot_radius, seed=0):
     reduces into torque/power/foot-force metrics (`actuator_force`,
     `base_accel`) -- harmless here since the battery's own scenario
     summary below only reads the fields it always has.
+
+    Heights, foot contact and foot clearance come from the env's own helpers
+    (`_base_height`, `_foot_contact`, `_foot_clearance`), so they are measured
+    from the local surface whenever the env is a terrain env. Reading raw
+    `qpos[2]` and raw geom z here is what made every number garbage on a raised
+    or lowered tile: a rollout spawned on inverted stairs at world z 0.071 with
+    a commanded height of 0.151 reads as an 8 cm height error while the robot is
+    exactly on command. On the flat scene the helpers ARE the old expressions.
 
     Returns (rec, fell_at, term): `rec` maps signal name -> np.ndarray over
     the steps taken before any fall; `fell_at` is the step index of
@@ -329,12 +362,14 @@ def rollout(env, reset, step, inf, cmd_at, n, foot_radius, seed=0):
         if float(state.done) and fell_at is None:
             fell_at = i
             term = {
-                "height": float(d.qpos[2]),
+                # Terrain-relative, so report.py classifies the fall against
+                # the same height the env terminated on.
+                "height": float(env._base_height(d)),
                 "gravity_z": float(env._gravity_body(d)[2]),
             }
             break
         gx = np.asarray(d.geom_xpos)[env._foot_geom_ids]
-        c = gx[:, 2] < foot_radius + 0.005
+        c = np.asarray(env._foot_contact(d))
         fv = np.asarray(d.sensordata)[np.asarray(env._foot_linvel_adr)]
         adr = env._sensor_adr["linear-acceleration"]
         local_linvel = np.asarray(env._local_linvel(d))
@@ -346,11 +381,11 @@ def rollout(env, reset, step, inf, cmd_at, n, foot_radius, seed=0):
         rec["cmd_wz"].append(float(cmd[2]))
         rec["wz"].append(float(np.asarray(env._gyro(d))[2]))
         rec["cmd_h"].append(float(cmd[3]))
-        rec["h"].append(float(d.qpos[2]))
+        rec["h"].append(float(env._base_height(d)))
         rec["qvel"].append(np.asarray(d.qvel[env._vadr]))
         rec["qpos"].append(np.asarray(d.qpos[env._qadr]))
         rec["contact"].append(c)
-        rec["foot_clearance"].append(gx[:, 2] - foot_radius)
+        rec["foot_clearance"].append(np.asarray(env._foot_clearance(d)))
         rec["slip"].append(float((np.square(fv[:, :2]).sum(-1) * c).sum()))
         rec["actuator_force"].append(np.asarray(d.actuator_force))
         rec["base_accel"].append(np.asarray(d.sensordata[adr : adr + 3]))
@@ -815,7 +850,8 @@ def make_lagged_rollout_fns(env, lag_tau: float, torque_envelope=None):
         )
 
         gravity = env._gravity_body(data)
-        fall = (data.qpos[2] < env._config.fall.min_height) | (
+        # Terrain-relative, matching env.py's own termination.
+        fall = (env._base_height(data) < env._config.fall.min_height) | (
             gravity[2] > env._config.fall.max_tilt_gz
         )
 
@@ -856,7 +892,7 @@ def run_battery(
     battery table half of eval_report.json (always called with the
     defaults, so that path is unaffected by this function's new params).
     """
-    run, env, ckpt, inf, foot_radius = load_checkpoint_policy(run_dir)
+    run, env, ckpt, inf = load_checkpoint_policy(run_dir)
     if alpha != 1.0:
         apply_kt_miscalibration(env.mj_model, alpha)
         env._mjx_model = mjx.put_model(env.mj_model, impl=env._backend)
@@ -884,7 +920,7 @@ def run_battery(
         "torque_envelope": list(torque_envelope) if torque_envelope else None,
     }
     for name, (cmd_at, n) in battery_scenarios().items():
-        rec, fell_at, _term = rollout(env, reset, step, inf, cmd_at, n, foot_radius)
+        rec, fell_at, _term = rollout(env, reset, step, inf, cmd_at, n)
         results[name] = scenario_result(name, rec, fell_at, env.dt, torque_cap)
     return results
 

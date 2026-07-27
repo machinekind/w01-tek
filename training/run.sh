@@ -5,7 +5,6 @@ PY=.venv/bin/python
 # Headless-render default for eval/app: egl exists only on Linux; macOS
 # must stay unset so mujoco picks its own default (cgl).
 if [[ "$(uname)" == "Linux" ]]; then export MUJOCO_GL="${MUJOCO_GL:-egl}"; fi
-
 case "${1:-}" in
   build) shift; "$PY" -m wojtek_rl.build_model "$@" ;;
   build-terrain) shift; "$PY" -m wojtek_rl.build_terrain "$@" ;;
@@ -13,11 +12,14 @@ case "${1:-}" in
   check) shift; "$PY" -m wojtek_rl.check_model_mjx "$@" ;;
   check-terrain) shift; "$PY" -m wojtek_rl.check_terrain "$@" ;;
   train) shift; "$PY" -m wojtek_rl.train "$@" ;;
+  # Heightfield contact overflow is a warp/GPU failure mode; this CPU smoke
+  # can never see it. `check-terrain --backend warp` is the gate for that.
   smoke) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.train smoke=true wandb.enable=false "$@" ;;
   eval)  shift; "$PY" -m wojtek_rl.eval "$@" ;;
   battery) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.battery "$@" ;;
   courses) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.courses "$@" ;;  # path-following benchmark
   report) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.report "$@" ;;
+  terrain-scan) shift; "$PY" -m wojtek_rl.terrain_scan "$@" ;;  # GPU-sized; --backend jax to cross-check
   export) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.export_policy "$@" ;;
   sysid) shift; "$PY" -m wojtek_rl.sysid "$@" ;;  # engine params from rosbags, docs/sysid.md
   app)   shift; MUJOCO_GL="${MUJOCO_GL:-egl}" "$PY" -m demo.app "$@" ;;

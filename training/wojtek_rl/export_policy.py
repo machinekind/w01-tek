@@ -46,9 +46,10 @@ def numpy_policy(params, obs):
 def build_env(run: dict):
     """The run's env, rebuilt for contract extraction on this host.
 
-    sim.* is training-only (deploy_contract.py), so forcing the jax backend
-    and one env changes nothing the contract reads -- and keeps the exporter
-    off warp/GPU paths.
+    sim.* and terrain are training-only (deploy_contract.py), so forcing the
+    jax backend, one env and the flat scene changes nothing the contract reads
+    -- and keeps the exporter off warp/GPU paths and off the generated arena
+    files, which the export host need not have.
     """
     from wojtek_rl.registry import make_env
 
@@ -56,6 +57,8 @@ def build_env(run: dict):
     sim = dict(env_config.get("sim", {}))
     sim.update(backend="jax", num_envs=1)
     env_config["sim"] = sim
+    if "terrain" in env_config:
+        env_config["terrain"] = {**env_config["terrain"], "enable": False}
     return make_env(run.get("task", "joystick"), env_config)
 
 

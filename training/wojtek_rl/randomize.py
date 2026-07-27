@@ -18,6 +18,7 @@ its own per-actuator sample, so weak and soft are no longer the same draw.
 
 import jax
 import jax.numpy as jnp
+import mujoco
 
 from wojtek_rl import paths
 
@@ -58,7 +59,22 @@ def make_domain_randomize(mj_model, dr_cfg=None):
     foot_cfg = _field_cfg(dr_cfg, "foot_friction")
     motor_cfg = _field_cfg(dr_cfg, "motor_strength")
 
-    floor_id = mj_model.geom("floor").id
+    # The terrain scene has no geom named "floor", only the heightfield and
+    # the boxes. One friction draw covers them all, like the one floor plane
+    # on flat.
+    try:
+        floor_id = mj_model.geom("floor").id
+        terrain_ids = None
+    except KeyError:
+        floor_id = None
+        names = [
+            mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_GEOM, i) or ""
+            for i in range(mj_model.ngeom)
+        ]
+        terrain_ids = jnp.array([
+            i for i, n in enumerate(names)
+            if n == "terrain_hfield" or n.startswith("terrain_box_")
+        ])
     root_id = mj_model.body("root").id
     foot_ids = jnp.array(
         [mj_model.geom(f"{leg}_foot_sphere").id for leg in paths.LEGS]
@@ -69,7 +85,10 @@ def make_domain_randomize(mj_model, dr_cfg=None):
         def rand(rng):
             r1, r2, r3, r4, r5 = jax.random.split(rng, 5)
             friction = jax.random.uniform(r1, minval=0.6, maxval=1.2)
-            geom_friction = model.geom_friction.at[floor_id, 0].set(friction)
+            if floor_id is not None:
+                geom_friction = model.geom_friction.at[floor_id, 0].set(friction)
+            else:
+                geom_friction = model.geom_friction.at[terrain_ids, 0].set(friction)
 
             base_scale = jax.random.uniform(r2, minval=0.7, maxval=1.3)
             link_scale = jax.random.uniform(
@@ -164,10 +183,6 @@ def make_domain_randomize(mj_model, dr_cfg=None):
 
         out = rand(rng)
 
-        in_axes = jax.tree_util.tree_map(lambda x: None, model)
-        in_axes = in_axes.tree_replace({k: 0 for k in out})
-        model = model.tree_replace(out)
-
         if foot_cfg["enable"]:
             # Equal-priority contacts take the element-wise max of the two
             # geoms' friction, so a foot draw below the floor's draw would
@@ -175,9 +190,21 @@ def make_domain_randomize(mj_model, dr_cfg=None):
             # foot's friction win outright. geom_priority is a static numpy
             # field in mjx (resolved at collision-pair setup, not under
             # jit), so it stays unbatched and is set with numpy indexing.
+            #
+            # This has to happen BEFORE in_axes is built. A static field is
+            # pytree METADATA, not a leaf, so writing it here produces a model
+            # whose treedef differs from one built off the original -- and
+            # `jax.vmap(..., in_axes=[in_axes, 0])` then rejects in_axes as
+            # "not a tree prefix of the corresponding value". That killed every
+            # run with dr.foot_friction.enable=true at wrap time; the default
+            # is off, which is why no run ever hit it.
             priority = model.geom_priority.copy()
             priority[foot_ids] = 1
             model = model.tree_replace({"geom_priority": priority})
+
+        in_axes = jax.tree_util.tree_map(lambda x: None, model)
+        in_axes = in_axes.tree_replace({k: 0 for k in out})
+        model = model.tree_replace(out)
 
         return model, in_axes
 

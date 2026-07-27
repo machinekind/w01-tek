@@ -37,10 +37,10 @@ def test_actuators_are_pd_with_forcerange():
 
 
 def test_collision_geoms_are_primitives_only():
-    # 4 foot spheres + base box + 4 legs x 4 floor-only leg primitives.
+    # 4 foot spheres + 2 base half-boxes + 4 legs x 4 floor-only leg primitives.
     m = _compiled()
     active = [i for i in range(m.ngeom) if m.geom_contype[i] != 0]
-    assert len(active) == 21
+    assert len(active) == 22
     assert all(
         m.geom_type[i] != mujoco.mjtGeom.mjGEOM_MESH for i in active
     )
@@ -49,6 +49,43 @@ def test_collision_geoms_are_primitives_only():
     leg = [i for i in active if m.geom_contype[i] == 2]
     assert len(leg) == 16
     assert all(m.geom_conaffinity[i] == 0 for i in leg)  # floor-only
+
+
+def test_base_box_is_two_halves_with_an_open_seam():
+    """Two geoms, so the MJWarp heightfield cap of 50 contacts per geom pair
+    applies to each half separately. The outer faces stay where the single
+    box's were and the seam carries a gap, so neither half claims a contact
+    the other already has."""
+    m = _compiled()
+    hx, hy, hz = build_model.BASE_BOX_HALFSIZE
+    front, rear = (m.geom(n) for n in build_model.BASE_BOX_NAMES)
+    for g in (front, rear):
+        assert np.allclose(g.size, [(hx - build_model.BASE_BOX_SEAM_GAP / 2) / 2,
+                                    hy, hz])
+        assert g.contype == 1 and g.conaffinity == 15
+        assert np.allclose(g.pos[1:], 0.0)
+    assert np.isclose(front.pos[0] + front.size[0], hx)
+    assert np.isclose(rear.pos[0] - rear.size[0], -hx)
+    seam = (front.pos[0] - front.size[0]) - (rear.pos[0] + rear.size[0])
+    assert np.isclose(seam, build_model.BASE_BOX_SEAM_GAP)
+
+
+def test_base_inertia_stays_on_the_full_box():
+    """The split is a collision detail and moves no mass. Feeding a half box
+    into the inertia formula would change the dynamics of every run with
+    nothing in the model to show for it."""
+    m = _compiled()
+    root = m.body("root")
+    lx, ly, lz = (2 * s for s in build_model.BASE_BOX_HALFSIZE)
+    mass = float(root.mass[0])
+    assert np.allclose(
+        root.inertia,
+        [
+            mass / 12 * (ly**2 + lz**2),
+            mass / 12 * (lx**2 + lz**2),
+            mass / 12 * (lx**2 + ly**2),
+        ],
+    )
 
 
 def test_timestep():

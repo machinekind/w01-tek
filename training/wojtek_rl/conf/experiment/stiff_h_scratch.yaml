@@ -1,0 +1,47 @@
+# @package _global_
+# Generation H: stiff_g_scratch minus the far-field tracking blend.
+# G's post-mortem (2026-07-26, interim probe at 681M + videos): the robot
+# deadlocks in a perfect stance under pure-spin commands. The far-field
+# term is the enabler — at wz err 0.8 it pays 0.25*exp(-0.64/2.5) ~ 19% of
+# max angular reward (~0.47/step at scale 2.4) for standing still, while
+# its far_sigma=2.5 gradient (~0.12 per rad/s) is weaker than the penalty
+# gradients any pivot attempt incurs. A cozy floor with no slope: deadlock
+# became a stable optimum. The keeper learned its pivot from scratch with
+# the SHARP kernel (far term zero at deadlock), so discovery needs no
+# far-field — pure_wz_prob 0.25 + exploration found it, and the symmetry
+# mirror now makes any discovery bilateral.
+# Otherwise identical to G: from scratch (no restore), symmetry on,
+# rotation defended (tracking_ang_vel 2.4, wz +-1.5, arcs), slow-walk
+# coverage, no foot-friction DR, 2B ceiling with plateau stopping.
+# min_delta raised 0.5 -> 1.0: G's eval noise (+-1.5) kept resetting the
+# 0.5 patience clock on noise, not signal.
+# Gate: as stiff_g_scratch (courses >= keeper everywhere it passes;
+# slalom + both pure spins complete; straight_slow >= 1.0).
+# DEPLOYMENT: kp=40 / kd=1.6 / +-9 Nm, keeper contract.
+# Usage: ./training/run.sh train +experiment=stiff_h_scratch \
+#   ++ppo.num_evals=40 seed=1
+defaults:
+  - locomotion_stiff_v1
+
+task:
+  env:
+    symmetry:
+      enable: true
+      mirror_prob: 0.5
+    command:
+      wz: [-1.5, 1.5]
+      arc_prob: 0.2
+      arc_vx: [0.3, 0.8]
+      pure_slow_prob: 0.15
+      slow_vx: [0.1, 0.35]
+
+early_stop:
+  enable: true
+  min_evals: 10
+  patience: 6
+  min_delta: 1.0
+
+ppo:
+  num_timesteps: 2000000000
+
+run_name: wojtek_stiff_h_scratch

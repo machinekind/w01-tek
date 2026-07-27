@@ -13,6 +13,19 @@ Execution is deferred to the first executor.active poll so VlmNavigator's
 blocked-detection (which snapshots executor.blocked after submit, before
 polling) keeps working unchanged.
 
+With ``local_planner=True`` (the default) a forward move is not a straight
+march any more: it is handed to the SCAN local planner (wojtek_rl.scan),
+which drives the base along an optimised, collision-checked trajectory built
+from the simulated depth channel while the robot moves. The straight-march
+path stays available (``local_planner=False``) as the A/B baseline -- it is
+the behaviour every VLM backend has been failing against, walking into
+furniture the model could not judge the distance of.
+
+Both modes book every stopped step: ``collisions`` when the oracle grid has
+an obstacle there (the metric the planner is judged on), ``off_floor`` when
+the scan simply has no floor there -- the room mesh ends before its walls do,
+and no depth camera can tell that from carpet.
+
 Two eval-only extensions over the physics app:
   - the VLM input frame is a composite: ego RGB + top-down minimap HUD;
   - an `explore` action (wojtek_eval.navigator.EvalNavigator) that walks
@@ -37,6 +50,12 @@ RENDER_W, RENDER_H = 640, 480
 MINIMAP_PX = 210
 JPEG_QUALITY = 82
 DEPTH_STRIDE = 4
+
+# Planner-driven execution: integrate the base at 20 Hz, look at 10 Hz.
+PLAN_DT = 0.05
+SENSE_EVERY = 2
+PLAN_TIMEOUT_S = 6.0      # per metre asked, plus PLAN_TIMEOUT_BASE
+PLAN_TIMEOUT_BASE_S = 6.0
 
 
 class DeferredExecutor:
@@ -75,6 +94,7 @@ class KinematicSim:
         start: tuple[float, float, float] = (0, 0, 0),
         vlm_cam: str = "ego",
         hud: bool = True,
+        local_planner: bool = True,
     ):
         import mujoco
 
@@ -118,8 +138,15 @@ class KinematicSim:
         self.resets = 0  # kinematic robots do not fall
         self.executor = DeferredExecutor(self)
         self.path_length = 0.0
+        self.collisions = 0  # steps into an oracle obstacle (the metric)
+        self.off_floor = 0   # steps off the scanned floor (holes at the scan edge)
         self.commands: list[dict] = []
+        self.scan = self._make_scan() if local_planner else None
         self.frame_dir = None  # set to a Path to save each VLM frame (media)
+        # Optional callable(sim) invoked while a move executes: the media hook
+        # the A/B runner records from (a per-decision frame is too coarse to
+        # show a robot curving around a chair).
+        self.step_hook = None
         self._frame_n = 0
         self.x, self.y, self.yaw = 0.0, 0.0, 0.0
         self.reset(start)
@@ -133,9 +160,31 @@ class KinematicSim:
         self.x, self.y, self.yaw = float(x), float(y), float(yaw)
         self._sync_model()
         self.omap.mark_pose(self.x, self.y)
+        if getattr(self, "scan", None) is not None:
+            self.scan.reset()
 
     def pose(self) -> tuple[float, float, float]:
         return (self.x, self.y, self.yaw)
+
+    def _make_scan(self):
+        from wojtek_rl.scan.stack import ScanStack
+
+        return ScanStack(self.model, self.data, dt=PLAN_DT)
+
+    def _count_stop(self, x: float, y: float) -> None:
+        """Book a stopped step: an obstacle hit, or the edge of the scan.
+
+        The oracle grid is not free either where an (inflated) obstacle sits
+        or where the scan simply has no floor -- the room mesh ends before
+        the walls do. Only the first is a collision the planner should be
+        judged on; the second is a hole in the ground truth that no depth
+        camera can distinguish from carpet.
+        """
+        cell = self.grid.world_to_cell(x, y)
+        if self.grid.occ[cell]:
+            self.collisions += 1
+        else:
+            self.off_floor += 1
 
     def _sync_model(self) -> None:
         q = self._home_qpos.copy()
@@ -171,6 +220,8 @@ class KinematicSim:
         rec = {"cmd": type(cmd).__name__.lower(), "pose0": self.pose(), "blocked": False}
         if isinstance(cmd, Turn):
             self.yaw = (self.yaw + cmd.angle_rad + math.pi) % (2 * math.pi) - math.pi
+        elif self.scan is not None and isinstance(cmd, Forward):
+            rec["blocked"], rec["plan"] = self._execute_planned(cmd)
         else:
             sign = -1.0 if isinstance(cmd, Backward) else 1.0
             remaining = cmd.meters
@@ -182,12 +233,16 @@ class KinematicSim:
                 ny = self.y + dy * (step / SUBSTEP_M)
                 if not self.grid.is_free(nx, ny):
                     self.executor.blocked += 1
+                    self._count_stop(nx, ny)
                     rec["blocked"] = True
                     break
                 self.x, self.y = nx, ny
                 self.path_length += step
                 remaining -= step
                 self.omap.mark_pose(self.x, self.y)
+                if self.step_hook is not None and int(remaining / SUBSTEP_M) % 8 == 0:
+                    self._sync_model()
+                    self.step_hook(self)
         self._sync_model()
         rec["pose1"] = self.pose()
         self.commands.append(rec)
@@ -245,5 +300,55 @@ class KinematicSim:
             Image.fromarray(img).save(path)
         return img
 
+    def _execute_planned(self, cmd) -> tuple[bool, str]:
+        """Roll a forward command out through the SCAN planner.
+
+        Look at 10 Hz, replan at 10 Hz, integrate the commanded body velocity
+        at 20 Hz. The oracle grid is consulted only as *physics*: a step into
+        a non-free cell stops the move and is booked by _count_stop, which is
+        what makes the A/B against the straight march meaningful.
+        """
+        ex = self.scan.executor
+        ex.clear()
+        ex.submit(cmd)
+        deadline = PLAN_TIMEOUT_BASE_S + PLAN_TIMEOUT_S * cmd.meters
+        t, tick, blocked = 0.0, 0, False
+        while ex.active and t < deadline:
+            if tick % SENSE_EVERY == 0:
+                self.scan.sense(self.x, self.y)
+            vx, vy, wyaw = ex.update(self.x, self.y, self.yaw)
+            if not self._integrate_base(vx, vy, wyaw):
+                blocked = True
+                break
+            if self.step_hook is not None and tick % 4 == 0:
+                self.step_hook(self)
+            t += PLAN_DT
+            tick += 1
+        status = ex.status()
+        note = f"{status['plan']}:{status['plan_note']}"
+        if ex.active:  # ran out of time
+            blocked = True
+        if blocked:
+            self.executor.blocked += 1
+        ex.clear()
+        return blocked, note
+
+    def _integrate_base(self, vx: float, vy: float, wyaw: float) -> bool:
+        """Kinematic base step; False on a collision with the oracle grid."""
+        c, s = math.cos(self.yaw), math.sin(self.yaw)
+        nx = self.x + (c * vx - s * vy) * PLAN_DT
+        ny = self.y + (s * vx + c * vy) * PLAN_DT
+        if not self.grid.is_free(nx, ny):
+            self._count_stop(nx, ny)
+            return False
+        self.path_length += math.hypot(nx - self.x, ny - self.y)
+        self.x, self.y = nx, ny
+        self.yaw = (self.yaw + wyaw * PLAN_DT + math.pi) % (2 * math.pi) - math.pi
+        self._sync_model()
+        self.omap.mark_pose(self.x, self.y)
+        return True
+
     def close(self) -> None:
         self._renderer.close()
+        if self.scan is not None:
+            self.scan.close()

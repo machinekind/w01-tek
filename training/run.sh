@@ -27,6 +27,7 @@ case "${1:-}" in
   build-room)  shift; "$PY" -m wojtek_rl.build_room "$@" ;;
   room)  shift; "$PY" -m wojtek_rl.room_app "$@" ;;  # GL backend picked per-OS in room_app
   grid)  shift; "$PY" -m wojtek_eval.gridmap "$@" ;;
+  scan-bench) shift; MUJOCO_GL="${MUJOCO_GL:-$([ "$(uname)" = Linux ] && echo egl || echo cgl)}" "$PY" -m wojtek_rl.scan_bench "$@" ;;  # SCAN local planner A/B
   nav-eval) shift; MUJOCO_GL="${MUJOCO_GL:-$([ "$(uname)" = Linux ] && echo egl || echo cgl)}" "$PY" -m wojtek_eval.runner "$@" ;;
   nav-episode) shift; MUJOCO_GL="${MUJOCO_GL:-$([ "$(uname)" = Linux ] && echo egl || echo cgl)}" "$PY" -m wojtek_rl.nav_episode "$@" ;;  # headless VLM goal runner
   # tests/unit is model-free by construction: no env instantiation, no

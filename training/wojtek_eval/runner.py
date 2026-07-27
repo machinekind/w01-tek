@@ -65,6 +65,9 @@ async def _run_episode(ep: Episode, client, out_dir: Path, save_frames: bool,
         "final_pose": sim.pose(), "path_length": sim.path_length,
         "trail": [(round(x, 2), round(y, 2)) for x, y in sim.omap.trail],
         "steps": status["step"], "blocked": sim.executor.blocked,
+        # What the local planner is supposed to change: steps into an
+        # obstacle (off_floor is the scan's own missing floor, not a hit).
+        "collisions": sim.collisions, "off_floor": sim.off_floor,
         "failures": failures, "wall_s": time.monotonic() - t0,
         "history": getattr(nav, "history", []),
     }
@@ -137,8 +140,21 @@ def main(argv=None) -> None:
     p.add_argument("--vlm-url", default=None, help="futurenav backend: action server URL")
     p.add_argument("--vlm-cam", choices=("ego", "bench"), default="ego",
                    help="camera the VLM sees (bench = VLN-CE-style 1.25 m mast)")
+    p.add_argument(
+        "--no-local-planner",
+        action="store_true",
+        help="execute forward commands as straight marches instead of routing "
+        "them through the SCAN local planner (pre-SCAN baseline)",
+    )
     p.add_argument("--no-hud", action="store_true",
                    help="clean frames without the minimap HUD (futurenav never saw HUDs)")
+    p.add_argument(
+        "--suite",
+        type=Path,
+        default=None,
+        help="reuse an episodes.json from a previous run verbatim instead of "
+        "generating (the only way two scoreboards are comparable)",
+    )
     p.add_argument("--scenes", nargs="+", default=["room", "apartment"])
     p.add_argument("--per-task", type=int, default=6, help="episodes per task type per scene")
     p.add_argument("--sample-frac", type=float, default=1.0,
@@ -156,17 +172,26 @@ def main(argv=None) -> None:
     args = p.parse_args(argv)
 
     episodes: list[Episode] = []
-    for scene in args.scenes:
-        episodes += generate(scene, args.per_task, seed=args.seed)
+    if args.suite:
+        from wojtek_eval.episodes import episodes_from_json
+
+        episodes = episodes_from_json(args.suite.read_text())
+        logger.info(f"loaded {len(episodes)} episodes verbatim from {args.suite}")
+    else:
+        for scene in args.scenes:
+            episodes += generate(scene, args.per_task, seed=args.seed)
     rng = np.random.default_rng(args.seed)
     if args.sample_frac < 1.0:
         k = max(1, int(len(episodes) * args.sample_frac))
         episodes = list(rng.choice(episodes, size=k, replace=False))
     if args.max_episodes:
         episodes = episodes[: args.max_episodes]
-    spoken_idx = rng.random(len(episodes)) < args.spoken_frac
-    for ep, sp in zip(episodes, spoken_idx):
-        ep.spoken = bool(sp)
+    if args.suite:
+        spoken_idx = np.array([e.spoken for e in episodes])
+    else:
+        spoken_idx = rng.random(len(episodes)) < args.spoken_frac
+        for ep, sp in zip(episodes, spoken_idx):
+            ep.spoken = bool(sp)
     logger.info(f"{len(episodes)} episodes ({int(spoken_idx.sum())} spoken) "
                 f"across {args.scenes}")
 
@@ -181,7 +206,11 @@ def main(argv=None) -> None:
 
     import os
 
-    sim_kwargs = {"vlm_cam": args.vlm_cam, "hud": not args.no_hud}
+    sim_kwargs = {
+        "vlm_cam": args.vlm_cam,
+        "hud": not args.no_hud,
+        "local_planner": not args.no_local_planner,
+    }
 
     if args.backend == "futurenav":
         from wojtek_rl.futurenav_nav import DEFAULT_FUTURENAV_URL, FutureNavVlmClient

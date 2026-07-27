@@ -1,6 +1,8 @@
 """Turn a rollout into a score: physical normalizers, weakest-link min,
 completion gate. See the package docstring for the full rationale."""
 
+import math
+
 import numpy as np
 
 from wojtek_rl.battery import vibration_index
@@ -27,6 +29,52 @@ def _ratio(reference, error):
     """`reference / error`, error floored at 1e-9 and the result capped at
     SUBSCORE_CAP so a near-perfect axis stays finite. Higher is better."""
     return round(float(min(SUBSCORE_CAP, reference / max(float(error), 1e-9))), 3)
+
+
+def gait_metrics(rec) -> dict:
+    """Swing-apex and touchdown-softness KPIs from per-foot clearance/vz.
+
+    Reported metrics only — deliberately NOT sub-scores, so the frozen
+    min-of-five score stays comparable across every battery ever run.
+    A swing is a contiguous airborne run (clearance > 5 mm ground band);
+    its apex is the peak clearance, its touchdown speed the downward foot
+    speed on the last airborne step. Softness normalizes touchdown speed
+    by the free-fall speed from that swing's own apex (sqrt(2 g apex)):
+    1.0 falls like a brick from its peak, lower glides in.
+    """
+    clear = np.asarray(rec["foot_clear"], dtype=float)  # (steps, 4)
+    vz = np.asarray(rec["foot_vz"], dtype=float)
+    apexes, tds, softness = [], [], []
+    for f in range(clear.shape[1]):
+        airborne = clear[:, f] > 0.005
+        t = 0
+        n = len(airborne)
+        while t < n:
+            if not airborne[t]:
+                t += 1
+                continue
+            start = t
+            while t < n and airborne[t]:
+                t += 1
+            if t >= n or t - start < 2:  # truncated or 1-step blip
+                continue
+            apex = float(clear[start:t, f].max())
+            if apex < 0.005:
+                continue
+            td = max(0.0, -float(vz[t - 1, f]))  # downward, pre-contact
+            apexes.append(apex)
+            tds.append(td)
+            v_ff = math.sqrt(2.0 * 9.81 * apex)
+            softness.append(td / v_ff if v_ff > 0 else 0.0)
+    if not apexes:
+        return {}
+    return {
+        "swing_apex_med_m": round(float(np.median(apexes)), 4),
+        "swing_apex_p90_m": round(float(np.percentile(apexes, 90)), 4),
+        "swings": len(apexes),
+        "touchdown_v_med": round(float(np.median(tds)), 3),
+        "touchdown_softness_med": round(float(np.median(softness)), 3),
+    }
 
 
 def seed_result(rec, info, dt) -> dict:
@@ -77,6 +125,16 @@ def seed_result(rec, info, dt) -> dict:
         "vibration": round(vib, 4),
         "duration_s": round(n * dt, 2),
     }
+    if "foot_clear" in rec and len(rec["foot_clear"]):
+        gait = gait_metrics(rec)
+        # constant key set so aggregate() can median across seeds
+        raw.update({
+            "swing_apex_med_m": gait.get("swing_apex_med_m", 0.0),
+            "swing_apex_p90_m": gait.get("swing_apex_p90_m", 0.0),
+            "swings": gait.get("swings", 0),
+            "touchdown_v_med": gait.get("touchdown_v_med", 0.0),
+            "touchdown_softness_med": gait.get("touchdown_softness_med", 0.0),
+        })
     subs = {
         "tracking": _ratio(STANCE_HALFWIDTH_M, raw["xte_rms_m"]),
         "speed": _ratio(v_ref, v_err) if v_ref > 0 else SUBSCORE_CAP,

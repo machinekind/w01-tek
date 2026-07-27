@@ -197,7 +197,8 @@ def make_domain_randomize(mj_model, dr_cfg=None):
             # `jax.vmap(..., in_axes=[in_axes, 0])` then rejects in_axes as
             # "not a tree prefix of the corresponding value". That killed every
             # run with dr.foot_friction.enable=true at wrap time; the default
-            # is off, which is why no run ever hit it.
+            # is off, which is why no run ever hit it. (Only the jax backend
+            # treats the field as metadata; the warp backend is unaffected.)
             priority = model.geom_priority.copy()
             priority[foot_ids] = 1
             model = model.tree_replace({"geom_priority": priority})

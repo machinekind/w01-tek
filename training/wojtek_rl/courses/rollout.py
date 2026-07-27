@@ -113,7 +113,7 @@ def course_rollout(env, reset, step, inf, course, foot_radius, seed=0, renderer=
 
     rec = {
         "xy": [], "s": [], "xte": [], "cmd_v": [], "v_fwd": [], "v_planar": [],
-        "h": [], "qvel": [], "slip_speed": [],
+        "h": [], "qvel": [], "slip_speed": [], "foot_clear": [], "foot_vz": [],
     }
     fell_at, completed, pushed = None, False, course.push_at_m is None
     frames = []
@@ -163,6 +163,10 @@ def course_rollout(env, reset, step, inf, course, foot_radius, seed=0, renderer=
         rec["slip_speed"].append(
             float((np.linalg.norm(fv[:, :2], axis=-1) * contact).sum())
         )
+        # Gait shape KPIs (scoring.gait_metrics): per-foot clearance and
+        # vertical foot speed, for swing-apex and touchdown-softness stats.
+        rec["foot_clear"].append(gx[:, 2] - foot_radius)
+        rec["foot_vz"].append(fv[:, 2].copy())
         if renderer is not None and i % render_every == 0:
             render_data.qpos[:] = np.asarray(d.qpos)
             mujoco.mj_forward(mj_model, render_data)

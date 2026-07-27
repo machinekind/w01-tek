@@ -1,0 +1,57 @@
+# @package _global_
+# Generation G: from-scratch training of the full courses-fix stack. The
+# 2026-07-26 fine-tune ladder (d_grip/e/f/f2, all restored from the stiff_b
+# keeper) established that a converged checkpoint cannot acquire NEW
+# capabilities: its exploration noise has annealed away, so the pivot the
+# keeper never had (right spin) is unreachable, and even the marginal left
+# pivot erodes unless rotation is actively defended (phase_c kept it with
+# tracking_ang_vel 2.4 + arcs; the stock-weight fine-tunes lost it).
+# G therefore trains from scratch — no restore — so exploration is alive
+# while:
+# - symmetry mirror augmentation makes every discovery bilateral,
+# - reward.tracking_far_weight keeps a gradient toward far-off commands,
+# - phase_c's rotation stack (tracking_ang_vel 2.4, wz +-1.5, arc_prob)
+#   keeps turning profitable for the whole run,
+# - pure_slow_prob covers the slow-gait axis.
+# Height command stays frozen at 0.125 (phase_c's live height needs ROS
+# changes; out of scope). No foot-friction DR: unobservable low-mu DR
+# provably teaches pivot-avoidance (d/e/f post-mortems); the mu axis waits
+# for an adaptation-capable iteration.
+# Budget: 2B-step ceiling with reward-plateau early stopping; launch with
+# ++ppo.num_evals=40 so the plateau check runs every 50M steps.
+# Gate against the keeper (courses battery): every keeper-passing course
+# >= keeper; slalom completes; both pure spins complete; straight_slow >=
+# 1.0; slippery at keeper level is acceptable.
+# DEPLOYMENT: kp=40 / kd=1.6 / +-9 Nm, same contract as the keeper.
+# Usage: ./training/run.sh train +experiment=stiff_g_scratch \
+#   ++ppo.num_evals=40 seed=1
+defaults:
+  - locomotion_stiff_v1
+
+task:
+  env:
+    symmetry:
+      enable: true
+      mirror_prob: 0.5
+    command:
+      wz: [-1.5, 1.5]
+      arc_prob: 0.2
+      arc_vx: [0.3, 0.8]
+      pure_slow_prob: 0.15
+      slow_vx: [0.1, 0.35]
+    reward:
+      tracking_far_weight: 0.25
+      tracking_far_sigma: 2.5
+      scales:
+        tracking_ang_vel: 2.4
+
+early_stop:
+  enable: true
+  min_evals: 10
+  patience: 6
+  min_delta: 0.5
+
+ppo:
+  num_timesteps: 2000000000
+
+run_name: wojtek_stiff_g_scratch

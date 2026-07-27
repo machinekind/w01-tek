@@ -46,14 +46,26 @@ HEIGHT_TABLE = (0.084, 0.094, 0.106, 0.121, 0.139, 0.160, 0.182)
 DSECOND_TABLE = (-0.45, -0.30, -0.15, 0.0, 0.15, 0.30, 0.45)
 
 
-def height_anchor(home_ctrl, height, ctrl_low, ctrl_high):
+def height_anchor(home_ctrl, height, ctrl_low, ctrl_high, table=None):
     """Ctrl anchor for a commanded standing height (env.py _height_ctrl).
 
     Clipped to the model ctrlrange only; training clips the anchor+action
     sum to the (narrower) target bounds afterwards, so the anchor itself
     may sit above target_high and the order of the two clips matters.
+
+    `table` is the policy's own height->dsecond mapping from
+    policy_meta.json ("height_table", schema 2), exported from the env the
+    policy trained in. Policies trained with real_pose_ref calibrate a
+    kinematic table that differs from the legacy module-level copy below;
+    anchoring them with the wrong table shifts every live-height stance by
+    the calibration sag. The legacy copy remains the fallback for metas
+    published before the field existed.
     """
-    dsecond = np.interp(height, HEIGHT_TABLE, DSECOND_TABLE)
+    heights, dsecond_tbl = (
+        (table["heights"], table["dsecond"]) if table
+        else (HEIGHT_TABLE, DSECOND_TABLE)
+    )
+    dsecond = np.interp(height, heights, dsecond_tbl)
     offset = np.tile(np.array([0.0, 1.0, 2.0]), 4) * dsecond
     return np.clip(home_ctrl + offset, ctrl_low, ctrl_high).astype(np.float32)
 
@@ -203,7 +215,8 @@ class WojtekPolicy:
             if height != self._anchor_height:
                 self._anchor_height = height
                 self.anchor_ctrl = height_anchor(
-                    self.home_ctrl, height, self.ctrl_low, self.ctrl_high
+                    self.home_ctrl, height, self.ctrl_low, self.ctrl_high,
+                    table=self.meta.get("height_table"),
                 )
         obs = self._assemble_obs(gyro, gravity_body, joint_pos, joint_vel, command)
         self.last_obs = obs

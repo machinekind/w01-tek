@@ -1,0 +1,28 @@
+# @package _global_
+# Phase E: low-friction DR alone, on the kp40 stiff keeper. One knob:
+# dr.foot_friction enabled and widened to [0.45, 1.4] (effective contact
+# mu ~0.4-1.26 -- the range multiplies the feet's 0.9, and enabling the
+# field also gives feet contact priority so the draw actually reaches the
+# contact; with it disabled the keeper trained on effective mu [0.9, 1.2]
+# only, see the max-combining note in randomize.py). feet_slip stays at
+# the keeper's -0.35: wojtek_stiff_d_grip_20260726 showed a flat -1.0
+# suppresses rotation and slow walking outright, so the DR knob must be
+# measured on its own before any slip-weight change (its effect was
+# unattributable in that coupled run).
+# Gate against the keeper: circle_r1_slippery and straight_slippery up;
+# no turning course lost; battery vel_err within ~10%; vibration stable;
+# record ang_vel_err_spin / ang_vel_err_spin_right.
+# DEPLOYMENT unchanged from the keeper: kp=40 / kd=1.6 / +-9 Nm.
+# Launched with restore=<keeper checkpoint>; this preset does not set
+# restore.
+# Usage: ./training/run.sh train +experiment=stiff_phase_e_friction restore=runs/wojtek_stiff_b_keeper/checkpoints/000825753600
+defaults:
+  - locomotion_stiff_v1
+
+dr:
+  foot_friction: { enable: true, range: [0.45, 1.4] }
+
+ppo:
+  num_timesteps: 400000000
+
+run_name: wojtek_stiff_e_friction

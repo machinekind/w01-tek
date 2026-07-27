@@ -61,7 +61,7 @@ def terrain_paths(kind: str = "train") -> dict[str, Path]:
 WOJTEK_POLICY_PKG = REPO_ROOT / "ros/src/wojtek_policy"
 # Default policy reference for sim/demo apps: any form accepted by
 # wojtek_policy.policy_source (HF repo id, local dir, path to policy.npz).
-DEFAULT_POLICY = "<HF_ORGANIZATION>/wojtek-springy-locomotion"
+DEFAULT_POLICY = "<HF_ORGANIZATION>/wojtek-stiff-height-locomotion"
 
 # URDF <-> MuJoCo affine joint map, shared with the ROS nodes (sysid bag
 # reader converts recorded signals with the exact same table).

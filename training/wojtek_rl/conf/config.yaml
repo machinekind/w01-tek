@@ -33,6 +33,19 @@ wandb:
   enable: true
   project: fbb-locomotion
 
+# Reward-plateau early stopping, off by default. Checked at every PPO eval:
+# once `min_evals` evals have run, stop when no eval has beaten the best
+# reward so far by more than `min_delta` within the last `patience` evals.
+# Aborting mid-train is safe: brax saves a checkpoint at every eval, so the
+# latest checkpoint IS the early-stopped policy; run.json records the stop.
+# Give the run enough evals to make this meaningful (e.g. ++ppo.num_evals=40
+# on a 2B-step ceiling checks every 50M steps).
+early_stop:
+  enable: false
+  min_evals: 10 # never stop before this many evals
+  patience: 6 # evals without a new best before stopping
+  min_delta: 0.5 # reward improvement below this does not count as a new best
+
 # Free-form overrides applied onto the tuned playground Go1 PPO config,
 # after the task's own ppo block (so CLI ppo.foo=... wins).
 ppo: {}

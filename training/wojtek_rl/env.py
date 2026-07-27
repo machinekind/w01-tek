@@ -12,6 +12,7 @@ from ml_collections import config_dict
 from mujoco import mjx
 from mujoco_playground._src import mjx_env
 
+from wojtek_rl import paths
 from wojtek_rl import terrain_env
 from wojtek_rl.base import ABDUCTION_ACTUATORS, KNEE_ACTUATORS, WojtekEnv
 
@@ -60,6 +61,21 @@ def default_config() -> config_dict.ConfigDict:
         # (wojtek_real.urdf.xacro kp/kd).
         pd_kp=0.0,
         pd_kd=0.0,
+        # Judge the REAL pose, not the set one (off = legacy tables,
+        # bit-identical). Legacy pose/stand_still/reset compare measured
+        # joints against COMMANDED ctrl targets, so any PD sag becomes a
+        # penalty floor the policy cannot remove (0.343 rad summed on the
+        # kp40 plant, ~97% of its standing residual) — and HEIGHT_TABLE
+        # itself was settled at kp20/kd1, so the height mapping drifts on
+        # every other plant. With this flag the env settles a QUASI-RIGID
+        # copy of the model (kp 2000, torque unclamped) once per rung at
+        # construction: the result is the KINEMATIC standing family — a
+        # pure function of the robot's geometry, identical for every
+        # pd_kp/pd_kd/max_torque — used as the height mapping and as the
+        # pose/stand_still/reset reference. Compensating the actual
+        # plant's sag to reach that pose is the policy's job. Motor-target
+        # centering stays in ctrl space.
+        real_pose_ref=False,
         # Clamp the 4 abduction actuators' ctrlrange to +-this many rad
         # (0 = keep the model's +-pi). The mechanical hip travel exceeds this,
         # so once set the software clamp is the binding limit, not the joint
@@ -129,6 +145,23 @@ def default_config() -> config_dict.ConfigDict:
             # overrides them) and before zeroing (standing still wins).
             arc_prob=0.0,
             arc_vx=(0.3, 0.8),
+            # With this prob command a clean slow straight walk: vx redrawn
+            # from slow_vx, vy and wz zeroed. Same fix family as pure_wz/
+            # pure_vy/arc — the uniform box rarely draws a slow forward
+            # command uncontaminated by lateral/yaw, so the gait never
+            # learns to scale down (courses: straight_slow 0.69 vs 1.24
+            # fast). Applied after arc and before zeroing.
+            pure_slow_prob=0.0,
+            slow_vx=(0.1, 0.35),
+            # With this prob command a clean fast straight walk: vx redrawn
+            # from fast_vx, vy and wz zeroed. Same fix family as slow —
+            # the uniform box serves vx > arc_vx contaminated with random
+            # vy/wz, which product-gated tracking prices at ~0, so clean
+            # fast walking is never profitable and the policy deadlocks at
+            # commands past the arc range (H4: 0.70 m/s at cmd 0.8, 0.00
+            # at cmd 1.0). Applied after slow and before zeroing.
+            pure_fast_prob=0.0,
+            fast_vx=(0.8, 1.2),
         ),
         push=config_dict.create(enable=True, interval_steps=200, vel=0.4),
         action_delay=1,  # control steps of latency between policy and motors
@@ -178,11 +211,33 @@ def default_config() -> config_dict.ConfigDict:
         # noise-driven standing limit cycle structurally; mirror the same
         # one-liner on the robot when deploying a policy trained with it.
         action_filter=0.0,
+        # Left/right mirror augmentation: with mirror_prob, an env presents
+        # the policy a laterally mirrored world (obs mirrored on the way
+        # out, actions un-mirrored on the way in; physics, rewards and
+        # termination stay in the real frame). Everything learned about one
+        # side then transfers to the other by construction — the fix for
+        # one-sided emergent collapses (stiff_b's dead right spin). Sampled
+        # at reset; under the brax auto-reset wrapper the flag is fixed per
+        # env for the whole run, like latency above. Training-only: the
+        # deployed policy always sees real observations.
+        symmetry=config_dict.create(enable=False, mirror_prob=0.5),
         # NOTE: design standing height is ~0.10 m (Task 3 correction); the
         # plan's original 0.10 min_height would terminate almost every step.
+        # max_toggle_deg (0 = off): terminate when any leg's four-bar
+        # toggle angle — the interior angle between sixth_link and
+        # foot_link, 180 deg = links collinear = branch crossing — exceeds
+        # this. A STATE-based guard replacing the knee_target_max command
+        # clamp (owner design, 2026-07-27): the same knee target can sit at
+        # toggle 14 deg (coordinated extension, measured safe to the full
+        # 0.212 m stance) or 177 deg (hip left behind), so the command
+        # never was the danger variable. Measured envelope: every healthy
+        # behavior <= ~14 deg; crossing at 180. Termination teaches
+        # avoidance like fall avoidance — no deployment clamp parity
+        # needed (the driver may keep an independent last-resort limit).
         fall=config_dict.create(
             min_height=0.06,
             max_tilt_gz=-0.4,
+            max_toggle_deg=0.0,
             # Terrain only: also end the episode when any base chessboard
             # cell is analytically down on the terrain (height lookup, not
             # contact forces). A lying robot is the expensive simulation
@@ -213,6 +268,56 @@ def default_config() -> config_dict.ConfigDict:
         ),
         reward=config_dict.create(
             tracking_sigma=0.25,
+            # Far-field mix-in for the two velocity tracking kernels
+            # (weight 0 = off, exact legacy kernel). exp(-err^2/sigma) is
+            # gradient-free once the error is a few sigma out, so a
+            # capability the policy never explored (stiff_b's right spin)
+            # gets no pull toward the command at all; blending in a wider
+            # second exponential keeps a usable gradient at range while
+            # the optimum and the [0, 1] bound stay unchanged.
+            tracking_far_weight=0.0,
+            tracking_far_sigma=2.5,
+            # Height band of the feet_landing penalty: downward foot speed
+            # is penalized proportionally to how far INSIDE this clearance
+            # band the foot is (1 at the floor, 0 at glide_height and
+            # above), so the gradient reads "decelerate as you approach".
+            # Measured pre-contact, unlike an at-contact penalty which
+            # under-reads hard hits at ctrl_dt granularity (the solver has
+            # already absorbed the impact by the step contact is seen).
+            glide_height=0.03,
+            # Per-swing apex target for the feet_apex reward, m. high_step
+            # pays AVERAGE clearance per airborne step, so a long 2 cm skim
+            # collects nearly as much as a crisp arc and the optimizer
+            # skims (H5b: 1.5-2 cm median apex). feet_apex instead pays,
+            # once per swing at touchdown, how close the swing's PEAK got
+            # to this target — pricing the apex itself.
+            apex_target=0.05,
+            # Relative velocity-tracking error (off = legacy absolute).
+            # The absolute kernel pays only within ~sqrt(sigma) of the
+            # target regardless of the target's size, so fast commands put
+            # the whole reward cliff out of exploration's reach (H2:
+            # completes wz 0.8 pivots but deadlocks at wz 1.2 — spinning
+            # at its proven 0.8 under a 1.2 command would earn only 0.20).
+            # Relative mode divides the error by the commanded magnitude
+            # (floored below, so zero commands stay well-defined): 80% of
+            # target pays the same at every speed. tracking_rel_sigma is
+            # dimensionless, calibrated so the keeper's measured operating
+            # points (vel_err 0.071 on ramp, wz err 0.13 on turn) score
+            # within a few percent of the absolute kernel.
+            tracking_relative=False,
+            tracking_rel_sigma=0.25,
+            tracking_rel_floor_lin=0.3,  # m/s
+            tracking_rel_floor_ang=0.4,  # rad/s
+            # Multiplicative velocity tracking (off = legacy additive).
+            # Additive tracking pays the easy half of a command: a robot
+            # that deadlocks under a pure-spin command still earns the
+            # FULL tracking_lin_vel (its commanded linear velocity is 0
+            # and standing still "tracks" it perfectly) — 4.0/step in the
+            # stiff presets, which makes ignoring rotation profitable.
+            # With tracking_product both terms are gated by the product of
+            # the two kernels: full pay only when the WHOLE command is
+            # tracked; a deadlocked spin earns ~0.
+            tracking_product=False,
             phase_sigma=0.002,
             height_sigma=1e-3,  # m^2: 1 cm err -> 0.90, 3 cm -> 0.41
             # Pose anchors to the commanded-height stance; leg joints get a
@@ -242,6 +347,21 @@ def default_config() -> config_dict.ConfigDict:
                 pose=-0.5,
                 feet_air_time=2.0,
                 feet_slip=-0.25,
+                # Soft-landing shaping: downward foot speed^2 within
+                # glide_height of the floor (see glide_height above). 0 =
+                # off; a policy trained with it glides feet into stance
+                # instead of striking the floor at swing free-fall speed.
+                feet_landing=0.0,
+                # Four-bar flat-proximity shaping (0 = off): quadratic ramp
+                # from 0 at toggle 90 deg to 1 at 180, summed over legs.
+                # The gradient that teaches the policy to stay off the
+                # toggle BEFORE fall.max_toggle_deg terminates: H8/H8b
+                # showed a bare termination cliff next to the tall-stance
+                # operating region is unlearnable (11/12 episodes died on
+                # it at 472M; ep_len pinned ~180).
+                toggle_flat=0.0,
+                # Per-swing apex shaping (see apex_target above). 0 = off.
+                feet_apex=0.0,
                 feet_phase=1.0,
                 contact_match=1.0,
                 # High-step shaping (clock-free presets): reward swing-foot
@@ -286,6 +406,7 @@ class WojtekJoystick(WojtekEnv):
         # 0 keeps self._ctrlrange as-is (mirrors env_jump.py's _target_lo/
         # _target_hi precompute).
         knee_idx = jp.array(KNEE_ACTUATORS)
+        self._knee_idx = knee_idx
         self._target_lo = self._ctrlrange[:, 0]
         ktm = self._config.get("knee_target_max", 0.0)
         if ktm:
@@ -294,9 +415,58 @@ class WojtekJoystick(WojtekEnv):
             )
         else:
             self._target_hi = self._ctrlrange[:, 1]
+        # Four-bar toggle instrumentation (see fall.max_toggle_deg): per
+        # leg, the ids needed to compute the interior angle between
+        # sixth_link and foot_link — 180 deg = links collinear = the
+        # branch-crossing configuration.
+        m5 = self._mj_model
+        self._toggle_j5 = jp.array(
+            [m5.joint(f"{leg}_fifth_joint").id for leg in paths.LEGS]
+        )
+        self._toggle_jf = jp.array(
+            [m5.joint(f"{leg}_foot_joint").id for leg in paths.LEGS]
+        )
+        self._toggle_site = jp.array(
+            [m5.site(f"{leg}_chain_close_b").id for leg in paths.LEGS]
+        )
         # Per-actuator torque cap for the torque_limit hinge, read after
         # _customize_model ran so max_torque (when set) is the cap.
         self._torque_cap = jp.array(self._mj_model.actuator_forcerange[:, 1])
+        # Kinematic standing family (see real_pose_ref in default_config):
+        # gain-invariant by construction — settled on a quasi-rigid copy,
+        # so it depends on the geometry only, never on this run's gains.
+        if self._config.get("real_pose_ref", False):
+            heights, poses = self._settle_height_grid()
+            # The runtime target clamps (knee_target_max) cap the reachable
+            # extension: past the peak the settle heights flatten and then
+            # DROP (knees pinned while second joints over-extend). The
+            # honest envelope is the strictly-increasing prefix up to the
+            # peak; commands above its top saturate there by interp-clamp.
+            cut = int(np.argmax(heights)) + 1
+            heights, poses = heights[:cut], poses[:cut]
+            dsecond = np.array(DSECOND_TABLE)[:cut]
+            if cut < 3 or not np.all(np.diff(heights) > 0):
+                raise ValueError(
+                    f"real_pose_ref: unusable settled-height envelope "
+                    f"(increasing prefix of {cut} rungs): {heights}"
+                )
+            self._anchor_heights = jp.array(heights)
+            self._anchor_poses = jp.array(poses)
+            self._anchor_dsecond = jp.array(dsecond)
+        # Mirror maps for the symmetry augmentation, assembled once from
+        # the resolved obs lists (so the include filter is respected).
+        if self._config.symmetry.enable:
+            from wojtek_rl import symmetry
+
+            act_perm, act_sign = symmetry.joint_mirror()
+            self._act_perm = jp.array(act_perm)
+            self._act_sign = jp.array(act_sign)
+            state_perm, state_sign = symmetry.obs_mirror(self.actor_obs_names)
+            priv_perm, priv_sign = symmetry.obs_mirror(self._config.obs.privileged)
+            self._state_perm = jp.array(state_perm)
+            self._state_sign = jp.array(state_sign)
+            self._priv_perm = jp.array(priv_perm)
+            self._priv_sign = jp.array(priv_sign)
 
     def _customize_model(self, m):
         kp = self._config.get("pd_kp", 0.0)
@@ -350,10 +520,93 @@ class WojtekJoystick(WojtekEnv):
                 r9, minval=c.arc_vx[0], maxval=c.arc_vx[1]
             )
             vel = jp.where(arc, jp.array([vx_arc, 0.0, vel[2]]), vel)
+        # slow-walk training: redraw vx from slow_vx, zero vy and wz.
+        # Gated and fold_in-keyed like arc, so presets with the prob at 0
+        # keep their sampling stream bit-identical.
+        slow_p = c.get("pure_slow_prob", 0.0)
+        if slow_p:
+            r10, r11 = jax.random.split(jax.random.fold_in(rng, 2))
+            slow = jax.random.bernoulli(r10, slow_p)
+            vx_slow = jax.random.uniform(
+                r11, minval=c.slow_vx[0], maxval=c.slow_vx[1]
+            )
+            vel = jp.where(slow, jp.array([vx_slow, 0.0, 0.0]), vel)
+        # fast-walk training: redraw vx from fast_vx, zero vy and wz.
+        # Gated and fold_in-keyed like arc/slow (index 3), stream-safe.
+        fast_p = c.get("pure_fast_prob", 0.0)
+        if fast_p:
+            r12, r13 = jax.random.split(jax.random.fold_in(rng, 3))
+            fast = jax.random.bernoulli(r12, fast_p)
+            vx_fast = jax.random.uniform(
+                r13, minval=c.fast_vx[0], maxval=c.fast_vx[1]
+            )
+            vel = jp.where(fast, jp.array([vx_fast, 0.0, 0.0]), vel)
         zero = jax.random.bernoulli(r4, c.zero_prob)
         vel = jp.where(zero, jp.zeros(3), vel)
         height = jax.random.uniform(r5, minval=c.height[0], maxval=c.height[1])
         return jp.concatenate([vel, height[None]])
+
+    def _settle_height_grid(self):
+        """Kinematic standing family: settle each DSECOND_TABLE rung on a
+        QUASI-RIGID copy of the model (kp 2000 / kd 100, torque
+        unclamped), so sag is ~1e-3 rad and the result is a function of
+        the geometry alone — identical for every runtime gains config.
+        Plain MuJoCo, ~1 s one-off at construction.
+        """
+        import copy
+
+        import mujoco
+
+        m = copy.deepcopy(self._mj_model)
+        # kp 400 leaves ~5e-3 rad of sag (negligible) while staying
+        # integrable; the implicitfast integrator + a fine timestep keep
+        # the stiff servo stable regardless of the training sim_dt.
+        m.actuator_gainprm[:, 0] = 400.0
+        m.actuator_biasprm[:, 1] = -400.0
+        m.actuator_biasprm[:, 2] = -20.0
+        m.actuator_forcerange[:, 0] = -1e6
+        m.actuator_forcerange[:, 1] = 1e6
+        m.opt.timestep = 5e-4
+        m.opt.integrator = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
+        d = mujoco.MjData(m)
+        qadr = np.asarray(self._qadr)
+        # Clamp with the RUNTIME target bounds (knee_target_max included),
+        # not the raw model ctrlrange: step() clips motor targets to
+        # _target_lo/_target_hi, so an envelope settled past those bounds
+        # would promise heights the policy can never command (measured:
+        # the kinematic table reaches 0.21 m but knee anchors pass the
+        # 3.15 singularity guard above ~0.155 m).
+        lo = np.asarray(self._target_lo)
+        hi = np.asarray(self._target_hi)
+        home_ctrl = np.asarray(self._home_ctrl)
+        n_steps = int(round(2.0 / m.opt.timestep))
+        heights, poses = [], []
+        for ds in DSECOND_TABLE:
+            ctrl = np.clip(
+                home_ctrl + np.tile([0.0, 1.0, 2.0], 4) * ds, lo, hi
+            )
+            mujoco.mj_resetData(m, d)
+            d.qpos[:] = np.asarray(self._home_qpos)
+            d.ctrl[:] = ctrl
+            for _ in range(n_steps):
+                mujoco.mj_step(m, d)
+            heights.append(float(d.qpos[2]))
+            poses.append(d.qpos[qadr].copy())
+        return np.array(heights), np.array(poses)
+
+    def _pose_ref(self, height):
+        """Joint-pose reference for a commanded height: the kinematic real
+        pose when real_pose_ref is on, else the legacy ctrl anchor (which
+        conflates set targets with expected readings — kept for old
+        presets)."""
+        if self._config.get("real_pose_ref", False):
+            return jp.stack(
+                [
+                    jp.interp(height, self._anchor_heights, self._anchor_poses[:, j])
+                    for j in range(12)
+                ]
+            )
+        return self._height_ctrl(height)
 
     def _cmd_speed(self, command):
         """Planar speed the gait clock should serve; turning counts too."""
@@ -361,9 +614,12 @@ class WojtekJoystick(WojtekEnv):
 
     def _height_ctrl(self, height):
         """Ctrl anchor for a commanded standing height (measured table)."""
-        dsecond = jp.interp(
-            height, jp.array(HEIGHT_TABLE), jp.array(DSECOND_TABLE)
-        )
+        if self._config.get("real_pose_ref", False):
+            dsecond = jp.interp(height, self._anchor_heights, self._anchor_dsecond)
+        else:
+            dsecond = jp.interp(
+                height, jp.array(HEIGHT_TABLE), jp.array(DSECOND_TABLE)
+            )
         offset = jp.tile(jp.array([0.0, 1.0, 2.0]), 4) * dsecond
         return jp.clip(
             self._home_ctrl + offset, self._ctrlrange[:, 0], self._ctrlrange[:, 1]
@@ -417,11 +673,13 @@ class WojtekJoystick(WojtekEnv):
     def reset(self, rng: jax.Array) -> mjx_env.State:
         rng, r_cmd, r_pos = jax.random.split(rng, 3)
         command = self._sample_command(r_cmd)
-        # Start posed for the commanded height: legs on the height anchor
-        # (base z follows via the same measured table), plus joint noise.
+        # Start posed for the commanded height: legs on the pose reference
+        # (the measured settled pose when calibrated, else the ctrl
+        # anchor), plus joint noise; ctrl holds the ctrl-space anchor.
         anchor = self._height_ctrl(command[3])
         qpos = self._home_qpos.at[self._qadr].set(
-            anchor + jax.random.uniform(r_pos, (12,), minval=-0.05, maxval=0.05)
+            self._pose_ref(command[3])
+            + jax.random.uniform(r_pos, (12,), minval=-0.05, maxval=0.05)
         )
         qpos = qpos.at[2].set(command[3])
         # Terrain spawn: random type, easy starting row, base lifted by the
@@ -472,7 +730,17 @@ class WojtekJoystick(WojtekEnv):
             )
         else:
             epsilon = jp.zeros(12)
+        # Mirror flag, sampled at reset (fixed per env for the whole run
+        # under auto-reset, like latency/encoder above). The disabled
+        # branch draws no rng, so the default trajectory is unchanged.
+        sym = self._config.symmetry
+        if sym.enable:
+            rng, r_mirror = jax.random.split(rng)  # only consumed when enabled
+            mirror = jax.random.bernoulli(r_mirror, sym.mirror_prob)
+        else:
+            mirror = jp.array(False)
         info = {
+            "mirror": mirror,
             "rng": rng,
             "command": command,
             "last_act": jp.zeros(12),
@@ -480,6 +748,7 @@ class WojtekJoystick(WojtekEnv):
             "filtered_act": jp.zeros(12),
             "steps_since_cmd": jp.array(0),
             "feet_air_time": jp.zeros(4),
+            "swing_apex": jp.zeros(4),
             "last_contact": jp.zeros(4, dtype=bool),
             "last_torque": jp.zeros(12),
             "motor_targets": anchor,
@@ -514,6 +783,17 @@ class WojtekJoystick(WojtekEnv):
         info = dict(state.info)
         rng, r_noise, r_cmd, r_push = jax.random.split(info["rng"], 4)
         info["rng"] = rng
+
+        # Symmetry augmentation: the policy acted on mirrored observations,
+        # so its action is in the mirrored frame; map it back before the
+        # physics. Everything below (dynamics, rewards, info) stays in the
+        # real frame; _get_obs mirrors the outgoing observations (which
+        # maps the real-frame last_act back to the action the policy
+        # actually emitted, since the mirror is an involution).
+        if self._config.symmetry.enable:
+            action = jp.where(
+                info["mirror"], self._act_sign * action[self._act_perm], action
+            )
 
         # Actions center on the commanded-height stance, so "zero action"
         # means "stand at the commanded height" at any height.
@@ -562,9 +842,18 @@ class WojtekJoystick(WojtekEnv):
         contact = self._foot_contact(data)
         contact_filt = contact | info["last_contact"]
         first_contact = (info["feet_air_time"] > 0) & contact_filt
+        # Track each swing's peak clearance while the foot is airborne;
+        # at first_contact the reward reads the completed swing's apex.
+        step_clearance = self._foot_clearance(data)
+        info["swing_apex"] = jp.where(
+            ~contact_filt,
+            jp.maximum(info["swing_apex"], step_clearance),
+            info["swing_apex"],
+        )
         rewards, done = self._get_reward(
             data, info, action, motor_targets, first_contact, contact
         )
+        info["swing_apex"] = jp.where(contact_filt, 0.0, info["swing_apex"])
         info["feet_air_time"] = jp.where(
             contact_filt, 0.0, info["feet_air_time"] + self.dt
         )
@@ -632,7 +921,21 @@ class WojtekJoystick(WojtekEnv):
         return catalog
 
     def _get_obs(self, data, info, rng=None):
-        return self._build_obs(data, info, rng)
+        obs = self._build_obs(data, info, rng)
+        if self._config.symmetry.enable:
+            m = info["mirror"]
+            obs = {
+                "state": jp.where(
+                    m, self._state_sign * obs["state"][self._state_perm],
+                    obs["state"],
+                ),
+                "privileged_state": jp.where(
+                    m,
+                    self._priv_sign * obs["privileged_state"][self._priv_perm],
+                    obs["privileged_state"],
+                ),
+            }
+        return obs
 
     # -- rewards ------------------------------------------------------------
     def _get_reward(self, data, info, action, motor_targets, first_contact, contact):
@@ -642,7 +945,9 @@ class WojtekJoystick(WojtekEnv):
         gravity = self._gravity_body(data)
         sigma = self._config.reward.tracking_sigma
         moving = self._cmd_speed(cmd) > 0.05
-        anchor = self._height_ctrl(cmd[3])
+        # Pose/stand references judge the REAL expected pose (measured
+        # settled pose when calibrated), not the commanded targets.
+        anchor = self._pose_ref(cmd[3])
         # Abduction full weight; leg joints lighter (gait flexes around it).
         pose_w = jp.tile(
             jp.array([1.0, self._config.reward.pose_leg_weight,
@@ -655,6 +960,32 @@ class WojtekJoystick(WojtekEnv):
         fall = (base_height < self._config.fall.min_height) | (
             gravity[2] > self._config.fall.max_tilt_gz
         )
+        max_toggle = self._config.fall.get("max_toggle_deg", 0.0)
+        toggle_on = max_toggle or self._config.reward.scales.get("toggle_flat", 0.0)
+        toggle_ramp = jp.zeros(())
+        if toggle_on:
+            # Four-bar toggle angle per leg (see fall.max_toggle_deg):
+            # interior angle between sixth_link (fifth->foot joint anchors)
+            # and foot_link (foot joint anchor -> chain_close_b site).
+            a5 = data.xanchor[self._toggle_j5]
+            af = data.xanchor[self._toggle_jf]
+            sb = data.site_xpos[self._toggle_site]
+            u = af - a5
+            v = sb - af
+            cosang = jp.sum(u * v, axis=-1) / (
+                jp.linalg.norm(u, axis=-1) * jp.linalg.norm(v, axis=-1)
+                + 1e-9
+            )
+            toggle_deg = jp.degrees(jp.arccos(jp.clip(cosang, -1.0, 1.0)))
+            # smooth proximity ramp: 0 at 90 deg, 1 at 180 (see toggle_flat)
+            toggle_ramp = jp.sum(
+                jp.square(jp.clip((toggle_deg - 90.0) / 90.0, 0.0, 1.0))
+            )
+            if max_toggle:
+                # angle > max_toggle_deg <=> cos(angle) < cos(max_toggle_deg)
+                fall = fall | jp.any(
+                    cosang < jp.cos(jp.deg2rad(max_toggle))
+                )
         if self._terrain_enabled and self._config.fall.on_base_contact:
             fall = fall | self._base_terrain_contact(data)
 
@@ -681,11 +1012,45 @@ class WojtekJoystick(WojtekEnv):
 
         qvel = data.qvel[self._vadr]
 
+        # Velocity tracking kernel: the legacy exponential, optionally
+        # blended with a wider far-field exponential so far-off-command
+        # states still see a gradient toward the command (see
+        # tracking_far_weight in default_config). far_w is static config,
+        # so 0 reproduces the legacy kernel exactly.
+        far_w = self._config.reward.get("tracking_far_weight", 0.0)
+
+        def _track(err_sq):
+            r = jp.exp(-err_sq / sigma)
+            if far_w:
+                far = jp.exp(-err_sq / self._config.reward.tracking_far_sigma)
+                r = (1.0 - far_w) * r + far_w * far
+            return r
+
+        if self._config.reward.get("tracking_relative", False):
+            r = self._config.reward
+            denom_lin = jp.maximum(
+                jp.linalg.norm(cmd[:2]), r.tracking_rel_floor_lin
+            )
+            denom_ang = jp.maximum(jp.abs(cmd[2]), r.tracking_rel_floor_ang)
+            k_lin = jp.exp(
+                -jp.sum(jp.square(cmd[:2] - linvel[:2]))
+                / (r.tracking_rel_sigma * jp.square(denom_lin))
+            )
+            k_ang = jp.exp(
+                -jp.square(cmd[2] - gyro[2])
+                / (r.tracking_rel_sigma * jp.square(denom_ang))
+            )
+        else:
+            k_lin = _track(jp.sum(jp.square(cmd[:2] - linvel[:2])))
+            k_ang = _track(jp.square(cmd[2] - gyro[2]))
+        if self._config.reward.get("tracking_product", False):
+            # Gate each term by the other's kernel: tracking pays only for
+            # tracking the whole command (see default_config note).
+            k_lin, k_ang = k_lin * k_ang, k_ang * k_lin
+
         rewards = {
-            "tracking_lin_vel": jp.exp(
-                -jp.sum(jp.square(cmd[:2] - linvel[:2])) / sigma
-            ),
-            "tracking_ang_vel": jp.exp(-jp.square(cmd[2] - gyro[2]) / sigma),
+            "tracking_lin_vel": k_lin,
+            "tracking_ang_vel": k_ang,
             "height_tracking": jp.exp(
                 -jp.square(base_height - cmd[3])
                 / self._config.reward.height_sigma
@@ -719,6 +1084,34 @@ class WojtekJoystick(WojtekEnv):
             )
             * moving,
             "feet_slip": slip * moving,
+            # Flat-linkage proximity (see toggle_flat in default_config).
+            "toggle_flat": toggle_ramp,
+            # Per-swing apex: paid once per swing at touchdown, scaled by
+            # how close the swing's peak clearance came to apex_target —
+            # the term that prices lift height itself (high_step pays
+            # duration-averaged clearance and tolerates skimming).
+            "feet_apex": jp.sum(
+                jp.clip(
+                    info["swing_apex"] / self._config.reward.apex_target,
+                    0.0,
+                    1.0,
+                )
+                * first_contact
+            )
+            * moving,
+            # Downward foot speed^2, gated by proximity to the floor
+            # (pre-contact, so hard strikes are read before the solver
+            # absorbs them). Stance feet contribute ~0 (vz ~ 0); swing
+            # above glide_height contributes 0 (gate).
+            "feet_landing": jp.sum(
+                jp.square(jp.clip(feet_vel[:, 2], None, 0.0))
+                * jp.clip(
+                    1.0 - foot_clearance / self._config.reward.glide_height,
+                    0.0,
+                    1.0,
+                )
+            )
+            * moving,
             "feet_phase": jp.exp(-phase_err / self._config.reward.phase_sigma)
             * moving,
             "high_step": high_step * moving,

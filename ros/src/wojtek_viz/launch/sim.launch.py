@@ -37,7 +37,7 @@ def generate_launch_description():
             # policy.npz + policy_meta.json -- see wojtek_policy/policy_source.py.
             DeclareLaunchArgument(
                 "policy",
-                default_value="<HF_ORGANIZATION>/wojtek-stiff-locomotion-v2",
+                default_value="<HF_ORGANIZATION>/wojtek-stiff-height-locomotion",
             ),
             Node(
                 package="robot_state_publisher",

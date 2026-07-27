@@ -3,8 +3,10 @@
 # GPU validation session ran (docs/plans/terrain-training/
 # 2026-07-27-step5-validation-report.md). Do not launch a real terrain run
 # from it. The terrain family rule (Marcin, 2026-07-27): terrain policies
-# train from scratch and WITH the IMU (CANdle-hat BMI, PR #75) in the
-# observations. This preset does neither, on purpose: it repeats the kp80c
+# never start from a flat keeper. The family starts from scratch WITH the
+# IMU (CANdle-hat BMI, PR #75) in the observations; terrain policies may
+# fine-tune from other terrain policies only. This preset predates the
+# rule, on purpose for its session: it repeats the kp80c
 # keeper's obs layout (joint pos/vel, action history, command; no IMU) so
 # the kp80c checkpoint could be restored for the session's scan-noise
 # measurement. The measured warp budgets below are what carry over to the

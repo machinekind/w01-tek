@@ -37,10 +37,11 @@ def test_actuators_are_pd_with_forcerange():
 
 
 def test_collision_geoms_are_primitives_only():
-    # 4 foot spheres + 2 base half-boxes + 4 legs x 4 floor-only leg primitives.
+    # 4 foot spheres + 9 base chessboard cells + 4 legs x 4 floor-only leg
+    # primitives. This count is the naconmax_per_env floor's geom count.
     m = _compiled()
     active = [i for i in range(m.ngeom) if m.geom_contype[i] != 0]
-    assert len(active) == 22
+    assert len(active) == 4 + len(build_model.BASE_BOX_NAMES) + 16
     assert all(
         m.geom_type[i] != mujoco.mjtGeom.mjGEOM_MESH for i in active
     )
@@ -51,23 +52,34 @@ def test_collision_geoms_are_primitives_only():
     assert all(m.geom_conaffinity[i] == 0 for i in leg)  # floor-only
 
 
-def test_base_box_is_two_halves_with_an_open_seam():
-    """Two geoms, so the MJWarp heightfield cap of 50 contacts per geom pair
-    applies to each half separately. The outer faces stay where the single
-    box's were and the seam carries a gap, so neither half claims a contact
-    the other already has."""
+def test_base_box_is_a_chessboard_inside_the_original_footprint():
+    """One geom per filled cell, so the MJWarp heightfield cap of 50
+    contacts per geom pair applies to each small cell separately. Every
+    cell stays inside the original box's footprint, corner cells reach its
+    outer faces up to the anti-double-claim shrink, and the fill pattern is
+    the chessboard (adjacent cells never both filled)."""
     m = _compiled()
     hx, hy, hz = build_model.BASE_BOX_HALFSIZE
-    front, rear = (m.geom(n) for n in build_model.BASE_BOX_NAMES)
-    for g in (front, rear):
-        assert np.allclose(g.size, [(hx - build_model.BASE_BOX_SEAM_GAP / 2) / 2,
-                                    hy, hz])
+    nx, ny = build_model.BASE_BOX_GRID
+    shrink = build_model.BASE_BOX_CELL_SHRINK
+    names = build_model.BASE_BOX_NAMES
+    assert len(names) == (nx * ny + 1) // 2
+    for name in names:
+        g = m.geom(name)
+        assert np.allclose(g.size, [hx / nx - shrink, hy / ny - shrink, hz])
         assert g.contype == 1 and g.conaffinity == 15
-        assert np.allclose(g.pos[1:], 0.0)
-    assert np.isclose(front.pos[0] + front.size[0], hx)
-    assert np.isclose(rear.pos[0] - rear.size[0], -hx)
-    seam = (front.pos[0] - front.size[0]) - (rear.pos[0] + rear.size[0])
-    assert np.isclose(seam, build_model.BASE_BOX_SEAM_GAP)
+        assert abs(g.pos[0]) + g.size[0] <= hx + 1e-9
+        assert abs(g.pos[1]) + g.size[1] <= hy + 1e-9
+    # Corner cell (row 0, col 0) touches both outer faces up to the shrink.
+    corner = m.geom(names[0])
+    assert np.isclose(corner.pos[0] - corner.size[0], -hx + shrink)
+    assert np.isclose(corner.pos[1] - corner.size[1], -hy + shrink)
+    # Chessboard: no two filled cells share a grid edge.
+    filled = {
+        (int(n.split("r")[1].split("c")[0]), int(n.split("c")[1])) for n in names
+    }
+    for row, col in filled:
+        assert (row, col + 1) not in filled and (row + 1, col) not in filled
 
 
 def test_base_inertia_stays_on_the_full_box():

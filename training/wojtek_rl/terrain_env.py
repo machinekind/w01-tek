@@ -53,6 +53,7 @@ class Arena:
     spawn_yaw: bool
     demote_fraction: float
     init_level_frac: float
+    spawn_level: int
 
     def height(self, xy):
         """Terrain surface height under world ``xy`` (``(..., 2)``)."""
@@ -159,6 +160,7 @@ def load(terrain_cfg) -> Arena:
         spawn_yaw=bool(terrain_cfg.spawn_yaw),
         demote_fraction=float(terrain_cfg.demote_fraction),
         init_level_frac=float(terrain_cfg.init_level_frac),
+        spawn_level=int(terrain_cfg.get("spawn_level", -1)),
     )
 
 

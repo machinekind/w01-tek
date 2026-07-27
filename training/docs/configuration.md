@@ -393,6 +393,7 @@ Keys under `task.env.terrain`:
 | `spawn_yaw` | `true` | Random heading at every spawn. |
 | `pad_jitter` | `0.15` m | Spawn scatter around the pad centre. Keep it under 0.2: the pad is 0.6 m in radius and a standing robot needs 0.36 m of it. |
 | `init_level_frac` | `0.5` | First spawns come from the easiest half of the rows. |
+| `spawn_level` | `-1` | Pin every spawn to one row (0-based, clamped to the arena). `-1` keeps the `init_level_frac` sampling. For videos and debugging; the curriculum still moves the level after the first episode. |
 | `demote_fraction` | `0.5` | See the rule below. |
 
 The rule, from legged_gym, applied when an episode ends by fall or by

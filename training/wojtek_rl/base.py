@@ -3,6 +3,11 @@
 Model loading, actuator address tables and IMU/foot helpers, extracted from
 the joystick env so getup/jump tasks reuse them. Task envs subclass this and
 provide their own config, reset, step, observations and rewards.
+
+On the terrain scene this class holds one ``terrain_env.Arena`` (``self._terrain``)
+and asks it for surface heights. Reading the generated files, checking they are
+the arena the code expects, and the height lookup itself all live in
+``terrain_env``; nothing about the terrain file layout belongs here.
 """
 
 import jax
@@ -13,8 +18,8 @@ from brax import math as brax_math
 from mujoco import mjx
 from mujoco_playground._src import mjx_env
 
-from wojtek_rl import paths
-from wojtek_rl.build_model import FOOT_RADIUS
+from wojtek_rl import paths, terrain_env
+from wojtek_rl.build_model import BASE_BOX_NAMES, FOOT_RADIUS
 
 # Actuator indices of the knee cranks (third joints), paths.LEGS order.
 KNEE_ACTUATORS = (2, 5, 8, 11)
@@ -24,6 +29,11 @@ ABDUCTION_ACTUATORS = (0, 3, 6, 9)
 # (the foot flips above the trunk). Recovery/jump policies must not command
 # targets on the far branch; crossing it under load can break the linkage.
 KNEE_SINGULARITY = 3.2
+# A base half-box counts as touching the terrain when its lowest corner sits
+# within this of the surface. Looser than the foot threshold because the
+# surface comes from the bilinear lookup, which is smoother than the
+# heightfield prisms the physics actually collides against.
+BASE_CONTACT_TOL = 0.01
 
 
 def resolve_backend(backend: str) -> str:
@@ -91,7 +101,14 @@ def make_data_fn(backend, mj_model, mjx_model, naconmax_per_env, njmax, num_envs
 class WojtekEnv(mjx_env.MjxEnv):
     def __init__(self, config, config_overrides=None):
         super().__init__(config, config_overrides)
-        self._mj_model = mujoco.MjModel.from_xml_path(str(paths.SCENE_XML))
+        # Terrain is opt-in and joystick-only. getup/jump have no terrain key, so
+        # `.get` leaves them on the flat scene. terrain_env owns the loading,
+        # validation and lookup; this class only asks it for heights.
+        terrain_cfg = self._config.get("terrain")
+        enabled = bool(terrain_cfg is not None and terrain_cfg.enable)
+        self._terrain = terrain_env.load(terrain_cfg) if enabled else None
+        scene_xml = self._terrain.files["scene"] if enabled else paths.SCENE_XML
+        self._mj_model = mujoco.MjModel.from_xml_path(str(scene_xml))
         self._mj_model.opt.timestep = self.sim_dt
         self._customize_model(self._mj_model)
         sim = self._config.sim
@@ -121,6 +138,10 @@ class WojtekEnv(mjx_env.MjxEnv):
         self._foot_geom_ids = np.array(
             [m.geom(f"{leg}_foot_sphere").id for leg in paths.LEGS]
         )
+        self._base_geom_ids = np.array([m.geom(n).id for n in BASE_BOX_NAMES])
+        self._base_geom_half = jp.array(
+            m.geom_size[self._base_geom_ids][:, :3]
+        )
         self._sensor_adr = {
             name: m.sensor(name).adr[0]
             for name in ("orientation", "angular-velocity", "linear-acceleration")
@@ -130,6 +151,49 @@ class WojtekEnv(mjx_env.MjxEnv):
                 [m.sensor(f"{leg}_foot_linvel").adr[0] + i for i in range(3)]
                 for leg in paths.LEGS
             ]
+        )
+
+        if self._terrain_enabled:
+            self._warn_on_small_contact_budget()
+
+    @property
+    def _terrain_enabled(self) -> bool:
+        return self._terrain is not None
+
+    def _warn_on_small_contact_budget(self) -> None:
+        # Warp has a fixed contact pool and drops overflow silently, so an
+        # undersized budget is wrong physics with no error. Warn against a floor
+        # derived from the model rather than a rule of thumb: warp allows four
+        # contacts per geom-heightfield pair, so every collision geom on the
+        # robot can put four contacts in the pool before a single box is touched.
+        # That is a floor, not a budget -- measure the real number with
+        # `check-terrain --backend warp` (the jax backend never applies it).
+        if self._backend == "warp":
+            floor = 4 * self._count_ground_colliding_geoms()
+            if self._config.sim.naconmax_per_env < floor:
+                print(
+                    "WARNING: terrain.enable on the warp backend with "
+                    f"sim.naconmax_per_env="
+                    f"{self._config.sim.naconmax_per_env}, below the "
+                    f"heightfield-only floor of {floor} "
+                    f"(4 contacts x {floor // 4} colliding geoms). Warp drops "
+                    "the overflow silently. Measure it: "
+                    "`./training/run.sh check-terrain --backend warp "
+                    f"--arena {self._terrain.kind}`."
+                )
+
+    def _count_ground_colliding_geoms(self) -> int:
+        """Robot geoms that can pair with the terrain.
+
+        Keyed on body, not name: the ground is whatever sits in the worldbody
+        (the flat scene's floor plane, or the generator's heightfield and boxes),
+        and everything on a real body is the robot. 21 on this model -- the base
+        box, the four feet, and four per-leg collision proxies."""
+        m = self._mj_model
+        return sum(
+            1
+            for i in range(m.ngeom)
+            if m.geom_bodyid[i] != 0 and (m.geom_contype[i] or m.geom_conaffinity[i])
         )
 
     def _customize_model(self, m: mujoco.MjModel) -> None:
@@ -142,7 +206,9 @@ class WojtekEnv(mjx_env.MjxEnv):
     # -- MjxEnv plumbing -------------------------------------------------
     @property
     def xml_path(self) -> str:
-        return str(paths.SCENE_XML)
+        return str(
+            self._terrain.files["scene"] if self._terrain_enabled else paths.SCENE_XML
+        )
 
     @property
     def action_size(self) -> int:
@@ -174,8 +240,63 @@ class WojtekEnv(mjx_env.MjxEnv):
         return brax_math.rotate(data.qvel[:3], brax_math.quat_inv(self._quat(data)))
 
     def _foot_contact(self, data):
-        z = data.geom_xpos[self._foot_geom_ids][:, 2]
+        """Per-foot contact flag, from a height lookup rather than a contact
+        force.
+
+        It has a blind band on terrain, in two places, and both are one-sided
+        (a foot that IS touching reads as airborne):
+
+        - A foot pressed against the vertical face of a riser sits above the
+          surface the lookup returns for its own xy, so it reads as airborne.
+        - The lookup rasterises a box onto the node grid, so within about one
+          cell of a box edge (0.04 m, and up to ~0.05 m after bilinear
+          interpolation) it returns the box top for ground next to the box, and
+          a foot on that ground reads as airborne.
+
+        Both land on the stair and step tiles the curriculum aims at. Replacing
+        this with real contact forces is the fix; it has not been done."""
+        foot = data.geom_xpos[self._foot_geom_ids]
+        z = foot[:, 2]
+        if self._terrain_enabled:
+            z = z - self._terrain.height(foot[:, :2])
         return z < FOOT_RADIUS + 0.005
+
+    def _base_terrain_contact(self, data):
+        """Whether any base collision box is down on the terrain.
+
+        Feeds the base-contact metrics, and termination when
+        ``fall.on_base_contact`` is set. No observation reads it. Like
+        ``_foot_contact`` it works off the height lookup rather than contact
+        forces, and inherits that method's blind bands. A box has no single
+        lowest point, so it takes the lowest corner -- the centre minus the
+        box's own extent along world z -- and compares it against the surface
+        under the centre, which is the height ``_base_height`` already uses.
+
+        Terrain only; the flat scene has no lookup to read.
+        """
+        centre = data.geom_xpos[self._base_geom_ids]
+        # geom_xmat rows are the geom frame's axes in world coordinates, so
+        # row 2 against the half-sizes is the box's half-extent along world z.
+        rot = data.geom_xmat[self._base_geom_ids].reshape(-1, 3, 3)
+        reach = jp.sum(jp.abs(rot[:, 2, :]) * self._base_geom_half, axis=-1)
+        gap = (centre[:, 2] - reach) - self._terrain.height(centre[:, :2])
+        return jp.any(gap < BASE_CONTACT_TOL)
+
+    def _base_height(self, data):
+        """Base height above the ground. Flat: ``data.qpos[2]``, unchanged.
+        Terrain: minus the surface height under the base."""
+        if self._terrain_enabled:
+            return data.qpos[2] - self._terrain.height(data.qpos[0:2])
+        return data.qpos[2]
+
+    def _foot_clearance(self, data):
+        """Height of each foot's bottom above the ground. Flat: the old
+        ``geom_xpos[..., 2] - FOOT_RADIUS``, unchanged."""
+        foot = data.geom_xpos[self._foot_geom_ids]
+        clearance = foot[:, 2] - FOOT_RADIUS
+        if self._terrain_enabled:
+            clearance = clearance - self._terrain.height(foot[:, :2])
+        return clearance
 
     def _noisy(self, rng, clean, scales):
         noise = jax.random.uniform(rng, clean.shape, minval=-1.0, maxval=1.0)
@@ -208,7 +329,10 @@ class WojtekEnv(mjx_env.MjxEnv):
             "last_act": info["last_act"],
             # Sim-only signals, meant for the privileged critic list:
             "linvel": self._local_linvel(data),
-            "base_height": data.qpos[2:3],
+            # Terrain-relative, like the reward and termination paths. On the
+            # flat scene _base_height IS qpos[2], so getup/jump (which observe
+            # this and have no terrain key) are unchanged.
+            "base_height": jp.atleast_1d(self._base_height(data)),
             "actuator_force": data.actuator_force,
             "foot_contact": self._foot_contact(data).astype(jp.float32),
         }

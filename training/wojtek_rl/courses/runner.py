@@ -97,7 +97,10 @@ def run_courses(
     out_dir: Path | None = None,
 ) -> dict:
     """Run the course benchmark against `run_dir`'s latest checkpoint."""
-    run, env, ckpt, inf, foot_radius = load_checkpoint_policy(run_dir)
+    from wojtek_rl.build_model import FOOT_RADIUS
+
+    run, env, ckpt, inf = load_checkpoint_policy(run_dir)
+    foot_radius = FOOT_RADIUS
     catalogue = course_catalogue()
     names = only or list(catalogue)
     unknown = [n for n in names if n not in catalogue]

@@ -44,7 +44,15 @@
       <geom name="front_right_first_link_collision" class="collision" pos="0.131 -0.06 0.06" quat="0.707107 -0.707107 0 0" contype="0" conaffinity="0" mesh="first_link"/>
       <geom name="front_left_first_link_visual" class="visual" pos="0.131 0.06 0.06" quat="0.707107 -0.707107 0 0" mesh="first_link"/>
       <geom name="front_left_first_link_collision" class="collision" pos="0.131 0.06 0.06" quat="0.707107 -0.707107 0 0" contype="0" conaffinity="0" mesh="first_link"/>
-      <geom name="base_box" size="0.17 0.08 0.05" type="box" group="3"/>
+      <geom name="base_box_r0c0" size="0.0278333 0.0261667 0.05" pos="-0.141667 -0.0533333 0" type="box" group="3"/>
+      <geom name="base_box_r0c2" size="0.0278333 0.0261667 0.05" pos="-0.0283333 -0.0533333 0" type="box" group="3"/>
+      <geom name="base_box_r0c4" size="0.0278333 0.0261667 0.05" pos="0.085 -0.0533333 0" type="box" group="3"/>
+      <geom name="base_box_r1c1" size="0.0278333 0.0261667 0.05" pos="-0.085 0 0" type="box" group="3"/>
+      <geom name="base_box_r1c3" size="0.0278333 0.0261667 0.05" pos="0.0283333 0 0" type="box" group="3"/>
+      <geom name="base_box_r1c5" size="0.0278333 0.0261667 0.05" pos="0.141667 0 0" type="box" group="3"/>
+      <geom name="base_box_r2c0" size="0.0278333 0.0261667 0.05" pos="-0.141667 0.0533333 0" type="box" group="3"/>
+      <geom name="base_box_r2c2" size="0.0278333 0.0261667 0.05" pos="-0.0283333 0.0533333 0" type="box" group="3"/>
+      <geom name="base_box_r2c4" size="0.0278333 0.0261667 0.05" pos="0.085 0.0533333 0" type="box" group="3"/>
       <site name="imu" pos="0 0 0" size="1e-08"/>
       <camera name="ego" pos="0.3 0 0.1" quat="0.541665 0.454532 -0.454532 -0.541665" fovy="100"/>
       <camera name="bench" pos="0.05 0 1.11" quat="-0.5 -0.5 0.5 0.5" fovy="73.74"/>

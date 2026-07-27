@@ -44,4 +44,15 @@ env:
     enable: false
     range: 0.02
 
+  # Terrain training, off by default. Run `./training/run.sh build-terrain`
+  # first. With enable=false nothing changes. Details: docs/configuration.md.
+  terrain:
+    enable: false
+    arena: train # train | eval | test; build-terrain --arena <kind>
+    spawn_yaw: true # random heading at every spawn
+    pad_jitter: 0.15 # spawn scatter around pad centre, m; keep under 0.2
+    init_level_frac: 0.5 # first spawns come from the easiest half of rows
+    spawn_level: -1 # pin every spawn to this row; -1 samples per init_level_frac
+    demote_fraction: 0.5 # drop a level if walked < this * commanded distance
+
 ppo: {}

@@ -240,8 +240,7 @@ def main() -> None:
     ap.add_argument(
         "--no-plots",
         action="store_true",
-        help="plain video without the command label, torque strip, and "
-        "per-joint target-vs-state grid",
+        help="alias for --plots none: plain video with no panels",
     )
     ap.add_argument(
         "--joint",
@@ -251,10 +250,24 @@ def main() -> None:
         "e.g. front_left_first_joint",
     )
     ap.add_argument(
+        "--plots",
+        default="label,torques,grid",
+        help="comma list of panels stacked onto the video, in fixed order: "
+        "label (command bar above the render), torques (full-episode "
+        "torque strip), grid (per-joint target-vs-state; --joint swaps in "
+        "its one-joint variant). 'none' or an empty value drops them all.",
+    )
+    ap.add_argument(
         "--push",
         action="store_true",
         help="keep the training env's random pushes; default is push-free, "
         "matching the battery's measurement convention",
+    )
+    ap.add_argument(
+        "--flat",
+        action="store_true",
+        help="force the flat scene for a policy trained on terrain; default "
+        "renders the scene it trained on",
     )
     args = ap.parse_args()
 
@@ -289,7 +302,10 @@ def main() -> None:
     env_cfg = dict(run.get("env_config") or {})
     if not args.push:
         env_cfg["push"] = {**env_cfg.get("push", {}), "enable": False}
+    if args.flat and "terrain" in env_cfg:
+        env_cfg["terrain"] = {**env_cfg["terrain"], "enable": False}
     env = make_env(task, env_cfg)
+    print(f"scene: {env.xml_path}")
     # run.json may carry the training host's absolute checkpoint path
     # (cluster runs); fall back to the run dir itself.
     ckpt_dir = Path(run["checkpoint_dir"])
@@ -326,7 +342,11 @@ def main() -> None:
             rng, act_rng = jax.random.split(rng)
             action, _ = inference(state.obs, act_rng)
             state = step(state, action)
-            vels.append(float(state.data.qvel[0]))
+            # Body-frame forward speed, not world qvel[0]. A terrain env spawns
+            # on a random heading, so the world-frame x velocity is not the
+            # robot's forward speed at all; on an arc it under-reads for the
+            # same reason (see battery.py's vx_err_local).
+            vels.append(float(env._local_linvel(state.data)[0]))
             torques.append(np.asarray(state.data.actuator_force))
             # The joystick env applies ctrl one step late (action_delay);
             # info holds the target the policy just issued, which is the
@@ -347,37 +367,55 @@ def main() -> None:
                     (i * env.dt, np.asarray(state.info["command"]))
                 )
 
-    if not args.no_plots and frames:
+    panels = {p for p in args.plots.split(",") if p and p != "none"}
+    if args.no_plots:
+        panels = set()
+    unknown = panels - {"label", "torques", "grid"}
+    if unknown:
+        sys.exit(f"unknown --plots panel(s) {sorted(unknown)}; "
+                 "pick from label, torques, grid, none")
+    if panels and frames:
         names = [
             mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, i)
             for i in range(mj_model.nu)
         ]
         times = np.arange(len(torques)) * env.dt
-        strip_at = _torque_strip(
-            times, np.stack(torques), names,
-            float(env._config.get("max_torque", 0) or 0), frames[0].shape[1],
-        )
-        if args.joint:
-            if args.joint not in names:
-                sys.exit(f"unknown --joint {args.joint!r}; one of {names}")
-            j = names.index(args.joint)
-            grid_at = _joint_plot(
-                times, np.stack(targets)[:, j], np.stack(joints)[:, j],
-                args.joint, frames[0].shape[1],
-            )
-        else:
-            grid_at = _joint_grid(
-                times, np.stack(targets), np.stack(joints), names,
+        strip_at = None
+        if "torques" in panels:
+            strip_at = _torque_strip(
+                times, np.stack(torques), names,
+                float(env._config.get("max_torque", 0) or 0),
                 frames[0].shape[1],
             )
+        grid_at = None
+        if "grid" in panels:
+            if args.joint:
+                if args.joint not in names:
+                    sys.exit(f"unknown --joint {args.joint!r}; one of {names}")
+                j = names.index(args.joint)
+                grid_at = _joint_plot(
+                    times, np.stack(targets)[:, j], np.stack(joints)[:, j],
+                    args.joint, frames[0].shape[1],
+                )
+            else:
+                grid_at = _joint_grid(
+                    times, np.stack(targets), np.stack(joints), names,
+                    frames[0].shape[1],
+                )
         labels = {}
         for k, (t, cmd) in enumerate(frame_meta):
-            key = tuple(np.round(cmd[:3], 2))
-            if key not in labels:
-                labels[key] = _label_bar(cmd, frames[0].shape[1])
-            frames[k] = np.vstack(
-                [labels[key], frames[k], strip_at(t), grid_at(t)]
-            )
+            parts = []
+            if "label" in panels:
+                key = tuple(np.round(cmd[:3], 2))
+                if key not in labels:
+                    labels[key] = _label_bar(cmd, frames[0].shape[1])
+                parts.append(labels[key])
+            parts.append(frames[k])
+            if strip_at is not None:
+                parts.append(strip_at(t))
+            if grid_at is not None:
+                parts.append(grid_at(t))
+            frames[k] = np.vstack(parts)
 
     import shutil
 
@@ -392,9 +430,12 @@ def main() -> None:
 
     mediapy.write_video(args.out, frames, fps=fps)
     if args.scenario:
-        print(f"scenario {args.scenario}  mean vx {np.mean(vels):+.2f}")
+        print(f"scenario {args.scenario}  mean forward vx {np.mean(vels):+.2f}")
     else:
-        print(f"commanded vx {args.x_vel:+.2f}  achieved vx {np.mean(vels):+.2f}")
+        print(
+            f"commanded vx {args.x_vel:+.2f}  achieved forward vx "
+            f"{np.mean(vels):+.2f}"
+        )
     print(f"wrote {args.out} ({len(frames)} frames)")
 
 

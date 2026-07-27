@@ -35,7 +35,10 @@ JAX compile cache; every script sources it via `WORKDIR`.
 
 Personal values live in one repo-root `.env` (gitignored; template in
 `.env.example`): `cluster_USER`/`HPC_NS`/`HPC_REPO` for the `make hpc-*`
-wrappers and `STORE_DIR` for the jobs. `make hpc-push` rsyncs `.env` to
+wrappers and `STORE_DIR` for the jobs. Agent sessions are
+permission-denied from reading `.env` — never `cat`/`grep` it. For ad-hoc
+remote commands use `./cluster.sh <cmd>` from the repo root; it loads `.env`
+itself and execs ssh. `make hpc-push` rsyncs `.env` to
 the cluster checkout, where `_common.sh` loads it for any variable not
 already exported — an explicit `sbatch --export` or shell export wins.
 `WORKDIR` needs no configuration: it defaults to the sbatch submit

@@ -1,5 +1,6 @@
 import numpy as np
 
+from wojtek_rl import report
 from wojtek_rl.report import (
     assemble_report,
     foot_force_proxy,
@@ -132,9 +133,12 @@ def test_assemble_report_schema_keys():
         timestamp="2026-07-10T00:00:00",
     )
     assert set(report.keys()) == {
-        "run", "checkpoint", "battery", "torque", "power",
-        "foot_force_proxy", "termination", "torque_by_speed", "timestamp",
+        "run", "checkpoint", "battery_scene", "battery", "torque", "power",
+        "foot_force_proxy", "termination", "torque_by_speed", "terrain",
+        "timestamp",
     }
+    # A run with no terrain scan says so, rather than omitting the section.
+    assert report["terrain"] is None
     assert report["run"] == "probe"
     assert report["checkpoint"] == "1000"
     assert report["timestamp"] == "2026-07-10T00:00:00"
@@ -222,3 +226,95 @@ def test_torque_by_speed_empty():
     assert set(r.keys()) == {
         "0.0-0.2", "0.2-0.4", "0.4-0.6", "0.6-0.8", "0.8-1.0", "1.0+",
     }
+
+
+# -- terrain section ------------------------------------------------------------
+
+
+def _scan_doc():
+    """A terrain-scan document shaped like the one terrain_scan writes."""
+    from wojtek_rl import terrain_scan, terrain_suite
+
+    cell = terrain_suite.CELLS_BY_NAME["pyramid_stairs_5cm"]
+    tracked = terrain_suite.CELLS_BY_NAME["pyramid_stairs_9cm"]
+    reduced = terrain_scan.CellResult(
+        passed=29, of=32, falls=2, timeouts=1, crossings_mean=3.8,
+        saturation=0.12, track_err=0.05, clearance=0.01, measured=30,
+        nacon_max=88, nefc_max=300, steps=1036,
+    )
+    return {
+        "run": "probe", "checkpoint": "1000", "engine": "warp",
+        "arena": terrain_suite.arena_fingerprint(),
+        "runs_per_cell_speed": 32,
+        "cells": {
+            cell.name: {"0.4": terrain_scan.cell_entry(cell, 0.4, reduced),
+                        "0.7": terrain_scan.cell_entry(cell, 0.7, reduced)},
+            tracked.name: {"0.4": terrain_scan.cell_entry(tracked, 0.4, reduced)},
+        },
+        "gate": {
+            "absolute": {"verdict": "pass", "checked": 2, "failures": []},
+            "relative": {"verdict": "no baseline", "notes": ["no --baseline given"]},
+        },
+    }
+
+
+def test_terrain_section_says_so_when_there_is_no_scan():
+    lines = report.render_terrain_markdown(None)
+    assert "## Terrain" in lines
+    assert any("no terrain scan" in line for line in lines)
+
+
+def test_terrain_section_renders_a_scan():
+    lines = report.render_terrain_markdown(_scan_doc())
+    text = "\n".join(lines)
+    assert "## Terrain" in text
+    assert "engine: warp" in text
+    # one row per cell and speed, with the bar and where its number came from
+    assert "| pyramid_stairs_5cm | 0.4 | 29 | 32 | 26 | plan |" in text
+    assert "| pyramid_stairs_5cm | 0.7 | 29 | 32 | 26 | provisional |" in text
+    assert "| pyramid_stairs_9cm | 0.4 | 29 | 32 | - | tracked |" in text
+    assert "### Gate" in text
+    # how many runs the per-step metrics average over, so a thin sample shows
+    assert "| 30 |" in text
+    assert "measured` is how many runs" in text
+    # the scan's own provenance renders, so a stale scan is visible
+    assert "scan: run probe, checkpoint 1000" in text
+
+
+def test_terrain_section_warns_when_the_scan_is_for_another_checkpoint():
+    """The report renders whatever scan file sits in the run dir, and it picks
+    the newest checkpoint itself -- the two can disagree."""
+    lines = report.render_terrain_markdown(_scan_doc(), report_checkpoint="2000")
+    assert any("scan measured checkpoint 1000" in line for line in lines)
+    lines = report.render_terrain_markdown(_scan_doc(), report_checkpoint="1000")
+    assert not any("scan measured checkpoint" in line for line in lines)
+
+
+def test_terrain_section_tolerates_an_incomplete_document():
+    """A scan that crashed part way, or an older schema, must not take the whole
+    report down with it."""
+    for doc in ({}, {"cells": {}}, {"cells": None, "arena": {}},
+                {"cells": {"c": {"0.4": {}}}}):
+        lines = report.render_terrain_markdown(doc or None)
+        assert any("Terrain" in line for line in lines)
+
+
+def test_full_report_carries_the_scan_and_the_battery_scene():
+    doc = _scan_doc()
+    rendered = report.render_markdown(
+        report.assemble_report(
+            run_name="probe", checkpoint="1000",
+            battery={"run": "probe", "checkpoint": "1000",
+                     "stand_to_trot_ramp": {"fell_at": None, "steps": 750}},
+            torque={"p50": 1.0, "p90": 2.0, "p99": 3.0, "max": 4.0},
+            power={"p50": 1.0, "p90": 2.0, "p99": 3.0, "mean_total": 4.0},
+            foot_force={"peak_accel_mps2": 1.0, "peak_force_n": 10.0},
+            termination={"scenarios_run": 1, "fall_count": 0,
+                         "fall_reason_counts": {}, "per_scenario": {}},
+            battery_scene="scene_mjx.xml", terrain=doc,
+        )
+    )
+    # the report says which scene produced the battery half
+    assert "scene: scene_mjx.xml" in rendered
+    assert "flat comparison" in rendered
+    assert "engine: warp" in rendered

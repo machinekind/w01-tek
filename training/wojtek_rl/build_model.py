@@ -3,7 +3,8 @@
 Reads the original wojtek.xml, applies the training edits from the
 spec, and writes wojtek_mjx.xml plus scene_mjx.xml next to it. The
 original files stay untouched. Edits:
-  - every mesh geom stops colliding; feet get spheres, the base gets a box
+  - every mesh geom stops colliding; feet get spheres, the base gets a
+    box in two halves
   - the base gets an explicit inertial so the total mass hits a parameter
   - the 12 torque motors become PD position actuators (gain/bias overwrite,
     the same trick as 3_jaxpot_robotics/jaxpot_robotics/race_scene.py)
@@ -36,6 +37,46 @@ DEFAULT_TOTAL_MASS = 14.0
 FORCERANGE = 9.0
 # Base collision box half-sizes, eyeballed from the mesh footprint.
 BASE_BOX_HALFSIZE = (0.17, 0.08, 0.05)
+# The base collides as a chessboard of small boxes over the original box's
+# footprint, not as one box. MJWarp caps a heightfield collision at
+# mjMAXCONPAIR = 50 contacts per geom pair and drops the rest without an
+# error. The count scales with footprint area over the 4 cm terrain cells:
+# the full box measured 68-100 contacts lying on terrain and one x-half
+# about 34, so even a two-way split sat within a factor of two of the cap.
+# One chessboard cell covers at most a 2x2 patch of terrain cells and stays
+# an order of magnitude under it. The outer faces of the original box are
+# preserved, so the footprint, the camera placement and the inertial
+# (computed from the FULL box) do not move. The gaps between cells are
+# covered by the analytic base-contact termination (fall.on_base_contact),
+# which reads the height lookup, not collision.
+BASE_BOX_GRID = (6, 3)  # cells along x, y; (col + row) even cells are filled
+# Keeps diagonally adjacent cell corners from both claiming a contact point.
+BASE_BOX_CELL_SHRINK = 0.0005
+BASE_BOX_NAMES = tuple(
+    f"base_box_r{row}c{col}"
+    for row in range(BASE_BOX_GRID[1])
+    for col in range(BASE_BOX_GRID[0])
+    if (col + row) % 2 == 0
+)
+
+
+def base_box_cells():
+    """(name, (x, y) of the centre, half-sizes) for the chessboard cells.
+
+    Iteration order matches BASE_BOX_NAMES.
+    """
+    hx, hy, hz = BASE_BOX_HALFSIZE
+    nx, ny = BASE_BOX_GRID
+    cell = (hx / nx - BASE_BOX_CELL_SHRINK, hy / ny - BASE_BOX_CELL_SHRINK, hz)
+    cells = []
+    for row in range(ny):
+        for col in range(nx):
+            if (col + row) % 2:
+                continue
+            x = -hx + (2 * col + 1) * hx / nx
+            y = -hy + (2 * row + 1) * hy / ny
+            cells.append((f"base_box_r{row}c{col}", (x, y), cell))
+    return cells
 
 # Onboard forward camera (the future VLM's eyes): just past the base box's
 # front face, optical axis along body +x pitched ~15 deg down, wide FOV.
@@ -179,17 +220,18 @@ def build_spec(
                 **kw,
             )
 
-    # 3. One contact box for the base.
+    # 3. Contact boxes for the base, one per filled chessboard cell.
     root = spec.body("root")
-    root.add_geom(
-        name="base_box",
-        type=mujoco.mjtGeom.mjGEOM_BOX,
-        size=list(BASE_BOX_HALFSIZE),
-        pos=[0, 0, 0],
-        contype=1,
-        conaffinity=15,
-        group=3,
-    )
+    for name, (x, y), size in base_box_cells():
+        root.add_geom(
+            name=name,
+            type=mujoco.mjtGeom.mjGEOM_BOX,
+            size=list(size),
+            pos=[x, y, 0],
+            contype=1,
+            conaffinity=15,
+            group=3,
+        )
 
     # 3b. Onboard cameras (physics-inert; rendered by room_app / eval).
     for cam in (EGO_CAM, BENCH_CAM):
@@ -200,7 +242,9 @@ def build_spec(
             quat=_xyaxes_to_quat(cam["xyaxes"]),
         )
 
-    # 4. Explicit base inertial. Box formula over the collision box dims.
+    # 4. Explicit base inertial. Box formula over the FULL base box dims: the
+    # split above is a collision detail and does not move any mass, so a half
+    # box here would silently change the dynamics of every run.
     base_mass = float(total_mass - non_base_mass)
     if base_mass <= 0:
         raise ValueError(f"total_mass {total_mass} below link mass {non_base_mass}")

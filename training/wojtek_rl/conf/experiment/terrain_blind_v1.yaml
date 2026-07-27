@@ -13,8 +13,11 @@
 # uncompensated. Artifacts:
 # https://huggingface.co/<HF_ORGANIZATION>/wojtek-stiff-kp80-locomotion
 # Restoring from the kp80c checkpoint is a launch-time flag (restore=...),
-# not set in this preset. train.py pins ppo.num_resets_per_eval=0 whenever
-# terrain is on, because a rebuilt env loses the level it climbed to.
+# not set in this preset -- and it is mandatory in practice: 50M steps from
+# scratch at this operating point scored 0/32 on every scan cell (2026-07-27
+# measurement). train.py pins ppo.num_resets_per_eval=0 whenever terrain is
+# on, because a rebuilt env loses the level it climbed to; the same pin also
+# prevents the mass-reset warp OOM the 2026-07-25 report hit at 52M steps.
 # Launch notes:
 #   ./training/run.sh build-terrain --arena train   # generated, gitignored
 #   XLA_PYTHON_CLIENT_PREALLOC=false ./training/run.sh train \
@@ -93,12 +96,14 @@ task:
     sim:
       # The post-split floor the env computes from the robot's own collision
       # set: 22 geoms that can pair with the heightfield, 4 contacts each.
-      # Confirmed or adjusted by the 2026-07-26 GPU measurement session.
+      # Confirmed 2026-07-27: scan peak is 12 contacts/env and no instrument
+      # tripped the pool at 88, checks up to 4096 envs included
+      # (docs/plans/terrain-training/2026-07-27-step5-validation-report.md).
       naconmax_per_env: 88
-      # Provisional: about 6 constraint rows per condim-4 contact times the
-      # 88-contact floor, plus margin. The measured nefc_max from the
-      # 2026-07-26 GPU session replaces this number.
-      njmax: 768
+      # Sized from the same session: worst measured nefc_max is 228, in
+      # forced-fall states on the eval arena; walking scans peak near 97.
+      # 512 is 2.2x the worst observation.
+      njmax: 512
 
 dr:
   motor_strength: { enable: true, range: [0.5, 1.1] }

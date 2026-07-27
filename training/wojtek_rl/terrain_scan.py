@@ -57,8 +57,13 @@ SATURATION_FRAC = 0.85
 # whose trained command box excludes it is flagged, not silently measured.
 COMMAND_HEIGHT = 0.125
 # A cell may not drop more than this many percentage points against the
-# baseline keeper.
-RELATIVE_DROP_LIMIT = 10.0
+# baseline keeper. Sized from the scan's own test-retest noise, not from
+# ambition: three scans of one checkpoint on different --eval-seed draws
+# swung a single cell/speed pair by up to 6 of 32 runs (18.75 points), so
+# the old 10-point limit failed on noise alone (2026-07-27 validation
+# report). The whole-course pass total moved only ~2% in the same test;
+# a tighter gate should be built on that, not on single pairs.
+RELATIVE_DROP_LIMIT = 25.0
 # Warp contact pool per env: the env's own model-derived floor (22 geoms
 # collide with the heightfield at 4 contacts per pair), and still 7x the
 # per-env peak of 12 contacts measured on the GPU. The pool is allocated up

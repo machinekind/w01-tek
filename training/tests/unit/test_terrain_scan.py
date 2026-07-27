@@ -162,21 +162,22 @@ def test_relative_gate_without_a_baseline_says_so():
     assert gate["verdict"] == "no baseline"
 
 
-def test_relative_gate_allows_a_small_drop():
-    now = _scan(_cells([("pyramid_stairs_5cm", 0.4, 29)]))
+def test_relative_gate_allows_a_drop_inside_the_measured_noise():
+    now = _scan(_cells([("pyramid_stairs_5cm", 0.4, 25)]))
     base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 32)]))
-    # 32/32 -> 29/32 is 9.4 points, inside the 10-point limit
+    # 32/32 -> 25/32 is 21.9 points. The scan's own test-retest noise swings
+    # a pair by up to 18.75 points, so the limit sits above that, at 25.
     gate = terrain_scan.relative_gate(now, base)
     assert gate["verdict"] == "pass", gate
     assert gate["drops"] == []
 
 
 def test_relative_gate_fails_a_big_drop():
-    now = _scan(_cells([("pyramid_stairs_5cm", 0.4, 28)]))
+    now = _scan(_cells([("pyramid_stairs_5cm", 0.4, 23)]))
     base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 32)]))
-    gate = terrain_scan.relative_gate(now, base)  # 12.5 points
+    gate = terrain_scan.relative_gate(now, base)  # 28.1 points
     assert gate["verdict"] == "fail"
-    assert gate["drops"][0]["drop"] == pytest.approx(12.5)
+    assert gate["drops"][0]["drop"] == pytest.approx(28.1, abs=0.05)
 
 
 def test_relative_gate_gains_are_never_failures():

@@ -37,30 +37,46 @@ DEFAULT_TOTAL_MASS = 14.0
 FORCERANGE = 9.0
 # Base collision box half-sizes, eyeballed from the mesh footprint.
 BASE_BOX_HALFSIZE = (0.17, 0.08, 0.05)
-# The base collides as two boxes split across x, not as one. MJWarp caps a
-# heightfield collision at mjMAXCONPAIR = 50 contacts per geom pair and drops
-# the rest without an error. The count is real contacts, so it scales with the
-# footprint area over the 4 cm terrain cells: a full box lying on terrain
-# measured 68-100 contacts, one half about 34. Two geoms are two pairs, so each
-# half gets its own 50. The halves are pulled apart by this much so their seam
-# faces cannot both claim the same contact point.
-BASE_BOX_SEAM_GAP = 0.001
-BASE_BOX_NAMES = ("base_box_front", "base_box_rear")
+# The base collides as a chessboard of small boxes over the original box's
+# footprint, not as one box. MJWarp caps a heightfield collision at
+# mjMAXCONPAIR = 50 contacts per geom pair and drops the rest without an
+# error. The count scales with footprint area over the 4 cm terrain cells:
+# the full box measured 68-100 contacts lying on terrain and one x-half
+# about 34, so even a two-way split sat within a factor of two of the cap.
+# One chessboard cell covers at most a 2x2 patch of terrain cells and stays
+# an order of magnitude under it. The outer faces of the original box are
+# preserved, so the footprint, the camera placement and the inertial
+# (computed from the FULL box) do not move. The gaps between cells are
+# covered by the analytic base-contact termination (fall.on_base_contact),
+# which reads the height lookup, not collision.
+BASE_BOX_GRID = (6, 3)  # cells along x, y; (col + row) even cells are filled
+# Keeps diagonally adjacent cell corners from both claiming a contact point.
+BASE_BOX_CELL_SHRINK = 0.0005
+BASE_BOX_NAMES = tuple(
+    f"base_box_r{row}c{col}"
+    for row in range(BASE_BOX_GRID[1])
+    for col in range(BASE_BOX_GRID[0])
+    if (col + row) % 2 == 0
+)
 
 
-def base_box_halves():
-    """(name, x of the centre, half-sizes) for the two halves of the base box.
+def base_box_cells():
+    """(name, (x, y) of the centre, half-sizes) for the chessboard cells.
 
-    The outer faces stay where the single box's were; only the seam moves in.
+    Iteration order matches BASE_BOX_NAMES.
     """
     hx, hy, hz = BASE_BOX_HALFSIZE
-    half_x = (hx - BASE_BOX_SEAM_GAP / 2) / 2
-    offset = hx - half_x
-    front, rear = BASE_BOX_NAMES
-    return (
-        (front, offset, (half_x, hy, hz)),
-        (rear, -offset, (half_x, hy, hz)),
-    )
+    nx, ny = BASE_BOX_GRID
+    cell = (hx / nx - BASE_BOX_CELL_SHRINK, hy / ny - BASE_BOX_CELL_SHRINK, hz)
+    cells = []
+    for row in range(ny):
+        for col in range(nx):
+            if (col + row) % 2:
+                continue
+            x = -hx + (2 * col + 1) * hx / nx
+            y = -hy + (2 * row + 1) * hy / ny
+            cells.append((f"base_box_r{row}c{col}", (x, y), cell))
+    return cells
 
 # Onboard forward camera (the future VLM's eyes): just past the base box's
 # front face, optical axis along body +x pitched ~15 deg down, wide FOV.
@@ -204,14 +220,14 @@ def build_spec(
                 **kw,
             )
 
-    # 3. Contact boxes for the base, one per half.
+    # 3. Contact boxes for the base, one per filled chessboard cell.
     root = spec.body("root")
-    for name, x, size in base_box_halves():
+    for name, (x, y), size in base_box_cells():
         root.add_geom(
             name=name,
             type=mujoco.mjtGeom.mjGEOM_BOX,
             size=list(size),
-            pos=[x, 0, 0],
+            pos=[x, y, 0],
             contype=1,
             conaffinity=15,
             group=3,

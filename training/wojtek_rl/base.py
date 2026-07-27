@@ -262,9 +262,10 @@ class WojtekEnv(mjx_env.MjxEnv):
         return z < FOOT_RADIUS + 0.005
 
     def _base_terrain_contact(self, data):
-        """Whether either half of the base collision box is down on the terrain.
+        """Whether any base collision box is down on the terrain.
 
-        Diagnostic only: no observation, reward or termination reads it. Like
+        Feeds the base-contact metrics, and termination when
+        ``fall.on_base_contact`` is set. No observation reads it. Like
         ``_foot_contact`` it works off the height lookup rather than contact
         forces, and inherits that method's blind bands. A box has no single
         lowest point, so it takes the lowest corner -- the centre minus the

@@ -176,7 +176,15 @@ def default_config() -> config_dict.ConfigDict:
         action_filter=0.0,
         # NOTE: design standing height is ~0.10 m (Task 3 correction); the
         # plan's original 0.10 min_height would terminate almost every step.
-        fall=config_dict.create(min_height=0.06, max_tilt_gz=-0.4),
+        fall=config_dict.create(
+            min_height=0.06,
+            max_tilt_gz=-0.4,
+            # Terrain only: also end the episode when any base chessboard
+            # cell is analytically down on the terrain (height lookup, not
+            # contact forces). A lying robot is the expensive simulation
+            # state and carries no learning signal for locomotion.
+            on_base_contact=False,
+        ),
         # Trot clock: fbb_v2 skated at 7 Hz instead of stepping (duty factor
         # ~1.0); the phase reward makes periodic swings the only way to score.
         gait=config_dict.create(
@@ -638,6 +646,8 @@ class WojtekJoystick(WojtekEnv):
         fall = (base_height < self._config.fall.min_height) | (
             gravity[2] > self._config.fall.max_tilt_gz
         )
+        if self._terrain_enabled and self._config.fall.on_base_contact:
+            fall = fall | self._base_terrain_contact(data)
 
         # Foot clearance above the local ground vs the duty-aware swing profile,
         # plus explicit contact/stance schedule matching.

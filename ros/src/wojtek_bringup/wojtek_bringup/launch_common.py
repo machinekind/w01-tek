@@ -204,7 +204,7 @@ def common_launch_description(with_rviz, bag_default, with_gamepad=False):
         # from the local HF cache.
         DeclareLaunchArgument(
             "policy",
-            default_value="<HF_ORGANIZATION>/wojtek-stiff-locomotion-v2"
+            default_value="<HF_ORGANIZATION>/wojtek-stiff-height-locomotion"
             "@4dda27e12101a68dbf52bb134721b18dc166a7d3",
         ),
         # Explicit overrides of the policy contract's servo settings (empty =

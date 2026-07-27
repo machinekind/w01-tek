@@ -166,6 +166,10 @@ def default_config() -> config_dict.ConfigDict:
             pad_jitter=0.15,
             # First spawns come from the easiest half of the rows.
             init_level_frac=0.5,
+            # Pin every spawn to one row (0-based, clamped to the arena).
+            # -1 keeps the init_level_frac sampling. Videos and debugging
+            # use this; the curriculum still moves the level afterwards.
+            spawn_level=-1,
             # Drop a level when the episode walked less than this fraction
             # of its commanded distance.
             demote_fraction=0.5,
@@ -426,10 +430,15 @@ class WojtekJoystick(WojtekEnv):
         if self._terrain_enabled:
             rng, r_type, r_level, r_spawn, r_trng = jax.random.split(rng, 5)
             terrain_type = jax.random.randint(r_type, (), 0, self._terrain.n_types)
-            init_rows = max(
-                1, round(self._terrain.n_rows * self._terrain.init_level_frac)
-            )
-            level = jax.random.randint(r_level, (), 0, init_rows)
+            if self._terrain.spawn_level >= 0:
+                level = jp.minimum(
+                    self._terrain.spawn_level, self._terrain.n_rows - 1
+                )
+            else:
+                init_rows = max(
+                    1, round(self._terrain.n_rows * self._terrain.init_level_frac)
+                )
+                level = jax.random.randint(r_level, (), 0, init_rows)
             spawn_xy, pad_height, quat = terrain_env.sample_tile_spawn(
                 r_spawn, terrain_type, level,
                 self._terrain.origin_xy, self._terrain.pad_h,

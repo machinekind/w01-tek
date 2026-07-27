@@ -31,7 +31,7 @@ tread might be the hardest thing in the suite, and the number would then measure
 turning instead of climbing. Every real preset trains forward speed from -0.8 to
 1.2, so walking backwards is inside the trained command box.
 
-Nothing is sampled. Eight headings, four start offsets, three speeds, one fixed
+Nothing is sampled. Eight headings, four start offsets, two speeds, one fixed
 arena: two scans of one checkpoint at the same ``--eval-seed`` return the same
 numbers. A different ``--eval-seed`` redraws the rollout's noise on the same
 course, which is how the score's test-retest spread gets measured.
@@ -484,15 +484,15 @@ def make_cell_runner(env, inf):
     """A jitted "score one cell at one speed" function.
 
     Batch shape is fixed at RUNS_PER_CELL_SPEED and the step budget is the only
-    static argument, so exactly three programs get compiled -- one per commanded
-    speed -- and each is dispatched once per cell. That is a requirement, not an
-    optimization: warp allocates its contact pool when the data is created,
-    sized by the number of environments, so a varying batch size means a new
-    allocation. Which tile, which heading and which direction are numbers fed
-    into the same program.
+    static argument, so one program gets compiled per commanded speed and each
+    is dispatched once per cell. That is a requirement, not an optimization:
+    warp allocates its contact pool when the data is created, sized by the
+    number of environments, so a varying batch size means a new allocation.
+    Which tile, which heading and which direction are numbers fed into the same
+    program.
 
     Known perf ceiling, accepted for now: the cell axis could ride in the batch
-    too (43 x 32 worlds is still one fixed shape), and the 129 sequential
+    too (43 x 32 worlds is still one fixed shape), and the 86 sequential
     dispatches of a 32-world batch are why the measured scan runs ~200x below
     what the physics sustains at training batch sizes. Folding cells in changes
     nothing measured, only the wall clock, but it reshapes this whole rollout

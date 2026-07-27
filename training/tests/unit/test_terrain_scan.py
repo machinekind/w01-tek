@@ -100,7 +100,7 @@ def test_a_partial_scan_is_incomplete_not_a_pass():
     assert terrain_scan.absolute_gate(cells)["verdict"] == "pass"
     gate = terrain_scan.absolute_gate(cells, expect_gated=terrain_scan.gated_pairs())
     assert gate["verdict"] == "incomplete"
-    assert gate["checked"] == 1 and gate["expected"] == 54
+    assert gate["checked"] == 1 and gate["expected"] == 36
     # a real failure still outranks incompleteness
     bad = terrain_scan.absolute_gate(
         _cells([("pyramid_stairs_5cm", 0.4, 1)]), expect_gated=terrain_scan.gated_pairs()
@@ -108,8 +108,19 @@ def test_a_partial_scan_is_incomplete_not_a_pass():
     assert bad["verdict"] == "fail"
 
 
+def test_the_suite_measures_two_speeds():
+    """0.2 m/s was measured and dropped on 2026-07-27: finishing inside the step
+    budget needs 62% speed tracking, the measured policies track about 60% at
+    0.2, and every one of them scored 0 there. The bars gate at 0.4."""
+    assert terrain_suite.SPEEDS == (0.4, 0.7)
+    assert terrain_suite.PLAN_SPEED == 0.4
+    # a suite change has to retire the old baselines rather than be compared
+    # against them
+    assert terrain_suite.arena_fingerprint()["cells"] == "v2"
+
+
 def test_gated_pairs_counts_every_gated_cell_at_every_speed():
-    assert terrain_scan.gated_pairs() == 18 * 3
+    assert terrain_scan.gated_pairs() == 18 * 2
     assert terrain_scan.gated_pairs(speeds=(0.4,)) == 18
 
 
@@ -139,7 +150,7 @@ def test_absolute_gate_ignores_tracked_cells():
 def test_absolute_gate_reports_provisional_provenance():
     """A provisional failure has to be readable as one: the plan sets no bar
     away from 0.4 m/s."""
-    gate = terrain_scan.absolute_gate(_cells([("pyramid_stairs_5cm", 0.2, 10)]))
+    gate = terrain_scan.absolute_gate(_cells([("pyramid_stairs_5cm", 0.7, 10)]))
     assert gate["verdict"] == "fail"
     assert gate["failures"][0]["provenance"] == "provisional"
 
@@ -218,12 +229,12 @@ def test_a_new_cell_has_nothing_to_compare_against():
 
 def test_a_cell_missing_at_one_speed_only_is_unmatched_at_that_speed():
     now = _scan(
-        _cells([("pyramid_stairs_5cm", 0.4, 10), ("pyramid_stairs_5cm", 0.2, 10)])
+        _cells([("pyramid_stairs_5cm", 0.4, 10), ("pyramid_stairs_5cm", 0.7, 10)])
     )
     base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 32)]))
     gate = terrain_scan.relative_gate(now, base)
     assert gate["verdict"] == "fail"  # the 0.4 pair dropped
-    assert gate["unmatched"] == ["pyramid_stairs_5cm@0.2"]
+    assert gate["unmatched"] == ["pyramid_stairs_5cm@0.7"]
 
 
 # -- baseline loading ----------------------------------------------------------

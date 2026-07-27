@@ -48,11 +48,15 @@ FRONTIER_DIFFICULTIES = (1.2, 1.4)
 # Pass-rate bars from the terrain plan, easiest to hardest within a family.
 BARS = (0.95, 0.80, 0.60)
 # The commanded speed the plan's bars were written for. The same bars apply at
-# the other two speeds, tagged `provisional` -- the plan sets no numbers there,
-# and inventing a shape across speeds without data would be worse than keeping
-# them flat. See `threshold()`.
+# 0.7, tagged `provisional` -- the plan sets no numbers there, and inventing a
+# shape across speeds without data would be worse than keeping them flat. See
+# `threshold()`.
 PLAN_SPEED = 0.4
-SPEEDS = (0.2, PLAN_SPEED, 0.7)
+# 0.2 m/s was measured and dropped on 2026-07-27. Finishing the course inside
+# BUDGET_SLACK needs a run to average 62% of its commanded speed, every policy
+# measured so far tracks about 60% at 0.2, and all of them scored 0 there. The
+# bars gate at 0.4.
+SPEEDS = (PLAN_SPEED, 0.7)
 
 # The course: eight headings by four start offsets, 32 runs per cell and speed.
 N_HEADINGS = 8
@@ -248,9 +252,10 @@ def _build() -> tuple[tuple[float, ...], tuple[Cell, ...]]:
 
 DIFFICULTIES, CELLS = _build()
 CELLS_BY_NAME = {c.name: c for c in CELLS}
-# Bumped when the cell set or the arena changes in a way that makes old numbers
-# incomparable. The gate refuses a baseline from a different version.
-CELLS_VERSION = "v1"
+# Bumped when the cell set, the speed set or the arena changes in a way that
+# makes old numbers incomparable. The gate refuses a baseline from a different
+# version. v2 dropped the 0.2 m/s column.
+CELLS_VERSION = "v2"
 
 
 def eval_arena_kwargs() -> dict:

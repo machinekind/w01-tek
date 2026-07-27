@@ -510,8 +510,11 @@ until the base is 1.45 m from the centre (one crossing), then the commanded
 forward speed flips sign and the robot walks back to within 0.30 m (the
 second). Four crossings. A run passes when all four finish inside its step
 budget with no fall. 8 headings x 4 start offsets = 32 runs per cell and
-commanded speed, at 0.2 / 0.4 / 0.7 m/s: 4128 runs, about 7.0M environment
-steps. Nothing is sampled, so two scans of one checkpoint agree.
+commanded speed, at 0.4 / 0.7 m/s: 2752 runs, about 3.1M environment steps.
+Nothing is sampled, so two scans of one checkpoint agree. A third speed, 0.2
+m/s, was measured and dropped on 2026-07-27: finishing inside the step budget
+needs 62% speed tracking, the measured policies track about 60% at 0.2, and
+every one of them scored 0 there.
 
 Those radii are **Chebyshev** distances from the tile centre — `max(|dx|, |dy|)`,
 not the Euclidean radius — because that is how the terrain is built. Every
@@ -567,10 +570,10 @@ of climbing. Walking backwards is inside every real preset's command box.
 
 As counts out of 32 runs the bars are 31, 26 and 20. Every threshold is
 printed with where its number came from: `plan` at 0.4 m/s, which is the only
-speed the terrain plan sets bars for, and `provisional` at 0.2 and 0.7, where
-the same numbers were carried across rather than invented. A provisional
-failure is a prompt to check the bar. After the first terrain keeper, measured
-numbers replace them.
+speed the terrain plan sets bars for, and `provisional` at 0.7, where the same
+numbers were carried across rather than invented. A provisional failure is a
+prompt to check the bar. After the first terrain keeper, measured numbers
+replace them.
 
 The 8 cm step is tracked, not gated at 60 % as the plan has it: 8 cm is 0.64 of
 this robot's 12.5 cm hip height, above the 0.5-0.6 the same document calls the

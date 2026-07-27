@@ -36,6 +36,11 @@ if [ ! -d venv ]; then
   python3 -m venv venv
 fi
 ./venv/bin/pip install -q --upgrade pip
+# Torch first, from an explicit CUDA index. An unpinned 'torch' resolves to
+# the newest wheel (cu130+, driver >= 580); on the common vast 525/570 hosts
+# CUDA init then fails SILENTLY and the model serves from CPU -- /health says
+# "device":"cpu" and every /act takes ~30 s. cu124 runs on driver >= 525.
+./venv/bin/pip install -q --index-url https://download.pytorch.org/whl/cu124 torch torchvision
 ./venv/bin/pip install -q -r requirements.txt
 
 if [ ! -f weights/FutureNav-4B-Base/config.json ]; then
@@ -52,6 +57,13 @@ export FUTURENAV_SRC=\${FUTURENAV_SRC:-\$PWD/FutureNav/src}
 exec ./venv/bin/python -m uvicorn server:app --host 0.0.0.0 --port "\${FUTURENAV_PORT:-8100}"
 START
 chmod +x start.sh
+./venv/bin/python - <<'CHK'
+import torch
+assert torch.cuda.is_available(), (
+    f"torch {torch.__version__} cannot see the GPU -- driver/wheel mismatch; "
+    "do NOT start the server (a CPU process would squat the port)")
+print("cuda ok:", torch.cuda.get_device_name(0))
+CHK
 echo "DEPLOY_OK"
 EOF
 

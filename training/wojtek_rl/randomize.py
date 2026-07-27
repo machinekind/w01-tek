@@ -164,10 +164,6 @@ def make_domain_randomize(mj_model, dr_cfg=None):
 
         out = rand(rng)
 
-        in_axes = jax.tree_util.tree_map(lambda x: None, model)
-        in_axes = in_axes.tree_replace({k: 0 for k in out})
-        model = model.tree_replace(out)
-
         if foot_cfg["enable"]:
             # Equal-priority contacts take the element-wise max of the two
             # geoms' friction, so a foot draw below the floor's draw would
@@ -175,9 +171,18 @@ def make_domain_randomize(mj_model, dr_cfg=None):
             # foot's friction win outright. geom_priority is a static numpy
             # field in mjx (resolved at collision-pair setup, not under
             # jit), so it stays unbatched and is set with numpy indexing.
+            # It must be patched BEFORE the in_axes template is built: on
+            # the jax backend the field is pytree aux metadata, and vmap
+            # rejects an in_axes tree whose metadata differs from the
+            # batched model's (the warp backend doesn't care, which is why
+            # GPU runs never hit this).
             priority = model.geom_priority.copy()
             priority[foot_ids] = 1
             model = model.tree_replace({"geom_priority": priority})
+
+        in_axes = jax.tree_util.tree_map(lambda x: None, model)
+        in_axes = in_axes.tree_replace({k: 0 for k in out})
+        model = model.tree_replace(out)
 
         return model, in_axes
 

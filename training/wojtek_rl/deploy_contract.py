@@ -46,6 +46,10 @@ CONSUMED_KEYS = {
     "pd_kd",
     "obs",
     "command",
+    # Changes the env's height->anchor mapping (kinematic calibrated table
+    # instead of the legacy static one); consumed via the exported
+    # "height_table" field, which the runtime's height_anchor() prefers.
+    "real_pose_ref",
 }
 
 # Keys that shape training only: physics stepping, randomization, episode
@@ -64,6 +68,9 @@ TRAINING_ONLY_KEYS = {
     "fall",
     "gait",
     "reward",
+    # Mirror augmentation: env-internal frame flip during training only;
+    # the deployed policy always receives real observations.
+    "symmetry",
 }
 
 # Sub-keys of `command` that define the trained command box (contract) vs
@@ -78,6 +85,13 @@ COMMAND_TRAINING_KEYS = {
     # samples; changes what is practiced, not the command box itself.
     "arc_prob",
     "arc_vx",
+    # Slow/fast clean-walk curricula: same family as arc — practice
+    # emphasis within the trained box (see product-tracking coverage
+    # lesson, 2026-07-27), no contract impact.
+    "pure_slow_prob",
+    "slow_vx",
+    "pure_fast_prob",
+    "fast_vx",
 }
 
 
@@ -156,6 +170,26 @@ def build_contract(env, run: dict, checkpoint: str = "") -> dict:
     fill_height = command_fill[0]
     anchor = np.asarray(env._height_ctrl(fill_height), np.float32)
 
+    # The height->dsecond mapping the env actually anchored with, so the
+    # runtime re-anchors live-height commands with the SAME table. With
+    # real_pose_ref the env measures a kinematic table at construction
+    # (gains-invariant, truncated at the reachable peak) that differs from
+    # the legacy static HEIGHT_TABLE by the calibration sag — a runtime
+    # holding only the legacy copy would compute wrong anchors for such
+    # policies (policy.py height_anchor prefers this field when present).
+    if env._config.get("real_pose_ref", False):
+        height_table = {
+            "heights": np.asarray(env._anchor_heights, np.float32).tolist(),
+            "dsecond": np.asarray(env._anchor_dsecond, np.float32).tolist(),
+        }
+    else:
+        from wojtek_rl.env import DSECOND_TABLE, HEIGHT_TABLE
+
+        height_table = {
+            "heights": list(HEIGHT_TABLE),
+            "dsecond": list(DSECOND_TABLE),
+        }
+
     scale = np.asarray(env._config.action_scale, np.float32)
     if scale.ndim == 0:
         scale = np.full(12, float(scale), np.float32)
@@ -189,6 +223,7 @@ def build_contract(env, run: dict, checkpoint: str = "") -> dict:
         "command_low": command_low,
         "command_high": command_high,
         "command_fill": [float(v) for v in command_fill],
+        "height_table": height_table,
         "action_filter": float(env._config.action_filter),
         "ctrl_dt": float(env._config.ctrl_dt),
         "knee_singularity": KNEE_SINGULARITY,

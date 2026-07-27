@@ -240,8 +240,7 @@ def main() -> None:
     ap.add_argument(
         "--no-plots",
         action="store_true",
-        help="plain video without the command label, torque strip, and "
-        "per-joint target-vs-state grid",
+        help="alias for --plots none: plain video with no panels",
     )
     ap.add_argument(
         "--joint",
@@ -249,6 +248,14 @@ def main() -> None:
         help="plot target-vs-state for just this actuator as one full-width "
         "readable panel instead of the 3x4 grid, "
         "e.g. front_left_first_joint",
+    )
+    ap.add_argument(
+        "--plots",
+        default="label,torques,grid",
+        help="comma list of panels stacked onto the video, in fixed order: "
+        "label (command bar above the render), torques (full-episode "
+        "torque strip), grid (per-joint target-vs-state; --joint swaps in "
+        "its one-joint variant). 'none' or an empty value drops them all.",
     )
     ap.add_argument(
         "--push",
@@ -360,37 +367,55 @@ def main() -> None:
                     (i * env.dt, np.asarray(state.info["command"]))
                 )
 
-    if not args.no_plots and frames:
+    panels = {p for p in args.plots.split(",") if p and p != "none"}
+    if args.no_plots:
+        panels = set()
+    unknown = panels - {"label", "torques", "grid"}
+    if unknown:
+        sys.exit(f"unknown --plots panel(s) {sorted(unknown)}; "
+                 "pick from label, torques, grid, none")
+    if panels and frames:
         names = [
             mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, i)
             for i in range(mj_model.nu)
         ]
         times = np.arange(len(torques)) * env.dt
-        strip_at = _torque_strip(
-            times, np.stack(torques), names,
-            float(env._config.get("max_torque", 0) or 0), frames[0].shape[1],
-        )
-        if args.joint:
-            if args.joint not in names:
-                sys.exit(f"unknown --joint {args.joint!r}; one of {names}")
-            j = names.index(args.joint)
-            grid_at = _joint_plot(
-                times, np.stack(targets)[:, j], np.stack(joints)[:, j],
-                args.joint, frames[0].shape[1],
-            )
-        else:
-            grid_at = _joint_grid(
-                times, np.stack(targets), np.stack(joints), names,
+        strip_at = None
+        if "torques" in panels:
+            strip_at = _torque_strip(
+                times, np.stack(torques), names,
+                float(env._config.get("max_torque", 0) or 0),
                 frames[0].shape[1],
             )
+        grid_at = None
+        if "grid" in panels:
+            if args.joint:
+                if args.joint not in names:
+                    sys.exit(f"unknown --joint {args.joint!r}; one of {names}")
+                j = names.index(args.joint)
+                grid_at = _joint_plot(
+                    times, np.stack(targets)[:, j], np.stack(joints)[:, j],
+                    args.joint, frames[0].shape[1],
+                )
+            else:
+                grid_at = _joint_grid(
+                    times, np.stack(targets), np.stack(joints), names,
+                    frames[0].shape[1],
+                )
         labels = {}
         for k, (t, cmd) in enumerate(frame_meta):
-            key = tuple(np.round(cmd[:3], 2))
-            if key not in labels:
-                labels[key] = _label_bar(cmd, frames[0].shape[1])
-            frames[k] = np.vstack(
-                [labels[key], frames[k], strip_at(t), grid_at(t)]
-            )
+            parts = []
+            if "label" in panels:
+                key = tuple(np.round(cmd[:3], 2))
+                if key not in labels:
+                    labels[key] = _label_bar(cmd, frames[0].shape[1])
+                parts.append(labels[key])
+            parts.append(frames[k])
+            if strip_at is not None:
+                parts.append(strip_at(t))
+            if grid_at is not None:
+                parts.append(grid_at(t))
+            frames[k] = np.vstack(parts)
 
     import shutil
 

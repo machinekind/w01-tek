@@ -1,11 +1,14 @@
 # @package _global_
-# terrain_blind_v1 — first blind terrain curriculum run (locomotion plan
-# step 5). Blind means no exteroception: the policy sees no terrain. The
-# observations stay the keeper's: joint pos/vel, action history, command.
-# The robot does have an IMU (the CANdle-hat BMI, PR #75), but no keeper
-# observes it, and this preset must repeat the kp80c obs layout exactly or
-# its checkpoint cannot be restored. A height scan in the observations is
-# plan step 6, a separate preset. The training target is the tiled train arena's mini stairs, risers
+# terrain_blind_v1 — VERIFICATION ONLY. This is the preset the 2026-07-27
+# GPU validation session ran (docs/plans/terrain-training/
+# 2026-07-27-step5-validation-report.md). Do not launch a real terrain run
+# from it. The terrain family rule (Marcin, 2026-07-27): terrain policies
+# train from scratch and WITH the IMU (CANdle-hat BMI, PR #75) in the
+# observations. This preset does neither, on purpose: it repeats the kp80c
+# keeper's obs layout (joint pos/vel, action history, command; no IMU) so
+# the kp80c checkpoint could be restored for the session's scan-noise
+# measurement. The measured warp budgets below are what carry over to the
+# real terrain preset. The training target is the tiled train arena's mini stairs, risers
 # 3-9 cm, plus rough ground, slopes and discrete steps.
 # Operating point: the frozen kp80c keeper locomotion_stiff_kp80_v1
 # (run wojtek_stiff_kp80c_20260719_105503, 4.4B cumulative flat steps),
@@ -15,11 +18,12 @@
 # uncompensated. Artifacts:
 # https://huggingface.co/<HF_ORGANIZATION>/wojtek-stiff-kp80-locomotion
 # Restoring from the kp80c checkpoint is a launch-time flag (restore=...),
-# not set in this preset -- and it is mandatory in practice: 50M steps from
-# scratch at this operating point scored 0/32 on every scan cell (2026-07-27
-# measurement). train.py pins ppo.num_resets_per_eval=0 whenever terrain is
-# on, because a rebuilt env loses the level it climbed to; the same pin also
-# prevents the mass-reset warp OOM the 2026-07-25 report hit at 52M steps.
+# not set in this preset. The session's from-scratch control scored 0/32
+# after 50M steps -- a test budget; the real from-scratch terrain family
+# needs a budget in the billions, like the flat keepers had. train.py pins
+# ppo.num_resets_per_eval=0 whenever terrain is on, because a rebuilt env
+# loses the level it climbed to; the same pin also prevents the mass-reset
+# warp OOM the 2026-07-25 report hit at 52M steps.
 # Launch notes:
 #   ./training/run.sh build-terrain --arena train   # generated, gitignored
 #   XLA_PYTHON_CLIENT_PREALLOC=false ./training/run.sh train \

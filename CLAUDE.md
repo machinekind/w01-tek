@@ -108,6 +108,15 @@ For wider repository checks, use `make verify-static` first and
 `make verify-quick` when its prerequisites are available.  A full
 `make verify` includes the slower Docker/ROS gate.
 
+## cluster access
+
+Personal cluster values (`cluster_USER` etc.) live in the gitignored repo-root
+`.env`, which agent sessions are permission-denied from reading — never
+`cat`/`grep` it, and don't conclude the cluster is unreachable when that
+denial hits.  `./cluster.sh <cmd>` runs a command on the login node and the
+`make hpc-*` targets handle rsync/submit/status; both load `.env`
+themselves.
+
 ## Common commands
 
 ```bash

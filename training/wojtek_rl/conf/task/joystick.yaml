@@ -49,6 +49,7 @@ env:
   terrain:
     enable: false
     arena: train # train | eval | test; build-terrain --arena <kind>
+    flat_row: false # train on the arena built with --flat-row (flat level 0)
     spawn_yaw: true # random heading at every spawn
     pad_jitter: 0.15 # spawn scatter around pad centre, m; keep under 0.2
     init_level_frac: 0.5 # first spawns come from the easiest half of rows

@@ -162,6 +162,14 @@ def default_config() -> config_dict.ConfigDict:
             # at cmd 1.0). Applied after slow and before zeroing.
             pure_fast_prob=0.0,
             fast_vx=(0.8, 1.2),
+            # With this prob command a clean backward walk: vx redrawn from
+            # back_vx, vy and wz zeroed. Same fix family as slow/fast — the
+            # uniform box only ever serves backward vx contaminated with
+            # random vy/wz, and that coverage did not teach the skill:
+            # terrain_blind_v2c refused every backward command outright
+            # (0.000 m/s). Applied after fast and before zeroing.
+            pure_back_prob=0.0,
+            back_vx=(-0.8, -0.2),
         ),
         push=config_dict.create(enable=True, interval_steps=200, vel=0.4),
         action_delay=1,  # control steps of latency between policy and motors
@@ -191,6 +199,11 @@ def default_config() -> config_dict.ConfigDict:
             # the test suite's scratch arena. Build it with
             # `build-terrain --arena <kind>`.
             arena="train",
+            # Train on the arena built with `build-terrain --arena train
+            # --flat-row`: level 0 is flat ground, every terrain row sits
+            # one level higher. The build and this key must agree;
+            # terrain_env refuses a mismatched pair.
+            flat_row=False,
             # Random heading at every spawn. Costs nothing: the obs carry
             # no heading.
             spawn_yaw=True,
@@ -328,6 +341,14 @@ def default_config() -> config_dict.ConfigDict:
             # set), so the policy never learns postures that live near
             # saturation.
             torque_limit_frac=0.85,
+            # Tolerance cone around upright for the orientation penalty,
+            # half-angle in degrees (0 = legacy penalty, bit-exact). The
+            # penalty is sin^2 of the base's tilt from vertical; with a
+            # cone it becomes max(sin^2(tilt) - sin^2(tol), 0), zero inside
+            # and rising continuously from the edge. A flat-referenced
+            # penalty prices the body pitch that climbing requires; a
+            # nosedive stays far outside any cone worth setting.
+            orientation_tol_deg=0.0,
             scales=config_dict.create(
                 tracking_lin_vel=1.5,
                 tracking_ang_vel=0.8,
@@ -432,6 +453,18 @@ class WojtekJoystick(WojtekEnv):
         # Per-actuator torque cap for the torque_limit hinge, read after
         # _customize_model ran so max_torque (when set) is the cap.
         self._torque_cap = jp.array(self._mj_model.actuator_forcerange[:, 1])
+        # Orientation tolerance cone as sin^2 of its half-angle, so it can be
+        # subtracted directly from sum(square(gravity[:2])). Static config,
+        # like the other reward constants resolved here.
+        self._orientation_tol = float(
+            np.square(
+                np.sin(
+                    np.radians(
+                        self._config.reward.get("orientation_tol_deg", 0.0)
+                    )
+                )
+            )
+        )
         # Kinematic standing family (see real_pose_ref in default_config):
         # gain-invariant by construction — settled on a quasi-rigid copy,
         # so it depends on the geometry only, never on this run's gains.
@@ -541,6 +574,16 @@ class WojtekJoystick(WojtekEnv):
                 r13, minval=c.fast_vx[0], maxval=c.fast_vx[1]
             )
             vel = jp.where(fast, jp.array([vx_fast, 0.0, 0.0]), vel)
+        # backward training: redraw vx from back_vx, zero vy and wz.
+        # Gated and fold_in-keyed like arc/slow/fast (index 4), stream-safe.
+        back_p = c.get("pure_back_prob", 0.0)
+        if back_p:
+            r14, r15 = jax.random.split(jax.random.fold_in(rng, 4))
+            back = jax.random.bernoulli(r14, back_p)
+            vx_back = jax.random.uniform(
+                r15, minval=c.back_vx[0], maxval=c.back_vx[1]
+            )
+            vel = jp.where(back, jp.array([vx_back, 0.0, 0.0]), vel)
         zero = jax.random.bernoulli(r4, c.zero_prob)
         vel = jp.where(zero, jp.zeros(3), vel)
         height = jax.random.uniform(r5, minval=c.height[0], maxval=c.height[1])
@@ -1048,6 +1091,13 @@ class WojtekJoystick(WojtekEnv):
             # tracking the whole command (see default_config note).
             k_lin, k_ang = k_lin * k_ang, k_ang * k_lin
 
+        # sin^2 of the tilt from vertical, less the tolerance cone (see
+        # reward.orientation_tol_deg). Static config, so 0 leaves the legacy
+        # expression untouched.
+        orientation = jp.sum(jp.square(gravity[:2]))
+        if self._orientation_tol:
+            orientation = jp.maximum(orientation - self._orientation_tol, 0.0)
+
         rewards = {
             "tracking_lin_vel": k_lin,
             "tracking_ang_vel": k_ang,
@@ -1057,7 +1107,7 @@ class WojtekJoystick(WojtekEnv):
             ),
             "lin_vel_z": jp.square(linvel[2]),
             "ang_vel_xy": jp.sum(jp.square(gyro[:2])),
-            "orientation": jp.sum(jp.square(gravity[:2])),
+            "orientation": orientation,
             "torques": jp.sum(jp.square(data.actuator_force)),
             "torque_rate": jp.sum(
                 jp.square(data.actuator_force - info["last_torque"])

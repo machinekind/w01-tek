@@ -206,3 +206,128 @@ def test_sample_command_arc_default_off(env):
     keys = jax.random.split(jax.random.PRNGKey(0), 64)
     cmds = np.array(jax.vmap(env._sample_command)(keys))
     assert np.any(np.abs(cmds[:, 1]) > 1e-6)
+
+
+# -- command.pure_back_prob ---------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def env_without_back_keys():
+    """Env whose command block predates pure_back_prob/back_vx, so the
+    sampler falls back through `.get`."""
+    cfg = wojtek_env.default_config()
+    del cfg.command.pure_back_prob
+    del cfg.command.back_vx
+    return wojtek_env.WojtekJoystick(cfg)
+
+
+def test_sample_command_back_mode_holds_clean_reverse():
+    """pure_back_prob=1: every draw is a clean reverse -- vx inside back_vx
+    (negative throughout), vy and wz zeroed."""
+    cfg = wojtek_env.default_config()
+    cfg.command.pure_back_prob = 1.0
+    cfg.command.zero_prob = 0.0
+    back_env = wojtek_env.WojtekJoystick(cfg)
+    keys = jax.random.split(jax.random.PRNGKey(0), 64)
+    cmds = np.array(jax.vmap(back_env._sample_command)(keys))
+    np.testing.assert_allclose(cmds[:, 1], 0.0)
+    np.testing.assert_allclose(cmds[:, 2], 0.0)
+    assert np.all(cmds[:, 0] >= cfg.command.back_vx[0])
+    assert np.all(cmds[:, 0] <= cfg.command.back_vx[1])
+    assert np.all(cmds[:, 0] < 0.0)
+
+
+def test_sample_command_back_overrides_fast():
+    """pure_back applies after pure_fast, so a both-fire draw is backward."""
+    cfg = wojtek_env.default_config()
+    cfg.command.pure_fast_prob = 1.0
+    cfg.command.pure_back_prob = 1.0
+    cfg.command.zero_prob = 0.0
+    both = wojtek_env.WojtekJoystick(cfg)
+    keys = jax.random.split(jax.random.PRNGKey(0), 32)
+    cmds = np.array(jax.vmap(both._sample_command)(keys))
+    assert np.all(cmds[:, 0] < 0.0)
+
+
+def test_sample_command_back_default_off(env):
+    """Default pure_back_prob=0 keeps the plain box: vy and wz are drawn,
+    not zeroed, and forward commands still appear."""
+    keys = jax.random.split(jax.random.PRNGKey(0), 64)
+    cmds = np.array(jax.vmap(env._sample_command)(keys))
+    assert np.any(np.abs(cmds[:, 1]) > 1e-6)
+    assert np.any(np.abs(cmds[:, 2]) > 1e-6)
+    assert np.any(cmds[:, 0] > 0.0)
+
+
+def test_sample_command_back_off_matches_keyless_config(env, env_without_back_keys):
+    """pure_back_prob=0 consumes no randomness: the drawn commands are
+    bit-identical to a config that never had the keys."""
+    keys = jax.random.split(jax.random.PRNGKey(0), 64)
+    cmds = np.array(jax.vmap(env._sample_command)(keys))
+    legacy = np.array(jax.vmap(env_without_back_keys._sample_command)(keys))
+    np.testing.assert_array_equal(cmds, legacy)
+
+
+# -- reward.orientation_tol_deg -----------------------------------------------
+
+
+def _tilted_data(env, reset_state, tilt_deg):
+    """reset_state's data with the base pitched tilt_deg from vertical.
+
+    _gravity_body reads the orientation sensor, not qpos, so the quaternion
+    goes into sensordata.
+    """
+    half = np.radians(tilt_deg) / 2.0
+    quat = jp.array([np.cos(half), 0.0, np.sin(half), 0.0])
+    adr = env._sensor_adr["orientation"]
+    sensordata = reset_state.data.sensordata.at[adr : adr + 4].set(quat)
+    return reset_state.data.replace(sensordata=sensordata)
+
+
+def _sin2(deg):
+    return float(np.square(np.sin(np.radians(deg))))
+
+
+def _orientation_reward(env, data, info):
+    zeros4 = jp.zeros(4, dtype=bool)
+    rewards, _ = env._get_reward(
+        data, info, jp.zeros(12), jp.zeros(12), zeros4, zeros4
+    )
+    return float(rewards["orientation"])
+
+
+def test_orientation_default_matches_legacy_expression(env, reset_state):
+    """Default orientation_tol_deg=0: the term is exactly the pre-existing
+    sum(square(gravity[:2])), no cone arithmetic in the path at all."""
+    assert env._orientation_tol == 0.0
+    for tilt in (0.0, 10.0, 25.0):
+        data = _tilted_data(env, reset_state, tilt)
+        legacy = float(jp.sum(jp.square(env._gravity_body(data)[:2])))
+        assert _orientation_reward(env, data, reset_state.info) == legacy
+
+
+def test_orientation_cone_zero_inside_and_offset_outside(env, reset_state):
+    """A 15 deg cone: nothing inside it, and outside the penalty is the tilt's
+    sin^2 less the cone's, continuous at the edge. Scored on the shared reset
+    state -- the cone config leaves the model identical, so this is the same
+    physics with the cone on."""
+    cfg = wojtek_env.default_config()
+    cfg.reward.orientation_tol_deg = 15.0
+    coned = wojtek_env.WojtekJoystick(cfg)
+    assert coned._orientation_tol == pytest.approx(_sin2(15.0))
+
+    inside = _tilted_data(coned, reset_state, 10.0)
+    assert _orientation_reward(coned, inside, reset_state.info) == 0.0
+
+    edge = _tilted_data(coned, reset_state, 15.0)
+    assert _orientation_reward(coned, edge, reset_state.info) == pytest.approx(
+        0.0, abs=1e-7
+    )
+
+    outside = _tilted_data(coned, reset_state, 25.0)
+    assert _orientation_reward(coned, outside, reset_state.info) == pytest.approx(
+        _sin2(25.0) - _sin2(15.0), abs=1e-6
+    )
+    # The anti-nosedive gradient survives: a big tilt still costs.
+    nosedive = _tilted_data(coned, reset_state, 60.0)
+    assert _orientation_reward(coned, nosedive, reset_state.info) > 0.5

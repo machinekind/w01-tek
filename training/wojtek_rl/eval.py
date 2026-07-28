@@ -276,6 +276,19 @@ def main() -> None:
         "track_far, higher and farther out; on the tall upper rows the "
         "step walls hide the robot from track",
     )
+    ap.add_argument(
+        "--terrain-level",
+        type=int,
+        default=None,
+        help="pin every spawn to this terrain level instead of the "
+        "curriculum draw; terrain runs only",
+    )
+    ap.add_argument(
+        "--terrain-arena",
+        choices=["train", "eval"],
+        default=None,
+        help="render on this arena instead of the one the run trained on",
+    )
     args = ap.parse_args()
 
     # Imported lazily: wojtek_rl.env and wojtek_rl.train pull in brax/mjx and may
@@ -311,6 +324,14 @@ def main() -> None:
         env_cfg["push"] = {**env_cfg.get("push", {}), "enable": False}
     if args.flat and "terrain" in env_cfg:
         env_cfg["terrain"] = {**env_cfg["terrain"], "enable": False}
+    if args.terrain_level is not None and "terrain" in env_cfg:
+        env_cfg["terrain"] = {
+            **env_cfg["terrain"], "spawn_level": args.terrain_level,
+        }
+    if args.terrain_arena and "terrain" in env_cfg:
+        env_cfg["terrain"] = {
+            **env_cfg["terrain"], "arena": args.terrain_arena,
+        }
     env = make_env(task, env_cfg)
     print(f"scene: {env.xml_path}")
     # run.json may carry the training host's absolute checkpoint path

@@ -269,6 +269,13 @@ def main() -> None:
         help="force the flat scene for a policy trained on terrain; default "
         "renders the scene it trained on",
     )
+    ap.add_argument(
+        "--camera",
+        default="track",
+        help="named camera to render from. Terrain scenes also define "
+        "track_far, higher and farther out; on the tall upper rows the "
+        "step walls hide the robot from track",
+    )
     args = ap.parse_args()
 
     # Imported lazily: wojtek_rl.env and wojtek_rl.train pull in brax/mjx and may
@@ -361,7 +368,7 @@ def main() -> None:
             if i % render_every == 0:
                 data.qpos[:] = np.asarray(state.data.qpos)
                 mujoco.mj_forward(mj_model, data)
-                renderer.update_scene(data, camera="track")
+                renderer.update_scene(data, camera=args.camera)
                 frames.append(renderer.render())
                 frame_meta.append(
                     (i * env.dt, np.asarray(state.info["command"]))

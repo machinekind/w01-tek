@@ -123,6 +123,11 @@ def build_scene_xml(arena: terrain.Arena, hfield_file: str) -> str:
     <geom name="terrain_hfield" type="hfield" hfield="terrain" material="groundplane" pos="0 0 {hf.pos_z:.6f}" condim="3" conaffinity="15"/>
 {boxes}
     <camera name="track" mode="trackcom" pos="0.9 -1.3 0.5" xyaxes="0.83 0.55 0 -0.15 0.23 0.96"/>
+    <!-- On the tall upper rows the step walls rise above the robot and hide
+         it from the close track camera. track_far looks down at ~35 degrees
+         from twice the distance; select it with eval's double-dash camera
+         flag for frontier-row videos. -->
+    <camera name="track_far" mode="trackcom" pos="1.8 -2.6 2.2" xyaxes="0.82 0.57 0 -0.33 0.47 0.82"/>
   </worldbody>
 </mujoco>
 """

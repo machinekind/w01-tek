@@ -1,11 +1,11 @@
 # @package _global_
 # terrain_blind_v2 -- the terrain family's founding preset. Blind means no
 # exteroception: no height scan, the robot feels the ground through its own
-# joints. The IMU is in the observations. It trains from scratch. Family rule
-# (Marcin, 2026-07-27): terrain policies never start from a flat keeper, and a
-# terrain policy fine-tunes only from another terrain policy. terrain_blind_v1
-# is the verification-only predecessor that the 2026-07-27 GPU session ran; it
-# predates the rule. This is the preset to launch a real terrain run from.
+# joints. The IMU is in the observations. It trains from scratch, which is the
+# terrain family's default; starting from a keeper or adding a flat warm-up is
+# a per-run decision, made explicitly. terrain_blind_v1 is the
+# verification-only predecessor that the 2026-07-27 GPU session ran. This is
+# the preset to launch a real terrain run from.
 # Base: the phase-C operating point of the kp40 line (stiff_phase_c), which is
 # that line's current head and the deployed flat policy, published as
 # https://huggingface.co/<HF_ORGANIZATION>/wojtek-stiff-locomotion-v2. Its

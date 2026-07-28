@@ -45,7 +45,7 @@ hpc-push: hpc-vars
 #   make hpc-train EXPERIMENT=locomotion RUN_NAME=fbb_loco_v1
 hpc-train: hpc-vars
 	ssh $(HPC) "cd $(REMOTE) && mkdir -p logs && sbatch \
-	  --export=ALL$(if $(EXPERIMENT),\,EXPERIMENT=$(EXPERIMENT))$(if $(RUN_NAME),\,RUN_NAME=$(RUN_NAME))$(if $(NUM_ENVS),\,NUM_ENVS=$(NUM_ENVS))$(if $(BATCH),\,BATCH=$(BATCH))$(if $(TERRAIN),\,TERRAIN=$(TERRAIN))$(if $(WANDB),\,WANDB=$(WANDB))$(if $(EXTRA),\,EXTRA='$(EXTRA)') \
+	  --export=ALL$(if $(EXPERIMENT),\,EXPERIMENT=$(EXPERIMENT))$(if $(RUN_NAME),\,RUN_NAME=$(RUN_NAME))$(if $(NUM_ENVS),\,NUM_ENVS=$(NUM_ENVS))$(if $(BATCH),\,BATCH=$(BATCH))$(if $(TERRAIN),\,TERRAIN=$(TERRAIN))$(if $(FLAT_ROW),\,FLAT_ROW=$(FLAT_ROW))$(if $(WANDB),\,WANDB=$(WANDB))$(if $(EXTRA),\,EXTRA='$(EXTRA)') \
 	  $(if $(TIME),--time=$(TIME)) training/hpc/train.slurm"
 
 hpc-status: hpc-vars

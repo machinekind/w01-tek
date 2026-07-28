@@ -48,13 +48,12 @@
 # that way. train.py pins ppo.num_resets_per_eval=0 whenever terrain is on,
 # because a rebuilt env loses the level it climbed to; this preset does not
 # set it.
-# DEPLOYMENT: raise the torque contract to match first. The exported schema-2
-# contract carries max_torque=32 and the launch clamp (wojtek_real.urdf.xacro
-# + launch max_torque) follows it -- a config change, like every contract
-# field. Under the current +-9 Nm clamp the policy's learned spikes get
-# truncated and the gait it trained is not the gait that runs. One check for
-# the deploy session: 32 Nm peaks draw ~30 A phase current per motor, so
-# several joints spiking together is a PSU/bus budget question.
+# DEPLOYMENT: the exported schema-2 contract carries max_torque=32, and the
+# launch clamp (wojtek_real.urdf.xacro + launch max_torque) follows the
+# policy's contract -- deploying this preset is the usual config change. A
+# clamp below the trained cap truncates the learned torque spikes and changes
+# the gait. 32 Nm peaks draw ~30 A phase current per motor; simultaneous
+# spikes across joints are a PSU/bus budget item for the deploy session.
 # Usage: ./run.sh train +experiment=terrain_blind_v3
 defaults:
   - override /task: joystick

@@ -6,6 +6,7 @@ flat border around the grid. By default each row's column order is shuffled and
 each interior row's difficulty is jittered within half a row gap; ``ordered=True``
 restores the sorted-column, exact-difficulty layout, and ``difficulties=`` gives
 the rows explicitly (what the measurement arena in ``terrain_suite`` does).
+``flat_row=True`` prepends one flat row below all of them, as level 0.
 Rough, slopes, and the inverted-stairs pit are carved into a single heightfield
 covering the whole arena; stairs and discrete obstacles are static box geoms
 (crisp edges, cheap contacts) sitting on the heightfield. A modality overlay of
@@ -211,7 +212,7 @@ class HFieldSpec:
 @dataclass(frozen=True)
 class TerrainSpec:
     seed: int
-    n_rows: int
+    n_rows: int  # arena rows, the prepended flat row included when there is one
     n_cols: int
     tile_size: float
     border: float
@@ -227,6 +228,7 @@ class TerrainSpec:
     y_max: float
     hfield: HFieldSpec
     tiles: tuple[TileSpec, ...]
+    flat_row: bool = False
 
 
 @dataclass
@@ -541,6 +543,7 @@ def generate(
     difficulties: tuple[float, ...] | None = None,
     pad_radius: float = PAD_RADIUS,
     stair_platform_half: float = STAIR_PLATFORM_HALF,
+    flat_row: bool = False,
 ) -> Arena:
     """Build one arena.
 
@@ -555,11 +558,19 @@ def generate(
     feet sit 0.31 m from the base centre and the foot radius is 0.046 m, so
     that is the flat ground a standing robot needs. Anything above the
     training default's spawn jitter (0.15 m) plus that footprint is safe.
+
+    ``flat_row`` prepends one genuinely flat row, which becomes level 0. A
+    difficulty-0 row is not flat -- its stairs still have a 2 cm riser -- so
+    flat ground is a row of its own rather than the ramps turned down. The row
+    is additive: every terrain row keeps the difficulty and the seed streams it
+    has without the flag and moves up one row index and one tile.
     """
     n_cols = len(TYPES)
     if difficulties is not None:
         difficulties = tuple(float(d) for d in difficulties)
         n_rows = len(difficulties)
+    n_terrain_rows = n_rows
+    n_rows += int(flat_row)
     total_x = n_cols * tile_size + 2 * border
     total_y = n_rows * tile_size + 2 * border
     x_min, x_max = -total_x / 2, total_x / 2
@@ -575,8 +586,31 @@ def generate(
 
     boxes: list[Box] = []
     tiles: list[TileSpec] = []
-    for i in range(n_rows):
-        d = difficulties[i] if difficulties is not None else i / (n_rows - 1)
+    if flat_row:
+        # Ground stays at 0 here and no box is placed, so the row is flat to
+        # the bit. It still carries one tile of every type, because the spawn
+        # table is indexed by (row, type) and the env draws a type uniformly:
+        # a row missing a type would spawn those envs at the arena origin. On
+        # this row the type only names the column.
+        cy = grid_y0 + 0.5 * tile_size
+        for j, ttype in enumerate(TYPES):
+            cx = grid_x0 + (j + 0.5) * tile_size
+            tiles.append(
+                TileSpec(
+                    row=0, col=j, terrain_type=ttype, difficulty=0.0,
+                    origin=(float(cx), float(cy), 0.0),
+                    pad_radius=pad_radius, pad_height=0.0,
+                )
+            )
+    for i in range(n_terrain_rows):
+        # The generator index stays the row's identity: it drives the seed
+        # streams and the difficulty ramp, so a row holds the same tiles with
+        # and without the flat row. Only where it sits moves.
+        row = i + int(flat_row)
+        d = (
+            difficulties[i] if difficulties is not None
+            else i / (n_terrain_rows - 1)
+        )
         if ordered:
             row_types = TYPES
         else:
@@ -584,14 +618,15 @@ def generate(
             # difficulty jitter. Each row still holds every type exactly once.
             row_rng = np.random.default_rng([seed, i])
             row_types = tuple(TYPES[k] for k in row_rng.permutation(n_cols))
-            if difficulties is None and 0 < i < n_rows - 1:
+            if difficulties is None and 0 < i < n_terrain_rows - 1:
                 # Jitter under half a row gap (+-0.4 of 1/(n-1)) keeps realized
                 # difficulty strictly increasing; rows 0 and n-1 stay exact so
                 # the curriculum floor and ceiling are preserved. An explicit
                 # difficulty list is taken as given, so no draw happens.
                 d = float(np.clip(
-                    d + row_rng.uniform(-0.4, 0.4) / (n_rows - 1), 0.0, 1.0))
-        cy = grid_y0 + (i + 0.5) * tile_size
+                    d + row_rng.uniform(-0.4, 0.4) / (n_terrain_rows - 1),
+                    0.0, 1.0))
+        cy = grid_y0 + (row + 0.5) * tile_size
         ri0 = int(np.searchsorted(ys, cy - tile_size / 2))
         ri1 = int(np.searchsorted(ys, cy + tile_size / 2))
         for j, ttype in enumerate(row_types):
@@ -640,7 +675,7 @@ def generate(
                 heights[ri0:ri1, ci0:ci1] = _wave_patch(lx, ly, d, rng, pad_radius)
             tiles.append(
                 TileSpec(
-                    row=i, col=j, terrain_type=ttype, difficulty=d,
+                    row=row, col=j, terrain_type=ttype, difficulty=d,
                     origin=(float(cx), float(cy), 0.0),
                     pad_radius=pad_radius, pad_height=float(pad_height),
                 )
@@ -682,6 +717,7 @@ def generate(
             elevation_z=elevation_z, base_z=HFIELD_BASE_Z, pos_z=pos_z,
         ),
         tiles=tuple(tiles),
+        flat_row=flat_row,
     )
     return Arena(
         spec=spec, boxes=tuple(boxes),
@@ -709,9 +745,13 @@ def write_hfield_bin(path: Path, hfield_data: np.ndarray) -> None:
 
 
 def spec_to_dict(spec: TerrainSpec) -> dict:
-    """JSON-ready view of the spec: grid meta, heightfield meta, per-tile info."""
+    """JSON-ready view of the spec: grid meta, heightfield meta, per-tile info.
+
+    ``flat_row`` is written only when it is on, so an arena built without it is
+    byte-identical to one built before the flag existed -- the eval arena's
+    spec is the measurement fingerprint, and readers use ``spec.get``."""
     hf = spec.hfield
-    return {
+    out = {
         "seed": spec.seed,
         "n_rows": spec.n_rows,
         "n_cols": spec.n_cols,
@@ -741,3 +781,6 @@ def spec_to_dict(spec: TerrainSpec) -> dict:
             for t in spec.tiles
         ],
     }
+    if spec.flat_row:
+        out["flat_row"] = True
+    return out

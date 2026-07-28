@@ -46,7 +46,8 @@ class Arena:
     cell_y: float
     origin_xy: jp.ndarray  # (n_rows, n_types, 2) tile centres
     pad_h: jp.ndarray  # (n_rows, n_types) spawn pad heights
-    n_rows: int
+    n_rows: int  # curriculum levels, the flat row included when there is one
+    flat_row: bool  # true: level 0 is flat, every terrain row sits one higher
     n_types: int
     tile_size: float
     pad_jitter: float
@@ -108,6 +109,33 @@ def require_current_geometry(spec: dict, kind: str) -> None:
         )
 
 
+def require_flat_row(spec: dict, kind: str, want: bool) -> None:
+    """Refuse an arena whose flat row does not match what the run asked for.
+
+    The flat row is baked into the generated files, so the arena build and the
+    experiment preset have to agree. Neither mismatch shows up on its own:
+    without the row the run trains a level short of its configuration, and with
+    a row nobody asked for every logged level names a different terrain.
+
+    The flag describes the training arena. The eval arena never carries the
+    row (build-terrain refuses to add it), so eval loads ignore the run's
+    flag: a flat-row policy still scores on the standard course.
+    """
+    if kind == "eval":
+        want = False
+    has = bool(spec.get("flat_row", False))
+    if has == want:
+        return
+    flag = " --flat-row" if want else ""
+    built = "with" if has else "without"
+    raise ValueError(
+        f"terrain.flat_row={want} but the {kind} arena was built {built} the "
+        f"flat row. Rebuild it: `./training/run.sh build-terrain "
+        f"--arena {kind}{flag}`, or set terrain.flat_row={has} to train on the "
+        f"arena as built."
+    )
+
+
 def load(terrain_cfg) -> Arena:
     """Read one arena's generated files and the curriculum settings around them.
 
@@ -126,6 +154,14 @@ def load(terrain_cfg) -> Arena:
 
     spec = json.loads(Path(files["spec"]).read_text())
     require_current_geometry(spec, kind)
+    # Read with .get, unlike the fields below: an arena and a config from
+    # before the flat row both mean "no flat row", so absence is an answer
+    # here rather than a missing default.
+    want_flat = bool(terrain_cfg.get("flat_row", False))
+    require_flat_row(spec, kind, want_flat)
+    # The arena's own truth, not the run's flag: an eval load under a
+    # flat-row run carries no row.
+    flat_row = bool(spec.get("flat_row", False))
     origin_xy, pad_h = tables_from_spec(spec, terrain.TYPES)
 
     # A coarse fit check: the spawn scatter plus the standing footprint has to
@@ -154,6 +190,7 @@ def load(terrain_cfg) -> Arena:
         origin_xy=jp.asarray(origin_xy),
         pad_h=jp.asarray(pad_h),
         n_rows=int(spec["n_rows"]),
+        flat_row=flat_row,
         n_types=len(terrain.TYPES),
         tile_size=float(spec["tile_size"]),
         pad_jitter=pad_jitter,

@@ -329,8 +329,12 @@ def main() -> None:
             **env_cfg["terrain"], "spawn_level": args.terrain_level,
         }
     if args.terrain_arena and "terrain" in env_cfg:
+        # The eval arena's flat pads are smaller than the training arena's,
+        # and a training pad_jitter can scatter spawns off them (the env
+        # refuses to load). A render wants a deterministic spawn anyway.
         env_cfg["terrain"] = {
             **env_cfg["terrain"], "arena": args.terrain_arena,
+            "pad_jitter": 0.0,
         }
     env = make_env(task, env_cfg)
     print(f"scene: {env.xml_path}")

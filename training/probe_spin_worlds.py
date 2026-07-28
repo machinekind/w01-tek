@@ -22,7 +22,7 @@ from wojtek_rl.courses.spec import SpinCourse
 
 RUN = Path(sys.argv[1] if len(sys.argv) > 1 else "runs/wojtek_stiff_f_sym_20260726_seed1")
 
-run, env, ckpt, inf, _ = load_checkpoint_policy(RUN)
+run, env, ckpt, inf = load_checkpoint_policy(RUN)
 print(f"run {RUN.name} ckpt {ckpt.name}", flush=True)
 
 SPINS = [SpinCourse("spin_left", "wz+", 0.8), SpinCourse("spin_right", "wz-", -0.8)]

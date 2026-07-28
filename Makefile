@@ -43,9 +43,17 @@ hpc-push: hpc-vars
 
 # EXPERIMENT/RUN_NAME/NUM_ENVS/BATCH/EXTRA pass through, e.g.
 #   make hpc-train EXPERIMENT=locomotion RUN_NAME=fbb_loco_v1
+# Make cannot escape a comma inside $(if ...) with a backslash, so the
+# separator lives in $(comma). The old \, form silently dropped every
+# variable from --export (job NNNNNNN ran defaults that way).
+comma := ,
+empty :=
+space := $(empty) $(empty)
+TRAIN_VARS = EXPERIMENT RUN_NAME NUM_ENVS BATCH TERRAIN FLAT_ROW WANDB
+TRAIN_EXPORTS = $(subst $(space),,$(foreach v,$(TRAIN_VARS),$(if $($(v)),$(comma)$(v)=$($(v)))))
 hpc-train: hpc-vars
 	ssh $(HPC) "cd $(REMOTE) && mkdir -p logs && sbatch \
-	  --export=ALL$(if $(EXPERIMENT),\,EXPERIMENT=$(EXPERIMENT))$(if $(RUN_NAME),\,RUN_NAME=$(RUN_NAME))$(if $(NUM_ENVS),\,NUM_ENVS=$(NUM_ENVS))$(if $(BATCH),\,BATCH=$(BATCH))$(if $(TERRAIN),\,TERRAIN=$(TERRAIN))$(if $(FLAT_ROW),\,FLAT_ROW=$(FLAT_ROW))$(if $(WANDB),\,WANDB=$(WANDB))$(if $(EXTRA),\,EXTRA='$(EXTRA)') \
+	  --export=ALL$(TRAIN_EXPORTS)$(if $(EXTRA),$(comma)EXTRA='$(EXTRA)') \
 	  $(if $(TIME),--time=$(TIME)) training/hpc/train.slurm"
 
 hpc-status: hpc-vars

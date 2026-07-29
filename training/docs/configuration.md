@@ -553,12 +553,22 @@ The course, per cell: spawn at the tile centre on a fixed heading, walk out
 until the base is 1.45 m from the centre (one crossing), then the commanded
 forward speed flips sign and the robot walks back to within 0.30 m (the
 second). Four crossings. A run passes when all four finish inside its step
-budget with no fall. 8 headings x 4 start offsets = 32 runs per cell and
-commanded speed, at 0.4 / 0.7 m/s: 2752 runs, about 3.1M environment steps.
-Nothing is sampled, so two scans of one checkpoint agree. A third speed, 0.2
-m/s, was measured and dropped on 2026-07-27: finishing inside the step budget
-needs 62% speed tracking, the measured policies track about 60% at 0.2, and
-every one of them scored 0 there.
+budget with no fall. 8 headings x 4 start offsets x 2 noise draws = 64 runs per
+cell and commanded speed, at 0.4 / 0.7 m/s: 5504 runs, about 6.3M environment
+steps. Nothing is sampled, so two scans of one checkpoint agree. A third speed,
+0.2 m/s, was measured and dropped on 2026-07-27: finishing inside the step
+budget needs 62% speed tracking, the measured policies track about 60% at 0.2,
+and every one of them scored 0 there.
+
+The two noise draws are the same 32 physical starts, run twice. That doubling
+is what suite version `v3` is: the measured test-retest wobble moved one
+cell/speed pair by up to 6 of 32 runs across `--eval-seed` draws, and that
+spread is noise-draw variance, so a second draw of the same starts attacks
+exactly that axis without changing what is being tested. Draw is the outermost
+index in the course, so runs 0-31 are the old 32-run layout and 32-63 repeat it
+on the keys the per-run split hands them. Every number recorded out of 32 is a
+`v2` number and is not comparable; the relative gate refuses a baseline from a
+different suite version.
 
 Those radii are **Chebyshev** distances from the tile centre — `max(|dx|, |dy|)`,
 not the Euclidean radius — because that is how the terrain is built. Every
@@ -612,7 +622,7 @@ of climbing. Walking backwards is inside every real preset's command box.
 | Rubble and wave | 3 rows each | tracked |
 | Every type at difficulty 1.2 and 1.4 | 16 cells | tracked |
 
-As counts out of 32 runs the bars are 31, 26 and 20. Every threshold is
+As counts out of 64 runs the bars are 61, 52 and 39. Every threshold is
 printed with where its number came from: `plan` at 0.4 m/s, which is the only
 speed the terrain plan sets bars for, and `provisional` at 0.7, where the same
 numbers were carried across rather than invented. A provisional failure is a
@@ -633,7 +643,10 @@ against the previous keeper. The terrain plan wrote 10, but three scans of one
 checkpoint on different `--eval-seed` draws swung a single cell/speed pair by
 up to 18.75 points, so 10 fails on noise alone; the whole-course pass total
 moved only ~2% in the same test, which is where a tighter gate should live
-(2026-07-27 validation report). The
+(2026-07-27 validation report). That measurement was taken on the 32-run
+course, so at 64 runs the same per-run wobble is worth half the points and 25
+is conservative — tighten it from a fresh test-retest measurement at 64, not by
+halving the old number. The
 baseline is an input, published with the keeper it came from, not a file this
 repository keeps -- a best-ever number held in the repo hides which run set the
 bar, so a rejected policy could leave a bar behind nobody can trace.

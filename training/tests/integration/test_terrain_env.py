@@ -557,10 +557,10 @@ COUNTERS = ("crossings", "fell", "counted", "steps")
 def test_the_batched_rollout_matches_the_per_cell_one(monkeypatch):
     """The terrain scan's two rollouts, on the same runs.
 
-    `--per-cell` dispatches 32 worlds per cell per speed and is the reference;
+    `--per-cell` dispatches 64 worlds per cell per speed and is the reference;
     the default folds the cell axis into the batch and dispatches once per
     speed. This is the pair actually built against MJX: three cells in one
-    96-world batch against three 32-world dispatches, with each cell on its own
+    192-world batch against three 64-world dispatches, with each cell on its own
     tile and its own deadlines, and every run's outcome compared. The key
     streams and the batch layout are pinned exactly, and much more cheaply, in
     tests/unit/test_terrain_scan.py.
@@ -572,9 +572,9 @@ def test_the_batched_rollout_matches_the_per_cell_one(monkeypatch):
 
     The per-step metrics are NOT compared, and the reason is not this code: one
     mjx step is not batch-shape invariant on the jax CPU backend. Identical
-    states stepped as 32 worlds and as the first 32 of 96 part in the sixth
-    decimal of qpos -- identical lanes inside a single 96-world call do too,
-    in blocks of 32 -- and a legged robot amplifies that by roughly 10x per
+    states stepped as 64 worlds and as the first 64 of 192 part in the sixth
+    decimal of qpos -- identical lanes inside one batched call do too, in
+    blocks of 32 -- and a legged robot amplifies that by roughly 10x per
     step. The same comparison on the warp backend is pending a GPU run.
     """
     from wojtek_rl import terrain_scan, terrain_suite

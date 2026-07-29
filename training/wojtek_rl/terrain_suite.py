@@ -12,8 +12,8 @@ scans of one checkpoint return the same numbers. The pieces:
   and 1.4) sit past anything training reaches; they are measured, never gated.
 - `CELLS` -- one (terrain type, difficulty) pair per measured cell, with the
   pass-rate bar the terrain plan sets for it, or `None` for a tracked cell.
-- `COURSE` -- the 32 runs every cell is scored on: eight headings by four
-  start offsets.
+- `COURSE` -- the 64 runs every cell is scored on: eight headings by four
+  start offsets, on two draws of the policy's noise.
 
 Cell names are stable identifiers. They are what a gate compares against a
 baseline, so renaming one silently retires its history.
@@ -58,7 +58,8 @@ PLAN_SPEED = 0.4
 # bars gate at 0.4.
 SPEEDS = (PLAN_SPEED, 0.7)
 
-# The course: eight headings by four start offsets, 32 runs per cell and speed.
+# The course: eight headings by four start offsets, each start run on two draws
+# of the policy's noise -- 64 runs per cell and speed.
 N_HEADINGS = 8
 # Offsets along the heading, m. Small on purpose: the pad is 0.40 m and the
 # standing footprint reaches 0.36 m, so this is the room there is while all
@@ -67,7 +68,15 @@ N_HEADINGS = 8
 # 0.06/sqrt(2) = 0.042 m of Chebyshev radius, a third of a tread. That phase
 # is the foot-placement variable a riser is sensitive to.
 START_OFFSETS = (-0.03, -0.01, 0.01, 0.03)
-RUNS_PER_CELL_SPEED = N_HEADINGS * len(START_OFFSETS)
+# The same 32 physical starts, scored on two draws of the policy's noise. The
+# scan's measured test-retest wobble moved one cell/speed pair by up to 6 of 32
+# runs across --eval-seed draws (2026-07-27 validation), and that spread is
+# noise-draw variance: a second draw of the same starts attacks exactly that
+# axis without changing what is being tested. The draws differ only in the
+# rollout key each run is handed (terrain_scan splits the cell key per run), so
+# no physical dimension of the course moves.
+N_NOISE_DRAWS = 2
+RUNS_PER_CELL_SPEED = N_HEADINGS * len(START_OFFSETS) * N_NOISE_DRAWS
 
 # One crossing is a walk out to OUT_RADIUS or a walk back to BACK_RADIUS, both
 # measured as CHEBYSHEV distance from the tile centre -- max(|dx|, |dy|), not the
@@ -254,8 +263,9 @@ DIFFICULTIES, CELLS = _build()
 CELLS_BY_NAME = {c.name: c for c in CELLS}
 # Bumped when the cell set, the speed set or the arena changes in a way that
 # makes old numbers incomparable. The gate refuses a baseline from a different
-# version. v2 dropped the 0.2 m/s column.
-CELLS_VERSION = "v2"
+# version. v2 dropped the 0.2 m/s column. v3 doubled the runs per cell to 64
+# with a second noise draw, so every out-of-32 number is incomparable.
+CELLS_VERSION = "v3"
 
 
 def eval_arena_kwargs() -> dict:
@@ -290,7 +300,7 @@ def threshold(cell: Cell, speed: float) -> tuple[int | None, str]:
 
 
 def bar_count(bar: float, runs: int = RUNS_PER_CELL_SPEED) -> int:
-    """A pass-rate bar as a count of runs. 0.95/0.80/0.60 of 32 are 31/26/20."""
+    """A pass-rate bar as a count of runs. 0.95/0.80/0.60 of 64 are 61/52/39."""
     return math.ceil(bar * runs)
 
 
@@ -302,17 +312,28 @@ class Run:
     heading_index: int
     yaw: float  # rad, the fixed heading it walks and returns along
     offset: float  # m along the heading from the tile centre
+    draw: int  # which noise draw; both draws start from the same pose
 
 
 def course() -> tuple[Run, ...]:
-    """The 32 runs, in a fixed order: heading outer, start offset inner."""
+    """The 64 runs, in a fixed order: draw outer, heading, start offset inner.
+
+    Draw is outermost, so runs 0..31 are the 32-run course unchanged and 32..63
+    repeat those starts. What separates the two is the rollout key each run is
+    handed -- terrain_scan splits the cell's key into RUNS_PER_CELL_SPEED of
+    them -- so nothing physical distinguishes a draw.
+    """
     runs = []
-    for h in range(N_HEADINGS):
-        yaw = 2.0 * math.pi * h / N_HEADINGS
-        for offset in START_OFFSETS:
-            runs.append(
-                Run(index=len(runs), heading_index=h, yaw=yaw, offset=offset)
-            )
+    for draw in range(N_NOISE_DRAWS):
+        for h in range(N_HEADINGS):
+            yaw = 2.0 * math.pi * h / N_HEADINGS
+            for offset in START_OFFSETS:
+                runs.append(
+                    Run(
+                        index=len(runs), heading_index=h, yaw=yaw,
+                        offset=offset, draw=draw,
+                    )
+                )
     return tuple(runs)
 
 

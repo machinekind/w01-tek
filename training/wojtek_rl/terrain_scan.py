@@ -31,10 +31,11 @@ tread might be the hardest thing in the suite, and the number would then measure
 turning instead of climbing. Every real preset trains forward speed from -0.8 to
 1.2, so walking backwards is inside the trained command box.
 
-Nothing is sampled. Eight headings, four start offsets, two speeds, one fixed
-arena: two scans of one checkpoint at the same ``--eval-seed`` return the same
-numbers. A different ``--eval-seed`` redraws the rollout's noise on the same
-course, which is how the score's test-retest spread gets measured.
+Nothing is sampled. Eight headings, four start offsets, two noise draws of those
+32 starts, two speeds, one fixed arena: two scans of one checkpoint at the same
+``--eval-seed`` return the same numbers. A different ``--eval-seed`` redraws the
+rollout's noise on the same course, which is how the score's test-retest spread
+gets measured.
 """
 
 from __future__ import annotations
@@ -57,19 +58,25 @@ SATURATION_FRAC = 0.85
 # whose trained command box excludes it is flagged, not silently measured.
 COMMAND_HEIGHT = 0.125
 # A cell may not drop more than this many percentage points against the
-# baseline keeper. Sized from the scan's own test-retest noise: three scans
-# of one checkpoint on different --eval-seed draws moved a single cell/speed
-# pair by up to 6 of 32 runs (18.75 points), so the old 10-point limit
-# failed on noise alone (2026-07-27 validation report). The whole-course
-# pass total moved only ~2% in the same test; a tighter gate should compare
-# that total instead of single pairs.
+# baseline keeper. Sized from the scan's own test-retest noise on the 32-run
+# course: three scans of one checkpoint on different --eval-seed draws moved a
+# single cell/speed pair by up to 6 of 32 runs (18.75 points), so the old
+# 10-point limit failed on noise alone (2026-07-27 validation report). The
+# course now runs 64, where the same per-run wobble is worth half the points,
+# so this limit is conservative -- tighten it from a fresh test-retest
+# measurement at 64, not by halving the old number. The whole-course pass total
+# moved only ~2% in the same test; a tighter gate should compare that total
+# instead of single pairs.
 RELATIVE_DROP_LIMIT = 25.0
 # Warp contact pool per env: the env's own model-derived floor (22 geoms
 # collide with the heightfield at 4 contacts per pair), and still 7x the
 # per-env peak of 12 contacts measured on the GPU. The pool is allocated up
 # front for the whole batch, so a bigger one is not free -- a 256 pool is what
-# ran check-terrain out of device memory at 4096 envs. The scan records the peak
-# it actually reached, so too small shows up as a recorded overflow.
+# ran check-terrain out of device memory at 4096 envs. The batched scan
+# dispatches 43 cells x 64 runs = 2752 envs per speed, so 88 per env is a
+# 242,176-contact pool, about 23% of that 4096 x 256 combination. The scan
+# records the peak it actually reached, so too small shows up as a recorded
+# overflow.
 DEFAULT_NACONMAX_PER_ENV = 88
 SCAN_SCHEMA = 1
 
@@ -300,9 +307,12 @@ def relative_gate(scan: dict, baseline: dict | None) -> dict:
 def cell_key(cell, eval_seed: int = 0):
     """One cell's rollout key: which draw of the policy's noise it runs on.
 
-    Seed 0 has to return the base key unchanged -- every scan taken so far ran
-    on it, and those numbers are the baselines the relative gate compares
-    against. Any other seed is a fresh draw of the same course.
+    Seed 0 returns the base key unchanged and is the default, so every scan
+    taken without the flag -- including the baselines the relative gate compares
+    against -- sits on one stream. The v3 suite retired the v2 baselines, so
+    what seed 0 protects now is that two default scans are the same measurement
+    rather than two draws of it. Any other seed is a fresh draw of the same
+    course.
     """
     import jax
 
@@ -426,10 +436,11 @@ def command_box_warnings(run: dict, speeds=terrain_suite.SPEEDS) -> list[str]:
 
 
 def _spawn_table(env, cell) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """(centre, spawn_xy, yaw, pad_height) for one cell's 32 runs.
+    """(centre, spawn_xy, yaw, pad_height) for one cell's runs, in COURSE order.
 
     Offsets run along the heading, so what varies is where in the tread cycle
-    the robot first meets the obstacle."""
+    the robot first meets the obstacle. The two noise draws repeat the same
+    starts, so this table repeats with them."""
     type_index = terrain.TYPES.index(cell.terrain_type)
     centre = np.asarray(env._terrain.origin_xy)[cell.row, type_index]
     pad_h = float(np.asarray(env._terrain.pad_h)[cell.row, type_index])
@@ -616,8 +627,8 @@ def make_cell_runner(env, inf):
     """A jitted "score one cell at one speed" function.
 
     The reference path, selected by `--per-cell`: 86 sequential dispatches of a
-    32-world batch on a complete scan (43 cells by two speeds), which is why it
-    runs ~200x below what the physics sustains at training batch sizes.
+    64-world batch on a complete scan (43 cells by two speeds), which is why it
+    runs far below what the physics sustains at training batch sizes.
     `make_batch_runner` is the default.
     """
     import jax
@@ -697,17 +708,17 @@ def make_batch_runner(env, inf, n_cells):
 
 
 def reduce_runs(out) -> CellResult:
-    """One cell's 32 run outcomes into its recorded numbers.
+    """One cell's 64 run outcomes into its recorded numbers.
 
     The per-step metrics average over the runs that actually contributed steps,
-    not over all 32. A run that fell inside the settle window has no metric steps
+    not over all 64. A run that fell inside the settle window has no metric steps
     at all, so its saturation, tracking error and clearance come back as zero --
     averaging those in drags the cell's numbers toward zero exactly where falls
-    are common, which is the hard cells. On a cell where 20 of 32 runs fall early
+    are common, which is the hard cells. On a cell where 40 of 64 runs fall early
     that reported a tracking error 2.7x better than the survivors', biased in the
     direction that makes hard terrain look easy.
 
-    Pass, fall and timeout counts are over all 32 runs regardless: a fall is an
+    Pass, fall and timeout counts are over all 64 runs regardless: a fall is an
     outcome, not a missing measurement.
     """
     crossings = np.asarray(out["crossings"])
@@ -746,7 +757,7 @@ def _report(cell, speed, reduced: CellResult) -> None:
 
 
 def _rollout_per_cell(runner, env, cells, speeds, deadlines, budgets, eval_seed):
-    """The reference: one dispatch per cell per speed, 32 worlds at a time."""
+    """The reference: one dispatch per cell per speed, 64 worlds at a time."""
     import jax
 
     entries, env_steps = {}, 0
@@ -1009,7 +1020,7 @@ def main() -> None:
     )
     ap.add_argument(
         "--per-cell", action="store_true",
-        help="the reference rollout: one dispatch of 32 worlds per cell per "
+        help="the reference rollout: one dispatch of 64 worlds per cell per "
              "speed, 86 of them on a complete scan. The default puts the cell "
              "axis in the batch and dispatches once per speed",
     )
@@ -1019,7 +1030,11 @@ def main() -> None:
     if args.list_cells:
         for c in terrain_suite.CELLS:
             value, unit = terrain_suite.realized_dimension(c.terrain_type, c.difficulty)
-            bar = "tracked" if c.tracked else f"{c.bar:.0%} ({terrain_suite.bar_count(c.bar)}/32)"
+            bar = (
+                "tracked" if c.tracked else
+                f"{c.bar:.0%} ({terrain_suite.bar_count(c.bar)}"
+                f"/{terrain_suite.RUNS_PER_CELL_SPEED})"
+            )
             print(f"{c.name:34s} row {c.row:2d}  d={c.difficulty:.6f}  "
                   f"{value:5.1f} {unit:3s}  {bar}")
         return

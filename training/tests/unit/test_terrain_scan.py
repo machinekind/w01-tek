@@ -69,10 +69,10 @@ def test_cell_entry_carries_bar_and_provenance():
     r = terrain_scan.reduce_runs(_out([CROSSINGS] * N, [False] * N))
     at_plan = terrain_scan.cell_entry(cell, 0.4, r)
     assert at_plan["passed"] == N and at_plan["of"] == N
-    assert at_plan["bar"] == 26 and at_plan["provenance"] == "plan"
+    assert at_plan["bar"] == 52 and at_plan["provenance"] == "plan"
     assert at_plan["bar_fraction"] == 0.8
     off_plan = terrain_scan.cell_entry(cell, 0.7, r)
-    assert off_plan["bar"] == 26 and off_plan["provenance"] == "provisional"
+    assert off_plan["bar"] == 52 and off_plan["provenance"] == "provisional"
     tracked = terrain_scan.cell_entry(
         terrain_suite.CELLS_BY_NAME["pyramid_stairs_9cm"], 0.4, r
     )
@@ -95,8 +95,8 @@ def _cells(entries):
 
 
 def test_absolute_gate_passes_on_the_bar():
-    """The bar is a floor, not a strict inequality: exactly 26 of 32 passes."""
-    gate = terrain_scan.absolute_gate(_cells([("pyramid_stairs_5cm", 0.4, 26)]))
+    """The bar is a floor, not a strict inequality: exactly 52 of 64 passes."""
+    gate = terrain_scan.absolute_gate(_cells([("pyramid_stairs_5cm", 0.4, 52)]))
     assert gate["verdict"] == "pass"
     assert gate["checked"] == 1
 
@@ -104,7 +104,7 @@ def test_absolute_gate_passes_on_the_bar():
 def test_a_partial_scan_is_incomplete_not_a_pass():
     """"The four cells I measured are fine" must not read as "the policy
     passed"."""
-    cells = _cells([("pyramid_stairs_5cm", 0.4, 32)])
+    cells = _cells([("pyramid_stairs_5cm", 0.4, N)])
     assert terrain_scan.absolute_gate(cells)["verdict"] == "pass"
     gate = terrain_scan.absolute_gate(cells, expect_gated=terrain_scan.gated_pairs())
     assert gate["verdict"] == "incomplete"
@@ -124,7 +124,22 @@ def test_the_suite_measures_two_speeds():
     assert terrain_suite.PLAN_SPEED == 0.4
     # a suite change has to retire the old baselines rather than be compared
     # against them
-    assert terrain_suite.arena_fingerprint()["cells"] == "v2"
+    assert terrain_suite.arena_fingerprint()["cells"] == "v3"
+
+
+def test_the_course_runs_two_noise_draws_of_the_same_starts():
+    """v3 doubled the runs per cell without moving the course: draw is the
+    outermost index, so runs 0-31 are the v2 layout and 32-63 repeat those
+    starts. What separates them is the per-run key split."""
+    assert terrain_suite.N_NOISE_DRAWS == 2
+    assert terrain_suite.RUNS_PER_CELL_SPEED == 64
+    course = terrain_suite.COURSE
+    half = len(course) // 2
+    assert [r.draw for r in course] == [0] * half + [1] * half
+    for a, b in zip(course[:half], course[half:]):
+        assert (a.heading_index, a.yaw, a.offset) == (
+            b.heading_index, b.yaw, b.offset
+        )
 
 
 def test_gated_pairs_counts_every_gated_cell_at_every_speed():
@@ -133,14 +148,14 @@ def test_gated_pairs_counts_every_gated_cell_at_every_speed():
 
 
 def test_absolute_gate_fails_one_below():
-    gate = terrain_scan.absolute_gate(_cells([("pyramid_stairs_5cm", 0.4, 25)]))
+    gate = terrain_scan.absolute_gate(_cells([("pyramid_stairs_5cm", 0.4, 51)]))
     assert gate["verdict"] == "fail"
     assert gate["failures"] == [
         {
             "cell": "pyramid_stairs_5cm",
             "speed": "0.4",
-            "passed": 25,
-            "bar": 26,
+            "passed": 51,
+            "bar": 52,
             "provenance": "plan",
         }
     ]
@@ -182,26 +197,26 @@ def test_relative_gate_without_a_baseline_says_so():
 
 
 def test_relative_gate_allows_a_drop_inside_the_measured_noise():
-    now = _scan(_cells([("pyramid_stairs_5cm", 0.4, 25)]))
-    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 32)]))
-    # 32/32 -> 25/32 is 21.9 points. The scan's own test-retest noise swings
-    # a pair by up to 18.75 points, so the limit sits above that, at 25.
+    now = _scan(_cells([("pyramid_stairs_5cm", 0.4, 50)]))
+    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 64)]))
+    # 64/64 -> 50/64 is 21.9 points. The limit sits at 25, above the 18.75
+    # points the 32-run course's test-retest swing was measured at.
     gate = terrain_scan.relative_gate(now, base)
     assert gate["verdict"] == "pass", gate
     assert gate["drops"] == []
 
 
 def test_relative_gate_fails_a_big_drop():
-    now = _scan(_cells([("pyramid_stairs_5cm", 0.4, 23)]))
-    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 32)]))
+    now = _scan(_cells([("pyramid_stairs_5cm", 0.4, 46)]))
+    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 64)]))
     gate = terrain_scan.relative_gate(now, base)  # 28.1 points
     assert gate["verdict"] == "fail"
     assert gate["drops"][0]["drop"] == pytest.approx(28.1, abs=0.05)
 
 
 def test_relative_gate_gains_are_never_failures():
-    now = _scan(_cells([("pyramid_stairs_5cm", 0.4, 32)]))
-    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 10)]))
+    now = _scan(_cells([("pyramid_stairs_5cm", 0.4, N)]))
+    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 20)]))
     assert terrain_scan.relative_gate(now, base)["verdict"] == "pass"
 
 
@@ -210,7 +225,18 @@ def test_relative_gate_refuses_a_different_arena():
     than reporting a difference."""
     other = dict(terrain_suite.arena_fingerprint(), rows=10)
     now = _scan(_cells([("pyramid_stairs_5cm", 0.4, 5)]))
-    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 32)]), arena=other)
+    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, N)]), arena=other)
+    gate = terrain_scan.relative_gate(now, base)
+    assert gate["verdict"] == "refused"
+    assert "arena" in gate["notes"][0]
+
+
+def test_relative_gate_refuses_a_baseline_from_an_older_suite_version():
+    """The suite version rides in the arena fingerprint, so a baseline scored
+    out of 32 runs is refused rather than compared against one out of 64."""
+    v2 = dict(terrain_suite.arena_fingerprint(), cells="v2")
+    now = _scan(_cells([("pyramid_stairs_5cm", 0.4, 60)]))
+    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 30)]), arena=v2)
     gate = terrain_scan.relative_gate(now, base)
     assert gate["verdict"] == "refused"
     assert "arena" in gate["notes"][0]
@@ -218,7 +244,7 @@ def test_relative_gate_refuses_a_different_arena():
 
 def test_relative_gate_refuses_a_different_engine():
     now = _scan(_cells([("pyramid_stairs_5cm", 0.4, 5)]), engine="warp")
-    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 32)]), engine="jax")
+    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, N)]), engine="jax")
     gate = terrain_scan.relative_gate(now, base)
     assert gate["verdict"] == "refused"
     assert "engine" in gate["notes"][0]
@@ -227,9 +253,9 @@ def test_relative_gate_refuses_a_different_engine():
 def test_a_new_cell_has_nothing_to_compare_against():
     """Otherwise the 6.5 cm steps cell fails its own first gate."""
     now = _scan(
-        _cells([("pyramid_stairs_5cm", 0.4, 30), ("discrete_obstacles_6.5cm", 0.4, 0)])
+        _cells([("pyramid_stairs_5cm", 0.4, 60), ("discrete_obstacles_6.5cm", 0.4, 0)])
     )
-    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 30)]))
+    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 60)]))
     gate = terrain_scan.relative_gate(now, base)
     assert gate["verdict"] == "pass"
     assert gate["unmatched"] == ["discrete_obstacles_6.5cm@0.4"]
@@ -237,9 +263,9 @@ def test_a_new_cell_has_nothing_to_compare_against():
 
 def test_a_cell_missing_at_one_speed_only_is_unmatched_at_that_speed():
     now = _scan(
-        _cells([("pyramid_stairs_5cm", 0.4, 10), ("pyramid_stairs_5cm", 0.7, 10)])
+        _cells([("pyramid_stairs_5cm", 0.4, 20), ("pyramid_stairs_5cm", 0.7, 20)])
     )
-    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 32)]))
+    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, N)]))
     gate = terrain_scan.relative_gate(now, base)
     assert gate["verdict"] == "fail"  # the 0.4 pair dropped
     assert gate["unmatched"] == ["pyramid_stairs_5cm@0.7"]
@@ -275,9 +301,10 @@ def _raw_key(cell):
 @pytest.mark.parametrize(
     "name", ["pyramid_stairs_5cm", "discrete_obstacles_8cm", "rough_uniform_2.5cm"]
 )
-def test_seed_zero_is_the_historical_stream(name):
-    """Every scan taken so far ran on seed 0, and those numbers are the
-    baselines the relative gate compares against."""
+def test_seed_zero_is_the_default_stream(name):
+    """Seed 0 is the base key and the default, so every scan taken without the
+    flag -- the baselines the relative gate compares against included -- is the
+    same measurement rather than another draw of it."""
     cell = terrain_suite.CELLS_BY_NAME[name]
     raw = np.asarray(_raw_key(cell))
     np.testing.assert_array_equal(np.asarray(terrain_scan.cell_key(cell, 0)), raw)
@@ -546,7 +573,8 @@ def test_leg_sign_alternates_out_and_back():
 
 def test_a_fall_after_the_course_is_not_recorded():
     """A run keeps being stepped after its fourth crossing -- the batch is one
-    program over 32 envs -- and its command still says walk out, so it walks on.
+    program over every env in the dispatch -- and its command still says walk
+    out, so it walks on.
     Without the running gate, falling over a hundred steps after passing would
     turn the pass into a fall."""
     finished = np.array([False])  # no longer running: crossings == CROSSINGS
@@ -646,7 +674,7 @@ def test_metrics_average_only_over_runs_that_were_measured():
     in drags a cell's numbers toward zero exactly where falls are common -- the
     hard cells -- and in the direction that makes hard terrain look easy. On this
     case the diluted tracking error reads 2.7x better than the survivors'."""
-    n_fell, n_ok = 20, 12
+    n_fell, n_ok = 40, 24
     counted = np.array([0.0] * n_fell + [900.0] * n_ok)
     out = {
         "crossings": np.array([0] * n_fell + [CROSSINGS] * n_ok),

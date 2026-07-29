@@ -551,6 +551,99 @@ def test_scan_reset_places_a_run_on_its_tile(terrain_env_inst):
     )
 
 
+COUNTERS = ("crossings", "fell", "counted", "steps")
+
+
+def test_the_batched_rollout_matches_the_per_cell_one(monkeypatch):
+    """The terrain scan's two rollouts, on the same runs.
+
+    `--per-cell` dispatches 32 worlds per cell per speed and is the reference;
+    the default folds the cell axis into the batch and dispatches once per
+    speed. This is the pair actually built against MJX: three cells in one
+    96-world batch against three 32-world dispatches, with each cell on its own
+    tile and its own deadlines, and every run's outcome compared. The key
+    streams and the batch layout are pinned exactly, and much more cheaply, in
+    tests/unit/test_terrain_scan.py.
+
+    The flat scene, because the heightfield one costs about four minutes per
+    program to trace and compile and nothing under test here is
+    terrain-specific; `_spawn_table` reads nothing but the arena's tile
+    origins, so a stand-in arena stands in for the eval one.
+
+    The per-step metrics are NOT compared, and the reason is not this code: one
+    mjx step is not batch-shape invariant on the jax CPU backend. Identical
+    states stepped as 32 worlds and as the first 32 of 96 part in the sixth
+    decimal of qpos -- identical lanes inside a single 96-world call do too,
+    in blocks of 32 -- and a legged robot amplifies that by roughly 10x per
+    step. The same comparison on the warp backend is pending a GPU run.
+    """
+    from wojtek_rl import terrain_scan, terrain_suite
+
+    env = wojtek_env.WojtekJoystick()
+    runs = terrain_suite.RUNS_PER_CELL_SPEED
+    cells = [
+        terrain_suite.Cell(
+            name=f"probe_{ttype}", terrain_type=ttype, difficulty=0.5,
+            row=row, bar=None,
+        )
+        for row, ttype in enumerate(terrain.TYPES[:3])
+    ]
+    origin = np.zeros((len(cells), len(terrain.TYPES), 2), dtype=np.float32)
+    for row, _ in enumerate(cells):
+        origin[row, row] = (4.0 * row, 0.0)
+    arena = SimpleNamespace(
+        _terrain=SimpleNamespace(
+            origin_xy=origin,
+            pad_h=np.zeros((len(cells), len(terrain.TYPES)), dtype=np.float32),
+        )
+    )
+
+    def inf(obs, key):
+        """Stand-in policy, deterministic in (obs, key)."""
+        state = obs["state"]
+        noise = jax.random.uniform(
+            key, (state.shape[0], env.action_size), minval=-1.0, maxval=1.0
+        )
+        return 0.5 * jp.tanh(state[:, : env.action_size]) + 0.5 * noise, {}
+
+    # The real settle window is 50 steps and this rollout is 6, so without this
+    # nothing would be measured at all. Read when the rollout is traced, below.
+    monkeypatch.setattr(terrain_suite, "SETTLE_STEPS", 0)
+    budget = 6
+    speed, height = 0.4, terrain_scan.COMMAND_HEIGHT
+    # A different deadline per cell, so runs stop at different steps inside the
+    # one batch and a slice taken from the wrong cell lands on the wrong count.
+    deadlines = [np.full(runs, 2 + row, np.int32) for row, _ in enumerate(cells)]
+    tables = [terrain_scan._spawn_table(arena, c) for c in cells]
+    centre, spawn, yaw, pad_h = [np.concatenate(x) for x in zip(*tables)]
+
+    reference = terrain_scan.make_cell_runner(env, inf)
+    want = []
+    for row, cell in enumerate(cells):
+        centres, spawns, yaws, pads = tables[row]
+        want.append(jax.tree.map(np.asarray, reference(
+            terrain_scan.cell_key(cell), centres, spawns, pads, yaws,
+            speed, height, deadlines[row], budget=budget,
+        )))
+
+    batched = terrain_scan.make_batch_runner(env, inf, len(cells))
+    got = jax.tree.map(np.asarray, batched(
+        jp.stack([terrain_scan.cell_key(c) for c in cells]),
+        centre, spawn, pad_h, yaw, speed, height,
+        np.concatenate(deadlines), budget=budget,
+    ))
+
+    for row, cell in enumerate(cells):
+        part = slice(row * runs, (row + 1) * runs)
+        for key in COUNTERS:
+            np.testing.assert_array_equal(
+                got[key][part], want[row][key], err_msg=f"{cell.name} {key}"
+            )
+        # each cell ran to its own deadline, and every run was measured
+        assert np.all(got["steps"][part] == 2 + row)
+        assert np.all(got["counted"][part] > 0)
+
+
 def test_flat_env_uses_stock_wrapper():
     """A flat env carries no terrain state, so train.py leaves it on brax's
     stock wrap_for_brax_training (the terrain wrapper is never built)."""

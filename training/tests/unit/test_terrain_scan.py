@@ -46,6 +46,14 @@ def test_pass_requires_all_four_crossings_and_no_fall():
     assert r.nefc_max == 300
 
 
+def test_the_recorded_step_count_is_the_longest_run_in_the_cell():
+    """The rollout counts steps per run, so a cell's number is its own runs'
+    even when the dispatch it rode in carried 42 other cells."""
+    out = _out([CROSSINGS] * 3, [False] * 3)
+    out["steps"] = np.array([120, 940, 300])
+    assert terrain_scan.reduce_runs(out).steps == 940
+
+
 def test_a_fall_fails_the_run():
     """Falling during the course fails it, whatever the crossing count. The
     rollout is what makes sure a fall AFTER the fourth crossing is never
@@ -295,6 +303,139 @@ def test_cells_still_differ_from_each_other_under_one_seed():
     assert len(set(keys)) == len(terrain_suite.CELLS)
 
 
+# -- the batched rollout's keys -------------------------------------------------
+
+BATCH_CELLS = ("pyramid_stairs_5cm", "rough_uniform_1cm", "wave_6cm")
+
+
+def _stacked(names, eval_seed=0):
+    import jax.numpy as jp
+
+    cells = [terrain_suite.CELLS_BY_NAME[n] for n in names]
+    return cells, jp.stack([terrain_scan.cell_key(c, eval_seed) for c in cells])
+
+
+@pytest.mark.parametrize("eval_seed", [0, 3])
+def test_the_batched_reset_keys_are_the_sequential_ones(eval_seed):
+    """Run r of cell c has to start on the key 86 separate dispatches would
+    have handed it, or the batched scan is a different draw of the course."""
+    import jax
+
+    cells, keys = _stacked(BATCH_CELLS, eval_seed)
+    got = np.asarray(terrain_scan.batch_reset_keys(keys))
+    assert got.shape[0] == len(cells) * N
+    for index, cell in enumerate(cells):
+        want = jax.random.split(terrain_scan.cell_key(cell, eval_seed), N)
+        np.testing.assert_array_equal(got[index * N : (index + 1) * N], np.asarray(want))
+
+
+def test_the_batched_policy_keys_follow_each_cell_own_stream():
+    """The per-step key is per cell, not per batch: the same `rng, sub =
+    split(rng)` the sequential rollout walks, one row per cell."""
+    import jax
+
+    cells, keys = _stacked(BATCH_CELLS)
+    streams = [terrain_scan.cell_key(c) for c in cells]
+    for _ in range(3):
+        keys, sub = terrain_scan.batch_step_keys(keys)
+        for index, stream in enumerate(streams):
+            streams[index], want = jax.random.split(stream)
+            np.testing.assert_array_equal(np.asarray(sub[index]), np.asarray(want))
+        np.testing.assert_array_equal(
+            np.asarray(keys), np.asarray(jax.numpy.stack(streams))
+        )
+
+
+def test_the_batched_policy_call_is_the_per_cell_one():
+    """Each cell's runs go through the policy on that cell's own key and its own
+    observations, so the actions are the ones separate dispatches produced."""
+    import jax
+    import jax.numpy as jp
+
+    cells, keys = _stacked(BATCH_CELLS)
+    obs = {
+        "state": jp.arange(len(cells) * N * 3, dtype=jp.float32).reshape(-1, 3),
+        "privileged_state": jp.zeros((len(cells) * N, 2)),
+    }
+
+    def inf(o, key):
+        return o["state"] + jax.random.uniform(key, o["state"].shape), {}
+
+    action, rng = terrain_scan.batch_policy(inf, len(cells), obs, keys)
+    for index, cell in enumerate(cells):
+        part = slice(index * N, (index + 1) * N)
+        stream, sub = jax.random.split(terrain_scan.cell_key(cell))
+        want, _ = inf({"state": obs["state"][part]}, sub)
+        np.testing.assert_array_equal(np.asarray(action[part]), np.asarray(want))
+        np.testing.assert_array_equal(np.asarray(rng[index]), np.asarray(stream))
+
+
+def _fake_env():
+    """Just the tile table `_spawn_table` reads: no model, no device."""
+    from types import SimpleNamespace
+
+    from wojtek_rl import terrain
+
+    rng = np.random.default_rng(0)
+    shape = (len(terrain_suite.DIFFICULTIES), len(terrain.TYPES))
+    return SimpleNamespace(
+        _terrain=SimpleNamespace(
+            origin_xy=rng.normal(size=shape + (2,)) * 10.0,
+            pad_h=rng.uniform(size=shape),
+        )
+    )
+
+
+def _fake_runner(rng, centre, spawn_xy, pad_h, yaw, speed, height, deadline, budget):
+    """Per-env outputs that depend on every per-env input.
+
+    Nothing physical: the point is that a batch laid out or sliced the wrong way
+    cannot come back looking right. The key is per cell in both shapes -- one
+    row for the sequential rollout, one per cell for the batched one.
+    """
+    keys = np.asarray(rng, dtype=np.float64).reshape(-1, 2)[:, 0]
+    n = len(deadline)
+    signature = (
+        np.repeat(keys, n // len(keys)) * 1e-9
+        + spawn_xy[:, 0] + centre[:, 1] + pad_h + yaw + deadline + speed + height
+    ) % 1.0
+    return {
+        "crossings": (deadline % (terrain_suite.CROSSINGS + 1)).astype(np.int32),
+        "fell": (deadline % 3) == 0,
+        "saturation": signature,
+        "track_err": 1.0 - signature,
+        "clearance": signature / 2.0,
+        "counted": deadline.astype(np.float64),
+        "steps": np.minimum(deadline, budget),
+        "nacon_max": np.int32(11),
+        "nefc_max": np.int32(22),
+    }
+
+
+def test_the_two_rollout_drivers_fill_the_same_cells():
+    """One dispatch per cell per speed against one dispatch per speed, on the
+    same made-up physics: the batched driver has to hand each cell its own
+    tiles, keys and deadlines, and slice its runs back out in the same order."""
+    env = _fake_env()
+    cells = [terrain_suite.CELLS_BY_NAME[name] for name in BATCH_CELLS]
+    speeds = (0.4, 0.7)
+    budgets = {0.4: 300, 0.7: 200}
+    # Distinct per run and per speed, which is what makes a mis-laid-out batch
+    # land on the wrong numbers rather than the right ones by symmetry.
+    deadlines = {
+        speed: (np.arange(N) + int(1000 * speed)).astype(np.int32) for speed in speeds
+    }
+    args = (_fake_runner, env, cells, speeds, deadlines, budgets, 3)
+    one, steps_one = terrain_scan._rollout_per_cell(*args)
+    batched, steps_batched = terrain_scan._rollout_batched(*args)
+
+    assert batched == one
+    assert steps_batched == steps_one
+    # and in the order the JSON is written in: cells outer, speeds inner
+    assert list(batched) == [c.name for c in cells]
+    assert all(list(per_speed) == ["0.4", "0.7"] for per_speed in batched.values())
+
+
 def test_a_baseline_on_another_seed_is_flagged():
     assert terrain_scan.baseline_seed_warnings({"eval_seed": 0}, 0) == []
     assert terrain_scan.baseline_seed_warnings(None, 3) == []
@@ -314,7 +455,10 @@ def test_the_cli_takes_an_eval_seed(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["terrain-scan", "--help"])
     with pytest.raises(SystemExit):
         terrain_scan.main()
-    assert "--eval-seed" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "--eval-seed" in out
+    # the reference rollout the batched one is validated against
+    assert "--per-cell" in out
 
 
 # -- command box ---------------------------------------------------------------

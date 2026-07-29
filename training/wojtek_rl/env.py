@@ -1055,34 +1055,42 @@ class WojtekJoystick(WojtekEnv):
 
         qvel = data.qvel[self._vadr]
 
-        # Velocity tracking kernel: the legacy exponential, optionally
+        # Velocity tracking kernels (absolute or relative), optionally
         # blended with a wider far-field exponential so far-off-command
         # states still see a gradient toward the command (see
         # tracking_far_weight in default_config). far_w is static config,
-        # so 0 reproduces the legacy kernel exactly.
+        # so 0 reproduces either bare kernel exactly.
         far_w = self._config.reward.get("tracking_far_weight", 0.0)
 
+        def _far_blend(kernel, err_sq):
+            if not far_w:
+                return kernel
+            far = jp.exp(-err_sq / self._config.reward.tracking_far_sigma)
+            return (1.0 - far_w) * kernel + far_w * far
+
         def _track(err_sq):
-            r = jp.exp(-err_sq / sigma)
-            if far_w:
-                far = jp.exp(-err_sq / self._config.reward.tracking_far_sigma)
-                r = (1.0 - far_w) * r + far_w * far
-            return r
+            return _far_blend(jp.exp(-err_sq / sigma), err_sq)
 
         if self._config.reward.get("tracking_relative", False):
             r = self._config.reward
+            err_lin = jp.sum(jp.square(cmd[:2] - linvel[:2]))
+            err_ang = jp.square(cmd[2] - gyro[2])
             denom_lin = jp.maximum(
                 jp.linalg.norm(cmd[:2]), r.tracking_rel_floor_lin
             )
             denom_ang = jp.maximum(jp.abs(cmd[2]), r.tracking_rel_floor_ang)
             k_lin = jp.exp(
-                -jp.sum(jp.square(cmd[:2] - linvel[:2]))
-                / (r.tracking_rel_sigma * jp.square(denom_lin))
+                -err_lin / (r.tracking_rel_sigma * jp.square(denom_lin))
             )
             k_ang = jp.exp(
-                -jp.square(cmd[2] - gyro[2])
-                / (r.tracking_rel_sigma * jp.square(denom_ang))
+                -err_ang / (r.tracking_rel_sigma * jp.square(denom_ang))
             )
+            # The far mix-in applies to the relative kernels too. The far
+            # kernel stays absolute: a state far off the command sees the
+            # same pull at any commanded speed, and the kernel's optimum
+            # is unchanged.
+            k_lin = _far_blend(k_lin, err_lin)
+            k_ang = _far_blend(k_ang, err_ang)
         else:
             k_lin = _track(jp.sum(jp.square(cmd[:2] - linvel[:2])))
             k_ang = _track(jp.square(cmd[2] - gyro[2]))

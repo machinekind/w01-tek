@@ -148,6 +148,39 @@ def test_torque_limit_positive_above_cap(env, reset_state):
     assert float(_reward_for_actuator_force(env, reset_state, above)) > 0.0
 
 
+def test_tracking_far_is_live_under_relative_kernels(env, reset_state):
+    """The far mix-in must blend into the relative kernels too. It used to
+    apply only in the absolute branch, so terrain_blind_v3 (tracking_relative
+    with tracking_far dropped as inert) lost the far-field gradient that
+    fixed stiff_b's dead spin. A robot at rest under a pure-spin command
+    must score visibly higher tracking_ang_vel with the blend on."""
+    r = env._config.reward
+    saved_rel, saved_w = r.tracking_relative, r.tracking_far_weight
+    info = dict(reset_state.info)
+    info["command"] = jp.array([0.0, 0.0, 1.5, 0.125])
+
+    def k_ang():
+        rewards, _ = env._get_reward(
+            reset_state.data, info, jp.zeros(12), jp.zeros(12),
+            jp.zeros(4, dtype=bool), jp.zeros(4, dtype=bool),
+        )
+        return float(rewards["tracking_ang_vel"])
+
+    try:
+        r.tracking_relative = True
+        r.tracking_far_weight = 0.0
+        bare = k_ang()
+        r.tracking_far_weight = 0.25
+        blended = k_ang()
+    finally:
+        r.tracking_relative = saved_rel
+        r.tracking_far_weight = saved_w
+    # at rest: bare relative kernel ~exp(-1/rel_sigma), far term
+    # ~exp(-2.25/2.5) -- the blend must lift the reward well clear
+    assert blended > 3.0 * bare
+    assert blended <= 1.0
+
+
 # -- pd_kp / pd_kd ---------------------------------------------------------
 
 

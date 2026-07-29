@@ -285,6 +285,12 @@ def load_checkpoint_policy(run_dir: Path, *, flat: bool = True, env_overrides=No
     # stand metrics; robustness is trained, not measured here).
     env_cfg = dict(run.get("env_config") or {})
     env_cfg["push"] = {**env_cfg.get("push", {}), "enable": False}
+    # Measure in the deployment frame. A run trained with the symmetry
+    # augmentation stores symmetry.enable=true, and a measurement env built
+    # from that draws its mirror flag at reset -- with mirror_prob 0.5 every
+    # sided result (spin left vs right, strafe courses) lands in a coin-flip
+    # frame. The robot always runs un-mirrored.
+    env_cfg["symmetry"] = {**env_cfg.get("symmetry", {}), "enable": False}
     if "terrain" in env_cfg:
         if flat:
             env_cfg["terrain"] = {**env_cfg["terrain"], "enable": False}

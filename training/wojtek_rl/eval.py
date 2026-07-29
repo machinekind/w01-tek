@@ -322,6 +322,11 @@ def main() -> None:
     env_cfg = dict(run.get("env_config") or {})
     if not args.push:
         env_cfg["push"] = {**env_cfg.get("push", {}), "enable": False}
+    # Render in the deployment frame: with the training value of
+    # symmetry.enable the env may draw mirror=true at reset and the video
+    # shows the laterally flipped world (a "strafe left" clip strafing
+    # right). The robot always runs un-mirrored.
+    env_cfg["symmetry"] = {**env_cfg.get("symmetry", {}), "enable": False}
     if args.flat and "terrain" in env_cfg:
         env_cfg["terrain"] = {**env_cfg["terrain"], "enable": False}
     if args.terrain_level is not None and "terrain" in env_cfg:

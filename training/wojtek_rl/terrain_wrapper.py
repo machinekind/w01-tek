@@ -77,6 +77,8 @@ class TerrainAutoResetWrapper(Wrapper):
         self._pad_jitter = base._terrain.pad_jitter
         self._spawn_yaw = base._terrain.spawn_yaw
         self._demote_fraction = base._terrain.demote_fraction
+        # For reseeding the no-progress meter on respawn (see step below).
+        self._cmd_speed = base._cmd_speed
         # EpisodeWrapper's length, for projecting the demote threshold onto a
         # full episode. Without one below us there are no truncation dones and
         # no "steps" key either, so the env's own length is the right fallback.
@@ -164,4 +166,13 @@ class TerrainAutoResetWrapper(Wrapper):
             done, jp.zeros_like(info["commanded_dist"]), info["commanded_dist"]
         )
         info["terrain_rng"] = new_rng
+        if "progress_ema" in info:
+            # A respawn keeps the dead episode's command and clocks (the
+            # auto-reset contract here), so the no-progress meter restarts
+            # by hand: reseed to ratio 1, exactly like reset does. Left
+            # stale, a cut env would respawn with a sub-threshold EMA and
+            # no grace (steps_since_cmd carries over) and be cut again
+            # within a second.
+            demand = jax.vmap(self._cmd_speed)(info["command"])
+            info["progress_ema"] = jp.where(done, demand, info["progress_ema"])
         return state.replace(data=data, obs=obs, info=info)

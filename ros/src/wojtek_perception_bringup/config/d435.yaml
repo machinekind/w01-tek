@@ -1,0 +1,92 @@
+# RealSense D435 settings for the on-robot perception pipeline.
+#
+# The values under `realsense:` are measured, not guessed -- see
+# docs/perception/d435-noise.md for the bench that produced them. Summary of
+# why each one is what it is:
+#
+#   visual_preset 3 (HIGH_ACCURACY)  temporal noise at 3-4 m drops 97 -> 33 mm
+#                                    versus the DEFAULT preset (3x). Costs
+#                                    fill rate (95% -> 65%), which the grid
+#                                    reduction gets back for free (patch
+#                                    medians over thousands of pixels bring
+#                                    the reduced grid to ~100% fill).
+#   temporal filter_smooth_delta 100 The librealsense default of 20 (mm) is
+#                                    below the frame-to-frame jump at range,
+#                                    so the filter treats real noise as
+#                                    motion and passes it through -- measured
+#                                    *worse* than no filter at 3-4 m. At 100
+#                                    it works: 39 -> 10 mm at 2-3 m.
+#   decimation magnitude 2           848x480 -> 424x240. Halves the host cost
+#                                    of the spatial filter, which is the
+#                                    expensive one, at no measured accuracy
+#                                    cost.
+#   laser_power 150 (default)        Raising it to the 360 max buys ~15% on
+#                                    the DEFAULT preset and nothing
+#                                    measurable on HIGH_ACCURACY.
+#   clip_distance 3.0                Beyond 3 m the radial noise exceeds the
+#                                    0.05 m map cell, so those returns paint
+#                                    obstacles that are not there.
+#   fps 10                           The planner replans at 10 Hz. At 30 Hz
+#                                    the post-processing chain alone eats a
+#                                    whole RPi core for frames nobody reads.
+#
+# PARAMETER NAMES: these target realsense2_camera 4.54+. The driver has
+# renamed parameters across releases (depth_width/height/fps became
+# depth_module.depth_profile, and the filter parameters moved under their
+# filter name). Verify against the installed driver with
+#   ros2 param list /camera/camera
+# before trusting a silent default.
+
+realsense:
+  # -- streams ------------------------------------------------------------
+  enable_depth: true
+  enable_color: false          # launch arg `enable_color` flips this
+  enable_infra1: false
+  enable_infra2: false
+  # The driver builds a PointCloud2 if asked; we do not want it. Reducing
+  # from the depth image is far cheaper than reducing from a 400k-point
+  # cloud that was serialised first.
+  pointcloud.enable: false
+
+  depth_module.depth_profile: "848x480x10"
+  rgb_camera.color_profile: "848x480x10"
+
+  # -- depth quality ------------------------------------------------------
+  depth_module.visual_preset: 3      # 3 = HIGH_ACCURACY
+  depth_module.emitter_enabled: 1
+  depth_module.laser_power: 150.0
+
+  # -- post-processing (order matters: decimation first) ------------------
+  decimation_filter.enable: true
+  decimation_filter.filter_magnitude: 2
+  spatial_filter.enable: true
+  temporal_filter.enable: true
+  temporal_filter.filter_smooth_alpha: 0.4
+  temporal_filter.filter_smooth_delta: 100
+
+  clip_distance: 3.0
+
+  # -- frames -------------------------------------------------------------
+  # The driver publishes the static camera_link -> *_optical_frame chain.
+  # Left on: the reduction node needs the optical frame to mean anything.
+  # This is the one singleton in this launch besides the container.
+  publish_tf: true
+  tf_publish_rate: 0.0          # 0 = static only, no periodic republish
+
+# Grid reduction: depth image -> coarse terrain reference cloud.
+#
+# grid 8x8 = 64 points. Measured: aggregating 6360 px into one point removes
+# only 1.8x of the noise (stereo noise is spatially correlated, so patch
+# neighbours err the same way), but it does take fill from 74% to 100%.
+# So the grid is chosen for coverage and cost, not for denoising.
+#
+# Angular resolution is the real limit, not noise: at a 0.25 m mount height
+# one 8x8 cell covers ~2 m of floor at 2 m range, so this grid reports
+# "flat / rising / obstacle", never stair treads. See the doc before
+# raising expectations of it.
+reduce:
+  grid_w: 8
+  grid_h: 8
+  min_range: 0.3               # below the D435's min-Z; nothing valid here
+  max_range: 3.0               # keep in step with realsense clip_distance
+  min_valid_frac: 0.05         # patch needs this fraction of valid px to count

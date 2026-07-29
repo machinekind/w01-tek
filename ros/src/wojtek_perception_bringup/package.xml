@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>wojtek_perception_bringup</name>
+  <version>0.1.0</version>
+  <description>
+    Perception pipeline bringup for wojtek: the RealSense D435 depth stream,
+    its post-processing settings, and the reduction of that depth into the
+    coarse terrain-reference cloud the planner/policy consume.
+
+    Composes several packages (the third-party realsense2_camera driver plus
+    this package's own reduction node), which is why it is a *_bringup and
+    not a launch file inside a single node package.
+  </description>
+  <maintainer email="kchmielewski707@gmail.com">Jakub Chmielewski</maintainer>
+  <license>MIT</license>
+
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>sensor_msgs_py</depend>
+  <depend>std_msgs</depend>
+  <depend>python3-numpy</depend>
+
+  <!-- The depth driver. Not wrapped in a package of our own: it is
+       configured from config/d435.yaml, not subclassed. -->
+  <exec_depend>realsense2_camera</exec_depend>
+  <!-- component_container_mt, so the driver runs composable (intra-process,
+       zero-copy) instead of pushing depth frames through DDS. -->
+  <exec_depend>rclcpp_components</exec_depend>
+  <!-- static_transform_publisher for the camera->body extrinsics. -->
+  <exec_depend>tf2_ros</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

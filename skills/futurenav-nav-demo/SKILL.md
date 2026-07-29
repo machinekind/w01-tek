@@ -58,9 +58,14 @@ executor → policy path with no VLM in the loop.
 
 ## 3. Rent the GPU
 
-Filter offers on: `gpu_ram ≥ 22000`, `disk_space ≥ 60`, `reliability2 ≥ 0.98`, high
-`inet_down` (11.7 GB of weights). Pick Ampere or newer — Turing (RTX 2080 Ti) has no real
-bf16 and the server loads with `dtype=bfloat16`.
+For the demo, `gpu_ram ≥ 12` (peak use is ~8.5 GiB), `disk_space ≥ 40`
+(weights ~15 GB installed) and any `inet_down` are enough — stricter filters
+carried over from training just prune the cheap hosts (measured 2026-07: the
+strict filter's cheapest EU offer was $0.47/hr while an A5000 at $0.23
+satisfied the relaxed one). Keep `reliability > 0.98` and pick Ampere or
+newer — Turing (RTX 2080 Ti) has no real bf16 and the server loads with
+`dtype=bfloat16`. Note the driver version in the offer row: ≥ 525 works with
+the cu124 wheels deploy.sh installs.
 
 ```bash
 vastai create instance OFFER_ID \
@@ -82,11 +87,19 @@ Poll until `actual_status` is `running` and read `status_msg` while waiting. A h
 failure (`failed to inject CDI devices: ... gpu=1: unknown`) never recovers — destroy and
 pick a different `machine_id`.
 
-SSH access needs a key on the instance, not on the account:
+SSH access needs a key on the instance, not on the account — and `attach ssh`
+issued while the instance is still `loading` silently does nothing. Attach
+**after** `actual_status` is `running`, and retry the first ssh a couple of
+times (key propagation takes ~10 s):
 
 ```bash
 vastai attach ssh INSTANCE_ID "$(cat ~/.ssh/id_rsa.pub)"
 ```
+
+Two macOS/ssh-config traps: a global `User <name>` line at the top of
+`~/.ssh/config` (outside any Host block) overrides `User root` inside a later
+Host block — always connect as `root@<alias>` explicitly. And macOS has no
+`setsid`; detach remote processes on the Linux side (as above), not locally.
 
 Connect to the direct address from `vastai ssh-url ID`, not the `sshN.vast.ai` proxy
 (see `vastai-gpu-training-ops`).
@@ -103,6 +116,14 @@ exactly on time and does not warn first.
 
 ## 5. Deploy and start
 
+`deploy.sh` installs torch from the **cu124 index before** `requirements.txt`
+and asserts `torch.cuda.is_available()` before printing `DEPLOY_OK` — an
+unpinned `torch` resolves to a cu130+ wheel needing driver ≥ 580, and on the
+common vast 525/570 hosts CUDA init fails *silently*: the model loads on CPU,
+`/health` says `"device":"cpu"`, and every `/act` takes ~30 s. If the assert
+fires, fix the wheel (`--index-url .../whl/cu124`, or cu121 for very old
+drivers) before any start — never after (see the port note below).
+
 ```bash
 cd "$MAIN/training/wojtek_rl/futurenav_server" && ./deploy.sh futurenav-gpu
 ```
@@ -114,6 +135,20 @@ session and leaves no log:
 
 ```bash
 ssh -n futurenav-gpu 'cd /root/futurenav && setsid nohup ./start.sh > server.log 2>&1 < /dev/null &'
+```
+
+The server's process is `python -m uvicorn server:app` — **neither
+`server.py` nor `start.sh` appears in its cmdline**, so those pkill patterns
+miss it. Worse, `pkill -f "server.py|start.sh"` inside an `ssh '...'` matches
+the ssh command's own cmdline and kills the shell before it relaunches
+anything. The correct pattern is `pkill -f "[u]vicorn server:app"` — but on a
+disposable box, don't fight for the port at all: a stale process on 8100
+means each new one dies on bind *after* logging `engine ready on cuda`, which
+reads like success. Start the replacement on another port instead:
+
+```bash
+ssh -n HOST 'cd ~/futurenav && FUTURENAV_PORT=8101 setsid nohup ./start.sh > server2.log 2>&1 < /dev/null &'
+ssh -N -L 8100:localhost:8101 HOST   # local port unchanged, room app untouched
 ```
 
 Model load is ~2 min (3 shards, 8-bit). Then tunnel and poll:

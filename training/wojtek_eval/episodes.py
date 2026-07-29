@@ -172,7 +172,7 @@ def _wrap(a: float) -> float:
 
 def score_episode(ep: Episode, result: dict, grid: GridMap) -> dict:
     """result: state, reason, final_pose, path_length, trail, steps, blocked,
-    failures, wall_s (from runner). Returns the metrics row."""
+    collisions, failures, wall_s (from runner). Returns the metrics row."""
     done = result["state"] == "done" and result.get("reason") == "vlm_done"
     row = {
         "id": ep.id, "scene": ep.scene, "task": ep.task, "spoken": ep.spoken,
@@ -181,6 +181,7 @@ def score_episode(ep: Episode, result: dict, grid: GridMap) -> dict:
         "wer": (ep.audio or {}).get("wer"),
         "steps": result["steps"], "path_len": round(result["path_length"], 2),
         "blocked": result["blocked"], "failures": result.get("failures", 0),
+        "collisions": result.get("collisions", 0),
         "wall_s": round(result.get("wall_s", 0.0), 1),
         "end_state": f"{result['state']}/{result.get('reason')}",
     }
@@ -247,7 +248,8 @@ def summarize(rows: list[dict]) -> dict:
         return {
             "n": len(sel), "sr": mean("success"), "oracle_sr": mean("oracle_success"),
             "spl": mean("spl"), "softspl": mean("softspl"), "dtg": mean("dtg"),
-            "steps": mean("steps"), "blocked": mean("blocked"), "wer": mean("wer"),
+            "steps": mean("steps"), "blocked": mean("blocked"),
+            "collisions": mean("collisions"), "wer": mean("wer"),
         }
 
     out = {"overall": agg(rows)}
@@ -265,3 +267,18 @@ def summarize(rows: list[dict]) -> dict:
 
 def episodes_to_json(episodes: list[Episode]) -> str:
     return json.dumps([asdict(e) for e in episodes], indent=1)
+
+
+def episodes_from_json(text: str) -> list[Episode]:
+    """Reload a suite verbatim (runner --suite).
+
+    Cross-model and cross-planner scoreboards are only comparable on the
+    *same* episodes: regenerating changes the rng draws (and therefore the
+    start poses, goals and spoken flags) whenever the generator or the task
+    mix changes. Pin the suite instead of trusting a seed."""
+    out = []
+    for d in json.loads(text):
+        d = dict(d)
+        d["start"] = tuple(d["start"])
+        out.append(Episode(**d))
+    return out

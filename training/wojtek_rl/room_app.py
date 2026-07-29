@@ -58,6 +58,11 @@ RENDER_EVERY = 2           # ~25 fps per view
 FALLEN_HEIGHT = 0.05       # base z below this -> fell into a weird pose
 FALLEN_GRAVITY_Z = -0.5    # body-frame gravity z above this -> tipped over
 MIN_FORWARD_CLEARANCE_M = 0.45  # refuse a forward step when an object is closer
+SENSE_EVERY = 5            # depth into the SCAN map at 10 Hz while walking
+# Map panel cadence. 1 Hz was fine for a static occupancy grid; the planner
+# panel animates (guidance, spline, the twin cylinders turning with the body),
+# so it is worth 5 Hz -- plan_image costs ~1 ms.
+MAP_EVERY = 10
 # FutureNav's training camera (Habitat R2R RGB sensor): square, HFOV 90.
 VLM_FRAME_PX = 224
 VLNCE_HFOV_DEG = 90.0
@@ -78,7 +83,8 @@ def _world_half() -> float:
 class RoomSim:
     """Plain-MuJoCo sim + NumPy policy + both cameras + command sources."""
 
-    def __init__(self, scene_xml: Path, policy_npz: Path, vlm_cam: str = "ego"):
+    def __init__(self, scene_xml: Path, policy_npz: Path, vlm_cam: str = "ego",
+                 local_planner: bool = True):
         import mujoco
 
         self._mujoco = mujoco
@@ -116,13 +122,25 @@ class RoomSim:
         self.cam.azimuth = VIEW["azimuth"]
 
         self.cfg = NavConfig(**NAV)
-        self.executor = MidLevelExecutor(self.cfg)
         self._init_online_map()
+        # Mid-level commands go through the SCAN local planner unless it is
+        # switched off for an A/B (--no-local-planner): same submit/active/
+        # blocked contract either way, so VlmNavigator cannot tell.
+        self.scan = self._make_scan() if local_planner else None
+        self.executor = self.scan.executor if self.scan else MidLevelExecutor(self.cfg)
         self.target: tuple[float, float] | None = None
         self._cmd = (0.0, 0.0, 0.0)
+        self._tick = 0
         self.resets = 0  # lets the VLM navigator tell a fall-reset from completion
         self.reset()
         logger.success("room sim ready")
+
+    def _make_scan(self):
+        """SCAN local planner over its own depth-built map (nothing is read
+        from the oracle grid; on the real robot there is no oracle grid)."""
+        from wojtek_rl.scan.stack import ScanStack
+
+        return ScanStack(self.model, self.data, dt=1.0 / CONTROL_HZ, cfg=self.cfg)
 
     def _init_online_map(self):
         """Agent-built occupancy map (same one the eval tier uses): fused
@@ -180,6 +198,9 @@ class RoomSim:
         mujoco.mj_forward(self.model, self.data)
         self.policy.reset()
         self.executor.clear()
+        if getattr(self, "scan", None) is not None:
+            self.scan.reset()
+            self.executor = self.scan.executor
         self.target = None
         self._cmd = (0.0, 0.0, 0.0)
         if hasattr(self, "omap"):
@@ -201,9 +222,10 @@ class RoomSim:
             cmd = parse_command(text)
         except ValueError as e:
             return {"ok": False, "error": str(e)}
-        # Proactive stop: refuse a forward step that would drive into an object
-        # right ahead, so the robot halts near the goal instead of ramming it.
-        if isinstance(cmd, Forward):
+        # Without the planner, a proactive veto is the only thing standing
+        # between "forward 2" and the coffee table. With it, the move is
+        # planned around the table instead of refused.
+        if isinstance(cmd, Forward) and self.scan is None:
             clr = self._forward_clearance_m()
             if clr < MIN_FORWARD_CLEARANCE_M:
                 return {"ok": False, "error": f"obstacle {clr:.2f} m ahead (too close to move forward)"}
@@ -226,6 +248,10 @@ class RoomSim:
 
     def set_target(self, x: float, y: float):
         self.executor.submit(Stop())
+        if self.scan is not None:
+            self.target = None
+            self.scan.executor.goto(float(x), float(y), (self.pose()[0], self.pose()[1]))
+            return
         self.target = (float(x), float(y))
 
     # -- sim loop -----------------------------------------------------------
@@ -239,6 +265,10 @@ class RoomSim:
         x, y, yaw = self.pose()
         reached = False
         dist = 0.0
+        if self.scan is not None:
+            self._tick += 1
+            if self._tick % SENSE_EVERY == 0:
+                self.scan.sense(x, y)
         if self.executor.active:
             mode = "midlevel"
             self._cmd = self.executor.update(x, y, yaw)
@@ -286,10 +316,44 @@ class RoomSim:
         from PIL import Image
 
         self.chase_renderer.update_scene(self.data, **scene_kw)
+        self._overlay_footprint(self.chase_renderer)
         frame = self.chase_renderer.render()
         buf = io.BytesIO()
         Image.fromarray(frame).save(buf, format="JPEG", quality=82)
         return base64.b64encode(buf.getvalue()).decode("ascii")
+
+    def _overlay_footprint(self, renderer) -> None:
+        """Draw the planner's twin collision cylinders into a render scene.
+
+        Overlay geoms only: appended to the MjvScene after update_scene, so
+        they exist in the browser's chase view and nowhere else -- not in
+        physics, not in the ego/VLM frames, not in the depth channel the map
+        is built from. This is the visual answer to "is the body model
+        actually where I think it is": two translucent yellow columns
+        spanning exactly the obstacle band the map stores.
+        """
+        if self.scan is None:
+            return
+        import mujoco
+
+        scene = getattr(renderer, "scene", None) or renderer._scene
+        fp = self.scan.footprint
+        z0, z1 = self.scan.map.cfg.z_step, self.scan.map.cfg.z_up
+        x, y, yaw = self.pose()
+        front, rear = fp.centers(x, y, yaw)
+        for cx, cy in (front[0], rear[0]):
+            if scene.ngeom >= scene.maxgeom:
+                return
+            g = scene.geoms[scene.ngeom]
+            mujoco.mjv_initGeom(
+                g,
+                mujoco.mjtGeom.mjGEOM_CYLINDER,
+                size=np.array([fp.radius, fp.radius, (z1 - z0) / 2.0]),
+                pos=np.array([cx, cy, (z0 + z1) / 2.0]),
+                mat=np.eye(3).reshape(-1),
+                rgba=np.array([1.0, 0.85, 0.2, 0.28], np.float32),
+            )
+            scene.ngeom += 1
 
     def vlm_frame_jpeg(self) -> str:
         """Clean square VLN-CE-style RGB frame for the FutureNav model: no HUD,
@@ -341,10 +405,22 @@ class RoomSim:
         return base64.b64encode(buf.getvalue()).decode("ascii")
 
     def map_jpeg(self, px: int = 300) -> str:
-        """Standalone agent-map panel for the demo UI."""
+        """Standalone agent-map panel for the demo UI.
+
+        With the planner on this is the planner's own view -- log-odds map,
+        A* guidance, optimised trajectory, twin-cylinder footprint -- which is
+        the panel that shows *why* the robot went around something."""
         from PIL import Image
 
-        img = Image.fromarray(self.omap.map_image(self.pose(), px=px))
+        if self.scan is not None:
+            from wojtek_rl.scan.viz import plan_image
+
+            img = Image.fromarray(plan_image(
+                self.scan.map, self.pose(), self.scan.planner,
+                px=px, footprint=self.scan.footprint,
+            ))
+        else:
+            img = Image.fromarray(self.omap.map_image(self.pose(), px=px))
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=80)
         return base64.b64encode(buf.getvalue()).decode("ascii")
@@ -361,17 +437,20 @@ app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
 
 _sim: RoomSim | None = None
 _scene_xml = paths.scene_xml(_scene_name)
-_policy_npz = paths.DEFAULT_POLICY
+# WOJTEK_POLICY overrides the keeper for this sim process (np_policy honours
+# it too, but only when the ref is None -- and this module always passes one).
+_policy_npz = os.environ.get("WOJTEK_POLICY") or paths.DEFAULT_POLICY
 _navigator: VlmNavigator | None = None
 _vlm_backend = os.environ.get("VLM_BACKEND", "local")
 _vlm_model = os.environ.get("VLM_MODEL")  # None -> backend default
 _vlm_url = os.environ.get("VLM_URL")  # futurenav backend only
+_local_planner = os.environ.get("LOCAL_PLANNER", "1") != "0"
 
 
 def get_sim() -> RoomSim:
     global _sim
     if _sim is None:
-        _sim = RoomSim(_scene_xml, _policy_npz)
+        _sim = RoomSim(_scene_xml, _policy_npz, local_planner=_local_planner)
     return _sim
 
 
@@ -483,6 +562,135 @@ async def hear(request: Request):
     return {"ok": True, "transcript": text}
 
 
+def _available_scenes() -> list[str]:
+    """Scenes whose XML and manifest both exist (built + assets present)."""
+    names = {"room"}
+    if paths.SCENES_DIR.exists():
+        names |= {d.name for d in paths.SCENES_DIR.iterdir() if d.is_dir()}
+    return sorted(
+        n for n in names
+        if paths.scene_xml(n).exists() and paths.scene_manifest(n).exists()
+    )
+
+
+@app.post("/api/scene")
+async def set_scene(request: Request):
+    """Switch the scanned scene: rebuild the ONE shared sim in place.
+
+    Async on purpose -- it runs on the same event loop as the websocket
+    control loop, so the loop is parked between ticks while the new model
+    loads: no concurrent stepping, no lock. The client reloads the page
+    afterwards, which refreshes /api/info (minimap extent, map geometry).
+    """
+    global _sim, _navigator, _scene_name, _scene_xml
+    body = await request.json()
+    name = str(body.get("name", ""))
+    have = _available_scenes()
+    if name not in have:
+        return {"ok": False, "error": f"unknown scene {name!r} (have {have})"}
+    if name == _scene_name and _sim is not None:
+        return {"ok": True, "scene": name}
+    if _navigator is not None:
+        _navigator.cancel("scene change")
+        _navigator = None
+    old_sim, old_name, old_xml = _sim, _scene_name, _scene_xml
+    _scene_name, _scene_xml, _sim = name, paths.scene_xml(name), None
+    try:
+        get_sim()
+    except Exception as e:  # keep the working scene rather than a dead server
+        logger.exception(f"scene switch to {name} failed")
+        _sim, _scene_name, _scene_xml = old_sim, old_name, old_xml
+        return {"ok": False, "error": str(e)}
+    if old_sim is not None:  # free the old GL renderers
+        for r in ("renderer", "chase_renderer", "vlm_renderer"):
+            try:
+                getattr(old_sim, r).close()
+            except Exception:
+                pass
+        if old_sim.scan is not None:
+            old_sim.scan.close()
+    logger.success(f"scene switched to {name}")
+    return {"ok": True, "scene": name}
+
+
+@app.get("/api/footprint")
+def get_footprint():
+    sim = get_sim()
+    if sim.scan is None:
+        return {"ok": False, "error": "planner off"}
+    fp = sim.scan.footprint
+    return {"ok": True, "d_off": fp.d_off, "radius": fp.radius, "length": round(fp.length, 3)}
+
+
+@app.post("/api/footprint")
+async def set_footprint(request: Request):
+    """Live-tune the twin-cylinder footprint (the /tune helper page).
+
+    Visual/geometry tuning only: the overlay, the planner's collision probes
+    and the turn-sweep check follow immediately, but the MAP's inflation
+    kernel keeps the radius it was built with -- rebuilding the dilation per
+    slider tick is not worth it for eyeballing body coverage. Once a size
+    looks right, it belongs in Footprint's defaults and MapConfig.inflate_r.
+    """
+    from dataclasses import replace
+
+    sim = get_sim()
+    if sim.scan is None:
+        return {"ok": False, "error": "planner off"}
+    body = await request.json()
+    fp = sim.scan.footprint
+    d_off = min(max(float(body.get("d_off", fp.d_off)), 0.0), 0.40)
+    radius = min(max(float(body.get("radius", fp.radius)), 0.05), 0.40)
+    fp = replace(fp, d_off=d_off, radius=radius)
+    sim.scan.footprint = fp
+    sim.scan.executor.planner.fp = fp
+    return {"ok": True, "d_off": fp.d_off, "radius": fp.radius, "length": round(fp.length, 3)}
+
+
+@app.get("/api/chase.jpg")
+async def chase_jpg():
+    """One chase frame on demand, cylinders included.
+
+    Lets the /tune page watch the robot without taking the single websocket
+    viewer slot. Async on purpose: it renders on the event loop, serialized
+    with the control loop, so there is no concurrent use of the renderer.
+    """
+    from fastapi.responses import Response
+
+    sim = get_sim()
+    x, y, _ = sim.pose()
+    sim.cam.lookat[:] = [x, y, VIEW["lookat_z"]]
+    return Response(content=base64.b64decode(sim._jpeg(camera=sim.cam)),
+                    media_type="image/jpeg")
+
+
+@app.get("/api/top.jpg")
+async def top_jpg():
+    """Straight-down snapshot, body-aligned (nose up), cylinders overlaid.
+
+    The tuner's second panel: radius reads best from above, d_off from the
+    side, so it shows both.
+    """
+    from fastapi.responses import Response
+
+    import mujoco
+
+    sim = get_sim()
+    x, y, yaw = sim.pose()
+    cam = mujoco.MjvCamera()
+    cam.lookat[:] = [x, y, 0.10]
+    cam.distance = 1.5
+    cam.elevation = -90.0
+    cam.azimuth = math.degrees(yaw)
+    return Response(content=base64.b64decode(sim._jpeg(camera=cam)),
+                    media_type="image/jpeg")
+
+
+@app.get("/tune")
+def tune():
+    return FileResponse(str(_STATIC / "tune.html"))
+
+
 @app.get("/api/info")
 def info():
     sim = get_sim()
@@ -494,27 +702,31 @@ def info():
         "vlm_backend": _vlm_backend,
         "vlm_model": _vlm_model,
         "vlm_url": _vlm_url,
+        "local_planner": sim.scan is not None,
+        "scene": _scene_name,
+        "scenes": _available_scenes(),
         "map_geom": {"res": res, "origin": list(origin), "shape": list(shape)},
     }
 
 
 # The control loop below steps the ONE shared sim, so only one websocket
 # client may drive it at a time -- a second concurrent loop would step
-# physics twice per tick and corrupt the rollout.
-_ws_active = False
+# physics twice per tick and corrupt the rollout. Rather than lock the sim to
+# whoever connected first (a stale tab then wedges every later one into a
+# reconnect loop that only says "disconnected"), the NEWEST viewer takes over:
+# each connection claims a generation number and older loops exit on their
+# next tick.
+_ws_gen = 0
 
 
 @app.websocket("/ws")
 async def ws(sock: WebSocket):
-    global _ws_active
+    global _ws_gen
     await sock.accept()
-    if _ws_active:
-        await sock.send_text(json.dumps(
-            {"type": "error", "error": "another client is connected (one viewer at a time)"}
-        ))
-        await sock.close()
-        return
-    _ws_active = True
+    _ws_gen += 1
+    mine = _ws_gen
+    # Let the previous loop notice it has been superseded and stop stepping.
+    await asyncio.sleep(2.5 / CONTROL_HZ)
     sim = get_sim()
     acks: asyncio.Queue[dict] = asyncio.Queue()
 
@@ -529,12 +741,12 @@ async def ws(sock: WebSocket):
                     if t in ("target", "command", "reset") and _navigator and _navigator.running:
                         _navigator.cancel(t)
                     if t == "target":
-                        sim.set_target(msg["x"], msg["y"])
+                        get_sim().set_target(msg["x"], msg["y"])
                     elif t == "command":
-                        ack = sim.submit_command(str(msg.get("text", "")))
+                        ack = get_sim().submit_command(str(msg.get("text", "")))
                         await acks.put({"type": "command_ack", **ack})
                     elif t == "reset":
-                        sim.reset()
+                        get_sim().reset()
                     elif t == "goal":
                         try:
                             ack = get_navigator().start(str(msg.get("text", "")))
@@ -557,12 +769,18 @@ async def ws(sock: WebSocket):
     try:
         loop = asyncio.get_event_loop()
         while True:
+            if mine != _ws_gen:  # a newer viewer took over
+                await sock.send_text(json.dumps(
+                    {"type": "error", "error": "another viewer took over this tab"}
+                ))
+                break
             t0 = loop.time()
+            sim = get_sim()  # /api/scene may have swapped it since last tick
             payload = sim.step()
             payload["robot"] = ROBOT_KEY
             if i % RENDER_EVERY == 0:
                 payload["frame"], payload["ego"] = sim.render_pair()
-            if i % 50 == 0:  # agent-map panel, 1 Hz is plenty
+            if i % MAP_EVERY == 0:
                 payload["map"] = sim.map_jpeg()
             while not acks.empty():
                 await sock.send_text(json.dumps(acks.get_nowait()))
@@ -575,7 +793,6 @@ async def ws(sock: WebSocket):
     except (WebSocketDisconnect, RuntimeError):
         pass
     finally:
-        _ws_active = False
         reader_task.cancel()
 
 
@@ -592,7 +809,13 @@ def main(argv=None):
     )
     p.add_argument("--scene", type=Path, default=None,
                    help="explicit scene XML path (overrides --scene-name's XML only)")
-    p.add_argument("--policy", default=paths.DEFAULT_POLICY)
+    p.add_argument("--policy", default=os.environ.get("WOJTEK_POLICY") or paths.DEFAULT_POLICY)
+    p.add_argument(
+        "--no-local-planner",
+        action="store_true",
+        help="execute mid-level commands as straight marches (pre-SCAN "
+        "behaviour); the A/B baseline for obstacle avoidance",
+    )
     p.add_argument(
         "--vlm-backend",
         choices=("local", "anthropic", "futurenav"),
@@ -611,7 +834,8 @@ def main(argv=None):
         help="FutureNav action server base URL (futurenav backend only)",
     )
     args = p.parse_args(argv)
-    global _scene_name, _vlm_url
+    global _scene_name, _vlm_url, _local_planner
+    _local_planner = not args.no_local_planner
     _scene_name = args.scene_name
     _scene_xml = args.scene or paths.scene_xml(_scene_name)
     _policy_npz = args.policy

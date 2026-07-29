@@ -107,6 +107,7 @@
   <h1>Wojtek</h1>
   <span id="status" class="chip">connecting</span>
   <span class="model" id="model"></span>
+  <select id="scene" title="scanned scene" style="background:#222;color:#ddd;border:1px solid #444;border-radius:6px;padding:2px 6px"></select>
   <span class="spacer"></span>
   <span class="model" id="exec"></span>
   <button id="reset">Reset robot</button>
@@ -144,6 +145,7 @@ const $ = id => document.getElementById(id);
 let ws, info = null, lastState = "idle", stepSeen = 0;
 
 // ---- websocket ------------------------------------------------------------
+let superseded = false;
 function connect() {
   ws = new WebSocket(`ws://${location.host}/ws`);
   ws.onmessage = e => {
@@ -162,14 +164,34 @@ function connect() {
       setChip("error", "error: " + m.error);
       addStep({cmd: "goal rejected", result: m.error}, true);
     } else if (m.type === "error") {
+      if (/took over|another client/.test(m.error)) superseded = true;
       setChip("error", m.error);
     }
   };
-  ws.onclose = () => { setChip("error", "disconnected — retrying"); setTimeout(connect, 1500); };
-  ws.onopen = () => setChip("idle");
+  ws.onclose = () => {
+    // A tab that lost the sim to a newer viewer must NOT auto-retry: two
+    // open tabs would kick each other every 1.5 s forever, both flashing
+    // "disconnected". The loser parks until the user deliberately reloads.
+    if (superseded) { setChip("error", "viewing in another tab — reload to take over"); return; }
+    setChip("error", "disconnected — retrying"); setTimeout(connect, 1500);
+  };
+  ws.onopen = () => { superseded = false; setChip("idle"); };
 }
 fetch("/api/info").then(r => r.json()).then(j => {
   info = j;
+  const sel = $("scene");
+  (j.scenes || []).forEach(n => {
+    const o = document.createElement("option");
+    o.value = n; o.textContent = n; if (n === j.scene) o.selected = true;
+    sel.appendChild(o);
+  });
+  sel.onchange = () => {
+    setChip("error", "switching scene…");
+    fetch("/api/scene", {method: "POST", headers: {"Content-Type": "application/json"},
+                         body: JSON.stringify({name: sel.value})})
+      .then(r => r.json())
+      .then(a => a.ok ? location.reload() : setChip("error", a.error));
+  };
   const label = j.vlm_backend === "futurenav"
     ? "FutureNav-4B @ " + (j.vlm_url || "action server")
     : j.vlm_backend === "anthropic"

@@ -8,7 +8,8 @@
 #   2 RT kernel     : Ubuntu Pro realtime-kernel        (--skip-kernel)
 #   3 RT tuning     : cmdline isolcpus, rtprio limits, cpu governor (--skip-tuning)
 #   4 network       : hostapd/dnsmasq/netplan + failover switch      (--skip-network)
-#   5 robot service : install wojtek-robot.service (left disabled)   (--skip-service)
+#   5 robot service : install wojtek-robot.service (boot autostart   (--skip-service)
+#                     only with --enable-robot)
 #   6 shell env     : ROS env in ~/.bashrc (domain 42 + CycloneDDS)  (--skip-shell-env)
 #
 # Needs the token for phase 2 (RT kernel), passed by deploy.sh from .env:
@@ -24,7 +25,7 @@ ROS_DISTRO="${ROS_DISTRO:-jazzy}"
 DRY_RUN=0
 DO_REBOOT=0
 SKIP_PACKAGES=0 SKIP_KERNEL=0 SKIP_TUNING=0 SKIP_NETWORK=0 SKIP_SERVICE=0 SKIP_SHELL_ENV=0
-ENABLE_ROBOT=1
+ENABLE_ROBOT=0
 REBOOT_NEEDED=0
 
 for a in "$@"; do case "$a" in
@@ -36,11 +37,13 @@ for a in "$@"; do case "$a" in
     --skip-network) SKIP_NETWORK=1 ;;
     --skip-service) SKIP_SERVICE=1 ;;
     --skip-shell-env) SKIP_SHELL_ENV=1 ;;
-    # The RT stack auto-starts on boot by default (the robot just runs when
-    # powered -- pad paired, DISARMED until /wojtek/arm). Opt out with
-    # --no-enable-robot to keep the RPi free for per-session dev launches.
+    # Boot autostart is DECLARATIVE: this flag states the state you want, and
+    # phase 5 makes the machine match it. --enable-robot means "start at
+    # power-on", its absence means "do not" -- so a provision run without the
+    # flag actively disables a service that was enabled. One flag, one
+    # meaning, no dependence on what the last person left behind.
     --enable-robot) ENABLE_ROBOT=1 ;;
-    --no-enable-robot) ENABLE_ROBOT=0 ;;
+    --no-enable-robot) ENABLE_ROBOT=0 ;;   # accepted, now the default
     *) echo "unknown arg: $a" >&2; exit 2 ;;
 esac; done
 
@@ -262,15 +265,25 @@ provision_service() {
     say "Phase 5: robot control service"
     run "sudo install -m644 '${HERE}/../wojtek-robot.service' /etc/systemd/system/wojtek-robot.service"
     run "sudo systemctl daemon-reload"
-    # Auto-start on boot by default: the robot's native "run at power-on" is
-    # this systemd unit (RT limits, DDS env, taskset, restart baked in). It
-    # comes up DISARMED -- no torque until /wojtek/arm -- so boot auto-start
-    # is safe. --no-enable-robot keeps the RPi free for per-session dev.
+    # The unit is always installed/refreshed; --enable-robot decides whether it
+    # runs at power-on, and this phase enforces that state either way. Running
+    # a provision without the flag is therefore how you turn boot autostart
+    # OFF -- it is a statement of intent, not an omission.
     if [ "${ENABLE_ROBOT}" = 1 ]; then
         run "sudo systemctl enable wojtek-robot.service"
         info "installed + ENABLED on boot (DISARMED until /wojtek/arm)"
     else
-        info "installed, not enabled (--no-enable-robot) -- start per-session with 'ros2 run wojtek_bringup robot'"
+        run "sudo systemctl disable wojtek-robot.service 2>/dev/null || true"
+        info "installed + DISABLED on boot (no --enable-robot)"
+        info "  (per-session: 'ros2 run wojtek_bringup robot')"
+        # Disabling only governs boot. A service running right now keeps
+        # running with the code it started with, which is not what anyone
+        # means by "disable it" -- so say so rather than leave it implied.
+        if systemctl is-active wojtek-robot.service >/dev/null 2>&1; then
+            info "  NOTE: the service is RUNNING right now -- it will not come"
+            info "        back after a reboot, but stop it explicitly if you"
+            info "        want it down now: sudo systemctl stop wojtek-robot.service"
+        fi
     fi
 }
 

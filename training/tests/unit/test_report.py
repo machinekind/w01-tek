@@ -238,14 +238,14 @@ def _scan_doc():
     cell = terrain_suite.CELLS_BY_NAME["pyramid_stairs_5cm"]
     tracked = terrain_suite.CELLS_BY_NAME["pyramid_stairs_9cm"]
     reduced = terrain_scan.CellResult(
-        passed=29, of=32, falls=2, timeouts=1, crossings_mean=3.8,
-        saturation=0.12, track_err=0.05, clearance=0.01, measured=30,
+        passed=58, of=64, falls=4, timeouts=2, crossings_mean=3.8,
+        saturation=0.12, track_err=0.05, clearance=0.01, measured=60,
         nacon_max=88, nefc_max=300, steps=1036,
     )
     return {
         "run": "probe", "checkpoint": "1000", "engine": "warp",
         "arena": terrain_suite.arena_fingerprint(),
-        "runs_per_cell_speed": 32,
+        "runs_per_cell_speed": 64,
         "cells": {
             cell.name: {"0.4": terrain_scan.cell_entry(cell, 0.4, reduced),
                         "0.7": terrain_scan.cell_entry(cell, 0.7, reduced)},
@@ -270,12 +270,12 @@ def test_terrain_section_renders_a_scan():
     assert "## Terrain" in text
     assert "engine: warp" in text
     # one row per cell and speed, with the bar and where its number came from
-    assert "| pyramid_stairs_5cm | 0.4 | 29 | 32 | 26 | plan |" in text
-    assert "| pyramid_stairs_5cm | 0.7 | 29 | 32 | 26 | provisional |" in text
-    assert "| pyramid_stairs_9cm | 0.4 | 29 | 32 | - | tracked |" in text
+    assert "| pyramid_stairs_5cm | 0.4 | 58 | 64 | 52 | plan |" in text
+    assert "| pyramid_stairs_5cm | 0.7 | 58 | 64 | 52 | provisional |" in text
+    assert "| pyramid_stairs_9cm | 0.4 | 58 | 64 | - | tracked |" in text
     assert "### Gate" in text
     # how many runs the per-step metrics average over, so a thin sample shows
-    assert "| 30 |" in text
+    assert "| 60 |" in text
     assert "measured` is how many runs" in text
     # the scan's own provenance renders, so a stale scan is visible
     assert "scan: run probe, checkpoint 1000" in text

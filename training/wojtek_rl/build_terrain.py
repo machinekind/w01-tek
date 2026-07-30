@@ -14,10 +14,15 @@ Generates the arena with wojtek_rl.terrain and writes, next to the robot XML
 
 `--arena eval` writes a separate file set holding the fixed measurement course
 (wojtek_rl.terrain_suite): its 12 rows, sorted columns and 0.40 m pads. Its
-row/pad settings come from the suite, so `--rows`, `--ordered` and
-`--pad-radius` do not apply there. `--arena test` is a scratch set for the test
-suite. Separate sets are what keeps a measurement from overwriting the arena a
-policy trained on.
+row/pad settings come from the suite, so `--rows`, `--ordered`, `--pad-radius`
+and `--flat-row` do not apply there. `--arena test` is a scratch set for the
+test suite. Separate sets are what keeps a measurement from overwriting the
+arena a policy trained on.
+
+`--flat-row` prepends a flat row to the arena as level 0. It is a property of
+the built arena, so the run that trains on it declares the same thing to the
+env (`task.env.terrain.flat_row=true`) and terrain_env refuses the pair when
+they disagree.
 
 The heightfield file path is emitted relative to the robot's meshdir, because
 MuJoCo resolves <hfield file=> against meshdir (the included robot XML sets it).
@@ -25,7 +30,8 @@ MuJoCo resolves <hfield file=> against meshdir (the included robot XML sets it).
 Run:
     ./run.sh build-terrain [--arena {train,eval,test}] [--seed N] [--rows N]
                            [--tile-size M] [--border M] [--cell-size M]
-                           [--pad-radius M] [--ordered] [--no-check]
+                           [--pad-radius M] [--ordered] [--flat-row]
+                           [--no-check]
 """
 
 from __future__ import annotations
@@ -117,6 +123,11 @@ def build_scene_xml(arena: terrain.Arena, hfield_file: str) -> str:
     <geom name="terrain_hfield" type="hfield" hfield="terrain" material="groundplane" pos="0 0 {hf.pos_z:.6f}" condim="3" conaffinity="15"/>
 {boxes}
     <camera name="track" mode="trackcom" pos="0.9 -1.3 0.5" xyaxes="0.83 0.55 0 -0.15 0.23 0.96"/>
+    <!-- On the tall upper rows the step walls rise above the robot and hide
+         it from the close track camera. track_far looks down at ~35 degrees
+         from twice the distance; select it with eval's double-dash camera
+         flag for frontier-row videos. -->
+    <camera name="track_far" mode="trackcom" pos="1.8 -2.6 2.2" xyaxes="0.82 0.57 0 -0.33 0.47 0.82"/>
   </worldbody>
 </mujoco>
 """
@@ -192,6 +203,9 @@ def main() -> None:
     p.add_argument("--pad-radius", type=float, default=None)
     p.add_argument("--ordered", action="store_true", default=None,
                    help="sorted-column, exact-difficulty layout")
+    p.add_argument("--flat-row", action="store_true", default=None,
+                   help="prepend a genuinely flat row as level 0; the run's "
+                        "preset must carry task.env.terrain.flat_row=true")
     p.add_argument("--tile-size", type=float, default=terrain.TILE_SIZE)
     p.add_argument("--border", type=float, default=terrain.BORDER)
     p.add_argument("--cell-size", type=float, default=terrain.CELL_SIZE)
@@ -201,12 +215,14 @@ def main() -> None:
     owned = {
         "--seed": args.seed, "--rows": args.rows,
         "--pad-radius": args.pad_radius, "--ordered": args.ordered,
+        "--flat-row": args.flat_row,
     }
     kwargs = dict(
         seed=terrain.DEFAULT_SEED if args.seed is None else args.seed,
         n_rows=terrain.DEFAULT_N_ROWS if args.rows is None else args.rows,
         pad_radius=terrain.PAD_RADIUS if args.pad_radius is None else args.pad_radius,
         ordered=bool(args.ordered),
+        flat_row=bool(args.flat_row),
         tile_size=args.tile_size, border=args.border, cell_size=args.cell_size,
     )
     if args.arena == "eval":
@@ -229,6 +245,8 @@ def main() -> None:
             f"{len(terrain_suite.DIFFICULTIES)} rows "
             f"{terrain_suite.DIFFICULTIES}, pad {terrain_suite.EVAL_PAD_RADIUS} m"
         )
+    if kwargs["flat_row"]:
+        print("flat row: level 0 is flat ground, every terrain row shifts up one")
     arena = terrain.generate(**kwargs)
     write_arena(arena, args.arena)
     if not args.no_check:

@@ -269,6 +269,26 @@ def main() -> None:
         help="force the flat scene for a policy trained on terrain; default "
         "renders the scene it trained on",
     )
+    ap.add_argument(
+        "--camera",
+        default="track",
+        help="named camera to render from. Terrain scenes also define "
+        "track_far, higher and farther out; on the tall upper rows the "
+        "step walls hide the robot from track",
+    )
+    ap.add_argument(
+        "--terrain-level",
+        type=int,
+        default=None,
+        help="pin every spawn to this terrain level instead of the "
+        "curriculum draw; terrain runs only",
+    )
+    ap.add_argument(
+        "--terrain-arena",
+        choices=["train", "eval"],
+        default=None,
+        help="render on this arena instead of the one the run trained on",
+    )
     args = ap.parse_args()
 
     # Imported lazily: wojtek_rl.env and wojtek_rl.train pull in brax/mjx and may
@@ -302,8 +322,25 @@ def main() -> None:
     env_cfg = dict(run.get("env_config") or {})
     if not args.push:
         env_cfg["push"] = {**env_cfg.get("push", {}), "enable": False}
+    # Render in the deployment frame: with the training value of
+    # symmetry.enable the env may draw mirror=true at reset and the video
+    # shows the laterally flipped world (a "strafe left" clip strafing
+    # right). The robot always runs un-mirrored.
+    env_cfg["symmetry"] = {**env_cfg.get("symmetry", {}), "enable": False}
     if args.flat and "terrain" in env_cfg:
         env_cfg["terrain"] = {**env_cfg["terrain"], "enable": False}
+    if args.terrain_level is not None and "terrain" in env_cfg:
+        env_cfg["terrain"] = {
+            **env_cfg["terrain"], "spawn_level": args.terrain_level,
+        }
+    if args.terrain_arena and "terrain" in env_cfg:
+        # The eval arena's flat pads are smaller than the training arena's,
+        # and a training pad_jitter can scatter spawns off them (the env
+        # refuses to load). A render wants a deterministic spawn anyway.
+        env_cfg["terrain"] = {
+            **env_cfg["terrain"], "arena": args.terrain_arena,
+            "pad_jitter": 0.0,
+        }
     env = make_env(task, env_cfg)
     print(f"scene: {env.xml_path}")
     # run.json may carry the training host's absolute checkpoint path
@@ -361,7 +398,7 @@ def main() -> None:
             if i % render_every == 0:
                 data.qpos[:] = np.asarray(state.data.qpos)
                 mujoco.mj_forward(mj_model, data)
-                renderer.update_scene(data, camera="track")
+                renderer.update_scene(data, camera=args.camera)
                 frames.append(renderer.render())
                 frame_meta.append(
                     (i * env.dt, np.asarray(state.info["command"]))

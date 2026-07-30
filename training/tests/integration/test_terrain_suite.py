@@ -112,9 +112,10 @@ def test_cell_names_are_unique_and_stable():
         assert name in terrain_suite.CELLS_BY_NAME, name
 
 
-def test_bar_counts_out_of_32():
-    assert [terrain_suite.bar_count(b) for b in terrain_suite.BARS] == [31, 26, 20]
-    assert terrain_suite.RUNS_PER_CELL_SPEED == 32
+def test_bar_counts_out_of_64():
+    assert [terrain_suite.bar_count(b) for b in terrain_suite.BARS] == [61, 52, 39]
+    assert terrain_suite.RUNS_PER_CELL_SPEED == 64
+    assert terrain_suite.CELLS_VERSION == "v3"
 
 
 def test_gated_families_take_the_plan_ladder():
@@ -159,8 +160,8 @@ def test_threshold_provenance():
     gated = terrain_suite.CELLS_BY_NAME["pyramid_stairs_5cm"]
     tracked = terrain_suite.CELLS_BY_NAME["pyramid_stairs_9cm"]
     assert terrain_suite.SPEEDS == (0.4, 0.7)
-    assert terrain_suite.threshold(gated, 0.4) == (26, "plan")
-    assert terrain_suite.threshold(gated, 0.7) == (26, "provisional")
+    assert terrain_suite.threshold(gated, 0.4) == (52, "plan")
+    assert terrain_suite.threshold(gated, 0.7) == (52, "provisional")
     for speed in terrain_suite.SPEEDS:
         assert terrain_suite.threshold(tracked, speed) == (None, "tracked")
 
@@ -171,14 +172,29 @@ def test_threshold_provenance():
 def test_course_is_fixed_and_deterministic():
     a, b = terrain_suite.course(), terrain_suite.course()
     assert a == b == terrain_suite.COURSE
-    assert len(a) == 32
-    assert [r.index for r in a] == list(range(32))
-    # heading outer, offset inner
+    assert len(a) == 64
+    assert [r.index for r in a] == list(range(64))
+    # draw outer, then heading, offset inner
+    assert [r.draw for r in a] == [0] * 32 + [1] * 32
     assert [r.heading_index for r in a[:8]] == [0, 0, 0, 0, 1, 1, 1, 1]
-    assert len({(r.heading_index, r.offset) for r in a}) == 32
+    assert len({(r.draw, r.heading_index, r.offset) for r in a}) == 64
     assert {r.yaw for r in a} == {
         2 * math.pi * h / 8 for h in range(8)
     }
+
+
+def test_the_second_draw_repeats_the_first_draw_starts():
+    """v3 doubled the runs per cell without touching the physical course: the
+    two draws are the same 32 starts, and what separates them is the rollout key
+    terrain_scan splits per run out of the cell's key."""
+    assert terrain_suite.N_NOISE_DRAWS == 2
+    first = [r for r in terrain_suite.COURSE if r.draw == 0]
+    second = [r for r in terrain_suite.COURSE if r.draw == 1]
+    assert len(first) == len(second) == 32
+    for a, b in zip(first, second):
+        assert (a.heading_index, a.yaw, a.offset) == (
+            b.heading_index, b.yaw, b.offset
+        )
 
 
 def test_course_offsets_keep_every_foot_on_the_pad():
@@ -252,15 +268,18 @@ def test_heading_stretch_is_one_on_axes_and_root_two_on_diagonals():
 
 
 def test_total_scan_size():
-    """The scan is 2752 runs; the cluster job's header is sized off this."""
+    """The scan is 5504 runs; the cluster job's header is sized off this."""
     runs = len(terrain_suite.CELLS) * terrain_suite.RUNS_PER_CELL_SPEED * len(
         terrain_suite.SPEEDS
     )
-    assert runs == 2752
+    assert runs == 5504
     steps = sum(
         terrain_suite.episode_budget(s, 0.02) for s in terrain_suite.SPEEDS
     ) * len(terrain_suite.CELLS) * terrain_suite.RUNS_PER_CELL_SPEED
-    assert 2.5e6 < steps < 3.5e6, steps
+    assert 5.5e6 < steps < 7.0e6, steps
+    # the batched rollout puts every cell in one dispatch per speed, which is
+    # what warp sizes its contact pool from
+    assert len(terrain_suite.CELLS) * terrain_suite.RUNS_PER_CELL_SPEED == 2752
 
 
 # -- 4. Arena kinds ------------------------------------------------------------

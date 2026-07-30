@@ -31,10 +31,11 @@ tread might be the hardest thing in the suite, and the number would then measure
 turning instead of climbing. Every real preset trains forward speed from -0.8 to
 1.2, so walking backwards is inside the trained command box.
 
-Nothing is sampled. Eight headings, four start offsets, two speeds, one fixed
-arena: two scans of one checkpoint at the same ``--eval-seed`` return the same
-numbers. A different ``--eval-seed`` redraws the rollout's noise on the same
-course, which is how the score's test-retest spread gets measured.
+Nothing is sampled. Eight headings, four start offsets, two noise draws of those
+32 starts, two speeds, one fixed arena: two scans of one checkpoint at the same
+``--eval-seed`` return the same numbers. A different ``--eval-seed`` redraws the
+rollout's noise on the same course, which is how the score's test-retest spread
+gets measured.
 """
 
 from __future__ import annotations
@@ -57,19 +58,25 @@ SATURATION_FRAC = 0.85
 # whose trained command box excludes it is flagged, not silently measured.
 COMMAND_HEIGHT = 0.125
 # A cell may not drop more than this many percentage points against the
-# baseline keeper. Sized from the scan's own test-retest noise: three scans
-# of one checkpoint on different --eval-seed draws moved a single cell/speed
-# pair by up to 6 of 32 runs (18.75 points), so the old 10-point limit
-# failed on noise alone (2026-07-27 validation report). The whole-course
-# pass total moved only ~2% in the same test; a tighter gate should compare
-# that total instead of single pairs.
+# baseline keeper. Sized from the scan's own test-retest noise on the 32-run
+# course: three scans of one checkpoint on different --eval-seed draws moved a
+# single cell/speed pair by up to 6 of 32 runs (18.75 points), so the old
+# 10-point limit failed on noise alone (2026-07-27 validation report). The
+# course now runs 64, where the same per-run wobble is worth half the points,
+# so this limit is conservative -- tighten it from a fresh test-retest
+# measurement at 64, not by halving the old number. The whole-course pass total
+# moved only ~2% in the same test; a tighter gate should compare that total
+# instead of single pairs.
 RELATIVE_DROP_LIMIT = 25.0
 # Warp contact pool per env: the env's own model-derived floor (22 geoms
 # collide with the heightfield at 4 contacts per pair), and still 7x the
 # per-env peak of 12 contacts measured on the GPU. The pool is allocated up
 # front for the whole batch, so a bigger one is not free -- a 256 pool is what
-# ran check-terrain out of device memory at 4096 envs. The scan records the peak
-# it actually reached, so too small shows up as a recorded overflow.
+# ran check-terrain out of device memory at 4096 envs. The batched scan
+# dispatches 43 cells x 64 runs = 2752 envs per speed, so 88 per env is a
+# 242,176-contact pool, about 23% of that 4096 x 256 combination. The scan
+# records the peak it actually reached, so too small shows up as a recorded
+# overflow.
 DEFAULT_NACONMAX_PER_ENV = 88
 SCAN_SCHEMA = 1
 
@@ -130,8 +137,8 @@ def fall_progress(fell, done, running):
     """Sticky fall flag, recorded only while a run is still on its course.
 
     A run that has finished its fourth crossing keeps being stepped: the batch is
-    one program over 32 environments and there is no way to drop one of them
-    mid-loop. Its command still says "walk out", so it walks on, and without this
+    one program over every run in the dispatch and there is no way to drop one of
+    them mid-loop. Its command still says "walk out", so it walks on, and without this
     gate a robot that falls over a hundred steps after completing the course
     would turn its own pass into a fall. The run is the four crossings; what
     happens after them is not the measurement.
@@ -300,9 +307,12 @@ def relative_gate(scan: dict, baseline: dict | None) -> dict:
 def cell_key(cell, eval_seed: int = 0):
     """One cell's rollout key: which draw of the policy's noise it runs on.
 
-    Seed 0 has to return the base key unchanged -- every scan taken so far ran
-    on it, and those numbers are the baselines the relative gate compares
-    against. Any other seed is a fresh draw of the same course.
+    Seed 0 returns the base key unchanged and is the default, so every scan
+    taken without the flag -- including the baselines the relative gate compares
+    against -- sits on one stream. The v3 suite retired the v2 baselines, so
+    what seed 0 protects now is that two default scans are the same measurement
+    rather than two draws of it. Any other seed is a fresh draw of the same
+    course.
     """
     import jax
 
@@ -426,10 +436,11 @@ def command_box_warnings(run: dict, speeds=terrain_suite.SPEEDS) -> list[str]:
 
 
 def _spawn_table(env, cell) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """(centre, spawn_xy, yaw, pad_height) for one cell's 32 runs.
+    """(centre, spawn_xy, yaw, pad_height) for one cell's runs, in COURSE order.
 
     Offsets run along the heading, so what varies is where in the tread cycle
-    the robot first meets the obstacle."""
+    the robot first meets the obstacle. The two noise draws repeat the same
+    starts, so this table repeats with them."""
     type_index = terrain.TYPES.index(cell.terrain_type)
     centre = np.asarray(env._terrain.origin_xy)[cell.row, type_index]
     pad_h = float(np.asarray(env._terrain.pad_h)[cell.row, type_index])
@@ -480,30 +491,26 @@ def scan_reset(env, rng, spawn_xy, pad_h, yaw, command):
     return state.replace(data=data, obs=env._get_obs(data, info), info=info)
 
 
-def make_cell_runner(env, inf):
-    """A jitted "score one cell at one speed" function.
+def _make_runner(env, n, reset_keys, act):
+    """The jitted rollout both paths share: n environments at one commanded speed.
 
-    Batch shape is fixed at RUNS_PER_CELL_SPEED and the step budget is the only
-    static argument, so one program gets compiled per commanded speed and each
-    is dispatched once per cell. That is a requirement, not an optimization:
-    warp allocates its contact pool when the data is created, sized by the
-    number of environments, so a varying batch size means a new allocation.
-    Which tile, which heading and which direction are numbers fed into the same
-    program.
+    Batch shape is fixed and the step budget is the only static argument, so one
+    program gets compiled per commanded speed. That is a requirement, not an
+    optimization: warp allocates its contact pool when the data is created,
+    sized by the number of environments, so a varying batch size means a new
+    allocation. Which tile, which heading and which direction are numbers fed
+    into the same program.
 
-    Known perf ceiling, accepted for now: the cell axis could ride in the batch
-    too (43 x 32 worlds is still one fixed shape), and the 86 sequential
-    dispatches of a 32-world batch are why the measured scan runs ~200x below
-    what the physics sustains at training batch sizes. Folding cells in changes
-    nothing measured, only the wall clock, but it reshapes this whole rollout
-    and needs GPU validation -- a follow-up, not a review-fix edit.
+    `reset_keys` and `act` are the only things the per-cell and the batched path
+    differ in: how the rollout's rng becomes one key per run at reset, and one
+    policy key per step. The pass rules and the metrics live here in one copy,
+    so the two cannot drift apart.
     """
     import functools
 
     import jax
     import jax.numpy as jp
 
-    n = terrain_suite.RUNS_PER_CELL_SPEED
     torque_cap = float(np.asarray(env.mj_model.actuator_forcerange[:, 1]).max())
 
     reset_one = functools.partial(scan_reset, env)
@@ -542,19 +549,19 @@ def make_cell_runner(env, inf):
             )
 
         state = jax.vmap(reset_one)(
-            jax.random.split(rng, n), spawn_xy, pad_h, yaw,
+            reset_keys(rng), spawn_xy, pad_h, yaw,
             command_at(jp.zeros(n, jp.int32)),  # the first leg walks out
         )
 
         def body(carry):
-            i, state, rng, crossings, fell, sat, err, clr, counted, nacon, nefc = carry
+            (i, state, rng, crossings, fell, sat, err, clr, counted, ran,
+             nacon, nefc) = carry
             sign = leg_sign(crossings)
             command = command_at(crossings)
             info = dict(state.info)
             info["command"] = command
             state = state.replace(info=info)
-            rng, sub = jax.random.split(rng)
-            action, _ = inf(state.obs, sub)
+            action, rng = act(state.obs, rng)
             was_running = still_running(i, crossings, fell, deadline)
             state = jax.vmap(env.step)(state, action)
             data = state.data
@@ -575,7 +582,8 @@ def make_cell_runner(env, inf):
             clr = clr + w * jp.mean(jax.vmap(env._foot_clearance)(data), axis=-1)
             return (
                 i + 1, state, rng, crossings, fell, sat, err, clr,
-                counted + w, jp.maximum(nacon, nacon_of(data)),
+                counted + w, ran + was_running.astype(jp.int32),
+                jp.maximum(nacon, nacon_of(data)),
                 jp.maximum(nefc, nefc_of(data)),
             )
 
@@ -589,12 +597,11 @@ def make_cell_runner(env, inf):
         init = (
             jp.zeros((), jp.int32), state, rng,
             jp.zeros(n, jp.int32), jp.zeros(n, bool),
-            zeros, zeros, zeros, zeros,
+            zeros, zeros, zeros, zeros, jp.zeros(n, jp.int32),
             jp.zeros((), jp.int32), jp.zeros((), jp.int32),
         )
-        i, state, _, crossings, fell, sat, err, clr, counted, nacon, nefc = (
-            jax.lax.while_loop(cond, body, init)
-        )
+        (_, state, _, crossings, fell, sat, err, clr, counted, ran,
+         nacon, nefc) = jax.lax.while_loop(cond, body, init)
         per_step = jp.maximum(counted, 1.0)
         return {
             "crossings": crossings,
@@ -603,7 +610,12 @@ def make_cell_runner(env, inf):
             "track_err": err / per_step,
             "clearance": clr / per_step,
             "counted": counted,
-            "steps": i,
+            # Per run, so a cell's step count is its own runs' even when the
+            # dispatch carries other cells. The loop's own iteration count is
+            # the largest of these: `still_running` only ever goes from true to
+            # false, so a run contributes one to it for every step before it
+            # stopped, and the loop stops when the last run does.
+            "steps": ran,
             "nacon_max": nacon,
             "nefc_max": nefc,
         }
@@ -611,18 +623,102 @@ def make_cell_runner(env, inf):
     return run
 
 
+def make_cell_runner(env, inf):
+    """A jitted "score one cell at one speed" function.
+
+    The reference path, selected by `--per-cell`: 86 sequential dispatches of a
+    64-world batch on a complete scan (43 cells by two speeds), which is why it
+    runs far below what the physics sustains at training batch sizes.
+    `make_batch_runner` is the default.
+    """
+    import jax
+
+    n = terrain_suite.RUNS_PER_CELL_SPEED
+
+    def reset_keys(rng):
+        return jax.random.split(rng, n)
+
+    def act(obs, rng):
+        rng, sub = jax.random.split(rng)
+        action, _ = inf(obs, sub)
+        return action, rng
+
+    return _make_runner(env, n, reset_keys, act)
+
+
+def batch_reset_keys(keys):
+    """One key per cell into one key per run, cell-major.
+
+    Run r of cell c gets exactly the key the sequential path hands it --
+    `jax.random.split(cell_key(c), RUNS_PER_CELL_SPEED)[r]` -- which is what
+    keeps the two rollouts the same measurement rather than two draws of it.
+    """
+    import jax
+
+    runs = terrain_suite.RUNS_PER_CELL_SPEED
+    split = jax.vmap(lambda k: jax.random.split(k, runs))(keys)
+    return split.reshape(keys.shape[0] * runs, -1)
+
+
+def batch_step_keys(keys):
+    """The per-cell `rng, sub = jax.random.split(rng)`, one cell per row."""
+    import jax
+
+    pair = jax.vmap(jax.random.split)(keys)
+    return pair[:, 0], pair[:, 1]
+
+
+def batch_policy(inf, n_cells, obs, rng):
+    """One policy call per cell, each on its own key and its own runs.
+
+    The cell axis is folded back out of the batch for the call, so a cell's
+    actions are a function of its own key and its own RUNS_PER_CELL_SPEED
+    observations and nothing else -- the same call the sequential path makes,
+    n_cells of them inside one program.
+    """
+    import jax
+
+    runs = terrain_suite.RUNS_PER_CELL_SPEED
+    rng, sub = batch_step_keys(rng)
+    per_cell = jax.tree.map(lambda x: x.reshape(n_cells, runs, *x.shape[1:]), obs)
+    action = jax.vmap(lambda o, k: inf(o, k)[0])(per_cell, sub)
+    return action.reshape(n_cells * runs, -1), rng
+
+
+def make_batch_runner(env, inf, n_cells):
+    """A jitted "score every cell at one speed" function.
+
+    The cell axis rides in the batch: n_cells x RUNS_PER_CELL_SPEED worlds is
+    still one fixed shape, so a complete scan is one dispatch per commanded
+    speed instead of 86. Which tile a run is on becomes per-env data, exactly
+    like its heading and its direction already were. Envs are laid out
+    cell-major -- run r of cell c is env c * RUNS_PER_CELL_SPEED + r.
+
+    The rng is one key per cell, the key the sequential path gives that cell,
+    and both places it is used are vmapped over the cell axis: the reset split
+    (`batch_reset_keys`) and the per-step policy call (`batch_policy`). Parity
+    with `make_cell_runner` is checked on the jax backend in tests/integration;
+    the same check on warp is pending a GPU run.
+    """
+    import functools
+
+    runs = terrain_suite.RUNS_PER_CELL_SPEED
+    act = functools.partial(batch_policy, inf, n_cells)
+    return _make_runner(env, n_cells * runs, batch_reset_keys, act)
+
+
 def reduce_runs(out) -> CellResult:
-    """One cell's 32 run outcomes into its recorded numbers.
+    """One cell's 64 run outcomes into its recorded numbers.
 
     The per-step metrics average over the runs that actually contributed steps,
-    not over all 32. A run that fell inside the settle window has no metric steps
+    not over all 64. A run that fell inside the settle window has no metric steps
     at all, so its saturation, tracking error and clearance come back as zero --
     averaging those in drags the cell's numbers toward zero exactly where falls
-    are common, which is the hard cells. On a cell where 20 of 32 runs fall early
+    are common, which is the hard cells. On a cell where 40 of 64 runs fall early
     that reported a tracking error 2.7x better than the survivors', biased in the
     direction that makes hard terrain look easy.
 
-    Pass, fall and timeout counts are over all 32 runs regardless: a fall is an
+    Pass, fall and timeout counts are over all 64 runs regardless: a fall is an
     outcome, not a missing measurement.
     """
     crossings = np.asarray(out["crossings"])
@@ -646,8 +742,77 @@ def reduce_runs(out) -> CellResult:
         measured=int(measured.sum()),
         nacon_max=int(out["nacon_max"]),
         nefc_max=int(out["nefc_max"]),
-        steps=int(out["steps"]),
+        # The longest run's, which is how many steps the cell cost.
+        steps=int(np.max(out["steps"])),
     )
+
+
+def _report(cell, speed, reduced: CellResult) -> None:
+    print(
+        f"{cell.name:34s} vx {speed:<4} "
+        f"pass {reduced.passed:2d}/{reduced.of} "
+        f"falls {reduced.falls:2d} timeouts {reduced.timeouts:2d} "
+        f"steps {reduced.steps}"
+    )
+
+
+def _rollout_per_cell(runner, env, cells, speeds, deadlines, budgets, eval_seed):
+    """The reference: one dispatch per cell per speed, 64 worlds at a time."""
+    import jax
+
+    entries, env_steps = {}, 0
+    for cell in cells:
+        centre, spawn, yaw, pad_h = _spawn_table(env, cell)
+        per_speed = {}
+        for speed in speeds:
+            out = runner(
+                cell_key(cell, eval_seed),
+                centre, spawn, pad_h, yaw, float(speed), COMMAND_HEIGHT,
+                deadlines[speed], budget=budgets[speed],
+            )
+            reduced = reduce_runs(jax.tree.map(np.asarray, out))
+            per_speed[f"{speed}"] = cell_entry(cell, speed, reduced)
+            env_steps += reduced.steps * terrain_suite.RUNS_PER_CELL_SPEED
+            _report(cell, speed, reduced)
+        entries[cell.name] = per_speed
+    return entries, env_steps
+
+
+def _rollout_batched(runner, env, cells, speeds, deadlines, budgets, eval_seed):
+    """One dispatch per speed, every cell in the same batch.
+
+    Envs are cell-major, so each cell's inputs and outputs are a contiguous
+    RUNS_PER_CELL_SPEED slice in COURSE order.
+
+    nacon and nefc are the dispatch's peaks, so here every cell records the peak
+    the whole batch reached rather than its own. An overflow invalidates the
+    scan either way; what the number no longer says is which cell hit it.
+    """
+    import jax
+    import jax.numpy as jp
+
+    runs = terrain_suite.RUNS_PER_CELL_SPEED
+    keys = jp.stack([cell_key(c, eval_seed) for c in cells])
+    tables = [_spawn_table(env, c) for c in cells]
+    centre, spawn, yaw, pad_h = [np.concatenate(x) for x in zip(*tables)]
+
+    entries = {c.name: {} for c in cells}
+    env_steps = 0
+    for speed in speeds:
+        out = runner(
+            keys, centre, spawn, pad_h, yaw, float(speed), COMMAND_HEIGHT,
+            np.tile(deadlines[speed], len(cells)), budget=budgets[speed],
+        )
+        out = jax.tree.map(np.asarray, out)
+        for index, cell in enumerate(cells):
+            part = slice(index * runs, (index + 1) * runs)
+            reduced = reduce_runs(
+                {k: v[part] if v.ndim else v for k, v in out.items()}
+            )
+            entries[cell.name][f"{speed}"] = cell_entry(cell, speed, reduced)
+            env_steps += reduced.steps * runs
+            _report(cell, speed, reduced)
+    return entries, env_steps
 
 
 def scan(
@@ -660,10 +825,13 @@ def scan(
     speeds=terrain_suite.SPEEDS,
     baseline_ref: str | None = None,
     eval_seed: int = 0,
+    per_cell: bool = False,
 ) -> dict:
-    """Score `run_dir`'s latest checkpoint on the measurement course."""
-    import jax
+    """Score `run_dir`'s latest checkpoint on the measurement course.
 
+    `per_cell` selects the reference rollout -- one dispatch per cell per speed
+    -- instead of the batched default, which runs every cell in one batch.
+    """
     from wojtek_rl.battery import load_checkpoint_policy
 
     cells = [
@@ -679,9 +847,13 @@ def scan(
     # reference must not throw away a finished scan.
     baseline = load_baseline(baseline_ref)
 
+    # One dispatch carries every cell unless --per-cell asks for the reference
+    # rollout. Warp sizes its contact pool from this number at make_data, so it
+    # has to be the batch the rollout actually runs.
+    batch_envs = terrain_suite.RUNS_PER_CELL_SPEED * (1 if per_cell else len(cells))
     sim_overrides = {
         "backend": backend,
-        "num_envs": terrain_suite.RUNS_PER_CELL_SPEED,
+        "num_envs": batch_envs,
         # Warp allocates its contact pool up front and drops overflow
         # silently. The recorded nacon_max is what says whether the
         # budget was enough.
@@ -708,7 +880,10 @@ def scan(
         },
     )
     check_arena(json.loads(env._terrain.files["spec"].read_text()))
-    runner = make_cell_runner(env, inf)
+    runner = (
+        make_cell_runner(env, inf) if per_cell
+        else make_batch_runner(env, inf, len(cells))
+    )
 
     result = {
         "schema": SCAN_SCHEMA,
@@ -746,27 +921,10 @@ def scan(
         for s in speeds
     }
     t0 = time.perf_counter()
-    env_steps = 0
-    for cell in cells:
-        centre, spawn, yaw, pad_h = _spawn_table(env, cell)
-        per_speed = {}
-        for speed in speeds:
-            out = runner(
-                cell_key(cell, eval_seed),
-                centre, spawn, pad_h, yaw, float(speed), COMMAND_HEIGHT,
-                deadlines[speed], budget=budgets[speed],
-            )
-            out = jax.tree.map(np.asarray, out)
-            reduced = reduce_runs(out)
-            per_speed[f"{speed}"] = cell_entry(cell, speed, reduced)
-            env_steps += reduced.steps * terrain_suite.RUNS_PER_CELL_SPEED
-            print(
-                f"{cell.name:34s} vx {speed:<4} "
-                f"pass {reduced.passed:2d}/{reduced.of} "
-                f"falls {reduced.falls:2d} timeouts {reduced.timeouts:2d} "
-                f"steps {reduced.steps}"
-            )
-        result["cells"][cell.name] = per_speed
+    rollout = _rollout_per_cell if per_cell else _rollout_batched
+    result["cells"], env_steps = rollout(
+        runner, env, cells, speeds, deadlines, budgets, eval_seed
+    )
 
     wall = time.perf_counter() - t0
     result["perf"] = {
@@ -782,7 +940,9 @@ def scan(
         (r["nefc_max"] for per in result["cells"].values() for r in per.values()),
         default=0,
     )
-    capacity = naconmax_per_env * terrain_suite.RUNS_PER_CELL_SPEED
+    # The pool covers the whole dispatch, which is every cell at once unless
+    # --per-cell was asked for. This is the number make_data was given.
+    capacity = naconmax_per_env * int(env._config.sim.num_envs)
     result["contacts"] = {
         "nacon_max": nacon_max,
         "capacity": capacity,
@@ -858,13 +1018,23 @@ def main() -> None:
         help="previous keeper's scan: a path, a directory holding "
              "terrain_scan.json, or an HF reference org/name[@rev]",
     )
+    ap.add_argument(
+        "--per-cell", action="store_true",
+        help="the reference rollout: one dispatch of 64 worlds per cell per "
+             "speed, 86 of them on a complete scan. The default puts the cell "
+             "axis in the batch and dispatches once per speed",
+    )
     ap.add_argument("--list-cells", action="store_true", help="print the cells and exit")
     args = ap.parse_args()
 
     if args.list_cells:
         for c in terrain_suite.CELLS:
             value, unit = terrain_suite.realized_dimension(c.terrain_type, c.difficulty)
-            bar = "tracked" if c.tracked else f"{c.bar:.0%} ({terrain_suite.bar_count(c.bar)}/32)"
+            bar = (
+                "tracked" if c.tracked else
+                f"{c.bar:.0%} ({terrain_suite.bar_count(c.bar)}"
+                f"/{terrain_suite.RUNS_PER_CELL_SPEED})"
+            )
             print(f"{c.name:34s} row {c.row:2d}  d={c.difficulty:.6f}  "
                   f"{value:5.1f} {unit:3s}  {bar}")
         return
@@ -883,6 +1053,7 @@ def main() -> None:
         ),
         baseline_ref=args.baseline,
         eval_seed=args.eval_seed,
+        per_cell=args.per_cell,
     )
     out = Path(args.out) if args.out else Path(args.run) / "terrain_scan.json"
     out.parent.mkdir(parents=True, exist_ok=True)

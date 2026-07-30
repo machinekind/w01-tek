@@ -162,6 +162,14 @@ def default_config() -> config_dict.ConfigDict:
             # at cmd 1.0). Applied after slow and before zeroing.
             pure_fast_prob=0.0,
             fast_vx=(0.8, 1.2),
+            # With this prob command a clean backward walk: vx redrawn from
+            # back_vx, vy and wz zeroed. Same fix family as slow/fast — the
+            # uniform box only ever serves backward vx contaminated with
+            # random vy/wz, and that coverage did not teach the skill:
+            # terrain_blind_v2c refused every backward command outright
+            # (0.000 m/s). Applied after fast and before zeroing.
+            pure_back_prob=0.0,
+            back_vx=(-0.8, -0.2),
         ),
         push=config_dict.create(enable=True, interval_steps=200, vel=0.4),
         action_delay=1,  # control steps of latency between policy and motors
@@ -191,6 +199,11 @@ def default_config() -> config_dict.ConfigDict:
             # the test suite's scratch arena. Build it with
             # `build-terrain --arena <kind>`.
             arena="train",
+            # Train on the arena built with `build-terrain --arena train
+            # --flat-row`: level 0 is flat ground, every terrain row sits
+            # one level higher. The build and this key must agree;
+            # terrain_env refuses a mismatched pair.
+            flat_row=False,
             # Random heading at every spawn. Costs nothing: the obs carry
             # no heading.
             spawn_yaw=True,
@@ -243,6 +256,26 @@ def default_config() -> config_dict.ConfigDict:
             # contact forces). A lying robot is the expensive simulation
             # state and carries no learning signal for locomotion.
             on_base_contact=False,
+        ),
+        # No-progress termination, CaT-style (arXiv 2403.18765): an env
+        # whose measured progress keeps falling short of its command is
+        # cut probabilistically. Ending the episode forfeits all remaining
+        # income, which is the whole penalty — no reward term is attached
+        # and rewards["termination"] stays fall-only. The hazard ramps
+        # linearly from 0 where the smoothed progress reaches risk_below
+        # of the commanded speed to p_max per control step at zero
+        # progress, so expected survival at a dead stop is 1/p_max steps
+        # (~1 s at the defaults). Zero commands never arm the cut, and a
+        # command change re-arms it only after grace_sec. Respawns keep the
+        # dying episode's info, so TerrainAutoResetWrapper reseeds the
+        # meter on done; a flat run turning this on needs the same reseed
+        # in its auto-reset path.
+        no_progress=config_dict.create(
+            enable=False,
+            grace_sec=2.0,   # no hazard this long after reset/resample
+            ema_sec=1.0,     # smoothing horizon of the progress measure
+            risk_below=0.5,  # hazard starts below this fraction of demand
+            p_max=0.02,      # per-step hazard at zero progress
         ),
         # Trot clock: fbb_v2 skated at 7 Hz instead of stepping (duty factor
         # ~1.0); the phase reward makes periodic swings the only way to score.
@@ -318,6 +351,14 @@ def default_config() -> config_dict.ConfigDict:
             # the two kernels: full pay only when the WHOLE command is
             # tracked; a deadlocked spin earns ~0.
             tracking_product=False,
+            # Gate the positive gait terms (feet_air_time, feet_apex,
+            # high_step) by the linear tracking kernel. Those terms pay on
+            # a commanded env whether or not it translates, which made
+            # stand-and-lift the top income under a command on terrain
+            # (terrain_blind_v3 post-mortem, 2026-07-29). Gated, a stride
+            # pays in proportion to how well the command is being served;
+            # standing pays nothing for lifting legs.
+            shaping_tracking_gate=False,
             phase_sigma=0.002,
             height_sigma=1e-3,  # m^2: 1 cm err -> 0.90, 3 cm -> 0.41
             # Pose anchors to the commanded-height stance; leg joints get a
@@ -328,6 +369,14 @@ def default_config() -> config_dict.ConfigDict:
             # set), so the policy never learns postures that live near
             # saturation.
             torque_limit_frac=0.85,
+            # Tolerance cone around upright for the orientation penalty,
+            # half-angle in degrees (0 = legacy penalty, bit-exact). The
+            # penalty is sin^2 of the base's tilt from vertical; with a
+            # cone it becomes max(sin^2(tilt) - sin^2(tol), 0), zero inside
+            # and rising continuously from the edge. A flat-referenced
+            # penalty prices the body pitch that climbing requires; a
+            # nosedive stays far outside any cone worth setting.
+            orientation_tol_deg=0.0,
             scales=config_dict.create(
                 tracking_lin_vel=1.5,
                 tracking_ang_vel=0.8,
@@ -432,6 +481,18 @@ class WojtekJoystick(WojtekEnv):
         # Per-actuator torque cap for the torque_limit hinge, read after
         # _customize_model ran so max_torque (when set) is the cap.
         self._torque_cap = jp.array(self._mj_model.actuator_forcerange[:, 1])
+        # Orientation tolerance cone as sin^2 of its half-angle, so it can be
+        # subtracted directly from sum(square(gravity[:2])). Static config,
+        # like the other reward constants resolved here.
+        self._orientation_tol = float(
+            np.square(
+                np.sin(
+                    np.radians(
+                        self._config.reward.get("orientation_tol_deg", 0.0)
+                    )
+                )
+            )
+        )
         # Kinematic standing family (see real_pose_ref in default_config):
         # gain-invariant by construction — settled on a quasi-rigid copy,
         # so it depends on the geometry only, never on this run's gains.
@@ -541,6 +602,16 @@ class WojtekJoystick(WojtekEnv):
                 r13, minval=c.fast_vx[0], maxval=c.fast_vx[1]
             )
             vel = jp.where(fast, jp.array([vx_fast, 0.0, 0.0]), vel)
+        # backward training: redraw vx from back_vx, zero vy and wz.
+        # Gated and fold_in-keyed like arc/slow/fast (index 4), stream-safe.
+        back_p = c.get("pure_back_prob", 0.0)
+        if back_p:
+            r14, r15 = jax.random.split(jax.random.fold_in(rng, 4))
+            back = jax.random.bernoulli(r14, back_p)
+            vx_back = jax.random.uniform(
+                r15, minval=c.back_vx[0], maxval=c.back_vx[1]
+            )
+            vel = jp.where(back, jp.array([vx_back, 0.0, 0.0]), vel)
         zero = jax.random.bernoulli(r4, c.zero_prob)
         vel = jp.where(zero, jp.zeros(3), vel)
         height = jax.random.uniform(r5, minval=c.height[0], maxval=c.height[1])
@@ -758,6 +829,13 @@ class WojtekJoystick(WojtekEnv):
             "encoder_offset": epsilon,
         }
         metrics = {f"reward/{k}": jp.zeros(()) for k in self._config.reward.scales}
+        if self._config.no_progress.enable:
+            # Optimistic seed: a fresh episode starts at progress ratio 1,
+            # so the hazard can only come from measured shortfall, never
+            # from the seed (see no_progress in default_config).
+            info["progress_ema"] = self._cmd_speed(command)
+            metrics["no_progress_cut"] = jp.zeros(())
+            metrics["progress_ratio_per_step"] = jp.zeros(())
         # State for the curriculum wrapper. terrain_type never changes; the
         # wrapper rewrites the rest on done. The env refreshes last_xy and
         # commanded_dist every step.
@@ -781,7 +859,13 @@ class WojtekJoystick(WojtekEnv):
 
     def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
         info = dict(state.info)
-        rng, r_noise, r_cmd, r_push = jax.random.split(info["rng"], 4)
+        if self._config.no_progress.enable:
+            # The extra key is only split off when the cut is on, so the
+            # default trajectory is unchanged (the latency/encoder pattern).
+            rng, r_noise, r_cmd, r_push, r_term = jax.random.split(info["rng"], 5)
+        else:
+            rng, r_noise, r_cmd, r_push = jax.random.split(info["rng"], 4)
+            r_term = None
         info["rng"] = rng
 
         # Symmetry augmentation: the policy acted on mirrored observations,
@@ -876,11 +960,51 @@ class WojtekJoystick(WojtekEnv):
         info["phase"] = jp.fmod(phase + jp.pi, 2 * jp.pi) - jp.pi
         info["step_count"] = info["step_count"] + 1
         info["steps_since_cmd"] = info["steps_since_cmd"] + 1
+        # No-progress cut (see no_progress in default_config): an env that
+        # keeps ignoring its command dies with a probability that grows
+        # with the shortfall. Evaluated against the command that drove
+        # this step, before the resample below.
+        if self._config.no_progress.enable:
+            npg = self._config.no_progress
+            cmd = info["command"]
+            demand = self._cmd_speed(cmd)
+            # Achieved speed in service of the command: planar velocity
+            # projected onto the commanded direction, plus yaw rate toward
+            # the commanded turn, blended like _cmd_speed blends demand.
+            # Moving against the command reads negative, i.e. worse than
+            # standing.
+            served = (
+                jp.dot(self._local_linvel(data)[:2], cmd[:2])
+                / jp.maximum(jp.linalg.norm(cmd[:2]), 1e-6)
+                + 0.3 * self._gyro(data)[2] * jp.sign(cmd[2])
+            )
+            alpha = self.dt / npg.ema_sec
+            info["progress_ema"] = (
+                (1.0 - alpha) * info["progress_ema"] + alpha * served
+            )
+            progress_ratio = info["progress_ema"] / jp.maximum(demand, 1e-6)
+            hazard = npg.p_max * jp.clip(
+                (npg.risk_below - progress_ratio) / npg.risk_below, 0.0, 1.0
+            )
+            armed = (demand > 0.05) & (
+                info["steps_since_cmd"] * self.dt >= npg.grace_sec
+            )
+            no_progress_cut = jax.random.bernoulli(
+                r_term, jp.where(armed, hazard, 0.0)
+            )
+            done = done | no_progress_cut
         resample = info["steps_since_cmd"] >= self._config.command.resample_steps
         info["command"] = jp.where(
             resample, self._sample_command(r_cmd), info["command"]
         )
         info["steps_since_cmd"] = jp.where(resample, 0, info["steps_since_cmd"])
+        if self._config.no_progress.enable:
+            # A fresh command restarts the meter at ratio 1: the EMA is
+            # reseeded to the new demand, and the grace window keeps the
+            # hazard at zero while the robot turns the gait around.
+            info["progress_ema"] = jp.where(
+                resample, self._cmd_speed(info["command"]), info["progress_ema"]
+            )
 
         reward = sum(
             rewards[k] * self._config.reward.scales[k] for k in rewards
@@ -892,6 +1016,12 @@ class WojtekJoystick(WojtekEnv):
             **state.metrics,
             **{f"reward/{k}": v for k, v in rewards.items()},
         }
+        if self._config.no_progress.enable:
+            # Episode sum is 1 exactly when the episode ended on the cut;
+            # the ratio is a per-step mean, clipped so over-delivery on a
+            # slow command cannot hide shortfall elsewhere in the average.
+            metrics["no_progress_cut"] = no_progress_cut.astype(jp.float32)
+            metrics["progress_ratio_per_step"] = jp.clip(progress_ratio, 0.0, 2.0)
         # The `_per_step` suffix makes brax report the mean, not the sum.
         if self._terrain_enabled:
             metrics["terrain_level_per_step"] = info["terrain_level"].astype(jp.float32)
@@ -1012,34 +1142,42 @@ class WojtekJoystick(WojtekEnv):
 
         qvel = data.qvel[self._vadr]
 
-        # Velocity tracking kernel: the legacy exponential, optionally
+        # Velocity tracking kernels (absolute or relative), optionally
         # blended with a wider far-field exponential so far-off-command
         # states still see a gradient toward the command (see
         # tracking_far_weight in default_config). far_w is static config,
-        # so 0 reproduces the legacy kernel exactly.
+        # so 0 reproduces either bare kernel exactly.
         far_w = self._config.reward.get("tracking_far_weight", 0.0)
 
+        def _far_blend(kernel, err_sq):
+            if not far_w:
+                return kernel
+            far = jp.exp(-err_sq / self._config.reward.tracking_far_sigma)
+            return (1.0 - far_w) * kernel + far_w * far
+
         def _track(err_sq):
-            r = jp.exp(-err_sq / sigma)
-            if far_w:
-                far = jp.exp(-err_sq / self._config.reward.tracking_far_sigma)
-                r = (1.0 - far_w) * r + far_w * far
-            return r
+            return _far_blend(jp.exp(-err_sq / sigma), err_sq)
 
         if self._config.reward.get("tracking_relative", False):
             r = self._config.reward
+            err_lin = jp.sum(jp.square(cmd[:2] - linvel[:2]))
+            err_ang = jp.square(cmd[2] - gyro[2])
             denom_lin = jp.maximum(
                 jp.linalg.norm(cmd[:2]), r.tracking_rel_floor_lin
             )
             denom_ang = jp.maximum(jp.abs(cmd[2]), r.tracking_rel_floor_ang)
             k_lin = jp.exp(
-                -jp.sum(jp.square(cmd[:2] - linvel[:2]))
-                / (r.tracking_rel_sigma * jp.square(denom_lin))
+                -err_lin / (r.tracking_rel_sigma * jp.square(denom_lin))
             )
             k_ang = jp.exp(
-                -jp.square(cmd[2] - gyro[2])
-                / (r.tracking_rel_sigma * jp.square(denom_ang))
+                -err_ang / (r.tracking_rel_sigma * jp.square(denom_ang))
             )
+            # The far mix-in applies to the relative kernels too. The far
+            # kernel stays absolute: a state far off the command sees the
+            # same pull at any commanded speed, and the kernel's optimum
+            # is unchanged.
+            k_lin = _far_blend(k_lin, err_lin)
+            k_ang = _far_blend(k_ang, err_ang)
         else:
             k_lin = _track(jp.sum(jp.square(cmd[:2] - linvel[:2])))
             k_ang = _track(jp.square(cmd[2] - gyro[2]))
@@ -1047,6 +1185,21 @@ class WojtekJoystick(WojtekEnv):
             # Gate each term by the other's kernel: tracking pays only for
             # tracking the whole command (see default_config note).
             k_lin, k_ang = k_lin * k_ang, k_ang * k_lin
+        # Gait-shaping gate (see shaping_tracking_gate in default_config):
+        # the positive gait terms follow the linear tracking kernel, after
+        # the product gate when that is on.
+        shape_gate = (
+            k_lin
+            if self._config.reward.get("shaping_tracking_gate", False)
+            else 1.0
+        )
+
+        # sin^2 of the tilt from vertical, less the tolerance cone (see
+        # reward.orientation_tol_deg). Static config, so 0 leaves the legacy
+        # expression untouched.
+        orientation = jp.sum(jp.square(gravity[:2]))
+        if self._orientation_tol:
+            orientation = jp.maximum(orientation - self._orientation_tol, 0.0)
 
         rewards = {
             "tracking_lin_vel": k_lin,
@@ -1057,7 +1210,7 @@ class WojtekJoystick(WojtekEnv):
             ),
             "lin_vel_z": jp.square(linvel[2]),
             "ang_vel_xy": jp.sum(jp.square(gyro[:2])),
-            "orientation": jp.sum(jp.square(gravity[:2])),
+            "orientation": orientation,
             "torques": jp.sum(jp.square(data.actuator_force)),
             "torque_rate": jp.sum(
                 jp.square(data.actuator_force - info["last_torque"])
@@ -1082,7 +1235,8 @@ class WojtekJoystick(WojtekEnv):
                 )
                 * first_contact
             )
-            * moving,
+            * moving
+            * shape_gate,
             "feet_slip": slip * moving,
             # Flat-linkage proximity (see toggle_flat in default_config).
             "toggle_flat": toggle_ramp,
@@ -1098,7 +1252,8 @@ class WojtekJoystick(WojtekEnv):
                 )
                 * first_contact
             )
-            * moving,
+            * moving
+            * shape_gate,
             # Downward foot speed^2, gated by proximity to the floor
             # (pre-contact, so hard strikes are read before the solver
             # absorbs them). Stance feet contribute ~0 (vz ~ 0); swing
@@ -1114,7 +1269,7 @@ class WojtekJoystick(WojtekEnv):
             * moving,
             "feet_phase": jp.exp(-phase_err / self._config.reward.phase_sigma)
             * moving,
-            "high_step": high_step * moving,
+            "high_step": high_step * moving * shape_gate,
             "contact_match": contact_match * moving,
             # Position pull to the anchor plus velocity damping: L1 position
             # alone caused bang-bang fidgeting around the anchor (v2).

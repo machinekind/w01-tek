@@ -75,6 +75,10 @@ TRAINING_ONLY_KEYS = {
     # the observation layout unchanged (no world position/heading reaches the
     # actor), so nothing about it changes what the robot does with the policy.
     "terrain",
+    # CaT-style early termination for episodes that ignore their command: a
+    # PPO training signal (future value zero), no reward term, nothing in the
+    # control loop. The robot has no episodes to cut.
+    "no_progress",
 }
 
 # Sub-keys of `command` that define the trained command box (contract) vs
@@ -96,6 +100,10 @@ COMMAND_TRAINING_KEYS = {
     "slow_vx",
     "pure_fast_prob",
     "fast_vx",
+    # Backward curriculum (terrain family, run three): clean backward
+    # commands drawn within the trained box's negative vx range.
+    "pure_back_prob",
+    "back_vx",
 }
 
 

@@ -69,3 +69,108 @@ def test_phase_mirror_swaps_leg_pairs_in_both_halves():
 def test_unknown_component_raises():
     with pytest.raises(KeyError):
         symmetry.component_mirror("no_such_obs")
+
+
+# -- the terrain family's frozen actor layout ------------------------------
+
+# terrain_blind_v3's obs.include applied to the joystick state list: the
+# kp40 joint/action/command channels plus the IMU, 46 dims. Frozen for the
+# whole terrain family (see the preset header).
+TERRAIN_ACTOR = ["gyro", "gravity", "joint_pos", "joint_vel", "last_act", "command"]
+
+
+def test_terrain_actor_layout_mirrors_every_block():
+    """Pin the assembled 46-dim map to hand-written expectations, so an
+    offset slip (component reorder, size change) cannot pass silently."""
+    perm, sign = symmetry.obs_mirror(TERRAIN_ACTOR)
+    assert perm.shape == sign.shape == (46,)
+
+    gyro = np.array([1.0, 2.0, 3.0])
+    grav = np.array([4.0, 5.0, 6.0])
+    jpos = 10.0 + np.arange(12.0)
+    jvel = 30.0 + np.arange(12.0)
+    lact = 50.0 + np.arange(12.0)
+    cmd = np.array([70.0, 71.0, 72.0, 73.0])
+    m = sign * np.concatenate([gyro, grav, jpos, jvel, lact, cmd])[perm]
+
+    np.testing.assert_allclose(m[0:3], [-1.0, 2.0, -3.0])  # gyro: pseudo-vector
+    np.testing.assert_allclose(m[3:6], [4.0, -5.0, 6.0])  # gravity: vector
+    # joint blocks: rear pair and front pair swap, abduction negates
+    for base, blk in ((6, jpos), (18, jvel), (30, lact)):
+        rl, rr, fr, fl = blk[0:3], blk[3:6], blk[6:9], blk[9:12]
+        expected = np.concatenate([
+            [-rr[0], rr[1], rr[2]], [-rl[0], rl[1], rl[2]],
+            [-fl[0], fl[1], fl[2]], [-fr[0], fr[1], fr[2]],
+        ])
+        np.testing.assert_allclose(m[base : base + 12], expected)
+    np.testing.assert_allclose(m[42:46], [70.0, -71.0, -72.0, 73.0])  # command
+
+
+# -- what the augmentation can and cannot train ----------------------------
+
+
+def _signed_perm(perm, sign):
+    n = len(perm)
+    mat = np.zeros((n, n))
+    mat[np.arange(n), perm] = sign
+    return mat
+
+
+def test_fixed_flag_world_mirror_is_invisible_to_the_policy():
+    """The terrain_blind_v3 post-mortem, as an algebraic fact.
+
+    The env's augmentation presents sigma(obs) and un-mirrors the action
+    before a mirror-equivariant physics step, with the flag fixed per env
+    (auto-reset never re-runs reset). For ANY policy -- however asymmetric
+    -- the policy-frame (obs, action, reward) stream of a mirrored env is
+    then IDENTICAL to a plain env's: the flag is unobservable, so PPO gets
+    zero gradient toward pi(sigma s) = sigma pi(s). World mirroring cancels
+    chirality of the WORLD; it cannot symmetrize the POLICY.
+
+    That is how wojtek_terrain_blind_v3_20260728 trained with
+    symmetry.enable=true and provably correct maps (mirror-wrapping the
+    checkpoint swaps spin_left/spin_right scores exactly: -33/+124 deg to
+    +127/-35) and still cannot turn one way. A fix must couple the two
+    frames inside the LEARNER -- mirrored-transition duplication in the
+    PPO batch, a symmetry loss, or per-step flag resampling -- and would
+    make the streams below differ for an asymmetric policy.
+    """
+    perm, sign = symmetry.obs_mirror(TERRAIN_ACTOR)
+    mo = _signed_perm(perm, sign)  # obs mirror
+    ap, asn = symmetry.joint_mirror()
+    ma = _signed_perm(ap, asn)  # action mirror
+    n = len(perm)
+    rng = np.random.default_rng(1)
+
+    # Linear stand-in plant, mirror-equivariant by symmetrization -- the
+    # property tests/integration/test_symmetry.py verifies for real MJX.
+    a0 = rng.normal(size=(n, n)) / (2 * n)
+    b0 = rng.normal(size=(n, 12)) / (2 * n)
+    plant_a = (a0 + mo @ a0 @ mo) / 2.0
+    plant_b = (b0 + mo @ b0 @ ma) / 2.0
+
+    w = rng.normal(size=(12, n))
+
+    def pi(obs):
+        return np.tanh(w @ obs)
+
+    x0 = rng.normal(size=n)
+    # a random policy is genuinely asymmetric in its own frame
+    assert np.abs(pi(mo @ x0) - ma @ pi(x0)).max() > 0.05
+
+    def stream(mirrored):
+        x = mo @ x0 if mirrored else x0.copy()
+        out = []
+        for _ in range(50):
+            obs = mo @ x if mirrored else x
+            act = pi(obs)  # what the learner records
+            u = ma @ act if mirrored else act  # what the plant receives
+            reward = x @ x + u @ u  # any sigma-invariant reward
+            out.append((obs, act, reward))
+            x = plant_a @ x + plant_b @ u
+        return out
+
+    for (o_p, a_p, r_p), (o_m, a_m, r_m) in zip(stream(False), stream(True)):
+        np.testing.assert_allclose(o_m, o_p, atol=1e-12)
+        np.testing.assert_allclose(a_m, a_p, atol=1e-12)
+        np.testing.assert_allclose(r_m, r_p, atol=1e-12)

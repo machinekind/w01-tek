@@ -1,0 +1,32 @@
+# Intel RealSense D435 on the robot -- device access for the perception path.
+# Installed by deploy/rpi/install.sh.
+#
+# Two kinds of node matter here and they need different things:
+#
+#   /dev/video*       UVC streaming: depth and colour, i.e. everything the
+#                     pipeline actually runs on. Ubuntu's stock rules already
+#                     hand these to the video group and install.sh puts rpi in
+#                     it -- the rule below states it explicitly so the camera
+#                     stops depending on a distro default staying put.
+#
+#   /dev/bus/usb/...  libusb control transfers. Not used for streaming, which
+#                     is why the camera works without this and the omission is
+#                     easy to miss. It is required for hardware_reset (the
+#                     driver's initial_reset:=true), firmware queries/updates
+#                     and advanced-mode JSON presets. The default is
+#                     root:root 0664 -- readable, NOT writable -- so a camera
+#                     that comes up wedged can only be recovered by physically
+#                     unplugging it. On a robot that has had its power pulled
+#                     mid-run, being able to reset the camera in software is
+#                     the difference between a failed boot and a retry.
+#
+# Scoped to this camera's VID:PID (8086:0b07, read off the unit with lsusb)
+# rather than vendor-wide: no other Intel device should inherit these
+# permissions, and a different camera in the socket should fail loudly instead
+# of half-working. plugdev/video because rpi is already in both groups.
+#
+# ":=" rather than "=" so a later-numbered rule cannot quietly take the
+# permissions back; this file is the last word on this device.
+
+SUBSYSTEM=="usb", ATTRS{idVendor}=="8086", ATTRS{idProduct}=="0b07", MODE:="0660", GROUP:="plugdev"
+SUBSYSTEM=="video4linux", ATTRS{idVendor}=="8086", ATTRS{idProduct}=="0b07", MODE:="0660", GROUP:="video"

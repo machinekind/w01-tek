@@ -91,6 +91,34 @@ provision_packages() {
         run "sudo usermod -aG input rpi"
     fi
 
+    # The RealSense driver opens the camera's /dev/video* nodes (root:video
+    # 0660). Without the video group librealsense enumerates nothing and says
+    # "No RealSense devices were found!" after a wall of "Permission denied"
+    # -- which reads like an unplugged camera, not a permissions problem
+    # (seen on hardware 2026-07-30). Takes effect on the next login/service
+    # start, same as the input group above.
+    if id -nG rpi | grep -qw video; then
+        info "rpi already in the video group"
+    else
+        info "adding rpi to the video group (RealSense /dev/video*)"
+        run "sudo usermod -aG video rpi"
+    fi
+
+    # udev for the D435: group ownership of the video nodes made explicit, and
+    # libusb write access so hardware_reset/firmware/advanced-mode work at all
+    # (see the rules file for why the camera streams fine without it).
+    local rsrules=/etc/udev/rules.d/99-wojtek-realsense.rules
+    if cmp -s "${HERE}/99-wojtek-realsense.rules" "$rsrules"; then
+        info "realsense udev rules already current"
+    else
+        info "installing $rsrules"
+        run "sudo install -m644 '${HERE}/99-wojtek-realsense.rules' '$rsrules'"
+        # Reload + trigger so an already-plugged camera picks the rules up
+        # without a replug; on a robot the socket is not always reachable.
+        run "sudo udevadm control --reload-rules"
+        run "sudo udevadm trigger --subsystem-match=usb --subsystem-match=video4linux"
+    fi
+
     # Xbox pads refuse to stay connected while bluetooth ERTM is on -- the
     # standard fix is to turn it off module-wide (takes effect after reboot
     # or btusb reload; pairing before that just keeps disconnecting).
@@ -198,6 +226,16 @@ provision_network() {
     # eth-AP failover moving 10.42.0.2 between ifaces. Keep in sync with the
     # CYCLONEDDS_URI lines in wojtek-robot.service and the bashrc block.
     run "sudo install -m644 '${HERE}/cyclonedds-rpi.xml' /etc/cyclonedds-rpi.xml"
+
+    # UDP socket buffers for large samples (camera images). The kernel default
+    # is 208 KB, while Cyclone asks for ~1 MB and gets silently clamped. One
+    # 848x480 rgb8 frame is 1.22 MB = ~840 UDP fragments, and losing a single
+    # fragment discards the whole frame -- which looks like "the image stutters
+    # in RViz" and gets misdiagnosed as bandwidth. Applies to any big message,
+    # not just the camera; the control loop's own topics are tiny and were
+    # never affected.
+    run "sudo install -m644 '${HERE}/60-wojtek-dds-buffers.conf' /etc/sysctl.d/60-wojtek-dds-buffers.conf"
+    run "sudo sysctl --quiet --system"
 
     # netplan: static eth0 (.2), wlan0 handed to hostapd. Only (re)apply when
     # the effective config differs, and refuse the disruptive first switch if

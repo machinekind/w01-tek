@@ -1,0 +1,137 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Colour1
+        - /TerrainPoints1
+      Splitter Ratio: 0.5
+    Tree Height: 500
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Name: Colour
+      Topic:
+        Depth: 2
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        # Best effort, matching the driver. A Reliable subscription simply
+        # never connects to a best-effort publisher and the panel stays
+        # blank -- which looks exactly like a dead camera.
+        Reliability Policy: Best Effort
+        Value: /camera/camera/color/image_raw
+      Value: true
+    - Class: rviz_default_plugins/Image
+      Enabled: false
+      Name: Depth
+      Topic:
+        Depth: 2
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /camera/camera/depth/image_rect_raw
+      Value: false
+    # The driver's XYZRGB cloud -- the actual "what does the camera see in 3D"
+    # view. Not what the planner eats (that is TerrainPoints below); this one
+    # exists so a human can look at the robot's surroundings.
+    - Alpha: 1
+      Class: rviz_default_plugins/PointCloud2
+      Color: 255; 255; 255
+      Color Transformer: RGB8
+      Decay Time: 0
+      Enabled: true
+      Name: Cloud
+      Position Transformer: XYZ
+      Selectable: true
+      Size (Pixels): 3
+      Size (m): 0.01
+      Style: Points
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /camera/camera/depth/color/points
+      Use Fixed Frame: true
+      Value: true
+    - Alpha: 1
+      Class: rviz_default_plugins/PointCloud2
+      Color: 255; 255; 255
+      Color Transformer: AxisColor
+      Axis: Z
+      Decay Time: 0
+      Enabled: true
+      Name: TerrainPoints
+      Position Transformer: XYZ
+      Selectable: true
+      Size (Pixels): 8
+      Size (m): 0.02
+      Style: Points
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /cloud_reduce/terrain_points
+      Use Fixed Frame: true
+      Value: true
+    - Class: rviz_default_plugins/TF
+      Enabled: true
+      Name: TF
+      Marker Scale: 0.3
+      Show Arrows: false
+      Show Axes: true
+      Show Names: true
+      Value: true
+    - Alpha: 0.5
+      Cell Size: 0.5
+      Class: rviz_default_plugins/Grid
+      Color: 160; 160; 164
+      Enabled: true
+      Line Style:
+        Line Width: 0.03
+        Value: Lines
+      Name: Grid
+      Normal Cell Count: 0
+      Plane: XY
+      Plane Cell Count: 20
+      Reference Frame: <Fixed Frame>
+      Value: true
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    # The camera's own optical frame: the reduction publishes in it and the
+    # robot's URDF is not required to view the camera alone.
+    Fixed Frame: camera_depth_optical_frame
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+      Line color: 128; 128; 0
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 4
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 1.5
+      Name: Current View
+      Near Clip Distance: 0.01
+      Pitch: 0.2
+      Target Frame: <Fixed Frame>
+      Value: Orbit (rviz)
+      Yaw: 3.14
+    Saved: ~
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 900
+  Width: 1500
+  Colour:
+    collapsed: false

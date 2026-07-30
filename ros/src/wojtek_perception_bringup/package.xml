@@ -21,12 +21,10 @@
   <depend>std_msgs</depend>
   <depend>python3-numpy</depend>
 
-  <!-- The depth driver. Not wrapped in a package of our own: it is
-       configured from config/d435.yaml, not subclassed. -->
+  <!-- The depth driver, run as a plain node (realsense2_camera_node). Not
+       wrapped in a package of our own: it is configured from
+       config/d435.yaml, not subclassed. -->
   <exec_depend>realsense2_camera</exec_depend>
-  <!-- component_container_mt, so the driver runs composable (intra-process,
-       zero-copy) instead of pushing depth frames through DDS. -->
-  <exec_depend>rclcpp_components</exec_depend>
   <!-- static_transform_publisher for the camera->body extrinsics. -->
   <exec_depend>tf2_ros</exec_depend>
 

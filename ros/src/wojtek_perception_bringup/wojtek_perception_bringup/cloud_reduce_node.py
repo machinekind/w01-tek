@@ -57,8 +57,11 @@ class CloudReduce(Node):
         self.create_subscription(
             Image, "depth/image", self._on_depth, qos_profile_sensor_data
         )
+        # Private topic (~/ = /cloud_reduce/terrain_points), matching how the
+        # rest of the stack publishes node-owned sensor output -- e.g.
+        # magnetometer_broadcaster's ~/magnetic_field.
         self._pub = self.create_publisher(
-            PointCloud2, "terrain_points", qos_profile_sensor_data
+            PointCloud2, "~/terrain_points", qos_profile_sensor_data
         )
         self.get_logger().info("cloud_reduce waiting for depth/camera_info")
 

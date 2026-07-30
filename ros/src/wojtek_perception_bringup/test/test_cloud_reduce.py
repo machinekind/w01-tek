@@ -126,3 +126,10 @@ def test_camera_info_mismatch_does_not_publish_wrong_geometry(node):
     msg.data = np.full((H // 2, W // 2), 2000, np.uint16).tobytes()
     node._on_depth(msg)
     assert node.published == []
+
+
+def test_output_is_a_private_topic(node):
+    """The published interface: ~/terrain_points, i.e. namespaced under the
+    node like the rest of the stack's sensor output (magnetometer_broadcaster
+    publishes ~/magnetic_field). Consumers hard-code this name."""
+    assert node._pub.topic_name == "/cloud_reduce/terrain_points"

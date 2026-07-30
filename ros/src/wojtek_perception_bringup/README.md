@@ -10,10 +10,35 @@ ros2 launch wojtek_perception_bringup perception.launch.py --show-args
 ```
 
 ```
-realsense2_camera ──depth 424x240@10──► cloud_reduce ──8x8 ordered cloud──► (planner / policy)
-   (composable,                          (rclpy)          /cloud_reduce/terrain_points
-    in a container)
+realsense2_camera ──depth 424x240@15──► cloud_reduce ──8x8 ordered cloud──► (planner / policy)
+   (plain node)   │     ~3 MB/s          (rclpy)   /cloud_reduce/terrain_points
+                  ├──── colour 1280x720@15 ───────────────────────────────► (VLM, later)
+                  │     ~41 MB/s          /camera/camera/color/image_raw
+                  └──── RGBD 1280x720@15 ─────────────────────────────────► (nothing yet)
+                        ~69 MB/s          /camera/camera/rgbd
 ```
+
+848x480 comes off the depth sensor; `decimation_filter.filter_magnitude: 2`
+halves each dimension before anything is published, so what crosses DDS is
+424x240x16 bit at 15 Hz. Both rates are constrained by what the D435
+actually offers (depth 6/15/30/60/90, colour 6/15/30/60): 15 is the nearest
+depth rate at or above the planner's 10 Hz replan, and 6 is the slowest
+colour rate the sensor has, which is still ~12x what the VLM's ~0.3-0.5 Hz
+decision loop needs.
+
+Colour and RGBD are on by default (`enable_color:=false` drops both) and are
+**deliberately more than the machine can deliver**: at 848x480x15 the RGBD
+message is 2.04 MB and a Python subscriber received ~70% of them, with the
+kernel dropping nothing (0 UDP buffer errors) -- it is deserialisation that
+cannot keep up. At 1280x720 expect proportionally worse. That is an accepted
+trade for now; the fix, when one is needed, is a C++ consumer in the driver's
+own process (see the composition note in the launch file), not more bandwidth.
+
+**The planner keeps using the RAW depth topic, not the aligned one.**
+Alignment reprojects depth into the colour intrinsics, and measured on this
+unit that narrows the horizontal field of view from 90.8 deg to 70.0 deg
+(fx 418.0 -> 605.6) -- a quarter of the view, lost at the sides where
+obstacles are.
 
 ## Why this is a `*_bringup`
 
@@ -23,9 +48,16 @@ single-node subsystem does not need one -- `wojtek_teleop` carries its own
 `gamepad.launch.py` and that is the right shape for it.
 
 The launch runs standalone and is includable. The one singleton in it is the
-**component container**: pass `container:=<name>` to load the driver into a
-container someone else owns instead of creating one. Everything else is
-opt-out (`extrinsics:=false`, `reduce:=false`).
+camera->body static transform, so that is opt-out (`extrinsics:=false`) for
+the case where the robot bringup already owns that TF edge; the reduction is
+opt-out too (`reduce:=false`).
+
+Both config files are ordinary ROS parameter files (`/**: ros__parameters:`)
+loaded by the nodes themselves, so `--params-file` and `ros2 param dump`
+work on them like on any other node's config. Launch arguments layer single
+overrides on top (`depth_profile:=`, `color_profile:=`, `enable_color:=`):
+each entry of `parameters=` becomes its own `--params-file` in list order,
+and the last one wins.
 
 ## Status
 
@@ -59,10 +91,14 @@ radial error exceeds the planner's 0.05 m map cell.
   The driver has renamed parameters across releases and silently ignores
   names it does not know. Check with `ros2 param list /camera/camera` before
   believing a setting took effect.
-- **The reduction is rclpy, so it is not composable.** Python nodes cannot
-  load into a component container; the depth image crosses DDS to reach it.
-  Fine at 424x240x10 (~2 MB/s), not fine if it moves to full frame rate --
-  that needs a C++ rewrite.
+- **No component container, on purpose.** Zero-copy needs two C++ nodes in
+  one process. The RPi hosts no container (nothing else in this workspace
+  creates one; `ros2_control_node` is a standalone process), and the only
+  consumer of the depth image is this package's rclpy reduction, which
+  cannot be composed at all. So the depth crosses DDS on loopback:
+  424x240x2 B at 15 Hz is ~3 MB/s, which is affordable. Rewriting the
+  reduction in C++ for a higher frame rate is the change that would make a
+  container worth introducing.
 - **Pitch beats sensor noise.** 1 deg of camera pitch error puts a floor
   point 52 mm off at 3 m; the sensor's own noise there is ~33 mm. A constant
   mounting error reads downstream as a permanent phantom obstacle. Measure
@@ -83,10 +119,15 @@ radial error exceeds the planner's 0.05 m map cell.
 
 ```bash
 cd ros/src/wojtek_perception_bringup
-PYTHONPATH=$PWD python3 -m pytest test/ -q     # 14 tests, no camera needed
+source /opt/ros/jazzy/setup.bash
+PYTHONPATH=$PWD:$PYTHONPATH python3 -m pytest test/ -q   # 20 tests, no camera needed
 ```
+
+(`PYTHONPATH=$PWD` alone replaces the ROS paths instead of extending them,
+and then `rclpy`/`launch` do not import.)
 
 Covers the reduction maths (median vs flying pixels, range gating, sparse
 patches, encoding and camera_info mismatches) and the launch file's
-composition logic (container ownership, argument overrides, and that the
-measured settings are still in the config).
+composition logic (which nodes get created, the parameter files they load,
+the argument overrides on top of them, and that the measured settings are
+still in the config).

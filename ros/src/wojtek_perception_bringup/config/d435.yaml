@@ -1,8 +1,12 @@
 # RealSense D435 settings for the on-robot perception pipeline.
 #
-# The values under `realsense:` are measured, not guessed -- see
-# docs/perception/d435-noise.md for the bench that produced them. Summary of
-# why each one is what it is:
+# An ordinary ROS parameter file: the driver loads it itself
+# (--params-file), and single values can be overridden from the launch on
+# top of it. `/**` rather than the node's path so the file keeps working
+# whatever name/namespace the launch gives the driver.
+#
+# The values are measured, not guessed -- see docs/perception/d435-noise.md
+# for the bench that produced them. Summary of why each one is what it is:
 #
 #   visual_preset 3 (HIGH_ACCURACY)  temporal noise at 3-4 m drops 97 -> 33 mm
 #                                    versus the DEFAULT preset (3x). Costs
@@ -26,67 +30,127 @@
 #   clip_distance 3.0                Beyond 3 m the radial noise exceeds the
 #                                    0.05 m map cell, so those returns paint
 #                                    obstacles that are not there.
-#   fps 10                           The planner replans at 10 Hz. At 30 Hz
-#                                    the post-processing chain alone eats a
-#                                    whole RPi core for frames nobody reads.
+#   depth 15 fps                     The planner replans at 10 Hz, but the
+#                                    D435 only offers 6/15/30/60/90 -- 15 is
+#                                    the nearest rate at or above what the
+#                                    planner consumes. Post-processing is
+#                                    ~38 ms/frame estimated on an RPi 5, so
+#                                    15 Hz is ~57% of a core; 30 Hz would not
+#                                    fit at all. Override without editing
+#                                    this file: depth_profile:=848x480x30
+#   colour 1280x720 at 15 fps        Deliberately generous and deliberately
+#                                    lossy (user call 2026-07-30): the RGBD
+#                                    product is only as good as the colour
+#                                    stream it is aligned into, so colour
+#                                    carries both the VLM's image and the
+#                                    RGBD resolution. ~2.76 MB a frame,
+#                                    41 MB/s of colour plus ~69 MB/s of RGBD,
+#                                    which is more than a Python subscriber
+#                                    can take -- frames will be dropped, and
+#                                    that is accepted for now. 1920x1080 was
+#                                    not chosen because VLMs downscale their
+#                                    input anyway; it would only cost more.
+#
+# WHAT THE PLANNER USES: still the RAW depth topic, not the aligned one.
+# Alignment reprojects depth into the colour camera's intrinsics, and the
+# colour lens is narrower: measured on this unit, horizontal FOV drops from
+# 90.8 deg (fx 418.0) to 70.0 deg (fx 605.6). Feeding the planner aligned
+# depth would throw away a quarter of its field of view -- at the sides,
+# where obstacles matter -- on top of quadrupling the pixels it reduces.
 #
 # PARAMETER NAMES: these target realsense2_camera 4.54+. The driver has
 # renamed parameters across releases (depth_width/height/fps became
 # depth_module.depth_profile, and the filter parameters moved under their
-# filter name). Verify against the installed driver with
+# filter name) and silently ignores names it does not know. Verify against
+# the installed driver with
 #   ros2 param list /camera/camera
 # before trusting a silent default.
 
-realsense:
-  # -- streams ------------------------------------------------------------
-  enable_depth: true
-  enable_color: false          # launch arg `enable_color` flips this
-  enable_infra1: false
-  enable_infra2: false
-  # The driver builds a PointCloud2 if asked; we do not want it. Reducing
-  # from the depth image is far cheaper than reducing from a 400k-point
-  # cloud that was serialised first.
-  pointcloud.enable: false
+/**:
+  ros__parameters:
+    # -- streams ----------------------------------------------------------
+    enable_depth: true
+    enable_color: true           # launch arg `enable_color` flips this
+    enable_infra1: false
+    enable_infra2: false
 
-  depth_module.depth_profile: "848x480x10"
-  rgb_camera.color_profile: "848x480x10"
+    # The driver's own XYZRGB cloud on ~/depth/color/points. On for viewing:
+    # RViz can render a PointCloud2, and it can render neither the raw depth
+    # image as geometry nor the RGBD message (realsense2_camera_msgs/RGBD has
+    # no RViz plugin at all).
+    #
+    # It is NOT what the planner path uses, and that reasoning has not
+    # changed: cloud_reduce still reduces from the depth image, because
+    # reducing a 400k-point cloud that was serialised first is the expensive
+    # way round. This is a second, parallel product for a human looking at
+    # the robot. It is built from the POST-decimation depth (424x240), so
+    # ~102k points, ~1.6 MB a frame, ~24 MB/s at 15 Hz -- affordable on the
+    # cable, and the first thing to turn off if the link is the bottleneck.
+    # NAME TRAP, and the exact one this file warns about at the top. The
+    # wrapper derives the parameter namespace from the processing block's
+    # name, and on aarch64 librealsense builds the NEON-accelerated variant
+    # called "Pointcloud (NEON)" -> `pointcloud__neon_`. On x86 the same
+    # setting is plain `pointcloud`. Both are listed here because an unknown
+    # key in a parameter file is ignored in silence (verified: setting only
+    # `pointcloud.enable` on the RPi left the cloud off and `ros2 param get`
+    # answered "Parameter not set"), so carrying both costs nothing and keeps
+    # the file working on the robot and on a dev box.
+    # allow_no_texture_points keeps points the colour camera cannot paint.
+    # "Texture" here is the RGB image used to colour the cloud -- nothing to
+    # do with the IR projector, and nothing to do with how depth is computed:
+    # depth is stereo on the D4 ASIC either way, the projector only sprays IR
+    # pattern so stereo has something to match on blank walls. With this off,
+    # the cloud was cropped to the colour lens (70 deg) and lost the outer
+    # ~20 deg of perfectly good stereo geometry: 16k points instead of ~75k.
+    pointcloud:
+      enable: true
+      stream_filter: 2         # RS2_STREAM_COLOR -> XYZRGB where colour reaches
+      allow_no_texture_points: true
+    pointcloud__neon_:
+      enable: true
+      stream_filter: 2
+      allow_no_texture_points: true
 
-  # -- depth quality ------------------------------------------------------
-  depth_module.visual_preset: 3      # 3 = HIGH_ACCURACY
-  depth_module.emitter_enabled: 1
-  depth_module.laser_power: 150.0
+    depth_module:
+      depth_profile: "848x480x15"
+      # -- depth quality --------------------------------------------------
+      visual_preset: 3           # 3 = HIGH_ACCURACY
+      emitter_enabled: 1
+      laser_power: 150.0
 
-  # -- post-processing (order matters: decimation first) ------------------
-  decimation_filter.enable: true
-  decimation_filter.filter_magnitude: 2
-  spatial_filter.enable: true
-  temporal_filter.enable: true
-  temporal_filter.filter_smooth_alpha: 0.4
-  temporal_filter.filter_smooth_delta: 100
+    rgb_camera:
+      color_profile: "1280x720x15"
 
-  clip_distance: 3.0
+    # Aligned depth + colour in one synchronised message
+    # (realsense2_camera_msgs/RGBD on ~/rgbd). enable_rgbd needs BOTH of the
+    # others: without align_depth there is nothing to pair, without sync the
+    # pairing is undefined -- and the driver says nothing, the topic just
+    # stays empty. Measured cost at 848x480x15: 2.04 MB per message, 30.6 MB/s
+    # produced at 13% of a core, of which a Python subscriber received ~70%
+    # (the kernel dropped nothing -- 0 UDP buffer errors -- the subscriber
+    # simply could not deserialise that fast). At 1280x720 the message is
+    # ~4.6 MB, so expect proportionally more loss until a C++ consumer exists.
+    align_depth:
+      enable: true
+    enable_sync: true
+    enable_rgbd: true
 
-  # -- frames -------------------------------------------------------------
-  # The driver publishes the static camera_link -> *_optical_frame chain.
-  # Left on: the reduction node needs the optical frame to mean anything.
-  # This is the one singleton in this launch besides the container.
-  publish_tf: true
-  tf_publish_rate: 0.0          # 0 = static only, no periodic republish
+    # -- post-processing (order matters: decimation first) ----------------
+    decimation_filter:
+      enable: true
+      filter_magnitude: 2
+    spatial_filter:
+      enable: true
+    temporal_filter:
+      enable: true
+      filter_smooth_alpha: 0.4
+      filter_smooth_delta: 100
 
-# Grid reduction: depth image -> coarse terrain reference cloud.
-#
-# grid 8x8 = 64 points. Measured: aggregating 6360 px into one point removes
-# only 1.8x of the noise (stereo noise is spatially correlated, so patch
-# neighbours err the same way), but it does take fill from 74% to 100%.
-# So the grid is chosen for coverage and cost, not for denoising.
-#
-# Angular resolution is the real limit, not noise: at a 0.25 m mount height
-# one 8x8 cell covers ~2 m of floor at 2 m range, so this grid reports
-# "flat / rising / obstacle", never stair treads. See the doc before
-# raising expectations of it.
-reduce:
-  grid_w: 8
-  grid_h: 8
-  min_range: 0.3               # below the D435's min-Z; nothing valid here
-  max_range: 3.0               # keep in step with realsense clip_distance
-  min_valid_frac: 0.05         # patch needs this fraction of valid px to count
+    clip_distance: 3.0
+
+    # -- frames -----------------------------------------------------------
+    # The driver publishes the static camera_link -> *_optical_frame chain.
+    # Left on: the reduction node needs the optical frame to mean anything.
+    # This is the one singleton in this launch besides the extrinsics.
+    publish_tf: true
+    tf_publish_rate: 0.0         # 0 = static only, no periodic republish

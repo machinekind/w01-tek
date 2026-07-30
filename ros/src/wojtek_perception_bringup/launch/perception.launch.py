@@ -1,7 +1,7 @@
 """Perception pipeline: RealSense D435 depth -> coarse terrain reference cloud.
 
     ros2 launch wojtek_perception_bringup perception.launch.py
-    ros2 launch wojtek_perception_bringup perception.launch.py fps:=30 enable_color:=true
+    ros2 launch wojtek_perception_bringup perception.launch.py depth_profile:=848x480x30
     ros2 launch wojtek_perception_bringup perception.launch.py reduce:=false
 
 Runs standalone (the line above brings up the camera, its settings and the
@@ -9,27 +9,33 @@ reduction, nothing else) and is meant to be included by the robot bringup:
 
     IncludeLaunchDescription(
         PythonLaunchDescriptionSource(".../perception.launch.py"),
-        launch_arguments={"container": "wojtek_container"}.items(),
+        launch_arguments={"extrinsics": "false"}.items(),
     )
 
-The only thing in here that must exist exactly once is the **component
-container**. Pass `container:=<name>` and this launch loads the driver into
-that existing container instead of creating its own -- which is also how you
-get the driver into the same process as other C++ nodes, i.e. intra-process
-zero-copy for the depth frames. With `container:=''` (the default) it owns
-one. Nothing else here is a singleton: the reduction works in the camera's
-own frame and the extrinsics publisher is opt-out (`extrinsics:=false`) for
-the case where the robot bringup already owns the TF tree.
+The only singleton in here is the camera->body static transform, which is
+why it is opt-out (`extrinsics:=false`) for the case where the robot bringup
+already owns that TF edge. The reduction works in the camera's own frame and
+needs nothing from the rest of the graph.
 
-The camera settings are in config/d435.yaml and are measured, not guessed;
-that file carries the reasoning per parameter.
+NOTE ON COMPOSITION: the driver runs as a plain node, deliberately. Loading
+it into a component container would buy intra-process zero-copy only if it
+shared that process with another C++ node -- and it would not: the RPi hosts
+no container (nothing else in this workspace creates one, and ros2_control
+runs as a standalone process), and the only consumer of the depth image is
+this package's rclpy reduction, which cannot be composed at all. The depth
+therefore crosses DDS on loopback: decimation halves each dimension before
+publishing, so that is 424x240x16 bit at 15 Hz, ~3 MB/s, which is
+affordable. If the reduction is ever rewritten in C++ for a higher frame
+rate, that is the moment to introduce a container -- not before.
 
-NOTE ON COMPOSITION: the reduction node is rclpy, and Python nodes cannot be
-loaded into a component container -- only the C++ driver is composable here.
-The depth image therefore still crosses DDS to reach the reduction. That is
-affordable at 424x240x10 (~2 MB/s), but if the reduction moves to the full
-frame rate or grows, it needs rewriting as a C++ composable node to stay on
-the zero-copy path.
+(The colour stream is the heavier one -- 848x480 rgb8 at 6 fps is ~7 MB/s
+uncompressed -- but nothing on the robot subscribes to it yet, and DDS does
+not serialise a topic with no subscribers.)
+
+Both config files are ordinary ROS parameter files, loaded by the nodes
+themselves. Launch arguments override single values on top of the file: each
+entry of `parameters=` becomes its own --params-file in list order, so the
+override that comes last wins.
 """
 
 import yaml
@@ -37,73 +43,46 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes, Node
-from launch_ros.descriptions import ComposableNode
+from launch_ros.actions import Node
 
 PKG = "wojtek_perception_bringup"
-
-
-def _flatten(prefix, node, out):
-    """YAML nesting -> flat ROS parameter names ('a': {'b': 1} -> 'a.b')."""
-    for key, value in node.items():
-        name = f"{prefix}{key}"
-        if isinstance(value, dict):
-            _flatten(f"{name}.", value, out)
-        else:
-            out[name] = value
-    return out
 
 
 def _setup(context, *args, **kwargs):
     def arg(name):
         return LaunchConfiguration(name).perform(context)
 
-    with open(arg("params_file")) as fh:
-        cfg = yaml.safe_load(fh)
-
-    rs_params = _flatten("", cfg.get("realsense", {}), {})
-    reduce_params = dict(cfg.get("reduce", {}))
-
-    # Launch arguments win over the file, so a one-off experiment does not
-    # need an edited config.
-    fps = int(arg("fps"))
-    for key in ("depth_module.depth_profile", "rgb_camera.color_profile"):
-        if key in rs_params:
-            width, height, _ = str(rs_params[key]).split("x")
-            rs_params[key] = f"{width}x{height}x{fps}"
-    rs_params["enable_color"] = arg("enable_color").lower() in ("true", "1")
-
     camera_name, camera_ns = arg("camera_name"), arg("camera_namespace")
-    driver = ComposableNode(
-        package="realsense2_camera",
-        plugin="realsense2_camera::RealSenseNodeFactory",
-        name=camera_name,
-        namespace=camera_ns,
-        parameters=[rs_params],
-        extra_arguments=[{"use_intra_process_comms": True}],
-    )
 
-    actions = []
-    container_name = arg("container")
-    if container_name:
-        # Someone else owns the container: just load into it.
-        actions.append(
-            LoadComposableNodes(
-                target_container=container_name,
-                composable_node_descriptions=[driver],
-            )
+    # Optional CPU affinity. On the robot this matters: the bringup runs the
+    # whole tree under `taskset -c 2,3` (the isolcpus RT cores), and without
+    # this the camera driver and the reduction land on the cores the 400 Hz
+    # control loop owns exclusively.
+    cpus = arg("cpus")
+    prefix = [f"taskset -c {cpus}"] if cpus else None
+
+    # Single-value overrides layered on top of the camera parameter file, so
+    # a one-off experiment does not need an edited config. An empty argument
+    # means "whatever the file says".
+    overrides = {"enable_color": arg("enable_color").lower() in ("true", "1")}
+    for name, param in (
+        ("depth_profile", "depth_module.depth_profile"),
+        ("color_profile", "rgb_camera.color_profile"),
+    ):
+        if arg(name):
+            overrides[param] = arg(name)
+
+    actions = [
+        Node(
+            package="realsense2_camera",
+            executable="realsense2_camera_node",
+            name=camera_name,
+            namespace=camera_ns,
+            parameters=[arg("camera_params_file"), overrides],
+            prefix=prefix,
+            output="screen",
         )
-    else:
-        actions.append(
-            ComposableNodeContainer(
-                name="perception_container",
-                namespace="",
-                package="rclcpp_components",
-                executable="component_container_mt",
-                composable_node_descriptions=[driver],
-                output="screen",
-            )
-        )
+    ]
 
     if arg("reduce").lower() in ("true", "1"):
         depth_topic = f"/{camera_ns}/{camera_name}/depth/image_rect_raw"
@@ -113,16 +92,20 @@ def _setup(context, *args, **kwargs):
                 package=PKG,
                 executable="cloud_reduce_node",
                 name="cloud_reduce",
-                parameters=[reduce_params],
+                parameters=[arg("reduce_params_file")],
                 remappings=[
                     ("depth/image", depth_topic),
                     ("depth/camera_info", info_topic),
                 ],
+                prefix=prefix,
                 output="screen",
             )
         )
 
     if arg("extrinsics").lower() in ("true", "1"):
+        # Not a parameter file: static_transform_publisher takes the pose on
+        # the command line, and roll/pitch/yaw is the form a mount is
+        # measured in (its parameter interface is quaternion-only).
         with open(arg("extrinsics_file")) as fh:
             tf = yaml.safe_load(fh)["static_transform"]
         actions.append(
@@ -149,16 +132,14 @@ def generate_launch_description():
     return LaunchDescription(
         [
             DeclareLaunchArgument(
-                "container", default_value="",
-                description="Empty: this launch creates its own component "
-                            "container. A name: load the driver into that "
-                            "existing container instead (shared process, "
-                            "intra-process depth frames).",
+                "camera_params_file", default_value=f"{share}/config/d435.yaml",
+                description="Camera settings. The defaults are measured; see "
+                            "the file's own commentary.",
             ),
             DeclareLaunchArgument(
-                "params_file", default_value=f"{share}/config/d435.yaml",
-                description="Camera + reduction settings. The defaults are "
-                            "measured; see the file's own commentary.",
+                "reduce_params_file",
+                default_value=f"{share}/config/cloud_reduce.yaml",
+                description="Grid reduction settings.",
             ),
             DeclareLaunchArgument(
                 "extrinsics_file", default_value=f"{share}/config/extrinsics.yaml",
@@ -176,16 +157,32 @@ def generate_launch_description():
                             "raw depth in RViz.",
             ),
             DeclareLaunchArgument(
-                "fps", default_value="10",
-                description="Depth frame rate. 10 matches the planner's "
-                            "replan rate; 30 costs about a whole RPi core in "
-                            "post-processing for frames nobody reads.",
+                "depth_profile", default_value="",
+                description="Override the depth stream, WxHxFPS (e.g. "
+                            "848x480x30). Empty = the config file's 15 fps, "
+                            "the sensor's nearest rate at or above the "
+                            "planner's 10 Hz replan; 30 does not fit the "
+                            "RPi's post-processing budget.",
             ),
             DeclareLaunchArgument(
-                "enable_color", default_value="false",
-                description="Colour stream. Off by default: the depth "
-                            "pipeline does not use it and it costs USB "
-                            "bandwidth. Turn on for VLM work.",
+                "color_profile", default_value="",
+                description="Override the colour stream, WxHxFPS. Empty = "
+                            "the config file.",
+            ),
+            DeclareLaunchArgument(
+                "enable_color", default_value="true",
+                description="Colour stream (for the VLM; the depth pipeline "
+                            "does not read it). On at 6 fps, which is the "
+                            "sensor's slowest. enable_color:=false drops it "
+                            "when only the depth path is being worked on.",
+            ),
+            DeclareLaunchArgument(
+                "cpus", default_value="",
+                description="CPU affinity for the camera driver and the "
+                            "reduction (comma list, e.g. \"0,1\"); empty = "
+                            "inherit. The robot bringup pins them to the "
+                            "non-isolated cores so they cannot steal time "
+                            "from the 400 Hz control loop.",
             ),
             DeclareLaunchArgument(
                 "camera_name", default_value="camera",

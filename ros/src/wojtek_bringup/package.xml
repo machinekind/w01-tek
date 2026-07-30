@@ -28,6 +28,10 @@
        "packages-up-to wojtek_bringup" build, so gamepad:=true has the
        node available on the RPi. -->
   <exec_depend>wojtek_teleop</exec_depend>
+  <!-- Camera pipeline (perception:=true). Same reason as wojtek_teleop: the
+       exec_depend is what pulls it into deploy.sh's "packages-up-to
+       wojtek_bringup" build, so the RPi has it at all. -->
+  <exec_depend>wojtek_perception_bringup</exec_depend>
   <depend>imu_i2c_hardware_interface</depend>
   <depend>magnetometer_broadcaster</depend>
 

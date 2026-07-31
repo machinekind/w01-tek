@@ -27,11 +27,23 @@ Control logic that matters for safety stays HERE, not in the browser:
     CMD_TIMEOUT_S the server zeroes /cmd_vel. The local Qt console does not
     need this; a phone on the robot's wifi does.
 
+The page is also the VLM's seat (wojtek#92): it shows the robot's colour
+camera (camera_spec.COLOR_TOPIC, JPEG over binary websocket frames -- the
+JSON protocol is untouched, the browser tells them apart by frame type) and
+carries a nav-command panel that publishes forward/left/right/stop on
+wojtek/nav_command. That panel drives ONLY through the VLM contract
+(nav_command -> text_commander -> /cmd_vel, dead-man included), never
+/cmd_vel directly -- so a human in the browser is a faithful dry-run of the
+future VLM, and needs `ros2 run wojtek_teleop text_commander` running to
+have any effect. Camera encode needs Pillow; without it (or without the
+camera topic) the page simply shows no frames and everything else works.
+
 Threading mirrors the Qt console: rclpy spins in a background thread and
 events cross into the asyncio (websocket) loop via call_soon_threadsafe.
 """
 import asyncio
 import http
+import io
 import json
 import os
 import threading
@@ -42,12 +54,19 @@ import websockets
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile
-from sensor_msgs.msg import Imu, JointState
+from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
+                       qos_profile_sensor_data)
+from sensor_msgs.msg import Image, Imu, JointState
 from std_msgs.msg import String
 from std_srvs.srv import SetBool, Trigger
 
 from wojtek_policy.policy_source import load_meta
+from wojtek_viz import camera_spec
+
+try:
+    from PIL import Image as PILImage
+except ImportError:  # soft dep: no Pillow = no camera panel, console works
+    PILImage = None
 
 # The drive controls scale to the loaded policy's trained command box
 # ([vx, vy, wz], per axis and asymmetric -- e.g. stiff_b trained on
@@ -68,15 +87,18 @@ DRIVE_TICK_HZ = 20.0     # /cmd_vel publish rate while driving
 TELEMETRY_HZ = 10.0      # joints/imu push rate to the browser
 CMD_TIMEOUT_S = 0.5      # dead-man: zero /cmd_vel if the page goes silent
 DEFAULT_JOINT_LIMIT = 3.14
+JPEG_QUALITY = 80        # ~25 KB per 640x360 frame at the sim's ~5 Hz
 
 
 class ConsoleNode(Node):
     """ROS half -- a port of operator_console.RosNode with the Qt signal
     plumbing replaced by a thread-safe `emit` into the asyncio loop."""
 
-    def __init__(self, emit):
+    def __init__(self, emit, has_clients):
         super().__init__("web_console")
-        self.emit = emit  # emit(dict) -- safe to call from ROS thread
+        # emit(dict JSON protocol | bytes camera JPEG) -- safe from ROS thread
+        self.emit = emit
+        self.has_clients = has_clients  # () -> bool, owned by the Server
 
         self._cli = {
             "arm": self.create_client(SetBool, "wojtek/arm"),
@@ -88,6 +110,9 @@ class ConsoleNode(Node):
         }
         self._pub_targets = self.create_publisher(JointState, "wojtek/joint_targets", 10)
         self._pub_cmd = self.create_publisher(Twist, "cmd_vel", 10)
+        # VLM-contract text commands; only text_commander (wojtek#92) acts on
+        # these -- the page's nav panel never touches /cmd_vel itself.
+        self._pub_nav = self.create_publisher(String, "wojtek/nav_command", 10)
 
         # Same reference policy_node gets (HF repo id or local directory);
         # empty = the conservative default limits below.
@@ -114,6 +139,20 @@ class ConsoleNode(Node):
         latched = QoSProfile(depth=1, history=HistoryPolicy.KEEP_LAST,
                              durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.create_subscription(String, "robot_description", self._on_urdf, latched)
+
+        # Colour camera for the VLM panel. The sim publishes best-effort
+        # (qos_profile_sensor_data); a default-QoS subscription would match
+        # nothing and receive NOTHING, so mirror the sensor-data profile.
+        # Without Pillow no frame could ever be encoded, so don't subscribe
+        # at all -- the page shows its no-camera text, console works as is.
+        if PILImage is not None:
+            self.create_subscription(
+                Image, camera_spec.COLOR_TOPIC, self._on_color,
+                qos_profile_sensor_data)
+        else:
+            self.get_logger().warning(
+                "Pillow not installed -- no camera frames for the web "
+                "console (pip install pillow)")
 
         # latest telemetry, pushed to browsers on a slow tick (not per message)
         self.imu_rpy_gyro = None
@@ -167,6 +206,33 @@ class ConsoleNode(Node):
         pitch = math.asin(max(-1.0, min(1.0, 2 * (q.w * q.y - q.z * q.x))))
         yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
         self.imu_rpy_gyro = ((roll, pitch, yaw), (w.x, w.y, w.z))
+
+    def _on_color(self, msg):
+        """Colour frame -> JPEG -> browsers, in the ROS thread.
+
+        Encoding lives on this side of the thread split so the asyncio
+        (drive dead-man) loop never carries per-frame work; the has_clients
+        gate keeps the resident console free when no page is open.
+        """
+        if not self.has_clients():
+            return
+        if msg.encoding != camera_spec.COLOR_ENCODING:
+            self.get_logger().warning(
+                f"unsupported camera encoding {msg.encoding!r} "
+                f"(want {camera_spec.COLOR_ENCODING})", once=True)
+            return
+        try:
+            # frombuffer with explicit raw args: zero-copy read of msg.data
+            img = PILImage.frombuffer(
+                "RGB", (msg.width, msg.height), msg.data, "raw", "RGB", 0, 1)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=JPEG_QUALITY)
+        except Exception as e:  # noqa: BLE001 -- a bad frame must not kill
+            # the spin thread (main() swallows spin exceptions on teardown,
+            # so an escape here would stop ALL console callbacks silently)
+            self.get_logger().warning(f"dropping camera frame: {e}", once=True)
+            return
+        self.emit(buf.getvalue())
 
     def _on_urdf(self, msg):
         limits = {}
@@ -225,6 +291,9 @@ class ConsoleNode(Node):
         t.linear.z = float(height)
         self._pub_cmd.publish(t)
 
+    def publish_nav(self, command):
+        self._pub_nav.publish(String(data=str(command)))
+
     def publish_targets(self, names, positions):
         msg = JointState()
         msg.header.stamp = self.get_clock().now().to_msg()
@@ -258,8 +327,11 @@ class Server:
         self.loop.call_soon_threadsafe(self._broadcast, obj)
 
     def _broadcast(self, obj):
+        """dict -> JSON text frame; bytes (camera JPEG) -> binary frame --
+        the browser splits on frame type, the JSON protocol stays text-only."""
         if self.clients:
-            websockets.broadcast(self.clients, json.dumps(obj))
+            data = obj if isinstance(obj, bytes) else json.dumps(obj)
+            websockets.broadcast(self.clients, data)
 
     # ---- per-client ---------------------------------------------------------
     async def handler(self, ws):
@@ -314,6 +386,14 @@ class Server:
                                  "targets": self.jog_target})
             else:
                 self.jog_target = None
+        elif t == "nav_command":
+            # VLM-contract text command -- published as-is; validation and
+            # log-bounding are the subscriber's job (text_commander warns
+            # and stops on anything unknown, exactly what a hallucinating
+            # VLM should get). The panel is a dry-run of the future VLM.
+            command = str(msg.get("command", "")).strip()
+            if command:
+                self.node.publish_nav(command)
         elif t == "jog_set":
             if self.jog_target is not None:
                 for n, v in (msg.get("targets") or {}).items():
@@ -402,7 +482,10 @@ def main():
         if server is not None:
             server.emit(obj)
 
-    node = ConsoleNode(emit)
+    def has_clients():
+        return server is not None and bool(server.clients)
+
+    node = ConsoleNode(emit, has_clients)
     port = node.declare_parameter("port", 8080).value
 
     share = get_package_share_directory("wojtek_viz")

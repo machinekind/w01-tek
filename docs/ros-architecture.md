@@ -1,6 +1,6 @@
 # Architektura ROS stacka (`ros/src`)
 
-Stan na 2026-07-18 (branch `jakuc/CANdle_hat+BMI_9DOF`).
+Stan na 2026-07-31 (branch `jakuc/CANdle_hat+BMI_9DOF` + #91 kamera, #92 text_commander).
 
 Stack dzieli się na trzy warstwy:
 
@@ -57,6 +57,8 @@ flowchart LR
     RSP["robot_state_publisher"]
     RVIZ["RViz"]
     TEL["teleop (Twist)"]
+    TXT["text_commander\n(wojtek_teleop, #92)"]
+    WEB["web_console\n(przeglądarka :8080)"]
 
     PERC["cloud_reduce\n(wojtek_perception_bringup)"]
 
@@ -64,6 +66,9 @@ flowchart LR
     SIM -- "/imu/data (ground truth)" --> POL
     POL -- "/wojtek/joint_targets" --> SIM
     TEL -- "/cmd_vel" --> POL
+    WEB -- "/wojtek/nav_command (String)" --> TXT
+    TXT -- "/cmd_vel" --> POL
+    SIM -- "/camera/camera/color/image_raw" --> WEB
     SIM -- "TF odom→base_link" --> RVIZ
     SIM -- "/joint_states" --> RSP
     SIM -- "/camera/camera/depth/* (wirtualny D435)" --> PERC
@@ -164,9 +169,17 @@ Parametry: `model_xml` (puste = przygotuj MJX z share z przepisaniem meshdir), `
 
 Nie ma topicu statusu arm/enable — konsola śledzi stan lokalnie z odpowiedzi serwisów. rclpy spinuje w wątku tła, do GUI przez sygnały Qt.
 
+**Node: `web_console`** (`web_console.py`) — przeglądarkowy bliźniak konsoli Qt (jeden port 8080: strona + websocket JSON), działa bez X11 (macOS, telefony na AP robota). Te same moduły co Qt plus **panel VLM** (#92): podgląd kamery kolorowej i komendy tekstowe — przeglądarka to "fotel VLM-a", człowiek widzi dokładnie to, co przyszły VLM (obraz z `/camera/.../image_raw`) i steruje wyłącznie przez jego kontrakt (`/wojtek/nav_command` → `text_commander` → `/cmd_vel`), nigdy przez `/cmd_vel` bezpośrednio. Klatki JPEG (Pillow, jakość 80) idą binarnymi ramkami websocketu obok nietkniętego protokołu JSON; subskrypcja kamery ma QoS sensor-data (best-effort — domyślny QoS nie odebrałby nic). Bez Pillow lub bez kamery panel po prostu nie pokazuje klatek, reszta konsoli działa.
+
+| Kierunek | Interfejs | Typ |
+|---|---|---|
+| sub | `/camera/camera/color/image_raw` (rgb8 → JPEG do przeglądarek) | `sensor_msgs/Image` |
+| pub | `/wojtek/nav_command` (panel VLM; wymaga `text_commander` — w symulacji startuje automatycznie z `sim.launch.py`) | `std_msgs/String` |
+| pub | `/cmd_vel`, `/wojtek/joint_targets` + serwisy — jak konsola Qt | — |
+
 **Launche:**
 
-* `sim.launch.py` — robot_state_publisher + mujoco_sim_node + policy_node (imu_mount_rpy=0, soft_start 0.5 s, bez clamp_knee) + RViz. Argumenty: `rviz`, `initial_pose`, `camera` (true), `camera_depth_hz`, `camera_color_hz`. Argumenty `name:=value` przechodzą z `./sim.sh` przez `robot.py` (np. `./sim.sh camera:=false`).
+* `sim.launch.py` — robot_state_publisher + mujoco_sim_node + policy_node (imu_mount_rpy=0, soft_start 0.5 s, bez clamp_knee) + text_commander (#92; rezydentny — milczy dopóki nie dostanie komendy) + RViz. Argumenty: `rviz`, `initial_pose`, `camera` (true), `camera_depth_hz`, `camera_color_hz`. Argumenty `name:=value` przechodzą z `./sim.sh` przez `robot.py` (np. `./sim.sh camera:=false`).
 * `viz.launch.py` — czyste PC-side dla żywego robota: RViz (czyta `/robot_description` i `/tf` z RPi po DDS), opcjonalnie PlotJuggler, oraz rosbag całego runu **na żądanie** (`bag:=true`, do `~/wojtek_bags/run_<timestamp>`; domyślnie wyłączony). Zero hardware'u, zero RSP.
 
 ## 4. `md80_hardware_interface` — napędy (C++, plugin ros2_control)
@@ -191,6 +204,37 @@ Bez nodów. Źródło prawdy o geometrii:
 * `urdf/` — modularne xacro: `body`, `leg`, `inertia`, `wojtek.urdf.xacro` — z pasywnymi przegubami fourth/fifth **bez** domknięcia czworoboku (URDF go nie umie),
 * `mujoco/` — `wojtek.xml`, `wojtek_mjx.xml` + sceny; tu domknięcie istnieje jako equality connect; wersje MJX to te treningowe,
 * meshe oraz historyczne launche (`bringup`, `simulation` — Gazebo, nieużywane w obecnym flow).
+
+## 7. `wojtek_teleop` — teleop po stronie robota (Python, ament_python)
+
+Wejścia sterujące bez GUI (buduje się na RPi): pad Xbox za standardowym
+driverem `joy` oraz — od #92 — komendy tekstowe. Oba mówią tym samym
+`/cmd_vel` co konsole, więc nic w `wojtek_bringup`/`wojtek_policy` się nie
+zmienia.
+
+**Node: `gamepad_teleop`** — lewy drążek vx/yaw, prawy strafe, A = arm,
+Y/B = stand_up/lie_down, D-pad = wysokość; skalowanie do boxa komend z
+kontraktu polityki, dead-man `cmd_timeout_s` (0.5 s) po zaniku `joy`.
+
+**Node: `text_commander`** (#92) — zamraża ROS-owy kontrakt przyszłego
+VLM-a: VLM konsumuje `/camera/camera/color/image_raw`, publikuje
+`/wojtek/nav_command` — nic więcej. Komendy `forward`/`left`/`right`/`stop`;
+nieznana komenda = warning + stop. Publikuje @ 20 Hz tylko gdy komenda jest
+aktywna; po `stop` lub po `command_timeout` (2.0 s) wysyła **dokładnie
+jeden** zerowy Twist i milknie — zero jest obowiązkowe (policy_node
+zatrzaskuje ostatnią komendę), a cisza pozwala innemu źródłu (konsola, pad)
+przejąć `/cmd_vel` bez przekrzykiwania. `linear.z` zostaje 0.0 ("domyślna
+wysokość" dla policy_node). Czysta logika (`CommandState`) jest oddzielona
+od powłoki rclpy i testowana bez ROS-a (`test/test_text_commander.py`).
+
+| Kierunek | Interfejs | Typ |
+|---|---|---|
+| sub | `/wojtek/nav_command` (`forward`/`left`/`right`/`stop`) | `std_msgs/String` |
+| pub | `/cmd_vel` (@ 20 Hz gdy aktywna komenda; jeden zerowy Twist na stop/timeout) | `geometry_msgs/Twist` |
+
+Parametry: `v_forward` (0.3 m/s), `w_turn` (0.5 rad/s), `command_timeout`
+(2.0 s — dead-man: VLM musi mówić, żeby Wojtek szedł). Test z CLI:
+`ros2 topic pub -1 /wojtek/nav_command std_msgs/String "data: forward"`.
 
 ---
 

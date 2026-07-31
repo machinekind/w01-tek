@@ -29,6 +29,7 @@ DEPTH_WIDTH, DEPTH_HEIGHT = 424, 240
 DEPTH_FX = DEPTH_FY = 209.0          # 418 at 848x480, halved by decimation
 # Colour is for the VLM: contract = topic + encoding, resolution is a knob.
 COLOR_WIDTH, COLOR_HEIGHT = 640, 360
+COLOR_ENCODING = "rgb8"
 
 # Vertical FOV the render must use so that fy comes out at DEPTH_FY.
 FOVY_DEG = math.degrees(2.0 * math.atan(DEPTH_HEIGHT / (2.0 * DEPTH_FY)))

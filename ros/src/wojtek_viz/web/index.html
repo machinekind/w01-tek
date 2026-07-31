@@ -48,6 +48,15 @@
   td.meas { color: var(--ok); }
   details summary { cursor: pointer; color: var(--dim); font-size: 12px;
                     text-transform: uppercase; letter-spacing: .06em; }
+  #cam { display: block; width: 100%; border-radius: 8px;
+         border: 1px solid var(--edge); background: #10131a; }
+  #camempty { color: var(--dim); font-size: 12px; text-align: center;
+              padding: 28px 0; }
+  #navtext { flex: 1; min-width: 90px; background: #10131a; color: var(--fg);
+             border: 1px solid var(--edge); border-radius: 8px;
+             padding: 10px; font-size: 14px; }
+  #navout { font-family: ui-monospace, monospace; font-size: 12px;
+            color: var(--dim); margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -83,6 +92,21 @@
 </div>
 
 <div class="card">
+  <h2>VLM seat <span style="text-transform:none">(camera + text commands; needs text_commander running)</span></h2>
+  <img id="cam" alt="" hidden>
+  <div id="camempty">no camera frames (sim camera off or Pillow missing)</div>
+  <div class="row" style="margin-top:10px">
+    <button data-nav="forward">forward</button>
+    <button data-nav="left">left</button>
+    <button data-nav="right">right</button>
+    <button data-nav="stop">stop</button>
+    <input id="navtext" placeholder="command ..." autocomplete="off">
+    <button id="navsend">send</button>
+  </div>
+  <div id="navout">last command: —</div>
+</div>
+
+<div class="card">
   <details>
     <summary>Joint jog (needs: ARMED + Policy OFF)</summary>
     <label class="toggle" style="margin:10px 0">
@@ -114,7 +138,11 @@ function connect() {
     $("driveon").checked = false;           // server dead-mans anyway
     setTimeout(connect, 1000);
   };
-  ws.onmessage = e => onMessage(JSON.parse(e.data));
+  // Text frames are the JSON protocol; binary frames are camera JPEGs.
+  ws.onmessage = e => {
+    if (e.data instanceof Blob) onFrame(e.data);
+    else onMessage(JSON.parse(e.data));
+  };
 }
 function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
 function setStatus(text) { $("status").textContent = text; }
@@ -291,6 +319,34 @@ setInterval(() => {
   gpPrev = {a, up, down};
   drawPad(); sendCmd();
 }, 50);
+
+// ---- VLM seat: camera frames + nav commands ---------------------------------
+// The camera <img> swaps object URLs per JPEG (revoking the old one so the
+// tab doesn't leak); the nav panel publishes on wojtek/nav_command via the
+// server -- driving happens only if text_commander is running (wojtek#92),
+// and its 2 s dead-man means "keep clicking to keep walking", same as the
+// future VLM must.
+let camUrl = null;
+function onFrame(blob) {
+  const url = URL.createObjectURL(blob);
+  const cam = $("cam");
+  cam.src = url;
+  // revoke the superseded URL right away (not in onload -- a handler that
+  // gets overwritten before firing would leak its URL forever)
+  if (camUrl) URL.revokeObjectURL(camUrl);
+  camUrl = url;
+  cam.hidden = false; $("camempty").hidden = true;
+}
+function sendNav(command) {
+  command = command.trim();
+  if (!command) return;
+  send({t: "nav_command", command});
+  $("navout").textContent = `last command: ${command}`;
+}
+for (const b of document.querySelectorAll("[data-nav]"))
+  b.onclick = () => sendNav(b.dataset.nav);
+$("navsend").onclick = () => sendNav($("navtext").value);
+$("navtext").onkeydown = e => { if (e.key === "Enter") sendNav($("navtext").value); };
 
 // ---- jog ---------------------------------------------------------------------
 let jogRows = {};   // name -> {slider, cmd, meas}

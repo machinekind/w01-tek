@@ -441,7 +441,8 @@ class MujocoSimNode(Node):
                 if next_color is not None and now_m >= next_color:
                     rgb = np.ascontiguousarray(self._cam.render_color(qpos, qvel))
                     self._pub_color.publish(self._image_msg(
-                        rgb, stamp, camera_spec.COLOR_FRAME_ID, "rgb8"
+                        rgb, stamp, camera_spec.COLOR_FRAME_ID,
+                        camera_spec.COLOR_ENCODING
                     ))
                     info = camera_spec.camera_info_msg(
                         rgb.shape[1], rgb.shape[0], camera_spec.COLOR_FRAME_ID

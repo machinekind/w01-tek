@@ -15,6 +15,11 @@ render rates; see wojtek_viz/mujoco_sim_node.py for the camera contract.
 Drive with any Twist teleop, e.g.:
     ros2 run teleop_twist_keyboard teleop_twist_keyboard
     ros2 launch wojtek_teleop gamepad.launch.py   # bluetooth Xbox pad
+
+text_commander (wojtek#92) is always up: text commands on /wojtek/nav_command
+(the web console's VLM panel, or `ros2 topic pub`) drive /cmd_vel with a 2 s
+dead-man. Resident by design -- it publishes NOTHING until commanded and goes
+silent after its single stop Twist, so it never fights the other teleops.
 """
 
 import os
@@ -97,6 +102,13 @@ def generate_launch_description():
                         "clamp_knee": False,
                     }
                 ],
+            ),
+            # Text-command bridge (wojtek#92), resident by design -- see
+            # the module docstring for why that is safe.
+            Node(
+                package="wojtek_teleop",
+                executable="text_commander",
+                output="screen",
             ),
             Node(
                 package="rviz2",

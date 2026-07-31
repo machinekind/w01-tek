@@ -26,6 +26,10 @@
   <!-- web_console.py: the browser twin of the Qt console (no X11 needed;
        works on macOS / phones). One port: HTTP page + JSON websocket. -->
   <depend>python3-websockets</depend>
+  <!-- web_console.py VLM panel: colour camera frames JPEG-encoded for the
+       browser. Soft dependency in code (no Pillow = no frames, console
+       still works), declared so the container image carries it. -->
+  <depend>python3-pil</depend>
 
   <!-- Gamepad teleop moved to wojtek_teleop (robot-side, no GUI deps);
        "./sim.sh gamepad mode" launches it from there. -->

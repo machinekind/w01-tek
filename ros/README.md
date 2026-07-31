@@ -28,6 +28,23 @@ The operator console (drive pad, arm/pose buttons, jog, telemetry) is the
 phone on the robot's AP works too). Drive commands are dead-man guarded:
 if the page goes silent mid-drive, `/cmd_vel` is zeroed.
 
+**Text commands (the VLM contract, #92)**: the web console also shows the
+robot's colour camera and a `forward / left / right / stop` command panel —
+the browser is a human dry-run of the future VLM, which will watch
+`/camera/camera/color/image_raw` and publish `/wojtek/nav_command` and
+nothing else. The panel drives only through that contract, via the
+`text_commander` bridge node (`wojtek_teleop`), which `sim.launch.py`
+starts automatically — safe as a resident, it publishes nothing until
+commanded. The CLI works too:
+
+```bash
+ros2 topic pub -1 /wojtek/nav_command std_msgs/String "data: forward"
+```
+
+Speeds are parameters (`v_forward` 0.3 m/s, `w_turn` 0.5 rad/s) and a 2 s
+dead-man (`command_timeout`) stops the robot when commands stop coming —
+keep clicking (or talking) to keep walking.
+
 3D visualization: on Linux `sim.sh` opens RViz (X11). On macOS GL-heavy RViz
 over X11 is slow, so it starts `foxglove_bridge` instead — open the native
 [Foxglove](https://foxglove.dev/download) app and connect to

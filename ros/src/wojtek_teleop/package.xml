@@ -8,13 +8,15 @@
     standard joy driver, publishing the same /cmd_vel surface the operator
     consoles use. Split out of wojtek_viz (PC-only, GUI deps) so the RPi
     build can carry it -- pair the pad with the ROBOT and drive without a
-    PC in the loop.
+    PC in the loop. Also carries text_commander, the text-command
+    (/wojtek/nav_command) to /cmd_vel bridge that freezes the VLM contract.
   </description>
   <maintainer email="kchmielewski707@gmail.com">Jakub Chmielewski</maintainer>
   <license>MIT</license>
 
   <depend>rclpy</depend>
   <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>std_srvs</depend>
   <!-- gamepad_teleop scales sticks into the trained command box read from

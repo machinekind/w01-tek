@@ -30,8 +30,16 @@
 # After that this script starts XQuartz itself when needed.
 #
 # Anything else is passed through to `ros2 run wojtek_bringup robot --sim`
-# (e.g. --plotjuggler, --no-viz, --no-console). Ctrl-C tears the session
-# down; the container stays up for reuse (same one ./dev.sh attaches to).
+# (e.g. --plotjuggler, --no-viz, --no-console) -- including ros2-launch
+# name:=value arguments, which robot.py forwards to sim.launch.py:
+#
+#   ./sim.sh camera:=false      # no virtual D435 (default on; the camera
+#                               # publishes /camera/camera/depth/* + color
+#                               # like the real perception stack)
+#   ./sim.sh initial_pose:=folded
+#
+# Ctrl-C tears the session down; the container stays up for reuse (same one
+# ./dev.sh attaches to).
 set -eo pipefail
 cd "$(dirname "$0")/docker"
 
@@ -68,6 +76,10 @@ COMPOSE=(docker compose)
 if $MAC; then
   # Bridge networking + published Foxglove/console ports; see compose.mac.yaml.
   COMPOSE+=(-f compose.yaml -f compose.mac.yaml)
+elif docker info 2>/dev/null | grep -q 'Runtimes:.*nvidia'; then
+  # Hardware GL/EGL in the container (RViz + the sim camera) instead of the
+  # llvmpipe fallback that renders everything on the CPU; see compose.gpu.yaml.
+  COMPOSE+=(-f compose.yaml -f compose.gpu.yaml)
 fi
 
 # ---- X server (only RViz and the Qt console need one) -----------------------

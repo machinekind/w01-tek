@@ -13,6 +13,16 @@ exactly the one the policy trained against; without it the XML defaults
               base, base_link frame; named like the real broadcaster's topic)
               TF odom -> base_link (ground truth base pose)
               /odom_vel (Twist, ground-truth base velocity, debugging)
+              /sim/rtf (Float32, sim-time/wall-time ratio over 1 s windows)
+              with camera:=true (default) a D435-compatible virtual camera
+              rendered offscreen from the robot's head pose (issue #91):
+              /camera/camera/depth/image_rect_raw  16UC1 mm, 424x240, ~15 Hz
+              /camera/camera/depth/camera_info     matching intrinsics
+              /camera/camera/color/image_raw       rgb8, ~5 Hz (for the VLM)
+              /camera/camera/color/camera_info
+              (sensor-data QoS; stamps match the odom->base_link TF; see
+              wojtek_viz.camera_spec for the contract, depth_camera for the
+              renderer, and machinekind/wojtek#91 for the requirements)
   services    /sim/reset (std_srvs/Trigger) -- back to the initial pose
 
 The initial_pose parameter selects where the robot spawns: "home" (the home
@@ -23,18 +33,46 @@ settling from the home keyframe under gravity with folded ctrl targets, so
 the four-bar closure stays consistent.
 """
 
+import os
+import sys
+import threading
+import time
+
 import numpy as np
 import rclpy
 from geometry_msgs.msg import TransformStamped, Twist
 from rclpy.node import Node
-from sensor_msgs.msg import Imu, JointState
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import CameraInfo, Image, Imu, JointState
+from std_msgs.msg import Float32
 from std_srvs.srv import Trigger
 from tf2_ros import TransformBroadcaster
 
 from wojtek_policy.joint_map import JointMap
 from wojtek_policy import poses
+from wojtek_viz import camera_spec
 
-import mujoco  # noqa: isort  (heavier import last)
+# `import mujoco` RAISES if MUJOCO_GL names a backend whose library is
+# missing (no libEGL in a slim container, say). Physics needs no GL at all,
+# so a broken backend must degrade to camera-off, never kill the sim: try
+# the preferred backend, and on failure fall back to MUJOCO_GL=disabled.
+# A failed import leaves partial modules behind -- clear them before retrying.
+_PREFERRED_GL = os.environ.get("MUJOCO_GL") or (
+    "egl" if sys.platform.startswith("linux") else "glfw"
+)
+os.environ["MUJOCO_GL"] = _PREFERRED_GL
+try:
+    import mujoco  # noqa: isort  (heavier import last)
+
+    GL_BACKEND = None if _PREFERRED_GL == "disabled" else _PREFERRED_GL
+except Exception:
+    for _m in [m for m in sys.modules
+               if m == "mujoco" or m.startswith("mujoco.")]:
+        del sys.modules[_m]
+    os.environ["MUJOCO_GL"] = "disabled"
+    import mujoco  # noqa: isort
+
+    GL_BACKEND = None
 
 from ament_index_python.packages import get_package_share_directory
 
@@ -76,9 +114,37 @@ class MujocoSimNode(Node):
         # XML carries the kp=20/kd=1/±6 defaults, wrong for e.g. a kp80
         # policy).
         self.declare_parameter("policy", "")
+        # D435-compatible virtual camera (issue #91): topics, encodings and
+        # rates mirror the real perception stack so cloud_reduce/planner/VLM
+        # run unchanged. `camera:=false` on the launch is the off-switch for
+        # weak machines; rendering runs on its own thread, never in _tick.
+        self.declare_parameter("camera", True)
+        self.declare_parameter("camera_depth_hz", 15.0)
+        self.declare_parameter("camera_color_hz", 5.0)
+        self.declare_parameter("depth_min_m", camera_spec.DEPTH_MIN_M)
+        self.declare_parameter("depth_max_m", camera_spec.DEPTH_MAX_M)
 
         xml = self.get_parameter("model_xml").value or _prepare_model_xml()
-        self.model = mujoco.MjModel.from_xml_path(xml)
+        self._camera_on = bool(self.get_parameter("camera").value)
+        if self._camera_on and GL_BACKEND is None:
+            self.get_logger().warning(
+                "no MuJoCo GL backend available (MUJOCO_GL fell back to "
+                "'disabled') -- camera off, physics unaffected"
+            )
+            self._camera_on = False
+        self.model = None
+        if self._camera_on:
+            from wojtek_viz.depth_camera import load_model_with_camera
+
+            try:
+                self.model = load_model_with_camera(xml)
+            except Exception as e:
+                self.get_logger().error(
+                    f"camera injection failed ({e}) -- camera off"
+                )
+                self._camera_on = False
+        if self.model is None:
+            self.model = mujoco.MjModel.from_xml_path(xml)
         policy_ref = self.get_parameter("policy").value
         if policy_ref:
             from wojtek_policy.policy_source import load_meta, pd_settings
@@ -137,10 +203,55 @@ class MujocoSimNode(Node):
         self._tf = TransformBroadcaster(self)
         self.create_service(Trigger, "sim/reset", self._srv_reset)
 
+        # Real-time factor telemetry: sim-time advance / wall advance over
+        # ~1 s windows. Makes "the camera does not slow physics down" a
+        # measurement instead of an opinion.
+        self._pub_rtf = self.create_publisher(Float32, "sim/rtf", 10)
+        self._rtf_ref = None  # (wall ns, sim time) of the last window edge
+        self._warned_catchup = False
+
+        # Camera: _tick stores a (stamp, qpos, qvel) snapshot under a lock
+        # (a memcpy, sub-microsecond); the render thread consumes the newest
+        # one. Images carry the SNAPSHOT stamp -- the same stamp the
+        # odom->base_link TF was broadcast with -- so tf2 lookups at the
+        # image time are exact. GL contexts are thread-affine: the render
+        # thread creates, uses and destroys them, nothing else touches GL.
+        self._snap = None
+        self._snap_lock = threading.Lock()
+        self._render_stop = threading.Event()
+        self._render_thread = None
+        if self._camera_on:
+            from wojtek_viz.depth_camera import SimDepthCamera
+
+            self._cam = SimDepthCamera(
+                self.model,
+                min_m=self.get_parameter("depth_min_m").value,
+                max_m=self.get_parameter("depth_max_m").value,
+            )
+            self._pub_depth = self.create_publisher(
+                Image, camera_spec.DEPTH_TOPIC, qos_profile_sensor_data
+            )
+            self._pub_depth_info = self.create_publisher(
+                CameraInfo, camera_spec.DEPTH_INFO_TOPIC, qos_profile_sensor_data
+            )
+            self._pub_color = self.create_publisher(
+                Image, camera_spec.COLOR_TOPIC, qos_profile_sensor_data
+            )
+            self._pub_color_info = self.create_publisher(
+                CameraInfo, camera_spec.COLOR_INFO_TOPIC, qos_profile_sensor_data
+            )
+            self._render_thread = threading.Thread(
+                target=self._render_loop, name="d435_render", daemon=True
+            )
+            self._render_thread.start()
+
         self._wall_start = self.get_clock().now()
         period = 1.0 / self.get_parameter("publish_rate_hz").value
         self.create_timer(period, self._tick)
-        self.get_logger().info(f"simulating {xml} at dt={self.model.opt.timestep}")
+        self.get_logger().info(
+            f"simulating {xml} at dt={self.model.opt.timestep} "
+            f"(camera={'on, GL=' + str(GL_BACKEND) if self._camera_on else 'off'})"
+        )
 
     def _reset(self):
         mujoco.mj_resetDataKeyframe(self.model, self.data, self.model.key("home").id)
@@ -190,8 +301,30 @@ class MujocoSimNode(Node):
         while self.data.time < elapsed and steps < 200:
             mujoco.mj_step(self.model, self.data)
             steps += 1
+        if steps >= 200 and self.data.time < elapsed and not self._warned_catchup:
+            self._warned_catchup = True
+            self.get_logger().warning(
+                "physics hit the 200-step catch-up cap -- sim is running "
+                "slower than wall clock (check sim/rtf)"
+            )
 
         now = self.get_clock().now().to_msg()
+
+        # Newest-state snapshot for the render thread; stamp identical to
+        # the TF broadcast below so image-time TF lookups are exact.
+        if self._camera_on:
+            with self._snap_lock:
+                self._snap = (now, self.data.qpos.copy(), self.data.qvel.copy())
+
+        wall_ns = self.get_clock().now().nanoseconds
+        if self._rtf_ref is None:
+            self._rtf_ref = (wall_ns, self.data.time)
+        elif wall_ns - self._rtf_ref[0] >= 1_000_000_000:
+            dt_wall = (wall_ns - self._rtf_ref[0]) * 1e-9
+            self._pub_rtf.publish(
+                Float32(data=float((self.data.time - self._rtf_ref[1]) / dt_wall))
+            )
+            self._rtf_ref = (wall_ns, self.data.time)
 
         js = JointState()
         js.header.stamp = now
@@ -243,6 +376,88 @@ class MujocoSimNode(Node):
         vel.angular.x, vel.angular.y, vel.angular.z = map(float, self.data.qvel[3:6])
         self._pub_vel.publish(vel)
 
+    # -- camera render thread -------------------------------------------------
+    def _image_msg(self, arr, stamp, frame_id, encoding):
+        msg = Image()
+        msg.header.stamp = stamp
+        msg.header.frame_id = frame_id
+        msg.height, msg.width = arr.shape[:2]
+        msg.encoding = encoding
+        msg.is_bigendian = False
+        msg.step = arr.shape[1] * arr.itemsize * (
+            arr.shape[2] if arr.ndim == 3 else 1
+        )
+        msg.data = arr.tobytes()
+        return msg
+
+    def _render_loop(self):
+        """Owns every GL object: create, use and destroy on this one thread.
+
+        A dedicated thread rather than a timer because GL contexts are
+        thread-affine and a MultiThreadedExecutor may move a timer callback
+        between workers; it also keeps a future mujoco.viewer.launch_passive
+        (which owns its own context) safe. If the renderer cannot come up,
+        log once and return -- physics keeps running.
+        """
+        try:
+            self._cam.start()
+        except Exception as e:
+            self.get_logger().error(
+                f"offscreen renderer unavailable ({e}) -- camera off, "
+                "physics unaffected"
+            )
+            return
+        depth_period = 1.0 / self.get_parameter("camera_depth_hz").value
+        color_hz = self.get_parameter("camera_color_hz").value
+        color_period = 1.0 / color_hz if color_hz > 0 else None
+        try:
+            next_depth = time.monotonic()
+            next_color = next_depth if color_period is not None else None
+            while not self._render_stop.is_set():
+                due = min(t for t in (next_depth, next_color) if t is not None)
+                wait = due - time.monotonic()
+                if wait > 0:
+                    self._render_stop.wait(wait)
+                    continue
+                with self._snap_lock:
+                    snap = self._snap
+                if snap is None:  # physics has not ticked yet
+                    self._render_stop.wait(0.05)
+                    continue
+                stamp, qpos, qvel = snap
+                now_m = time.monotonic()
+                if now_m >= next_depth:
+                    depth = self._cam.render_depth(qpos, qvel)
+                    self._pub_depth.publish(self._image_msg(
+                        depth, stamp, camera_spec.DEPTH_FRAME_ID, "16UC1"
+                    ))
+                    info = camera_spec.camera_info_msg(
+                        depth.shape[1], depth.shape[0], camera_spec.DEPTH_FRAME_ID
+                    )
+                    info.header.stamp = stamp
+                    self._pub_depth_info.publish(info)
+                    # If rendering fell behind, resync instead of bursting.
+                    next_depth = max(next_depth + depth_period, now_m)
+                if next_color is not None and now_m >= next_color:
+                    rgb = np.ascontiguousarray(self._cam.render_color(qpos, qvel))
+                    self._pub_color.publish(self._image_msg(
+                        rgb, stamp, camera_spec.COLOR_FRAME_ID, "rgb8"
+                    ))
+                    info = camera_spec.camera_info_msg(
+                        rgb.shape[1], rgb.shape[0], camera_spec.COLOR_FRAME_ID
+                    )
+                    info.header.stamp = stamp
+                    self._pub_color_info.publish(info)
+                    next_color = max(next_color + color_period, now_m)
+        finally:
+            self._cam.close()
+
+    def destroy_node(self):
+        self._render_stop.set()
+        if self._render_thread is not None:
+            self._render_thread.join(timeout=2.0)
+        super().destroy_node()
+
 
 def main():
     rclpy.init()
@@ -251,6 +466,8 @@ def main():
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
+    finally:
+        node.destroy_node()
 
 
 if __name__ == "__main__":

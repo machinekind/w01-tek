@@ -33,11 +33,16 @@ COPY ./src/magnetometer_broadcaster/package.xml ./src/magnetometer_broadcaster/p
 # ros-dev-tools (colcon, rosdep, compilers, git, ...) stay installed so
 # anyone can edit code (src/ is bind-mounted at runtime, see compose.yaml)
 # and rebuild inside the container without reinstalling anything.
+# The mesa EGL/OSMesa libraries are for MuJoCo's offscreen renderer (the
+# sim's virtual D435 camera): surfaceless EGL works headless with no GPU,
+# OSMesa is the software fallback. Without them `MUJOCO_GL=egl` raises at
+# import (the sim node then degrades to camera-off).
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ros-dev-tools udev git python3-pip setserial openssh-client \
         ros-${ROS_DISTRO}-rmw-cyclonedds-cpp \
-        ros-${ROS_DISTRO}-plotjuggler-ros && \
+        ros-${ROS_DISTRO}-plotjuggler-ros \
+        libegl1 libegl-mesa0 libgl1 libglx-mesa0 libosmesa6 && \
     mkdir -p src/md80_hardware_interface/3rd_party && \
     rm -rf src/md80_hardware_interface/3rd_party/candle && \
     git clone https://github.com/mabrobotics/candle src/md80_hardware_interface/3rd_party/candle && \

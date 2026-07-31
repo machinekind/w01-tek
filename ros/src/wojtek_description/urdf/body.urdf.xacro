@@ -6,8 +6,16 @@
   <!-- Mechanical assembly shared by every bringup of this robot: material,
        base_link/body_link/imu_link, and the four legs. ros2_control/Gazebo
        blocks are deliberately not part of this macro - callers add their
-       own on top (see wojtek.urdf.xacro for the stock example). -->
-  <xacro:macro name="wojtek_body">
+       own on top (see wojtek.urdf.xacro for the stock example).
+
+       with_camera adds the D435 mount frames (camera_link + optical
+       frames). Default OFF: on the real robot the realsense2_camera driver
+       publishes the camera_link->*_optical chain itself and two publishers
+       of the same TF edge fight. The sim URDF turns it on: there the
+       robot model owns the ground-truth extrinsics (machinekind/wojtek#91).
+       The mount numbers must match wojtek_viz/camera_spec.py (MOUNT_XYZ,
+       MOUNT_PITCH_RAD); a test cross-checks them. -->
+  <xacro:macro name="wojtek_body" params="with_camera:=false">
     <material name="grey">
       <color rgba="0.5 0.5 0.5 1" />
     </material>
@@ -45,6 +53,59 @@
       <child link="imu_link" />
       <origin xyz="0.0 0.0 0.1" rpy=" 0.0 ${pi} 0.0" />
     </joint>
+
+    <xacro:if value="${with_camera}">
+      <!-- D435 mount: camera_link (x forward, z up, ROS body convention)
+           at the centre of the head bracket (front face of the body mesh's
+           triangular head section), pitched down; then the standard
+           camera_frame -> optical_frame (z forward, x right, y down)
+           rotation. Frame names follow the realsense2_camera driver
+           (camera_name=camera) so consumers see identical TF in sim and
+           on the robot. Values mirror camera_spec.py: MOUNT_XYZ /
+           MOUNT_PITCH_RAD (15 deg = 0.2617994 rad). -->
+      <link name="camera_link">
+        <visual>
+          <!-- Camera-body sized marker so the mount is visible in RViz;
+               massless. -->
+          <origin xyz="-0.01 0 0" rpy="0 0 0" />
+          <geometry>
+            <box size="0.02 0.09 0.025" />
+          </geometry>
+          <xacro:grey_material />
+        </visual>
+      </link>
+      <joint name="camera_joint" type="fixed">
+        <parent link="base_link" />
+        <child link="camera_link" />
+        <origin xyz="0.32 0.0 0.07" rpy="0 0.2617994 0" />
+      </joint>
+
+      <link name="camera_depth_frame" />
+      <joint name="camera_depth_joint" type="fixed">
+        <parent link="camera_link" />
+        <child link="camera_depth_frame" />
+        <origin xyz="0 0 0" rpy="0 0 0" />
+      </joint>
+      <link name="camera_depth_optical_frame" />
+      <joint name="camera_depth_optical_joint" type="fixed">
+        <parent link="camera_depth_frame" />
+        <child link="camera_depth_optical_frame" />
+        <origin xyz="0 0 0" rpy="${-pi/2} 0 ${-pi/2}" />
+      </joint>
+
+      <link name="camera_color_frame" />
+      <joint name="camera_color_joint" type="fixed">
+        <parent link="camera_link" />
+        <child link="camera_color_frame" />
+        <origin xyz="0 0 0" rpy="0 0 0" />
+      </joint>
+      <link name="camera_color_optical_frame" />
+      <joint name="camera_color_optical_joint" type="fixed">
+        <parent link="camera_color_frame" />
+        <child link="camera_color_optical_frame" />
+        <origin xyz="0 0 0" rpy="${-pi/2} 0 ${-pi/2}" />
+      </joint>
+    </xacro:if>
 
     <xacro:leg prefix="rear_left" xyz="-0.131 0.06 0.06" rpy="0 0 ${pi}" first_joint_offset="${pi}"
       third_joint_gear_correction_dir="-1.0" />

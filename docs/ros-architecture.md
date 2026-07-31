@@ -58,12 +58,16 @@ flowchart LR
     RVIZ["RViz"]
     TEL["teleop (Twist)"]
 
+    PERC["cloud_reduce\n(wojtek_perception_bringup)"]
+
     SIM -- "/joint_states (aktuowane + pasywne)" --> POL
     SIM -- "/imu/data (ground truth)" --> POL
     POL -- "/wojtek/joint_targets" --> SIM
     TEL -- "/cmd_vel" --> POL
     SIM -- "TF odom→base_link" --> RVIZ
     SIM -- "/joint_states" --> RSP
+    SIM -- "/camera/camera/depth/* (wirtualny D435)" --> PERC
+    PERC -- "/cloud_reduce/terrain_points (8x8)" --> RVIZ
     RSP --> RVIZ
 ```
 
@@ -129,7 +133,7 @@ Zabezpieczenia: startuje DISARMED; arm/rampa/zero wzajemnie się wykluczają; fi
 
 Symulacja, wizualizacja i ręczne sterowanie. Nie buduje się na RPi.
 
-**Pliki:** `launch/sim.launch.py`, `launch/viz.launch.py`, `config/{scene_mjx,wojtek_mjx}.xml` (kopie modeli MJX), `urdf/wojtek_sim.urdf.xacro`.
+**Pliki:** `launch/sim.launch.py`, `launch/viz.launch.py`, `config/{scene_mjx,wojtek_mjx}.xml` (kopie modeli MJX), `config/perception.rviz` (widok głębi/chmury, port z gałęzi percepcji), `urdf/wojtek_sim.urdf.xacro`, `wojtek_viz/camera_spec.py` (kontrakt kamery D435: intrinsics/mount/frame'y/tematy), `wojtek_viz/depth_camera.py` (offscreen renderer + wstrzykiwanie kamery przez MjSpec).
 
 **Node: `mujoco_sim_node`** (nazwa: `wojtek_mujoco_sim`) — symulator real-time zamykający pętlę z policy_node na dokładnie tej fizyce, na której trenowano (`scene_mjx.xml`: serwa kp=20/kd=1, forcerange ±6, dt=0.004), krokowany do zegara ściennego (z limitem kroków — brak spirali śmierci przy lagu).
 
@@ -140,9 +144,16 @@ Symulacja, wizualizacja i ręczne sterowanie. Nie buduje się na RPi.
 | pub | `/imu/data` (ground truth z sensorów MuJoCo, frame base_link) | `sensor_msgs/Imu` |
 | pub | TF `odom→base_link` (ground-truth poza bazy) | tf2 |
 | pub | `/odom_vel` (debug) | `geometry_msgs/Twist` |
+| pub | `/sim/rtf` (real-time factor, okna 1 s — pomiar, nie opinia) | `std_msgs/Float32` |
+| pub | `/camera/camera/depth/image_rect_raw` (16UC1, mm, 424x240, ~15 Hz) | `sensor_msgs/Image` |
+| pub | `/camera/camera/depth/camera_info` (intrinsics zgodne z renderem) | `sensor_msgs/CameraInfo` |
+| pub | `/camera/camera/color/image_raw` (rgb8, ~5 Hz, dla VLM) | `sensor_msgs/Image` |
+| pub | `/camera/camera/color/camera_info` | `sensor_msgs/CameraInfo` |
 | srv | `/sim/reset` | `std_srvs/Trigger` |
 
-Parametry: `model_xml` (puste = przygotuj MJX z share z przepisaniem meshdir), `joint_map_yaml`, `publish_rate_hz` (100), `realtime_factor`, `initial_pose` (`home`/`folded` — folded uzyskiwane przez fizyczne "osiadanie" z home, żeby domknięcie czworoboku było spójne), `folded_knee_rad`.
+Wirtualna kamera D435 (#91): tematy, kodowanie i frame'y identyczne z realnym stosem `wojtek_perception_bringup`, więc `cloud_reduce`/planner/VLM działają w symulacji bez zmian. Render offscreen (MuJoCo `Renderer`, EGL) na osobnym wątku z prywatną `MjData` — fizyka nie zwalnia; stemple obrazów = stemple TF `odom→base_link` z tego samego ticku fizyki. Kamera jest wstrzykiwana do modelu przy starcie przez `MjSpec` (pozycja/FOV z `wojtek_viz/camera_spec.py`, jedno źródło prawdy dla MJCF, URDF i CameraInfo; patrz #93 dla docelowego przeniesienia do `build_model.py`). TF `base_link→camera_link→camera_depth_optical_frame` daje URDF (`with_camera` w `body.urdf.xacro`), nie plik konfiguracyjny. Bez działającego backendu GL kamera degraduje się do off z warningiem — fizyka działa dalej. QoS: sensor data (best effort). Głębia: 0 = brak zwrotu (jak RealSense), okno 0.3–3.0 m.
+
+Parametry: `model_xml` (puste = przygotuj MJX z share z przepisaniem meshdir), `joint_map_yaml`, `publish_rate_hz` (100), `realtime_factor`, `initial_pose` (`home`/`folded` — folded uzyskiwane przez fizyczne "osiadanie" z home, żeby domknięcie czworoboku było spójne), `folded_knee_rad`, `camera` (true; wyłącznik dla słabszych maszyn), `camera_depth_hz` (15), `camera_color_hz` (5), `depth_min_m`/`depth_max_m` (0.3/3.0).
 
 **Node: `console`** (`operator_console.py`, nazwa: `operator_console`) — GUI PyQt5, jedno okno na wszystkie ręczne operacje (zamiast `ros2 service call`). Cztery moduły:
 
@@ -155,7 +166,7 @@ Nie ma topicu statusu arm/enable — konsola śledzi stan lokalnie z odpowiedzi 
 
 **Launche:**
 
-* `sim.launch.py` — robot_state_publisher + mujoco_sim_node + policy_node (imu_mount_rpy=0, soft_start 0.5 s, bez clamp_knee) + RViz. Argumenty: `rviz`, `initial_pose`.
+* `sim.launch.py` — robot_state_publisher + mujoco_sim_node + policy_node (imu_mount_rpy=0, soft_start 0.5 s, bez clamp_knee) + RViz. Argumenty: `rviz`, `initial_pose`, `camera` (true), `camera_depth_hz`, `camera_color_hz`. Argumenty `name:=value` przechodzą z `./sim.sh` przez `robot.py` (np. `./sim.sh camera:=false`).
 * `viz.launch.py` — czyste PC-side dla żywego robota: RViz (czyta `/robot_description` i `/tf` z RPi po DDS), opcjonalnie PlotJuggler, oraz rosbag całego runu **na żądanie** (`bag:=true`, do `~/wojtek_bags/run_<timestamp>`; domyślnie wyłączony). Zero hardware'u, zero RSP.
 
 ## 4. `md80_hardware_interface` — napędy (C++, plugin ros2_control)

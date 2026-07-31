@@ -1,0 +1,27 @@
+# NVIDIA GPU passthrough (Linux only). Layered on top of compose.yaml by
+# sim.sh/dev.sh WHEN docker reports the `nvidia` runtime -- i.e. when
+# nvidia-container-toolkit is installed and registered:
+#
+#   sudo dnf install nvidia-container-toolkit     # (nvidia's repo)
+#   sudo nvidia-ctk runtime configure --runtime=docker
+#   sudo systemctl restart docker
+#
+# Why: the image ships mesa only. On a host with the proprietary NVIDIA
+# driver, mesa in the container cannot drive the GPU (the userspace half of
+# the driver is missing), so RViz and the sim's offscreen camera renderer
+# fall back to llvmpipe/swrast -- everything renders on the CPU and the
+# whole session turns sluggish. The toolkit injects the host's userspace
+# driver libraries at container start, giving the container hardware GL
+# (RViz) and EGL (MuJoCo camera) on the same driver the host runs.
+#
+# Harmless to include on a non-NVIDIA machine ONLY IF the nvidia runtime
+# exists, hence the runtime detection in sim.sh/dev.sh instead of putting
+# this in compose.yaml.
+services:
+  wojtek_robot:
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      # `all` on purpose: graphics (GLX for RViz) + compute + utility; EGL
+      # offscreen needs graphics, nvidia-smi diagnostics need utility.
+      - NVIDIA_DRIVER_CAPABILITIES=all

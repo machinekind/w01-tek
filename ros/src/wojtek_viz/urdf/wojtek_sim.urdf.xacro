@@ -8,5 +8,8 @@
 <robot name="quadruped" xmlns:xacro="http://www.ros.org/wiki/xacro">
   <xacro:include filename="$(find wojtek_description)/urdf/body.urdf.xacro" />
 
-  <xacro:wojtek_body />
+  <!-- In sim the robot model owns the camera extrinsics (ground truth) -
+       robot_state_publisher latches base_link->camera_link->optical frames
+       matching the MJCF render camera; see wojtek_viz/camera_spec.py. -->
+  <xacro:wojtek_body with_camera="true" />
 </robot>

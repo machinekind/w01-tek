@@ -1,11 +1,16 @@
 """MuJoCo sim + policy + RViz.
 
     ros2 launch wojtek_viz sim.launch.py [rviz:=false] [initial_pose:=folded]
+                                         [camera:=false]
 
 initial_pose:=folded spawns the robot in the real robot's boot/zeroing pose
 (lying flat, knees folded -- see real_io_node) instead of standing at home.
 Note the policy starts immediately, so from folded it will try to stand on
 its own; use this to inspect/verify the boot pose, not for clean walking.
+
+camera:=false turns off the D435-compatible virtual camera (on by default;
+the off-switch for weak machines). camera_depth_hz/camera_color_hz tune the
+render rates; see wojtek_viz/mujoco_sim_node.py for the camera contract.
 
 Drive with any Twist teleop, e.g.:
     ros2 run teleop_twist_keyboard teleop_twist_keyboard
@@ -25,7 +30,6 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 def generate_launch_description():
     share = get_package_share_directory("wojtek_viz")
-    policy_share = get_package_share_directory("wojtek_policy")
     xacro_file = os.path.join(share, "urdf", "wojtek_sim.urdf.xacro")
     robot_description = ParameterValue(Command(f"xacro {xacro_file}"), value_type=str)
 
@@ -33,6 +37,18 @@ def generate_launch_description():
         [
             DeclareLaunchArgument("rviz", default_value="true"),
             DeclareLaunchArgument("initial_pose", default_value="home"),
+            # D435-compatible virtual camera (default on; off-switch for
+            # weak machines). Rendering runs on its own thread in the sim
+            # node, so the physics real-time factor is unaffected.
+            DeclareLaunchArgument("camera", default_value="true"),
+            DeclareLaunchArgument("camera_depth_hz", default_value="15.0"),
+            DeclareLaunchArgument("camera_color_hz", default_value="5.0"),
+            # Default view includes the virtual camera's image panels;
+            # override for a different layout (e.g. the plain wojtek.rviz).
+            DeclareLaunchArgument(
+                "rviz_config",
+                default_value=os.path.join(share, "config", "sim.rviz"),
+            ),
             # HF repo id (org/name[@revision]) or a local directory with
             # policy.npz + policy_meta.json -- see wojtek_policy/policy_source.py.
             DeclareLaunchArgument(
@@ -54,6 +70,17 @@ def generate_launch_description():
                         # Match the simulated plant (servo gains, torque cap)
                         # to the same policy contract policy_node loads.
                         "policy": LaunchConfiguration("policy"),
+                        "camera": ParameterValue(
+                            LaunchConfiguration("camera"), value_type=bool
+                        ),
+                        "camera_depth_hz": ParameterValue(
+                            LaunchConfiguration("camera_depth_hz"),
+                            value_type=float,
+                        ),
+                        "camera_color_hz": ParameterValue(
+                            LaunchConfiguration("camera_color_hz"),
+                            value_type=float,
+                        ),
                     }
                 ],
             ),
@@ -74,7 +101,7 @@ def generate_launch_description():
             Node(
                 package="rviz2",
                 executable="rviz2",
-                arguments=["-d", os.path.join(policy_share, "rviz", "wojtek.rviz")],
+                arguments=["-d", LaunchConfiguration("rviz_config")],
                 condition=IfCondition(LaunchConfiguration("rviz")),
             ),
         ]

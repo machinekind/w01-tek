@@ -1,0 +1,77 @@
+# Default view for sim.launch.py: the robot in 3D plus what its virtual
+# D435 sees (wojtek_policy's wojtek.rviz stays the plain no-camera view for
+# the live robot's viz.launch.py). Both image subscriptions are Best Effort
+# on purpose -- the sim publishes sensor-data QoS, and a Reliable
+# subscription would connect to nothing and render a blank panel.
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Tree Height: 400
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Plane Cell Count: 20
+      Cell Size: 0.25
+    - Class: rviz_default_plugins/RobotModel
+      Name: RobotModel
+      Enabled: true
+      Description Source: Topic
+      Description Topic:
+        Value: /robot_description
+        Durability Policy: Transient Local
+      TF Prefix: ""
+      Visual Enabled: true
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: false
+    - Class: rviz_default_plugins/Image
+      Name: Camera
+      Enabled: true
+      Topic:
+        Value: /camera/camera/color/image_raw
+        Depth: 2
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+    - Class: rviz_default_plugins/Image
+      Name: CameraDepth
+      Enabled: true
+      Topic:
+        Value: /camera/camera/depth/image_rect_raw
+        Depth: 2
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+      # Raw 16UC1 in mm; RViz normalizes min..max per frame, so the floor
+      # gradient is visible without any extra scaling.
+      Normalize Range: true
+  Global Options:
+    Fixed Frame: odom
+    Frame Rate: 30
+    Background Color: 35; 38; 41
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Name: Current View
+      Distance: 1.6
+      Pitch: 0.35
+      Yaw: 0.8
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0.1
+      Target Frame: base_link
+Window Geometry:
+  Height: 900
+  Width: 1400
+  Camera:
+    collapsed: false
+  CameraDepth:
+    collapsed: false

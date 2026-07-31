@@ -65,6 +65,13 @@ def generate_launch_description():
     return LaunchDescription(
         [
             DeclareLaunchArgument("rviz", default_value="true"),
+            # Layout to load. Default = the plain live-robot view; the sim
+            # bringup (robot.py --sim) passes wojtek_viz's sim.rviz, which
+            # adds the virtual camera's image panels.
+            DeclareLaunchArgument(
+                "rviz_config",
+                default_value=os.path.join(policy_share, "rviz", "wojtek.rviz"),
+            ),
             DeclareLaunchArgument("plotjuggler", default_value="false"),
             DeclareLaunchArgument("foxglove", default_value="false"),
             # bag:=true records the whole run (all topics, over DDS);
@@ -74,7 +81,7 @@ def generate_launch_description():
             Node(
                 package="rviz2",
                 executable="rviz2",
-                arguments=["-d", os.path.join(policy_share, "rviz", "wojtek.rviz")],
+                arguments=["-d", LaunchConfiguration("rviz_config")],
                 condition=IfCondition(LaunchConfiguration("rviz")),
             ),
             Node(

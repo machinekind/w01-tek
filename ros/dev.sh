@@ -39,6 +39,8 @@ fi
 COMPOSE=(docker compose)
 if [ "$(uname -s)" = "Darwin" ]; then
   COMPOSE+=(-f compose.yaml -f compose.mac.yaml)
+elif docker info 2>/dev/null | grep -q 'Runtimes:.*nvidia'; then
+  COMPOSE+=(-f compose.yaml -f compose.gpu.yaml)
 fi
 
 "${COMPOSE[@]}" up -d

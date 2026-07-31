@@ -95,7 +95,18 @@ def main():
                          "default = the launch file's pinned default. Ignored "
                          "by the systemd RT path, which uses the service's "
                          "own launch arguments.")
-    args = ap.parse_args()
+    # ros2-launch style name:=value tokens (e.g. camera:=false) pass through
+    # to the launch file, so every launch argument is reachable from sim.sh
+    # without growing a bespoke flag here per argument. parse_known_args
+    # would swallow typos silently, hence the strict shape check: anything
+    # unrecognised that is not name:=value is still a hard error.
+    args, extra = ap.parse_known_args()
+    launch_args = []
+    for tok in extra:
+        name, sep, _ = tok.partition(":=")
+        if not sep or not name.replace("_", "").isalnum() or not name[0].isalpha():
+            ap.error(f"unrecognized argument: {tok}")
+        launch_args.append(tok)
 
     procs = []
     stop_remote = None  # callable to stop the RPi side on exit
@@ -110,16 +121,17 @@ def main():
     if args.sim:
         print(">> [sim] MuJoCo sim (local, in container)")
         spawn(["ros2", "launch", "wojtek_viz", "sim.launch.py", "rviz:=false"]
-              + policy_arg)
+              + policy_arg + launch_args)
     elif args.dry_run:
         print(f">> [BENCH] launching on {RPI_HOST} WITHOUT RT, no torque")
         gamepad = str(args.gamepad).lower()
         remote_policy = f" {policy_arg[0]}" if policy_arg else ""
+        remote_extra = "".join(f" {a}" for a in launch_args)
         remote = (f"source /opt/ros/{ROS_DISTRO}/setup.bash && "
                   f"source ~/{REMOTE_WS}/install/setup.bash && "
                   f"{REMOTE_DDS_ENV} && "
                   f"ros2 launch wojtek_bringup robot.launch.py dry_run:=true "
-                  f"gamepad:={gamepad}{remote_policy}")
+                  f"gamepad:={gamepad}{remote_policy}{remote_extra}")
         spawn(SSH_TTY + [remote])
         stop_remote = lambda: subprocess.run(SSH + ["pkill -f robot.launch.py"])
     else:
@@ -139,8 +151,17 @@ def main():
         fox = str(args.foxglove).lower()
         rviz = str(not args.foxglove).lower()
         print(f">> launching visualization (rviz={rviz}, foxglove={fox}, plotjuggler={pj})")
-        spawn(["ros2", "launch", "wojtek_viz", "viz.launch.py",
-               f"rviz:={rviz}", f"foxglove:={fox}", f"plotjuggler:={pj}"])
+        viz_cmd = ["ros2", "launch", "wojtek_viz", "viz.launch.py",
+                   f"rviz:={rviz}", f"foxglove:={fox}", f"plotjuggler:={pj}"]
+        if args.sim:
+            # Sim layout: the plain live-robot view plus the virtual D435's
+            # image panels, so the camera is visible without any clicking.
+            from ament_index_python.packages import get_package_share_directory
+            sim_rviz = os.path.join(
+                get_package_share_directory("wojtek_viz"), "config", "sim.rviz"
+            )
+            viz_cmd.append(f"rviz_config:={sim_rviz}")
+        spawn(viz_cmd)
         if args.foxglove:
             print(">> foxglove_bridge up -- open the Foxglove app and connect to "
                   "ws://localhost:8765 (3D panel reads /robot_description; "

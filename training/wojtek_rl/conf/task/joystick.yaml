@@ -56,4 +56,36 @@ env:
     spawn_level: -1 # pin every spawn to this row; -1 samples per init_level_frac
     demote_fraction: 0.5 # drop a level if walked < this * commanded distance
 
+  # Terrain-height grid ahead of the robot, off by default. Components:
+  # height_scan_clean (critic) and height_scan (actor: masked, held,
+  # corrupted). Reads zero without a terrain lookup. Details:
+  # docs/configuration.md.
+  height_scan:
+    enable: false
+    x_range: [0.65, 1.45] # body-frame forward extent, m
+    y_range: [-0.3, 0.3] # body-frame lateral extent, m
+    nx: 5 # points per axis; the obs width and mirror map assume 5x5
+    ny: 5
+    clip: 0.3 # values clipped to +-clip m around the lowest foot
+    hold_steps: 3 # control steps between captures (15 Hz camera, 50 Hz policy)
+    delay_steps: 1 # capture-to-visible delay, control steps
+    dark: false # feed the actor zeros while the critic still sees the grid
+    mask: # analytic camera visibility; cells outside read zero
+      enable: true
+      mount: [0.32, 0.0, 0.07] # body-frame camera position, m
+      pitch_deg: 15.0 # optical axis pitched down from body x
+      hfov_deg: 90.7 # D435 depth at 424x240, fx=fy=209
+      vfov_deg: 61.2
+      min_depth: 0.3 # usable depth window, m
+      max_depth: 3.0
+    corrupt: # actor-side sensor model, one regime drawn per episode
+      enable: false
+      noise_prob: 0.6 # iid gaussian noise on visible cells
+      drift_prob: 0.3 # constant offset + forward tilt for the episode
+      blackout_prob: 0.1 # the whole episode reads zero
+      noise_std: 0.02 # m
+      drift_z: 0.05 # offset drawn U(+-drift_z), m
+      drift_tilt: 0.05 # tilt drawn U(+-drift_tilt), m per m of grid x
+      dropout_prob: 0.05 # per-cell dropout to zero in noise/drift episodes
+
 ppo: {}

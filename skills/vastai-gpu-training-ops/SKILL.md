@@ -55,7 +55,7 @@ Do not upgrade major JAX, CUDA, MuJoCo, or Brax versions while debugging provisi
 
 ## Launch
 
-Pass the CPU-smoke and GPU-probe gates (`brax-locomotion-training`) first. Save the resolved
+Pass the GPU-probe gate (`brax-locomotion-training`) first. Save the resolved
 Hydra config before launching — `run.json` is written only after success:
 
 ```bash

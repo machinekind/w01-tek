@@ -56,11 +56,10 @@ training project before invoking Python.
 ./training/run.sh train +experiment=locomotion \
   ++ppo.num_timesteps=300000000 --cfg job --resolve
 
-# Then use a CPU smoke run to check the full train/checkpoint path.  A preset
-# can override smoke's short PPO budget, so pin it again when selecting one.
-./training/run.sh smoke +experiment=locomotion \
-  ++ppo.num_timesteps=100000 \
-  run_name=wojtek_smoke_locomotion_$(date +%Y%m%d_%H%M%S) wandb.enable=false
+# The train/checkpoint path is checked with a short bounded run on a GPU
+# box before the full budget.  CPU smoke runs are not viable (MJX compile
+# on CPU); do not run them.  A preset can override a short run's PPO
+# budget, so pin ++ppo.num_timesteps when selecting one.
 ```
 
 Rules for agents changing or launching training:
@@ -68,7 +67,7 @@ Rules for agents changing or launching training:
 - Use the detailed reference rather than guessing Hydra paths.  Code-defaulted
   environment fields require `+` or `++` on the command line; `++` is the
   safest form when a key may or may not already be present in YAML.
-- Run `--cfg job --resolve` first. Use a smoke run, then a GPU model check
+- Run `--cfg job --resolve` first, then a GPU model check
   (`./training/run.sh check --gpu --backend warp`) and a bounded train before
   a full budget. Do not claim a reward change is successful without the fixed
   evaluation battery or report.

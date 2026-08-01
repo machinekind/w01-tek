@@ -342,3 +342,72 @@ def test_wrapper_without_a_scan_is_untouched(blind_env):
             np.array(state.obs[key])[done],
             np.array(state.info["first_obs"][key])[done],
         )
+
+
+# -- 5. occlusion over a descending edge --------------------------------------
+
+
+def _teleport(env, state, xy, yaw):
+    """The reset pose moved rigidly to `xy` and turned to face `yaw`."""
+    data = state.data
+    quat = jp.array([jp.cos(yaw / 2), 0.0, 0.0, jp.sin(yaw / 2)])
+    xy = jp.asarray(xy)
+    dz = env._terrain.height(xy) - env._terrain.height(data.qpos[0:2])
+    delta = xy - data.qpos[0:2]
+    qpos = data.qpos.at[0:2].set(xy).at[2].add(dz).at[3:7].set(quat)
+    geom_xpos = data.geom_xpos.at[:, 0:2].add(delta).at[:, 2].add(dz)
+    adr = env._sensor_adr["orientation"]
+    return data.replace(
+        qpos=qpos,
+        geom_xpos=geom_xpos,
+        sensordata=data.sensordata.at[adr : adr + 4].set(quat),
+    )
+
+
+def _both_masks(env, data):
+    """(mask, frustum-only mask) at one pose, as 5x5 grids.
+
+    Also checks that the clean grid the critic reads is the same either way:
+    occlusion is a mask, not a measurement.
+    """
+    m = env._config.height_scan.mask
+    assert m.occlusion, "the default has occlusion on"
+    clean, seen = env._scan_raw(data)
+    m.occlusion = False
+    try:
+        clean_off, frustum = env._scan_raw(data)
+    finally:
+        m.occlusion = True
+    np.testing.assert_array_equal(np.array(clean_off), np.array(clean))
+    return np.array(seen).reshape(5, 5), np.array(frustum).reshape(5, 5)
+
+
+def test_occlusion_hides_the_treads_below_a_stair_rim(scan_env):
+    """Standing near the edge of the stair plateau and facing out, the grid
+    runs down the flight. The rim between the camera and the lower treads
+    takes them out of the mask; the frustum alone keeps every one of them."""
+    state = jax.jit(scan_env.reset)(jax.random.PRNGKey(0))
+    stairs_xy = _tile_xy(scan_env, TERRAIN_ROWS, "pyramid_stairs")
+    data = _teleport(scan_env, state, stairs_xy + np.array([-0.25, 0.0]), 0.0)
+
+    grid_xy = height_scan.world_xy(
+        scan_env._scan_grid, data.qpos[0:2],
+        height_scan.yaw_from_quat(scan_env._quat(data)),
+    )
+    ground = np.array(scan_env._terrain.height(grid_xy)).reshape(5, 5)
+    # the pose is only a test of occlusion if the grid really runs off an edge
+    assert np.all(np.diff(ground.mean(axis=1)) < -0.03), ground
+
+    seen, frustum = _both_masks(scan_env, data)
+    assert frustum.all(), frustum
+    assert seen[0].all(), seen  # the plateau the robot stands on
+    assert not seen[-1].any(), seen  # the bottom treads, behind the rim
+
+
+def test_flat_ground_sees_everything_the_frustum_does(scan_env):
+    """No edge, no occlusion: on the arena's flat row the two masks agree."""
+    state = jax.jit(scan_env.reset)(jax.random.PRNGKey(0))
+    data = _teleport(scan_env, state, _tile_xy(scan_env, 0, "rough_uniform"), 0.0)
+    seen, frustum = _both_masks(scan_env, data)
+    np.testing.assert_array_equal(seen, frustum)
+    assert frustum.any()

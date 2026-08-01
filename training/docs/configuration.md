@@ -211,6 +211,9 @@ Default actor observations are `gyro`, `gravity`, `joint_pos`, `joint_vel`,
 | `task.env.height_scan.mask.pitch_deg` | `15.0` | Downward tilt of the optical axis from the body x-axis. |
 | `task.env.height_scan.mask.hfov_deg` / `.vfov_deg` | `90.7` / `61.2` | Field of view: a D435 depth stream at 424×240 (`fx=fy=209`). |
 | `task.env.height_scan.mask.min_depth` / `.max_depth` | `0.3` / `3.0` m | Usable depth band; points outside it are invisible. |
+| `task.env.height_scan.mask.occlusion` | `true` | Also drop points a nearer rise stands in front of: the frustum reaches them, the line of sight does not. Off leaves frustum-only visibility. |
+| `task.env.height_scan.mask.occlusion_samples` | `8` | Terrain samples per camera-to-point ray, fixed at trace time. A rise narrower than the ray's sample spacing can slip between two samples. |
+| `task.env.height_scan.mask.occlusion_margin` | `0.02` m | How far the ground has to stand above the ray before it counts as blocking it. |
 | `task.env.height_scan.corrupt.enable` | `false` | Apply the sensor-failure model to the actor's copy. Off, the actor still gets the masked and stale grid. |
 | `task.env.height_scan.corrupt.noise_prob` | `0.6` | Episode draws iid gaussian noise of `noise_std`. |
 | `task.env.height_scan.corrupt.drift_prob` | `0.3` | Episode draws a fixed offset `drift_z + drift_tilt * (x - x_min)` over the grid's body-frame x. |

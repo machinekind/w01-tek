@@ -255,6 +255,14 @@ def default_config() -> config_dict.ConfigDict:
                 vfov_deg=61.2,
                 min_depth=0.3,
                 max_depth=3.0,
+                # Line of sight against nearer terrain, on top of the
+                # frustum: a real camera cannot see a pit floor through the
+                # lip in front of it. Rays are sampled, so a rise thinner
+                # than the segment/occlusion_samples spacing can slip
+                # between two samples.
+                occlusion=True,
+                occlusion_samples=8,
+                occlusion_margin=0.02,
             ),
             corrupt=config_dict.create(
                 enable=False,
@@ -833,17 +841,27 @@ class WojtekJoystick(WojtekEnv):
         if not hs.mask.enable:
             return clean, jp.ones_like(clean, dtype=bool)
         m = hs.mask
+        points = jp.concatenate([xy, h[:, None]], axis=-1)
+        mount = jp.array(m.mount)
         mask = height_scan.visible_mask(
-            jp.concatenate([xy, h[:, None]], axis=-1),
+            points,
             data.qpos[0:3],
             quat,
-            jp.array(m.mount),
+            mount,
             m.pitch_deg,
             m.hfov_deg,
             m.vfov_deg,
             m.min_depth,
             m.max_depth,
         )
+        if m.occlusion:
+            mask = mask & ~height_scan.occluded_mask(
+                points,
+                height_scan.camera_pos(data.qpos[0:3], quat, mount),
+                self._terrain.height,
+                m.occlusion_samples,
+                m.occlusion_margin,
+            )
         return clean, mask
 
     def _scan_actor(self, data, rng, regime, drift):

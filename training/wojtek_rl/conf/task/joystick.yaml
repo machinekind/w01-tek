@@ -78,6 +78,9 @@ env:
       vfov_deg: 61.2
       min_depth: 0.3 # usable depth window, m
       max_depth: 3.0
+      occlusion: true # also hide cells behind nearer terrain
+      occlusion_samples: 8 # terrain samples per camera-to-cell ray
+      occlusion_margin: 0.02 # ground must clear the ray by this much, m
     corrupt: # actor-side sensor model, one regime drawn per episode
       enable: false
       noise_prob: 0.6 # iid gaussian noise on visible cells

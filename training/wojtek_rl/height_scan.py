@@ -16,6 +16,13 @@ NOISE, DRIFT, BLACKOUT = 0, 1, 2
 NX, NY = 5, 5
 SIZE = NX * NY
 
+# Occlusion rays: where along the camera-to-point segment the terrain samples
+# start, and how far short of the point they stop. A sample inside the point's
+# own terrain cell (0.04 m) reads that point's surface and would occlude it
+# with itself.
+OCC_T_MIN = 0.1
+OCC_END_GAP = 0.05
+
 
 def body_grid(x_range, y_range, nx=NX, ny=NY, xp=np):
     """(nx*ny, 2) body-frame grid points, index ix*ny + iy."""
@@ -60,6 +67,11 @@ def scan_values(heights, ref_z, clip, xp=jp):
     return xp.clip(heights - ref_z, -clip, clip)
 
 
+def camera_pos(base_pos, quat, mount, xp=jp):
+    """World position of a body-frame `mount` at a base pose."""
+    return base_pos + rotation_matrix(quat, xp=xp) @ mount
+
+
 def visible_mask(
     points, base_pos, quat, mount, pitch_deg, hfov_deg, vfov_deg,
     min_depth, max_depth, xp=jp,
@@ -69,13 +81,14 @@ def visible_mask(
     The camera sits at `mount` in the body frame with its optical axis
     pitched `pitch_deg` below the body x-axis. Its frame follows the full
     base orientation, so base pitch and roll swing the frustum off the
-    ground the yaw-placed grid sits on.
+    ground the yaw-placed grid sits on. Frustum only: `occluded_mask` is
+    the line-of-sight test.
     """
     rot = rotation_matrix(quat, xp=xp)
     pitch = xp.radians(pitch_deg)
     fwd_b = xp.array([xp.cos(pitch), 0.0, -xp.sin(pitch)])
     up_b = xp.array([xp.sin(pitch), 0.0, xp.cos(pitch)])
-    body = (points - (base_pos + rot @ mount)) @ rot
+    body = (points - camera_pos(base_pos, quat, mount, xp=xp)) @ rot
     fwd = body @ fwd_b
     lat = body[..., 1]
     up = body @ up_b
@@ -87,6 +100,25 @@ def visible_mask(
         & (dist >= min_depth)
         & (dist <= max_depth)
     )
+
+
+def occluded_mask(points, cam_pos, height_fn, num_samples, margin, xp=jp):
+    """Which world `points` nearer terrain hides from a camera at `cam_pos`.
+
+    Each camera-to-point segment is sampled at `num_samples` interior
+    fractions; a sample whose ground stands more than `margin` above the ray
+    blocks it. `height_fn` maps world xy `(..., 2)` to ground height, so the
+    whole batch is one lookup. `num_samples` is static: the sampling never
+    depends on the data, only on the config.
+    """
+    delta = points - cam_pos
+    dist = xp.linalg.norm(delta, axis=-1)
+    t_end = xp.clip(1.0 - OCC_END_GAP / xp.maximum(dist, 1e-6), OCC_T_MIN, 1.0)
+    span = xp.linspace(0.0, 1.0, num_samples)
+    t = OCC_T_MIN + (t_end - OCC_T_MIN)[..., None] * span
+    ray = cam_pos + t[..., None] * delta[..., None, :]
+    ground = height_fn(ray[..., 0:2])
+    return xp.any(ground > ray[..., 2] + margin, axis=-1)
 
 
 def sample_corruption(

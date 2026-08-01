@@ -83,6 +83,78 @@ def test_nose_up_pitch_hides_the_near_row():
     assert not bool(np.any(nose_up))
 
 
+# -- occlusion ---------------------------------------------------------------
+
+CAM_POS = np.array([0.0, 0.0, 0.4])
+
+
+def _flat(xy):
+    return np.zeros(np.shape(xy)[:-1])
+
+
+def _ridge(x0, x1, top):
+    """Ground at `top` for x in [x0, x1], zero elsewhere."""
+    def height_fn(xy):
+        return np.where((xy[..., 0] >= x0) & (xy[..., 0] <= x1), top, 0.0)
+
+    return height_fn
+
+
+def _hidden(points, height_fn, num_samples=8, margin=0.02):
+    return np.asarray(
+        height_scan.occluded_mask(
+            np.asarray(points), CAM_POS, height_fn, num_samples, margin, xp=np
+        )
+    )
+
+
+def test_flat_ground_hides_nothing():
+    grid = height_scan.body_grid(X_RANGE, Y_RANGE)
+    points = np.concatenate([grid, np.zeros((height_scan.SIZE, 1))], axis=-1)
+    assert not _hidden(points, _flat).any()
+
+
+def test_a_ridge_hides_what_is_behind_it_only():
+    points = np.array([[0.5, 0.0, 0.0], [1.4, 0.0, 0.0]])
+    near, far = _hidden(points, _ridge(0.6, 0.9, 0.25))
+    assert not near
+    assert far
+
+
+@pytest.mark.parametrize("rise,blocked", [(0.01, False), (0.05, True)])
+def test_margin_is_the_clearance_the_ground_needs(rise, blocked):
+    # Camera and point at the same height: the ray runs level at z, so a
+    # ridge blocks it exactly when it stands more than the margin above.
+    point = np.array([[1.4, 0.0, CAM_POS[2]]])
+    ridge = _ridge(0.6, 0.9, CAM_POS[2] + rise)
+    assert bool(_hidden(point, ridge, margin=0.02)[0]) is blocked
+
+
+def test_sample_count_is_fixed_and_the_batch_is_one_lookup():
+    seen = []
+
+    def height_fn(xy):
+        seen.append(np.asarray(xy))
+        return np.zeros(np.shape(xy)[:-1])
+
+    points = np.stack([[0.7, 0.0, 0.0], [1.1, 0.2, 0.1], [1.4, -0.3, 0.0]])
+    _hidden(points, height_fn, num_samples=6)
+    assert [a.shape for a in seen] == [(3, 6, 2)]
+
+
+def test_samples_stay_off_both_ends_of_the_ray():
+    seen = []
+
+    def height_fn(xy):
+        seen.append(np.asarray(xy))
+        return np.zeros(np.shape(xy)[:-1])
+
+    _hidden(np.array([[1.4, 0.0, 0.0]]), height_fn)
+    x = seen[0][0, :, 0]
+    assert x.min() > 0.0
+    assert x.max() < 1.4 - 0.04  # the point's own terrain cell is excluded
+
+
 # -- corruption -------------------------------------------------------------
 
 GRID_X = height_scan.body_grid(X_RANGE, Y_RANGE)[:, 0]

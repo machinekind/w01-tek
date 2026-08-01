@@ -265,7 +265,32 @@ def common_launch_description(with_rviz, bag_default, with_gamepad=False):
                 condition=IfCondition(LaunchConfiguration("gamepad")),
             ),
         ]
-    args.append(
-        OpaqueFunction(function=_launch_setup, kwargs={"with_rviz": with_rviz})
-    )
+    args += [
+        # RealSense D435 depth (+ colour for the VLM) and the grid reduction.
+        # Off by default: the depth path is not on the robot's critical path,
+        # and a missing driver package would take the whole launch -- and with
+        # it the control stack -- down with it. Flip perception:=true in
+        # wojtek-robot.service once the pipeline is proven on hardware.
+        DeclareLaunchArgument("perception", default_value="false"),
+        # The camera pipeline must not run on the isolated RT cores: the
+        # service starts this whole tree under `taskset -c 2,3`, and children
+        # inherit that mask, so without re-affinitizing them the driver and
+        # the reduction (~26% of a core together, measured) compete with the
+        # 400 Hz control loop. Same treatment the bag recorder gets.
+        DeclareLaunchArgument("perception_cpus", default_value="0,1"),
+        IncludeLaunchDescription(
+            PathJoinSubstitution(
+                [
+                    FindPackageShare("wojtek_perception_bringup"),
+                    "launch",
+                    "perception.launch.py",
+                ]
+            ),
+            launch_arguments={
+                "cpus": LaunchConfiguration("perception_cpus"),
+            }.items(),
+            condition=IfCondition(LaunchConfiguration("perception")),
+        ),
+        OpaqueFunction(function=_launch_setup, kwargs={"with_rviz": with_rviz}),
+    ]
     return LaunchDescription(args)

@@ -7,7 +7,7 @@ nodes -- no RViz, no GUI. Run visualization/debug on the PC separately:
     ros2 launch wojtek_bringup robot.launch.py [policy:=org/name@sha]
                                                [max_torque:=2.0] [dry_run:=true]
                                                [boot_pose:=home|folded] [bag:=true]
-                                               [gamepad:=true]
+                                               [gamepad:=true] [perception:=true]
 
 The servo settings the MD80s run with (impedance kp/kd, torque cap) come
 from the loaded policy's contract: policy_meta.json carries the pd block

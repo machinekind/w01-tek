@@ -10,7 +10,14 @@
 #
 #   ./deploy.sh                 # fast: rsync src, build, restart the service
 #   ./deploy.sh --provision     # fresh RPi: full provision (install.sh) THEN build
+#   ./deploy.sh --provision --enable-robot   # ... and make it start at boot
 #   ./deploy.sh --no-restart    # skip the wojtek-robot.service restart
+#
+# Boot autostart is DECLARATIVE: --enable-robot is the state you want, and
+# provisioning makes the RPi match it. Provisioning WITHOUT the flag disables
+# boot autostart, including on a robot where it was enabled before -- that is
+# the point, so the flag alone decides and nobody has to remember what the
+# previous run left behind.
 #   RPI_HOST=rpi@10.42.0.2 ./deploy.sh
 #
 # Provisioning needs the Ubuntu Pro token for the RT kernel -- put it in .env
@@ -34,10 +41,14 @@ ROS_DISTRO="${ROS_DISTRO:-jazzy}"
 CANDLE_COMMIT="7c201d744baa107ee408e3e01694efd1a764a174"
 RESTART=1
 PROVISION=0
+ENABLE_ROBOT=0
 
 for a in "$@"; do case "$a" in
     --provision)  PROVISION=1 ;;
     --no-restart) RESTART=0 ;;
+    # Passed through to install.sh: turn ON boot autostart. Only meaningful
+    # together with --provision.
+    --enable-robot) ENABLE_ROBOT=1 ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown arg: $a" >&2; exit 2 ;;
 esac; done
@@ -63,9 +74,11 @@ if [ "${PROVISION}" = 1 ]; then
     # Run install.sh with the Pro token passed through the environment (not
     # baked into any file on the RPi). Token only needed the first time (RT
     # kernel); subsequent runs short-circuit that phase.
+    install_args=""
+    [ "${ENABLE_ROBOT}" = 1 ] && install_args="--enable-robot"
     ssh "${RPI_HOST}" \
         "UBUNTU_PRO_TOKEN='${UBUNTU_PRO_TOKEN:-}' ROS_DISTRO='${ROS_DISTRO}' \
-         bash '${REMOTE_WS}/deploy/rpi/install.sh'"
+         bash '${REMOTE_WS}/deploy/rpi/install.sh' ${install_args}"
 
     # Kernel/cmdline changes leave /var/run/reboot-required -- reboot + wait so
     # the RT kernel is active before we build.

@@ -462,7 +462,8 @@ def scan_reset(env, rng, spawn_xy, pad_h, yaw, command):
 
     Writing the pose into qpos is safe for the reason the training wrapper's
     teleport is safe -- the next physics step recomputes kinematics from qpos,
-    and no observation carries world position or heading. The joints are pinned
+    and the height scan is the only observation reading world pose, refilled
+    below from the forwarded data. The joints are pinned
     to the commanded height's stance anchor with none of reset's joint noise, so
     the course is fully deterministic.
 
@@ -471,6 +472,7 @@ def scan_reset(env, rng, spawn_xy, pad_h, yaw, command):
     would make the policy's very first action a response to a command the course
     never issued.
     """
+    import jax
     import jax.numpy as jp
     from mujoco import mjx
 
@@ -488,6 +490,16 @@ def scan_reset(env, rng, spawn_xy, pad_h, yaw, command):
     info = dict(state.info)
     info["command"] = command
     info["motor_targets"] = anchor
+    if env._scan_live:
+        # reset filled the camera buffers at its own spawn; the pose above is
+        # a different tile, and both buffers feed the first observations.
+        scan_rng, r_scan = jax.random.split(info["scan_rng"])
+        scan = env._scan_actor(
+            data, r_scan, info["scan_regime"], info["scan_drift"]
+        )
+        info["scan_rng"] = scan_rng
+        info["scan_hold"] = scan
+        info["scan_pending"] = scan
     return state.replace(data=data, obs=env._get_obs(data, info), info=info)
 
 
@@ -826,11 +838,16 @@ def scan(
     baseline_ref: str | None = None,
     eval_seed: int = 0,
     per_cell: bool = False,
+    scan_mode: str = "clean",
 ) -> dict:
     """Score `run_dir`'s latest checkpoint on the measurement course.
 
     `per_cell` selects the reference rollout -- one dispatch per cell per speed
     -- instead of the batched default, which runs every cell in one batch.
+
+    `scan_mode` "dark" feeds the actor a zero height scan, which is what a
+    scan-observing policy has left when the camera stops delivering. It scores
+    the same course, so the two numbers are directly comparable.
     """
     from wojtek_rl.battery import load_checkpoint_policy
 
@@ -861,10 +878,14 @@ def scan(
     }
     if njmax is not None:
         sim_overrides["njmax"] = njmax
+    if scan_mode not in ("clean", "dark"):
+        raise ValueError(f"scan mode must be clean or dark, got {scan_mode!r}")
+    env_overrides = {"height_scan": {"dark": True}} if scan_mode == "dark" else {}
     run, env, ckpt, inf = load_checkpoint_policy(
         run_dir,
         flat=False,
         env_overrides={
+            **env_overrides,
             "terrain": {
                 "enable": True,
                 "arena": "eval",
@@ -898,6 +919,7 @@ def scan(
         "saturation_threshold_frac": SATURATION_FRAC,
         "command_height": COMMAND_HEIGHT,
         "eval_seed": eval_seed,
+        "scan_mode": scan_mode,
         "naconmax_per_env": naconmax_per_env,
         "njmax": int(env._config.sim.njmax),
         "warnings": command_box_warnings(run, speeds),
@@ -1024,6 +1046,12 @@ def main() -> None:
              "speed, 86 of them on a complete scan. The default puts the cell "
              "axis in the batch and dispatches once per speed",
     )
+    ap.add_argument(
+        "--scan", choices=["clean", "dark"], default="clean",
+        help="what the actor's height scan carries: the camera as trained "
+             "(clean), or zeros (dark), the blind fallback score of a "
+             "scan-observing policy. The critic's grid is unaffected",
+    )
     ap.add_argument("--list-cells", action="store_true", help="print the cells and exit")
     args = ap.parse_args()
 
@@ -1054,6 +1082,7 @@ def main() -> None:
         baseline_ref=args.baseline,
         eval_seed=args.eval_seed,
         per_cell=args.per_cell,
+        scan_mode=args.scan,
     )
     out = Path(args.out) if args.out else Path(args.run) / "terrain_scan.json"
     out.parent.mkdir(parents=True, exist_ok=True)

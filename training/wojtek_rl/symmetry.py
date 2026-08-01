@@ -16,6 +16,8 @@ against its real observation sizes at construction.
 
 import numpy as np
 
+from wojtek_rl import height_scan
+
 # paths.LEGS order (rear_left, rear_right, front_right, front_left) -> the
 # laterally mirrored leg's index.
 LEG_MIRROR = (1, 0, 3, 2)
@@ -39,6 +41,8 @@ COMPONENT_SIZES = {
     "base_height": 1,
     "actuator_force": 12,
     "foot_contact": 4,
+    "height_scan": height_scan.SIZE,
+    "height_scan_clean": height_scan.SIZE,
 }
 
 
@@ -69,6 +73,8 @@ def _phase_mirror():
 def component_mirror(name):
     """(perm, sign) arrays mirroring one observation catalog component."""
     jperm, jsign = joint_mirror()
+    # y -> -y reverses each grid row's y index; heights are unsigned.
+    sperm, ssign = height_scan.mirror_map()
     table = {
         # angular rate: pseudo-vector
         "gyro": (np.arange(3), np.array([-1.0, 1.0, -1.0])),
@@ -84,6 +90,8 @@ def component_mirror(name):
         "base_height": (np.arange(1), np.ones(1)),
         "actuator_force": (jperm, jsign),
         "foot_contact": _leg_vector_mirror(),
+        "height_scan": (sperm, ssign),
+        "height_scan_clean": (sperm, ssign),
     }
     if name not in table:
         raise KeyError(

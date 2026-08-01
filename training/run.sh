@@ -11,6 +11,7 @@ case "${1:-}" in
   pose)  shift; "$PY" -m wojtek_rl.pose_explorer "$@" ;;
   check) shift; "$PY" -m wojtek_rl.check_model_mjx "$@" ;;
   check-terrain) shift; "$PY" -m wojtek_rl.check_terrain "$@" ;;
+  friction-probe) shift; "$PY" -m wojtek_rl.friction_probe "$@" ;;  # dr.foot_friction draw vs contact, per backend
   train) shift; "$PY" -m wojtek_rl.train "$@" ;;
   # Heightfield contact overflow is a warp/GPU failure mode; this CPU smoke
   # can never see it. `check-terrain --backend warp` is the gate for that.

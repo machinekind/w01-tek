@@ -198,6 +198,26 @@ Default actor observations are `gyro`, `gravity`, `joint_pos`, `joint_vel`,
 | `task.env.terrain.pad_jitter` | `0.15` m | Spawn scatter around the pad centre. Keep it under 0.2. |
 | `task.env.terrain.init_level_frac` | `0.5` | First spawns come from the easiest half of the rows. |
 | `task.env.terrain.demote_fraction` | `0.5` | Drop a level when the episode walked less than this fraction of the distance its commands asked for over a full episode. |
+| `task.env.height_scan.enable` | `false` | Add the body-frame terrain-height grid to the observation catalog: `height_scan_clean` (fresh, unmasked) for the critic and `height_scan` (masked, held, optionally corrupted) for the actor. Terrain only: on the flat scene both components read zero. Naming either component in an obs list with this off is an error. |
+| `task.env.height_scan.x_range` | `[0.65, 1.45]` m | Body-frame forward extent of the grid. |
+| `task.env.height_scan.y_range` | `[-0.3, 0.3]` m | Body-frame lateral extent of the grid. |
+| `task.env.height_scan.nx` / `.ny` | `5` / `5` | Grid points per axis, index `ix*ny + iy`. The observation width and its mirror map are sized for 5×5, so another grid needs `wojtek_rl/height_scan.py` changed too. |
+| `task.env.height_scan.clip` | `0.3` m | Each value is the terrain height minus the lowest foot's world z, clipped to `±clip`. |
+| `task.env.height_scan.hold_steps` | `3` | Control steps between camera captures (a 15 Hz depth stream under the 50 Hz policy). Each env starts on a random phase. |
+| `task.env.height_scan.delay_steps` | `1` | Control steps between a capture and its arrival in the actor's buffer. Must be under `hold_steps`. |
+| `task.env.height_scan.dark` | `false` | Feed the actor zeros while the critic still sees the grid. |
+| `task.env.height_scan.mask.enable` | `true` | Zero the points an analytic camera frustum cannot see. The frustum follows the full base orientation, so pitching the nose up blinds the near rows. |
+| `task.env.height_scan.mask.mount` | `[0.32, 0.0, 0.07]` m | Body-frame camera position. |
+| `task.env.height_scan.mask.pitch_deg` | `15.0` | Downward tilt of the optical axis from the body x-axis. |
+| `task.env.height_scan.mask.hfov_deg` / `.vfov_deg` | `90.7` / `61.2` | Field of view: a D435 depth stream at 424×240 (`fx=fy=209`). |
+| `task.env.height_scan.mask.min_depth` / `.max_depth` | `0.3` / `3.0` m | Usable depth band; points outside it are invisible. |
+| `task.env.height_scan.corrupt.enable` | `false` | Apply the sensor-failure model to the actor's copy. Off, the actor still gets the masked and stale grid. |
+| `task.env.height_scan.corrupt.noise_prob` | `0.6` | Episode draws iid gaussian noise of `noise_std`. |
+| `task.env.height_scan.corrupt.drift_prob` | `0.3` | Episode draws a fixed offset `drift_z + drift_tilt * (x - x_min)` over the grid's body-frame x. |
+| `task.env.height_scan.corrupt.blackout_prob` | `0.1` | Episode reads all zeros. |
+| `task.env.height_scan.corrupt.noise_std` | `0.02` m | Noise-regime standard deviation. |
+| `task.env.height_scan.corrupt.drift_z` / `.drift_tilt` | `0.05` / `0.05` | Drift offset and ramp are drawn uniformly from `±` these, once per episode. |
+| `task.env.height_scan.corrupt.dropout_prob` | `0.05` | Per-point chance of reading zero, in the noise and drift regimes. |
 | `task.env.fall.min_height` | `0.06` m | Fall threshold. |
 | `task.env.fall.max_tilt_gz` | `-0.4` | Fall tilt threshold in body-frame gravity z. |
 | `task.env.gait.freq` | `[1.4, 3.0]` Hz | Clock frequency range from slow walking to maximum command speed. |
@@ -216,6 +236,10 @@ Default actor observations are `gyro`, `gravity`, `joint_pos`, `joint_vel`,
 | `task.env.reward.apex_target` | `0.05` m | Per-swing peak-clearance target that `feet_apex` pays at touchdown. |
 | `task.env.reward.glide_height` | `0.03` m | Pre-contact clearance band in which `feet_landing` prices downward foot speed; a foot above the band contributes nothing. |
 | `task.env.reward.orientation_tol_deg` | `0.0` | Tolerance cone around upright for the `orientation` penalty, half-angle in degrees. The penalty becomes `max(sin^2(tilt) - sin^2(tol), 0)`: zero inside the cone, rising continuously from its edge. `0` is the bit-exact legacy penalty. |
+| `task.env.reward.terrain_gate.enable` | `false` | Scale the gait shaping with the terrain under and just ahead of the robot: `feet_apex` and `high_step` are multiplied by the gate, `feet_landing` is discounted by `landing_soften`. Terrain only; off, every factor is the literal `1.0` and the terms are unchanged. |
+| `task.env.reward.terrain_gate.floor` | `0.15` | Fraction of the lift shaping that pays on flat ground. |
+| `task.env.reward.terrain_gate.rough_ref` | `0.05` m | Local height spread at which the gate reaches 1. Roughness is `max - min` of the surface over the four foot positions plus a 3×3 body-frame strip at `x ∈ {0.17, 0.33, 0.5}`, `y ∈ {-0.2, 0, 0.2}`. |
+| `task.env.reward.terrain_gate.landing_soften` | `0.5` | Fraction of the `feet_landing` charge that roughness removes, so a foot may be planted hard on a riser. |
 
 Joystick reward-scale defaults:
 
@@ -356,6 +380,16 @@ Example enabling every expanded model randomization:
   'dr.dof.armature=[0.9,1.1]' 'dr.dof.frictionloss=[0.9,1.1]' \
   dr.foot_friction.enable=true 'dr.foot_friction.range=[0.8,1.2]' \
   dr.motor_strength.enable=true 'dr.motor_strength.range=[0.5,1.1]'
+```
+
+`friction-probe` checks the foot-friction draw end to end on the backend the
+box has: it samples per-foot multipliers, stands the robot on the flat floor
+and compares each foot-floor contact's friction with the draw. Equal-priority
+geoms combine friction with an element-wise max, so without the priority fix
+a draw below the floor's 0.9 would never reach the contact.
+
+```bash
+./training/run.sh friction-probe --backend warp --num-envs 8 --range 0.4 1.35
 ```
 
 ### Latency and encoder randomization
@@ -547,7 +581,16 @@ report from it. `training/hpc/terrain_scan.slurm` is the parameterized job.
 ./training/run.sh terrain-scan --run runs/wojtek_terrain_v2 \
   --baseline <HF_ORGANIZATION>/wojtek-terrain-v1
 ./training/run.sh terrain-scan --list-cells           # the 43 cells and bars
+./training/run.sh terrain-scan --run runs/wojtek_terrain_scan_v5 --scan dark
 ```
+
+`--scan dark` feeds the actor a zero height scan on the same course, which is
+the blind fallback score of a scan-observing policy; the critic's grid is
+untouched. The mode is recorded in the document as `scan_mode`, so a dark scan
+is not mistaken for a clean one. Either way the measurement env turns the
+sensor's corruption model off (`height_scan.corrupt.enable=false`) and keeps
+the camera mask and the sample-and-hold, so the score measures the sensor as
+built rather than one draw from its failure distribution.
 
 The course, per cell: spawn at the tile centre on a fixed heading, walk out
 until the base is 1.45 m from the centre (one crossing), then the commanded
@@ -752,6 +795,9 @@ so command-line values can still override it.
 | `terrain_blind_v1` | joystick | Verification only — the preset the 2026-07-27 GPU validation session ran; do not launch a real terrain run from it. Terrain policies never start from a flat keeper: the family starts from scratch with the IMU in the observations, and terrain policies fine-tune from terrain policies only (family rule, 2026-07-27). This preset keeps the kp80c obs layout (no IMU) so that session could restore the kp80c checkpoint. Its measured warp budgets carry over to the real terrain preset. |
 | `terrain_blind_v2` | joystick | The terrain family's founding preset, and the one to launch a real terrain run from; `terrain_blind_v1` is its verification-only predecessor. Blind locomotion on the tiled train arena, trained from scratch with the IMU in the observations, on the flattened phase-C kp40 operating point (`stiff_phase_c`, published as `<HF_ORGANIZATION>/wojtek-stiff-locomotion-v2`). Self-contained; does not inherit `stiff_phase_c`/`locomotion_stiff_v1`. |
 | `terrain_blind_v3` | joystick | Run two of the terrain family, from scratch: `terrain_blind_v2`'s configuration plus clean backward commands, product/relative tracking, an orientation tolerance cone, apex and landing shaping, mirrored worlds, and a flat level-0 row, at a 32 Nm torque cap. Deployable via the exported contract, which carries the 32 Nm cap; the launch clamp follows it. |
+| `terrain_blind_v4` | joystick | Run three of the terrain family, from scratch: `terrain_blind_v3`'s operating point plus wider tracking kernels, the tracking-gated gait shaping, the no-progress cut, and the far-field tracking blend. |
+| `terrain_blind_v4_1` | joystick | `terrain_blind_v4` plus foot-friction randomization, the roughness gate on the gait shaping, a slow clean-walk command draw, and the clean height scan on the critic. The actor stays on the family's 46-dim blind layout, so checkpoints interchange with `terrain_blind_v4`. |
+| `terrain_scan_v5` | joystick | `terrain_blind_v4_1` with the corrupted height scan on the actor as well (71-dim actor). Its checkpoints share nothing with the blind family. |
 
 Read the matching file in [`conf/experiment`](../wojtek_rl/conf/experiment)
 before choosing a historical version: the comments explain its intended

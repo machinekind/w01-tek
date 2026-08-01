@@ -35,7 +35,18 @@ from mujoco_playground._src.wrapper import (
     Wrapper,
 )
 
-from wojtek_rl import terrain_env
+from wojtek_rl import height_scan, symmetry, terrain_env
+
+
+def _component_slice(names, target):
+    """Where `target` sits in a concatenated observation, or None."""
+    offset = 0
+    for name in names:
+        size = symmetry.COMPONENT_SIZES[name]
+        if name == target:
+            return slice(offset, offset + size)
+        offset += size
+    return None
 
 
 def wrap_for_terrain_brax_training(
@@ -63,13 +74,15 @@ def wrap_for_terrain_brax_training(
 
 class TerrainAutoResetWrapper(Wrapper):
     """Restores the cached first state on done, like ``BraxAutoResetWrapper``,
-    then moves the base to the new curriculum spawn. The cached obs stays
-    correct after the move: no observation contains world position or
-    heading."""
+    then moves the base to the new curriculum spawn. Every cached observation
+    but the height scan stays correct after the move: nothing else carries
+    world position or heading. The scan is recomputed for the new pose below,
+    and only when the env has one."""
 
     def __init__(self, env: Any):
         super().__init__(env)
         base = env.unwrapped
+        self._base = base
         self._origin_xy = base._terrain.origin_xy
         self._pad_h = base._terrain.pad_h
         self._n_rows = base._terrain.n_rows
@@ -85,6 +98,24 @@ class TerrainAutoResetWrapper(Wrapper):
         self._episode_length = int(
             getattr(env, "episode_length", base._config.episode_length)
         )
+        # Static, so an env without a live scan adds no scan work to its step.
+        self._scan_live = bool(getattr(base, "_scan_live", False))
+        if self._scan_live:
+            hs = base._config.height_scan
+            self._scan_corrupt = hs.corrupt
+            self._hold_steps = int(hs.hold_steps)
+            self._quat_adr = int(base._sensor_adr["orientation"])
+            self._actor_scan = (
+                None if hs.dark
+                else _component_slice(base.actor_obs_names, "height_scan")
+            )
+            self._critic_scan = _component_slice(
+                base._config.obs.privileged, "height_scan_clean"
+            )
+            self._scan_mirror = (
+                jp.array(height_scan.mirror_map()[0])
+                if base._config.symmetry.enable else None
+            )
 
     def reset(self, rng: jax.Array) -> mjx_env.State:
         state = self.env.reset(rng)
@@ -114,6 +145,65 @@ class TerrainAutoResetWrapper(Wrapper):
         spawn_out = jp.where(done, new_xy, spawn_xy)
         rng_out = jp.where(done, rng2, rng)
         return qpos, level_out, spawn_out, rng_out
+
+    def _scan_pose(self, teleport_data, new_qpos, cached_qpos):
+        """The teleported pose as the scan reads it.
+
+        The next physics step is what recomputes kinematics and sensors, so
+        the base orientation and the foot heights the scan needs are written
+        here. Spawn quaternions are yaw-only, and a yaw rotation about the
+        base leaves every geom's height above it unchanged, so shifting z by
+        the base's own shift is exact.
+        """
+        adr = self._quat_adr
+        dz = (new_qpos[:, 2] - cached_qpos[:, 2])[:, None]
+        return teleport_data.replace(
+            sensordata=teleport_data.sensordata.at[:, adr : adr + 4].set(
+                new_qpos[:, 3:7]
+            ),
+            geom_xpos=teleport_data.geom_xpos.at[:, :, 2].add(dz),
+        )
+
+    def _respawn_scan(self, info, done, scan_data):
+        """Redraw the episode's sensor corruption and refill the camera
+        buffers from the new spawn. Returns the actor and clean scans there,
+        for the observation this step serves."""
+        keys = jax.vmap(lambda k: jax.random.split(k, 4))(info["scan_rng"])
+        info["scan_rng"] = keys[:, 0]
+        c = self._scan_corrupt
+        regime, drift = jax.vmap(
+            lambda k: height_scan.sample_corruption(
+                k, c.noise_prob, c.drift_prob, c.blackout_prob,
+                c.drift_z, c.drift_tilt,
+            )
+        )(keys[:, 1])
+        regime = jp.where(done, regime, info["scan_regime"])
+        drift = jp.where(done[:, None], drift, info["scan_drift"])
+        phase = jax.vmap(
+            lambda k: jax.random.randint(k, (), 0, self._hold_steps)
+        )(keys[:, 2])
+        scan = jax.vmap(self._base._scan_actor)(
+            scan_data, keys[:, 3], regime, drift
+        )
+        clean = jax.vmap(lambda d: self._base._scan_raw(d)[0])(scan_data)
+        info["scan_regime"] = regime
+        info["scan_drift"] = drift
+        info["scan_step"] = jp.where(done, phase, info["scan_step"])
+        info["scan_hold"] = jp.where(done[:, None], scan, info["scan_hold"])
+        info["scan_pending"] = jp.where(
+            done[:, None], scan, info["scan_pending"]
+        )
+        return scan, clean
+
+    def _splice_scan(self, vector, where, values, done, mirror):
+        """Write `values` into one observation component for the done envs."""
+        if self._scan_mirror is not None:
+            values = jp.where(
+                mirror[:, None], values[:, self._scan_mirror], values
+            )
+        return vector.at[:, where].set(
+            jp.where(done[:, None], values, vector[:, where])
+        )
 
     def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
         reset_data = state.info["first_data"]
@@ -158,6 +248,19 @@ class TerrainAutoResetWrapper(Wrapper):
 
         data = jax.tree.map(where_done, teleport_data, state.data)
         obs = jax.tree.map(where_done, reset_obs, state.obs)
+        if self._scan_live:
+            scan, clean = self._respawn_scan(
+                info, done, self._scan_pose(teleport_data, new_qpos, reset_data.qpos)
+            )
+            if self._actor_scan is not None:
+                obs["state"] = self._splice_scan(
+                    obs["state"], self._actor_scan, scan, done, info["mirror"]
+                )
+            if self._critic_scan is not None:
+                obs["privileged_state"] = self._splice_scan(
+                    obs["privileged_state"], self._critic_scan, clean, done,
+                    info["mirror"],
+                )
 
         info["terrain_level"] = new_level
         info["spawn_xy"] = new_spawn_xy

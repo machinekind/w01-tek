@@ -1,0 +1,178 @@
+# @package _global_
+# terrain_scan_v5 -- terrain_blind_v4_1's configuration with the height scan
+# on the actor as well: the masked, held, corrupted 25-point grid joins the
+# 46-dim blind layout, so the actor observation is 71-dim and shares no
+# checkpoint with the blind family. The critic keeps the clean grid.
+# The corruption model (noise / drift / blackout, plus dropout) is what stops
+# the policy from trusting a grid the real camera cannot always deliver;
+# without it a scan-observing policy has no reason to keep a blind fallback.
+# Launch notes:
+#   ./training/run.sh build-terrain --arena train --flat-row   # generated,
+#     gitignored; the --flat-row build and terrain.flat_row must agree, and
+#     train.slurm needs FLAT_ROW=1 for its in-job build.
+#   XLA_PYTHON_CLIENT_PREALLOC=false ./training/run.sh train \
+#     +experiment=terrain_scan_v5
+# PREALLOC=false is mandatory on terrain, not a tuning preference. train.py
+# pins ppo.num_resets_per_eval=0 whenever terrain is on.
+# DEPLOYMENT: the exported schema-2 contract carries max_torque=32 and the
+# launch clamp follows it. The runtime must also feed the height_scan
+# component named in the exported obs_layout.
+defaults:
+  - override /task: joystick
+
+task:
+  env:
+    action_scale: [0.25, 0.5, 0.5]
+    pd_kp: 40.0
+    pd_kd: 1.6
+    max_torque: 32.0
+    abduction_ctrl_limit: 0.44
+    knee_target_max: 3.15
+    latency:
+      enable: true
+    encoder:
+      enable: true
+    symmetry:
+      enable: true
+      mirror_prob: 0.5
+    no_progress:
+      enable: true
+      grace_sec: 2.0
+      ema_sec: 1.0
+      risk_below: 0.5
+      p_max: 0.02
+    obs:
+      state:
+        - gyro
+        - gravity
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+        - phase
+        - height_scan
+      # The blind family's actor layout plus the scan: 46 + 25 = 71 dims.
+      # Before this can run on the robot, the deployment side has to wire
+      # the CANdle-hat BMI and the depth camera into the policy node.
+      include:
+        - gyro
+        - gravity
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+        - height_scan
+      privileged:
+        - gyro
+        - gravity
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+        - phase
+        - linvel
+        - foot_contact
+        - height_scan_clean
+    height_scan:
+      enable: true
+      corrupt:
+        enable: true
+    command:
+      vx: [-0.8, 1.2]
+      vy: [-0.5, 0.5]
+      wz: [-1.5, 1.5]
+      height: [0.10, 0.16]
+      zero_prob: 0.25
+      pure_wz_prob: 0.25
+      pure_vy_prob: 0.2
+      arc_prob: 0.2
+      arc_vx: [0.3, 0.8]
+      pure_slow_prob: 0.1
+      slow_vx: [0.15, 0.35]
+      # A draw probability, not a realized share: the zero overwrite
+      # runs last, so 0.2 lands at 0.15 of commands as clean backward.
+      pure_back_prob: 0.2
+      back_vx: [-0.8, -0.2]
+    push:
+      vel: 0.8
+    gait:
+      swing_height: 0.08
+      air_time_cap: 0.35
+    reward:
+      tracking_rel_sigma: 0.5
+      tracking_rel_floor_ang: 0.7
+      tracking_far_weight: 0.25
+      tracking_far_sigma: 2.5
+      pose_leg_weight: 0.1
+      tracking_product: true
+      tracking_relative: true
+      shaping_tracking_gate: true
+      torque_limit_frac: 0.25
+      orientation_tol_deg: 20.0
+      apex_target: 0.05
+      terrain_gate:
+        enable: true
+        floor: 0.15
+        rough_ref: 0.05
+        landing_soften: 0.5
+      scales:
+        tracking_lin_vel: 4.0
+        tracking_ang_vel: 2.4
+        height_tracking: 1.0
+        lin_vel_z: 0.0
+        ang_vel_xy: 0.0
+        orientation: -5.0
+        torques: -6.0e-4
+        torque_rate: -0.02
+        torque_limit: -0.2
+        action_rate: -0.25
+        action_accel: 0.0
+        energy: 0.0
+        pose: -1.0
+        feet_air_time: 4.0
+        feet_slip: -0.35
+        feet_phase: 0.0
+        contact_match: 0.0
+        feet_apex: 5.0
+        feet_landing: -0.5
+        high_step: 4.0
+        stand_still: -2.5
+        stand_feet_down: -30.0
+        termination: -1.0
+    terrain:
+      enable: true
+      arena: train
+      flat_row: true
+    fall:
+      # A lying robot is the expensive simulation state and the source of
+      # every heightfield contact overflow; it carries no locomotion signal.
+      # The check is analytic (height lookup), so the chessboard gaps in the
+      # base collider cannot be rested on undetected.
+      on_base_contact: true
+    sim:
+      # Floor from the robot's collision set: 29 geoms that can pair with
+      # the heightfield (20 leg geoms + the 9-cell base chessboard), 4
+      # contacts each. A measured walking scan peaked at 12 contacts/env
+      # against the previous 88 pool with nothing tripped.
+      naconmax_per_env: 116
+      # The worst measured nefc_max was 228, in forced-fall states on the
+      # eval arena with the 2-box base; the 9-cell chessboard can put more
+      # (smaller) contacts down in fall states, so the margin is widened
+      # until check-terrain measures the new plant.
+      njmax: 640
+
+dr:
+  motor_strength: { enable: true, range: [0.5, 1.1] }
+  joint_gains: { enable: true, gain_pct: 0.2, kd_pct: 0.2 }
+  # Per-foot-geom multiplier, and the feet take contact priority, so this
+  # draw is the contact friction the policy actually walks on.
+  foot_friction: { enable: true, range: [0.4, 1.35] }
+
+ppo:
+  # terrain_lvl_train is the curriculum signal. The eval env starts fresh at
+  # every evaluation, so its terrain_lvl never climbs (configuration.md,
+  # Terrain curriculum).
+  log_training_metrics: true
+  num_timesteps: 2000000000
+
+run_name: wojtek_terrain_scan_v5

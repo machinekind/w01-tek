@@ -12,7 +12,7 @@ from ml_collections import config_dict
 from mujoco import mjx
 from mujoco_playground._src import mjx_env
 
-from wojtek_rl import paths
+from wojtek_rl import height_scan, paths
 from wojtek_rl import terrain_env
 from wojtek_rl.base import ABDUCTION_ACTUATORS, KNEE_ACTUATORS, WojtekEnv
 
@@ -32,6 +32,11 @@ WALK_PHASE = (0.0, np.pi, 1.5 * np.pi, 0.5 * np.pi)
 # every second joint, dthird = 2*dsecond on every third joint.
 HEIGHT_TABLE = (0.084, 0.094, 0.106, 0.121, 0.139, 0.160, 0.182)
 DSECOND_TABLE = (-0.45, -0.30, -0.15, 0.0, 0.15, 0.30, 0.45)
+
+# Body-frame xy of the strip the terrain gate measures roughness over,
+# alongside the four foot positions.
+GATE_STRIP_X = (0.17, 0.33, 0.5)
+GATE_STRIP_Y = (-0.2, 0.0, 0.2)
 
 
 def default_config() -> config_dict.ConfigDict:
@@ -220,6 +225,48 @@ def default_config() -> config_dict.ConfigDict:
             # of its commanded distance.
             demote_fraction=0.5,
         ),
+        # Body-frame grid of terrain heights ahead of the robot, relative to
+        # the lowest foot. Terrain only: on the flat scene there is no
+        # surface to sample and both components read zero. The critic gets
+        # the clean grid, the actor a masked, stale, optionally corrupted
+        # copy; height_scan.py has the geometry and the corruption model.
+        height_scan=config_dict.create(
+            enable=False,
+            x_range=(0.65, 1.45),
+            y_range=(-0.3, 0.3),
+            nx=5,
+            ny=5,
+            clip=0.3,
+            # Sample-and-hold: a capture every hold_steps control steps
+            # reaches the actor delay_steps later, so a 15 Hz camera under
+            # the 50 Hz policy holds each frame for three steps.
+            hold_steps=3,
+            delay_steps=1,
+            # Feed the actor zeros while the critic still sees the grid.
+            dark=False,
+            mask=config_dict.create(
+                enable=True,
+                # Body-frame camera mount and its downward optical-axis
+                # pitch. The angles are a D435 depth stream at 424x240
+                # (fx=fy=209); the depth range is the usable band.
+                mount=(0.32, 0.0, 0.07),
+                pitch_deg=15.0,
+                hfov_deg=90.7,
+                vfov_deg=61.2,
+                min_depth=0.3,
+                max_depth=3.0,
+            ),
+            corrupt=config_dict.create(
+                enable=False,
+                noise_prob=0.6,
+                drift_prob=0.3,
+                blackout_prob=0.1,
+                noise_std=0.02,
+                drift_z=0.05,
+                drift_tilt=0.05,
+                dropout_prob=0.05,
+            ),
+        ),
         # EMA low-pass on actions before the PD targets (0 = off). Kills the
         # noise-driven standing limit cycle structurally; mirror the same
         # one-liner on the robot when deploying a policy trained with it.
@@ -377,6 +424,14 @@ def default_config() -> config_dict.ConfigDict:
             # penalty prices the body pitch that climbing requires; a
             # nosedive stays far outside any cone worth setting.
             orientation_tol_deg=0.0,
+            # Scale the gait shaping with the roughness under and just ahead
+            # of the robot: `floor` of it on flat ground, all of it once the
+            # local height spread reaches `rough_ref`. landing_soften
+            # discounts the feet_landing charge by the same measure, so a
+            # foot may be planted hard on a riser. Terrain only.
+            terrain_gate=config_dict.create(
+                enable=False, floor=0.15, rough_ref=0.05, landing_soften=0.5
+            ),
             scales=config_dict.create(
                 tracking_lin_vel=1.5,
                 tracking_ang_vel=0.8,
@@ -514,6 +569,42 @@ class WojtekJoystick(WojtekEnv):
             self._anchor_heights = jp.array(heights)
             self._anchor_poses = jp.array(poses)
             self._anchor_dsecond = jp.array(dsecond)
+        hs = self._config.height_scan
+        self._scan_enabled = bool(hs.enable)
+        # The exporter rebuilds this env on the flat scene, so an enabled
+        # scan still has to assemble without a height lookup.
+        self._scan_live = self._scan_enabled and self._terrain_enabled
+        named = {"height_scan", "height_scan_clean"} & (
+            set(self._config.obs.state)
+            | set(self._config.obs.get("include", ()))
+            | set(self._config.obs.privileged)
+        )
+        if named and not self._scan_enabled:
+            raise ValueError(
+                f"obs lists name {sorted(named)} but "
+                "task.env.height_scan.enable is false"
+            )
+        if self._scan_enabled:
+            if (hs.nx, hs.ny) != (height_scan.NX, height_scan.NY):
+                raise ValueError(
+                    f"height_scan grid {hs.nx}x{hs.ny}: the observation "
+                    f"component and its mirror map are sized for "
+                    f"{height_scan.NX}x{height_scan.NY}"
+                )
+            # Capture and promotion share a tick when the delay reaches the
+            # hold, which would make the buffer neither stale nor fresh.
+            if not 0 <= hs.delay_steps < hs.hold_steps:
+                raise ValueError(
+                    f"height_scan.delay_steps ({hs.delay_steps}) must be in "
+                    f"[0, hold_steps={hs.hold_steps})"
+                )
+            self._scan_grid = jp.array(
+                height_scan.body_grid(hs.x_range, hs.y_range, hs.nx, hs.ny)
+            )
+        if self._config.reward.terrain_gate.enable:
+            self._gate_strip = jp.array(
+                [[x, y] for x in GATE_STRIP_X for y in GATE_STRIP_Y]
+            )
         # Mirror maps for the symmetry augmentation, assembled once from
         # the resolved obs lists (so the include filter is respected).
         if self._config.symmetry.enable:
@@ -728,6 +819,63 @@ class WojtekJoystick(WojtekEnv):
         rz = g.swing_height * jp.sin(jp.pi * theta / swing_frac) * in_swing
         return rz, ~in_swing
 
+    # -- height scan --------------------------------------------------------
+    def _scan_raw(self, data):
+        """(clean scan, camera visibility mask) at the current pose."""
+        hs = self._config.height_scan
+        quat = self._quat(data)
+        xy = height_scan.world_xy(
+            self._scan_grid, data.qpos[0:2], height_scan.yaw_from_quat(quat)
+        )
+        h = self._terrain.height(xy)
+        ref_z = jp.min(data.geom_xpos[self._foot_geom_ids][:, 2])
+        clean = height_scan.scan_values(h, ref_z, hs.clip)
+        if not hs.mask.enable:
+            return clean, jp.ones_like(clean, dtype=bool)
+        m = hs.mask
+        mask = height_scan.visible_mask(
+            jp.concatenate([xy, h[:, None]], axis=-1),
+            data.qpos[0:3],
+            quat,
+            jp.array(m.mount),
+            m.pitch_deg,
+            m.hfov_deg,
+            m.vfov_deg,
+            m.min_depth,
+            m.max_depth,
+        )
+        return clean, mask
+
+    def _scan_actor(self, data, rng, regime, drift):
+        """Masked scan with the actor-side sensor corruption applied."""
+        clean, mask = self._scan_raw(data)
+        scan = clean * mask
+        c = self._config.height_scan.corrupt
+        if not c.enable:
+            return scan
+        return height_scan.apply_corruption(
+            rng, scan, regime, drift, self._scan_grid[:, 0], c.noise_std,
+            c.dropout_prob,
+        )
+
+    def _step_scan(self, data, info):
+        """Advance the sample-and-hold camera one control step: capture into
+        scan_pending every hold_steps, promote it to scan_hold delay_steps
+        later."""
+        hs = self._config.height_scan
+        rng, r_scan = jax.random.split(info["scan_rng"])
+        info["scan_rng"] = rng
+        fresh = self._scan_actor(
+            data, r_scan, info["scan_regime"], info["scan_drift"]
+        )
+        phase = info["scan_step"] % hs.hold_steps
+        pending = jp.where(phase == 0, fresh, info["scan_pending"])
+        info["scan_pending"] = pending
+        info["scan_hold"] = jp.where(
+            phase == hs.delay_steps, pending, info["scan_hold"]
+        )
+        info["scan_step"] = info["scan_step"] + 1
+
     def _phase_dt(self, command):
         """Clock increment: speed-scaled; frozen when told to stand."""
         g = self._config.gait
@@ -810,6 +958,21 @@ class WojtekJoystick(WojtekEnv):
             mirror = jax.random.bernoulli(r_mirror, sym.mirror_prob)
         else:
             mirror = jp.array(False)
+        # Height scan: the episode's corruption draw, a random capture phase
+        # so the envs are not all on the same camera tick, and both buffers
+        # seeded with the current frame (a zero seed would read as flat
+        # ground for the first hold).
+        if self._scan_live:
+            rng, r_regime, r_scan, r_phase, r_hold = jax.random.split(rng, 5)
+            hc = self._config.height_scan.corrupt
+            scan_regime, scan_drift = height_scan.sample_corruption(
+                r_regime, hc.noise_prob, hc.drift_prob, hc.blackout_prob,
+                hc.drift_z, hc.drift_tilt,
+            )
+            scan0 = self._scan_actor(data, r_scan, scan_regime, scan_drift)
+            scan_step = jax.random.randint(
+                r_phase, (), 0, self._config.height_scan.hold_steps
+            )
         info = {
             "mirror": mirror,
             "rng": rng,
@@ -854,6 +1017,15 @@ class WojtekJoystick(WojtekEnv):
             # on a flat pad and no episode has run yet.
             metrics["base_contact_alive_per_step"] = jp.zeros(())
             metrics["base_contact_at_done"] = jp.zeros(())
+        if self._scan_live:
+            info.update(
+                scan_regime=scan_regime,
+                scan_drift=scan_drift,
+                scan_rng=r_hold,
+                scan_step=scan_step,
+                scan_hold=scan0,
+                scan_pending=scan0,
+            )
         obs = self._get_obs(data, info)
         return mjx_env.State(data, obs, jp.zeros(()), jp.zeros(()), metrics, info)
 
@@ -1036,6 +1208,8 @@ class WojtekJoystick(WojtekEnv):
             terminated = done.astype(jp.float32)
             metrics["base_contact_alive_per_step"] = base_down * (1.0 - terminated)
             metrics["base_contact_at_done"] = base_down * terminated
+        if self._scan_live:
+            self._step_scan(data, info)
         obs = self._get_obs(data, info, r_noise)
         return mjx_env.State(data, obs, reward, done.astype(jp.float32), metrics, info)
 
@@ -1048,6 +1222,18 @@ class WojtekJoystick(WojtekEnv):
         catalog["command"] = info["command"]
         leg_phase = self._leg_phases(info)
         catalog["phase"] = jp.concatenate([jp.cos(leg_phase), jp.sin(leg_phase)])
+        if self._scan_enabled:
+            if not self._scan_live:
+                zeros = jp.zeros(height_scan.SIZE)
+                catalog["height_scan_clean"] = zeros
+                catalog["height_scan"] = zeros
+            else:
+                catalog["height_scan_clean"] = self._scan_raw(data)[0]
+                catalog["height_scan"] = (
+                    jp.zeros(height_scan.SIZE)
+                    if self._config.height_scan.dark
+                    else info["scan_hold"]
+                )
         return catalog
 
     def _get_obs(self, data, info, rng=None):
@@ -1193,6 +1379,30 @@ class WojtekJoystick(WojtekEnv):
             if self._config.reward.get("shaping_tracking_gate", False)
             else 1.0
         )
+        # Roughness gate (see reward.terrain_gate): the height spread under
+        # the feet and over the strip just ahead of them. Flat ground pays
+        # `floor` of the lift shaping and the full landing charge; rough
+        # ground the reverse. Both factors stay Python 1.0 when the gate is
+        # off, so the terms are the expressions they always were.
+        gate = 1.0
+        landing_soften = 1.0
+        if self._terrain_enabled and self._config.reward.terrain_gate.enable:
+            tg = self._config.reward.terrain_gate
+            strip = height_scan.world_xy(
+                self._gate_strip,
+                data.qpos[0:2],
+                height_scan.yaw_from_quat(self._quat(data)),
+            )
+            local = self._terrain.height(
+                jp.concatenate(
+                    [data.geom_xpos[self._foot_geom_ids][:, :2], strip]
+                )
+            )
+            rough = jp.clip(
+                (jp.max(local) - jp.min(local)) / tg.rough_ref, 0.0, 1.0
+            )
+            gate = tg.floor + (1.0 - tg.floor) * rough
+            landing_soften = 1.0 - tg.landing_soften * rough
 
         # sin^2 of the tilt from vertical, less the tolerance cone (see
         # reward.orientation_tol_deg). Static config, so 0 leaves the legacy
@@ -1253,7 +1463,8 @@ class WojtekJoystick(WojtekEnv):
                 * first_contact
             )
             * moving
-            * shape_gate,
+            * shape_gate
+            * gate,
             # Downward foot speed^2, gated by proximity to the floor
             # (pre-contact, so hard strikes are read before the solver
             # absorbs them). Stance feet contribute ~0 (vz ~ 0); swing
@@ -1266,10 +1477,11 @@ class WojtekJoystick(WojtekEnv):
                     1.0,
                 )
             )
-            * moving,
+            * moving
+            * landing_soften,
             "feet_phase": jp.exp(-phase_err / self._config.reward.phase_sigma)
             * moving,
-            "high_step": high_step * moving * shape_gate,
+            "high_step": high_step * moving * shape_gate * gate,
             "contact_match": contact_match * moving,
             # Position pull to the anchor plus velocity damping: L1 position
             # alone caused bang-bang fidgeting around the anchor (v2).

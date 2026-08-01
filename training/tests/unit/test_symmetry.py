@@ -13,13 +13,20 @@ FULL_STATE = [
     "phase",
 ]
 PRIVILEGED = FULL_STATE + ["linvel", "foot_contact"]
+# The terrain actor list with the height scan appended: 46 + 25 dims.
+SCAN_ACTOR = [
+    "gyro", "gravity", "joint_pos", "joint_vel", "last_act", "command",
+    "height_scan",
+]
 
 
 def _apply(perm, sign, x):
     return sign * x[perm]
 
 
-@pytest.mark.parametrize("names", [STIFF_ACTOR, FULL_STATE, PRIVILEGED])
+@pytest.mark.parametrize(
+    "names", [STIFF_ACTOR, FULL_STATE, PRIVILEGED, SCAN_ACTOR]
+)
 def test_obs_mirror_is_involution(names):
     perm, sign = symmetry.obs_mirror(names)
     n = sum(symmetry.COMPONENT_SIZES[m] for m in names)
@@ -104,6 +111,16 @@ def test_terrain_actor_layout_mirrors_every_block():
         ])
         np.testing.assert_allclose(m[base : base + 12], expected)
     np.testing.assert_allclose(m[42:46], [70.0, -71.0, -72.0, 73.0])  # command
+
+
+def test_scan_block_reverses_its_y_index_after_the_frozen_actor_layout():
+    perm, sign = symmetry.obs_mirror(SCAN_ACTOR)
+    assert perm.shape == sign.shape == (71,)
+    scan = np.arange(25.0).reshape(5, 5)  # [ix, iy]
+    x = np.concatenate([np.zeros(46), scan.reshape(-1)])
+    m = (sign * x[perm])[46:71].reshape(5, 5)
+    np.testing.assert_array_equal(m, scan[:, ::-1])
+    np.testing.assert_array_equal(sign[46:71], np.ones(25))
 
 
 # -- what the augmentation can and cannot train ----------------------------

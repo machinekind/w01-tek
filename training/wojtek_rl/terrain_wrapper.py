@@ -171,23 +171,25 @@ class TerrainAutoResetWrapper(Wrapper):
         keys = jax.vmap(lambda k: jax.random.split(k, 4))(info["scan_rng"])
         info["scan_rng"] = keys[:, 0]
         c = self._scan_corrupt
-        regime, drift = jax.vmap(
+        regime, drift, cam_jit = jax.vmap(
             lambda k: height_scan.sample_corruption(
                 k, c.noise_prob, c.drift_prob, c.blackout_prob,
-                c.drift_z, c.drift_tilt,
+                c.drift_z, c.drift_tilt, c.pitch_jitter_deg, c.mount_jitter,
             )
         )(keys[:, 1])
         regime = jp.where(done, regime, info["scan_regime"])
         drift = jp.where(done[:, None], drift, info["scan_drift"])
+        cam_jit = jp.where(done[:, None], cam_jit, info["scan_cam_jit"])
         phase = jax.vmap(
             lambda k: jax.random.randint(k, (), 0, self._hold_steps)
         )(keys[:, 2])
         scan = jax.vmap(self._base._scan_actor)(
-            scan_data, keys[:, 3], regime, drift
+            scan_data, keys[:, 3], regime, drift, cam_jit
         )
         clean = jax.vmap(lambda d: self._base._scan_raw(d)[0])(scan_data)
         info["scan_regime"] = regime
         info["scan_drift"] = drift
+        info["scan_cam_jit"] = cam_jit
         info["scan_step"] = jp.where(done, phase, info["scan_step"])
         info["scan_hold"] = jp.where(done[:, None], scan, info["scan_hold"])
         info["scan_pending"] = jp.where(

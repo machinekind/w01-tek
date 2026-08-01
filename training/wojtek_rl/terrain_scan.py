@@ -521,7 +521,8 @@ def scan_reset(env, rng, spawn_xy, pad_h, yaw, command):
         # a different tile, and both buffers feed the first observations.
         scan_rng, r_scan = jax.random.split(info["scan_rng"])
         scan = env._scan_actor(
-            data, r_scan, info["scan_regime"], info["scan_drift"]
+            data, r_scan, info["scan_regime"], info["scan_drift"],
+            info["scan_cam_jit"],
         )
         info["scan_rng"] = scan_rng
         info["scan_hold"] = scan

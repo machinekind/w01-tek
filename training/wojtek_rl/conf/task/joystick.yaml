@@ -90,5 +90,9 @@ env:
       drift_z: 0.05 # offset drawn U(+-drift_z), m
       drift_tilt: 0.05 # tilt drawn U(+-drift_tilt), m per m of grid x
       dropout_prob: 0.05 # per-cell dropout to zero in noise/drift episodes
+      # Camera pose error, drawn U(+-bound) per episode: moves the actor's
+      # mask, not the values it keeps.
+      pitch_jitter_deg: 0.0 # optical-axis pitch offset, deg
+      mount_jitter: 0.0 # mount offset per xyz axis, m
 
 ppo: {}

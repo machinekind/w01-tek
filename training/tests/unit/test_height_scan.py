@@ -199,7 +199,7 @@ def test_dropout_zeroes_some_points():
 
 def test_regime_sampling_follows_the_probabilities():
     keys = jax.random.split(jax.random.PRNGKey(0), 4000)
-    regimes, drift = jax.vmap(
+    regimes, drift, _ = jax.vmap(
         lambda k: height_scan.sample_corruption(k, 0.6, 0.3, 0.1, 0.05, 0.05)
     )(keys)
     regimes = np.asarray(regimes)
@@ -211,10 +211,69 @@ def test_regime_sampling_follows_the_probabilities():
 
 
 def test_regime_sampling_is_deterministic_per_key():
-    a = height_scan.sample_corruption(jax.random.PRNGKey(3), 0.6, 0.3, 0.1, 0.05, 0.05)
-    b = height_scan.sample_corruption(jax.random.PRNGKey(3), 0.6, 0.3, 0.1, 0.05, 0.05)
+    args = (jax.random.PRNGKey(3), 0.6, 0.3, 0.1, 0.05, 0.05, 2.5, 0.03)
+    a = height_scan.sample_corruption(*args)
+    b = height_scan.sample_corruption(*args)
     assert int(a[0]) == int(b[0])
     np.testing.assert_array_equal(np.asarray(a[1]), np.asarray(b[1]))
+    np.testing.assert_array_equal(np.asarray(a[2]), np.asarray(b[2]))
+
+
+# -- camera-pose jitter ------------------------------------------------------
+
+
+def test_camera_jitter_respects_its_bounds():
+    keys = jax.random.split(jax.random.PRNGKey(1), 2000)
+    cam = np.asarray(
+        jax.vmap(
+            lambda k: height_scan.sample_corruption(
+                k, 0.6, 0.3, 0.1, 0.05, 0.05, 2.5, 0.03
+            )[2]
+        )(keys)
+    )
+    assert cam.shape == (2000, 4)
+    assert np.abs(cam[:, 0]).max() <= 2.5
+    assert np.abs(cam[:, 1:]).max() <= 0.03
+    assert cam[:, 0].min() < -1.5 and cam[:, 0].max() > 1.5
+    assert np.all(cam[:, 1:].min(axis=0) < -0.02)
+    assert np.all(cam[:, 1:].max(axis=0) > 0.02)
+    # the three mount axes are independent draws, not one offset
+    assert not np.allclose(cam[:, 1], cam[:, 2])
+
+
+def test_zero_bounds_draw_zeros_and_leave_the_mask_untouched():
+    cam = np.asarray(
+        height_scan.sample_corruption(
+            jax.random.PRNGKey(5), 0.6, 0.3, 0.1, 0.05, 0.05
+        )[2]
+    )
+    np.testing.assert_array_equal(cam, np.zeros(4))
+    grid = height_scan.body_grid(X_RANGE, Y_RANGE)
+    points = np.concatenate([grid, np.zeros((height_scan.SIZE, 1))], axis=-1)
+    jittered = height_scan.visible_mask(
+        points, ORIGIN, UPRIGHT, MOUNT + cam[1:4],
+        CAM["pitch_deg"] + cam[0], CAM["hfov_deg"], CAM["vfov_deg"],
+        CAM["min_depth"], CAM["max_depth"],
+    )
+    np.testing.assert_array_equal(
+        np.asarray(jittered),
+        np.asarray(height_scan.visible_mask(points, ORIGIN, UPRIGHT, **CAM)),
+    )
+
+
+def test_a_pitch_offset_flips_a_cell_at_the_frustum_edge():
+    # 44 deg below the camera, just inside a lower edge at 15 + 61.2/2
+    point = np.array([[0.72, 0.0, -0.316]])
+
+    def seen(pitch_deg):
+        mask = height_scan.visible_mask(
+            point, ORIGIN, UPRIGHT, MOUNT, pitch_deg, CAM["hfov_deg"],
+            CAM["vfov_deg"], CAM["min_depth"], CAM["max_depth"],
+        )
+        return bool(mask[0])
+
+    assert seen(15.0)
+    assert not seen(15.0 - 2.5)
 
 
 # -- mirror map -------------------------------------------------------------

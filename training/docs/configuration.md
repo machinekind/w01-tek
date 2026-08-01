@@ -221,6 +221,8 @@ Default actor observations are `gyro`, `gravity`, `joint_pos`, `joint_vel`,
 | `task.env.height_scan.corrupt.noise_std` | `0.02` m | Noise-regime standard deviation. |
 | `task.env.height_scan.corrupt.drift_z` / `.drift_tilt` | `0.05` / `0.05` | Drift offset and ramp are drawn uniformly from `±` these, once per episode. |
 | `task.env.height_scan.corrupt.dropout_prob` | `0.05` | Per-point chance of reading zero, in the noise and drift regimes. |
+| `task.env.height_scan.corrupt.pitch_jitter_deg` | `0.0` | Optical-axis pitch offset drawn uniformly from `±` this, once per episode. The actor's mask (frustum and line of sight) is computed from the jittered pose; the critic's clean grid and the height values are untouched. |
+| `task.env.height_scan.corrupt.mount_jitter` | `0.0` m | Same draw for the mount position, independently per body axis. Together with the pitch these say how well the camera's pose on the robot is known. |
 | `task.env.fall.min_height` | `0.06` m | Fall threshold. |
 | `task.env.fall.max_tilt_gz` | `-0.4` | Fall tilt threshold in body-frame gravity z. |
 | `task.env.gait.freq` | `[1.4, 3.0]` Hz | Clock frequency range from slow walking to maximum command speed. |

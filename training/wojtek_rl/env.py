@@ -273,6 +273,11 @@ def default_config() -> config_dict.ConfigDict:
                 drift_z=0.05,
                 drift_tilt=0.05,
                 dropout_prob=0.05,
+                # Per-episode camera pose error, drawn U(+-bound). It moves
+                # the actor's mask (frustum and line of sight); the values
+                # inside the mask are the drift regime's business.
+                pitch_jitter_deg=0.0,
+                mount_jitter=0.0,
             ),
         ),
         # EMA low-pass on actions before the PD targets (0 = off). Kills the
@@ -828,8 +833,13 @@ class WojtekJoystick(WojtekEnv):
         return rz, ~in_swing
 
     # -- height scan --------------------------------------------------------
-    def _scan_raw(self, data):
-        """(clean scan, camera visibility mask) at the current pose."""
+    def _scan_raw(self, data, cam_jit=None):
+        """(clean scan, camera visibility mask) at the current pose.
+
+        `cam_jit` offsets the camera pose the mask is computed from,
+        (dpitch_deg, dx, dy, dz); None is the nominal mount. The clean scan
+        does not depend on it.
+        """
         hs = self._config.height_scan
         quat = self._quat(data)
         xy = height_scan.world_xy(
@@ -843,12 +853,16 @@ class WojtekJoystick(WojtekEnv):
         m = hs.mask
         points = jp.concatenate([xy, h[:, None]], axis=-1)
         mount = jp.array(m.mount)
+        pitch_deg = m.pitch_deg
+        if cam_jit is not None:
+            mount = mount + cam_jit[1:4]
+            pitch_deg = pitch_deg + cam_jit[0]
         mask = height_scan.visible_mask(
             points,
             data.qpos[0:3],
             quat,
             mount,
-            m.pitch_deg,
+            pitch_deg,
             m.hfov_deg,
             m.vfov_deg,
             m.min_depth,
@@ -864,9 +878,9 @@ class WojtekJoystick(WojtekEnv):
             )
         return clean, mask
 
-    def _scan_actor(self, data, rng, regime, drift):
+    def _scan_actor(self, data, rng, regime, drift, cam_jit=None):
         """Masked scan with the actor-side sensor corruption applied."""
-        clean, mask = self._scan_raw(data)
+        clean, mask = self._scan_raw(data, cam_jit)
         scan = clean * mask
         c = self._config.height_scan.corrupt
         if not c.enable:
@@ -884,7 +898,8 @@ class WojtekJoystick(WojtekEnv):
         rng, r_scan = jax.random.split(info["scan_rng"])
         info["scan_rng"] = rng
         fresh = self._scan_actor(
-            data, r_scan, info["scan_regime"], info["scan_drift"]
+            data, r_scan, info["scan_regime"], info["scan_drift"],
+            info["scan_cam_jit"],
         )
         phase = info["scan_step"] % hs.hold_steps
         pending = jp.where(phase == 0, fresh, info["scan_pending"])
@@ -983,11 +998,14 @@ class WojtekJoystick(WojtekEnv):
         if self._scan_live:
             rng, r_regime, r_scan, r_phase, r_hold = jax.random.split(rng, 5)
             hc = self._config.height_scan.corrupt
-            scan_regime, scan_drift = height_scan.sample_corruption(
+            scan_regime, scan_drift, scan_cam_jit = height_scan.sample_corruption(
                 r_regime, hc.noise_prob, hc.drift_prob, hc.blackout_prob,
-                hc.drift_z, hc.drift_tilt,
+                hc.drift_z, hc.drift_tilt, hc.pitch_jitter_deg,
+                hc.mount_jitter,
             )
-            scan0 = self._scan_actor(data, r_scan, scan_regime, scan_drift)
+            scan0 = self._scan_actor(
+                data, r_scan, scan_regime, scan_drift, scan_cam_jit
+            )
             scan_step = jax.random.randint(
                 r_phase, (), 0, self._config.height_scan.hold_steps
             )
@@ -1039,6 +1057,7 @@ class WojtekJoystick(WojtekEnv):
             info.update(
                 scan_regime=scan_regime,
                 scan_drift=scan_drift,
+                scan_cam_jit=scan_cam_jit,
                 scan_rng=r_hold,
                 scan_step=scan_step,
                 scan_hold=scan0,

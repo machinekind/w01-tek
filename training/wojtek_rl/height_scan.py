@@ -122,10 +122,16 @@ def occluded_mask(points, cam_pos, height_fn, num_samples, margin, xp=jp):
 
 
 def sample_corruption(
-    rng, noise_prob, drift_prob, blackout_prob, drift_z, drift_tilt
+    rng, noise_prob, drift_prob, blackout_prob, drift_z, drift_tilt,
+    pitch_jitter_deg=0.0, mount_jitter=0.0,
 ):
-    """(regime, (drift_z, drift_tilt)) for one episode."""
-    r_regime, r_drift = jax.random.split(rng)
+    """(regime, (drift_z, drift_tilt), (dpitch_deg, dx, dy, dz)) per episode.
+
+    The last vector is the camera pose the actor's mask is computed from,
+    as an offset from the nominal mount. It moves what the mask keeps, not
+    the values themselves; zero bounds draw exact zeros.
+    """
+    r_regime, r_drift, r_cam = jax.random.split(rng, 3)
     probs = jp.array([noise_prob, drift_prob, blackout_prob])
     regime = jax.random.choice(r_regime, 3, p=probs / jp.sum(probs))
     drift = jax.random.uniform(
@@ -134,7 +140,11 @@ def sample_corruption(
         minval=jp.array([-drift_z, -drift_tilt]),
         maxval=jp.array([drift_z, drift_tilt]),
     )
-    return regime.astype(jp.int32), drift
+    bound = jp.array(
+        [pitch_jitter_deg, mount_jitter, mount_jitter, mount_jitter]
+    )
+    cam_jit = jax.random.uniform(r_cam, (4,), minval=-bound, maxval=bound)
+    return regime.astype(jp.int32), drift, cam_jit
 
 
 def apply_corruption(

@@ -411,3 +411,52 @@ def test_flat_ground_sees_everything_the_frustum_does(scan_env):
     seen, frustum = _both_masks(scan_env, data)
     np.testing.assert_array_equal(seen, frustum)
     assert frustum.any()
+
+
+# -- 6. per-episode camera-pose jitter ----------------------------------------
+
+
+def _cam_draws(n, pitch_jitter_deg, mount_jitter, key=0):
+    """The camera-pose offset n episodes would draw at these bounds."""
+    return jax.vmap(
+        lambda k: height_scan.sample_corruption(
+            k, 0.6, 0.3, 0.1, 0.05, 0.05, pitch_jitter_deg, mount_jitter
+        )[2]
+    )(jax.random.split(jax.random.PRNGKey(key), n))
+
+
+def test_camera_jitter_moves_the_actor_mask_not_the_clean_grid(scan_env):
+    """Episodes that drew different camera poses mask different cells at one
+    robot pose. The grid the critic reads is the same for all of them: the
+    jitter is a visibility error, not a measurement error."""
+    state = jax.jit(scan_env.reset)(jax.random.PRNGKey(0))
+    assert state.info["scan_cam_jit"].shape == (4,)
+    stairs_xy = _tile_xy(scan_env, TERRAIN_ROWS, "pyramid_stairs")
+    data = _teleport(scan_env, state, stairs_xy + np.array([-0.25, 0.0]), 0.0)
+    scans = [scan_env._scan_raw(data, jit) for jit in _cam_draws(8, 10.0, 0.05)]
+    cleans = np.array([np.asarray(clean) for clean, _ in scans])
+    masks = np.array([np.asarray(mask) for _, mask in scans])
+    np.testing.assert_array_equal(cleans, np.broadcast_to(cleans[0], cleans.shape))
+    assert np.any(masks != masks[0]), masks
+
+
+def test_zero_jitter_is_bitwise_the_unjittered_scan(scan_env):
+    """The default bounds draw exact zeros, and adding zero to the mount and
+    the pitch is exact, so every capture is the array the unjittered pose
+    produces. scan_hold only ever holds one of these captures."""
+    step = jax.jit(scan_env.step)
+    state = jax.jit(scan_env.reset)(jax.random.PRNGKey(0))
+    for _ in range(4):
+        cam_jit = state.info["scan_cam_jit"]
+        np.testing.assert_array_equal(np.asarray(cam_jit), np.zeros(4))
+        args = (
+            state.data,
+            jax.random.split(state.info["scan_rng"])[1],
+            state.info["scan_regime"],
+            state.info["scan_drift"],
+        )
+        np.testing.assert_array_equal(
+            np.asarray(scan_env._scan_actor(*args, cam_jit)),
+            np.asarray(scan_env._scan_actor(*args)),
+        )
+        state = step(state, jp.zeros(12))

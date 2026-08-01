@@ -77,6 +77,10 @@ task:
       enable: true
       corrupt:
         enable: true
+        # The camera's true pose on the robot is only known to about this
+        # much, so the policy must not learn one exact frustum.
+        pitch_jitter_deg: 2.5
+        mount_jitter: 0.03
     command:
       vx: [-0.8, 1.2]
       vy: [-0.5, 0.5]

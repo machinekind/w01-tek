@@ -189,6 +189,27 @@ def cell_entry(cell, speed: float, result: CellResult) -> dict:
     }
 
 
+def cell_lines() -> list[str]:
+    """One line per cell: name, row, difficulty, realized dimension, bar.
+
+    What `--list-cells` prints. The video probe lists the same names from here,
+    so the two tools cannot disagree about what a cell is called.
+    """
+    lines = []
+    for c in terrain_suite.CELLS:
+        value, unit = terrain_suite.realized_dimension(c.terrain_type, c.difficulty)
+        bar = (
+            "tracked" if c.tracked else
+            f"{c.bar:.0%} ({terrain_suite.bar_count(c.bar)}"
+            f"/{terrain_suite.RUNS_PER_CELL_SPEED})"
+        )
+        lines.append(
+            f"{c.name:34s} row {c.row:2d}  d={c.difficulty:.6f}  "
+            f"{value:5.1f} {unit:3s}  {bar}"
+        )
+    return lines
+
+
 def gated_pairs(cells=terrain_suite.CELLS, speeds=terrain_suite.SPEEDS) -> int:
     """How many (cell, speed) pairs a complete scan gates."""
     return sum(1 for c in cells if not c.tracked) * len(speeds)
@@ -407,6 +428,11 @@ def check_arena(spec: dict) -> None:
         )
 
 
+def check_arena_of(env) -> None:
+    """`check_arena` on the arena an env actually loaded."""
+    check_arena(json.loads(env._terrain.files["spec"].read_text()))
+
+
 def command_box_warnings(run: dict, speeds=terrain_suite.SPEEDS) -> list[str]:
     """Commanded speeds and heights this run never trained on.
 
@@ -435,7 +461,7 @@ def command_box_warnings(run: dict, speeds=terrain_suite.SPEEDS) -> list[str]:
 # -- the rollout ---------------------------------------------------------------
 
 
-def _spawn_table(env, cell) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def spawn_table(env, cell) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """(centre, spawn_xy, yaw, pad_height) for one cell's runs, in COURSE order.
 
     Offsets run along the heading, so what varies is where in the tread cycle
@@ -774,7 +800,7 @@ def _rollout_per_cell(runner, env, cells, speeds, deadlines, budgets, eval_seed)
 
     entries, env_steps = {}, 0
     for cell in cells:
-        centre, spawn, yaw, pad_h = _spawn_table(env, cell)
+        centre, spawn, yaw, pad_h = spawn_table(env, cell)
         per_speed = {}
         for speed in speeds:
             out = runner(
@@ -805,7 +831,7 @@ def _rollout_batched(runner, env, cells, speeds, deadlines, budgets, eval_seed):
 
     runs = terrain_suite.RUNS_PER_CELL_SPEED
     keys = jp.stack([cell_key(c, eval_seed) for c in cells])
-    tables = [_spawn_table(env, c) for c in cells]
+    tables = [spawn_table(env, c) for c in cells]
     centre, spawn, yaw, pad_h = [np.concatenate(x) for x in zip(*tables)]
 
     entries = {c.name: {} for c in cells}

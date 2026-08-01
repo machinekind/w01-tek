@@ -1,6 +1,12 @@
 """Render a checkpoint walking, with torque bars and the onboard depth view.
 
 Run: ./run.sh video-probe --run runs/<name> --arena train --seconds 8
+     ./run.sh video-probe --run runs/<name> --cell pyramid_stairs_5cm --vx 0.4
+
+`--cell` films one cell of the measurement suite: the eval arena, the spawn
+terrain-scan gives that cell's first course run, and the commanded speed held
+at `--vx` so the robot walks out into the obstacle. Falling is a result, not a
+failure of the tool -- the clip ends where the episode does.
 
 Three overlays on one chase-camera frame:
 
@@ -28,7 +34,7 @@ from pathlib import Path
 
 import numpy as np
 
-from wojtek_rl import height_scan, paths
+from wojtek_rl import height_scan, paths, terrain_scan, terrain_suite
 
 HEIGHT_CMD = 0.125
 DEPTH_WINDOW = (0.3, 3.0)  # colormap window, m
@@ -285,11 +291,16 @@ def main() -> None:
         description="Render a checkpoint walking, with torque bars and the "
         "onboard depth view."
     )
-    ap.add_argument("--run", required=True)
+    ap.add_argument("--run", default=None, help="required unless --list-cells")
     ap.add_argument(
-        "--arena", choices=["flat", "train", "eval"], default="train",
+        "--arena", choices=["flat", "train", "eval"], default=None,
         help="flat forces the flat scene; train/eval render on that terrain "
-        "arena (terrain runs only)",
+        "arena (terrain runs only). Default train, or eval with --cell",
+    )
+    ap.add_argument(
+        "--cell", default=None,
+        help="film one measurement cell of the eval arena, at the spawn "
+        "terrain-scan uses for it (implies --arena eval)",
     )
     ap.add_argument("--seconds", type=float, default=8.0)
     ap.add_argument("--fps", type=float, default=25.0)
@@ -301,7 +312,25 @@ def main() -> None:
         "track_far, higher and farther out",
     )
     ap.add_argument("--out", default=None)
+    ap.add_argument(
+        "--list-cells", action="store_true", help="print the cells and exit"
+    )
     args = ap.parse_args()
+
+    if args.list_cells:
+        for line in terrain_scan.cell_lines():
+            print(line)
+        return
+    if not args.run:
+        ap.error("--run is required")
+    if args.cell and args.arena:
+        ap.error("--cell already selects the eval arena; drop --arena")
+    cell = None
+    if args.cell:
+        cell = terrain_suite.CELLS_BY_NAME.get(args.cell)
+        if cell is None:
+            ap.error(f"unknown cell {args.cell!r}; --list-cells prints them all")
+    arena = args.arena or ("eval" if cell else "train")
 
     import jax
     import jax.numpy as jp
@@ -309,25 +338,34 @@ def main() -> None:
 
     from wojtek_rl.battery import load_checkpoint_policy, torque_cap_of
 
-    flat = args.arena == "flat"
+    flat = arena == "flat"
     overrides = {"sim": {"backend": "jax", "num_envs": 1}}
     if not flat:
         # A pinned spawn pad: this renders one episode, and jitter only makes
         # it irreproducible.
         overrides["terrain"] = {
-            "enable": True, "arena": args.arena, "pad_jitter": 0.0,
+            "enable": True, "arena": arena, "pad_jitter": 0.0,
         }
+    if cell is not None:
+        overrides["terrain"]["spawn_yaw"] = False
+        # The clip holds one command; the env's own resample would hand the
+        # actor a different one halfway up the obstacle.
+        overrides["command"] = {"resample_steps": 10**9}
     run, env, ckpt, inf = load_checkpoint_policy(
         Path(args.run), flat=flat, env_overrides=overrides
     )
+    if cell is not None:
+        terrain_scan.check_arena_of(env)
     hs = env._config.get("height_scan")
     if hs is None:
         sys.exit(
             f"task {run.get('task')!r} has no height_scan config, so there is "
             "no mask geometry to place the depth camera at"
         )
+    where = f"cell {cell.name}" if cell else f"arena {arena}"
     out = Path(args.out) if args.out else (
-        paths.PROJECT_DIR / "videos" / run["run_name"] / f"probe_{args.arena}.mp4"
+        paths.PROJECT_DIR / "videos" / run["run_name"]
+        / f"probe_{cell.name if cell else arena}.mp4"
     )
     print(f"scene: {env.xml_path}")
 
@@ -344,9 +382,17 @@ def main() -> None:
     show_hold = env._scan_live and "height_scan" in env.actor_obs_names
 
     command = jp.array([args.vx, 0.0, 0.0, HEIGHT_CMD])
-    reset, step = jax.jit(env.reset), jax.jit(env.step)
+    step = jax.jit(env.step)
     rng = jax.random.PRNGKey(args.seed)
-    state = reset(rng)
+    if cell is None:
+        state = jax.jit(env.reset)(rng)
+    else:
+        # Course run 0 of that cell: heading +x, the start offset furthest back
+        # from the obstacle band, on the tile the scan measures.
+        _, spawn, yaw, pad_h = terrain_scan.spawn_table(env, cell)
+        state = jax.jit(functools.partial(terrain_scan.scan_reset, env))(
+            rng, spawn[0], pad_h[0], yaw[0], command
+        )
     n_steps = max(1, round(args.seconds / env.dt))
     every = max(1, round(1.0 / (args.fps * env.dt)))
     fps = 1.0 / (env.dt * every)
@@ -405,7 +451,7 @@ def main() -> None:
                     float(hs.clip),
                     [
                         f"{run['run_name']} @ {ckpt.name}",
-                        f"arena {args.arena}   t {i * env.dt:5.2f} s",
+                        f"{where}   t {i * env.dt:5.2f} s",
                         f"cmd vx {args.vx:+.2f}   vx {vels[-1]:+.2f} m/s",
                     ],
                 )

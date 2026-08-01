@@ -861,9 +861,10 @@ using the preset.
 | `check` | `./training/run.sh check [--gpu --backend {jax,warp,auto} --nenv N --nsteps N]`; static checks plus a small MJX/JAX fallback compile by default. Use `--gpu --backend warp` to exercise the primary MJWarp CUDA path. GPU CLI defaults: backend `jax`, `nenv=4096`, `nsteps=200`. |
 | `train` | `./training/run.sh train [Hydra overrides]`; writes checkpoints and `run.json` to `training/runs/<run_name>`. |
 | `smoke` | `./training/run.sh smoke [Hydra overrides]`; tiny CPU pipeline check with WandB disabled. A selected preset can override smoke's short PPO budget, so use `++ppo.num_timesteps=100000` when combining a preset with smoke. |
-| `eval` | `./training/run.sh eval --run runs/<name> [--x-vel V --y-vel V --yaw-vel W --height H --steps N --out FILE]`; renders a rollout. |
+| `eval` | `./training/run.sh eval --run runs/<name> [--x-vel V --y-vel V --yaw-vel W --height H --steps N --out FILE --video-size WxH --overlay-torque --overlay-camera]`; renders a rollout. See "Rendering videos" below for the three render switches. |
+| `video-probe` | `./training/run.sh video-probe --run runs/<name> [--arena {flat,train,eval} --cell NAME --seconds S --fps F --vx V --camera NAME --out FILE --list-cells]`; renders the showcase clip: 960x720 with every overlay on. `--cell` films one measurement cell of the eval arena from the spawn `terrain-scan` uses; `--arena train`/`eval` needs a terrain run. Output lands in `training/videos/<run_name>/` unless `--out` says otherwise. |
 | `battery` | `./training/run.sh battery --run runs/<name> [--out FILE --alpha A --lag-tau T]`; writes the fixed comparison battery. `--alpha`/`--lag-tau` are eval-only plant perturbations, see "Robustness grid (eval-only)" below. |
-| `courses` | `./training/run.sh courses --run runs/<name> [--seeds N --only NAME... --video --paths --out FILE --list]`; writes the path-following course benchmark. `--list` prints the catalogue without loading a run. See "Course benchmark" below. |
+| `courses` | `./training/run.sh courses --run runs/<name> [--seeds N --only NAME... --video --video-size WxH --overlay-torque --overlay-camera --paths --out FILE --list]`; writes the path-following course benchmark. `--list` prints the catalogue without loading a run. See "Course benchmark" below. |
 | `report` | `./training/run.sh report --run runs/<name> [--out-json FILE --out-md FILE]`; writes battery, torque, power, impact proxy, and termination summary. |
 | `export` | `./training/run.sh export --run runs/<name> [--out DIR]`; writes `policy.npz` plus `policy_meta.json`, the schema-2 deployment contract built from the run's env (`wojtek_rl/deploy_contract.py`), and validates the deploy runtime end-to-end against the env before writing. |
 | `app` | `./training/run.sh app [--host HOST --port PORT]`; runs the interactive navigation demo. `WOJTEK_RUN_DIR`, `HOST`, and `PORT` environment variables supply defaults; see [demo README](../demo/README.md). |
@@ -895,6 +896,36 @@ local directory -- via the `policy` launch argument (see
 `ros/src/wojtek_policy/wojtek_policy/policy_source.py`); keepers exported
 before the schema-2 contract are regenerated with
 `wojtek_rl/migrate_keeper_meta.py`.
+
+## Rendering videos
+
+Every tool that writes an mp4 of a rollout goes through `wojtek_rl/video/`:
+`writer.py` (the one mediapy writer, falling back to the bundled ffmpeg when
+the system has none), `render.py` (`SceneView`, the offscreen chase-camera
+renderer), `overlays.py` (the in-frame panels, pure functions over the values
+they draw) and `probe.py` (the `video-probe` CLI). `pose` and the scan bench
+render their own interactive and benchmark output and do not use it.
+
+`eval` and `courses --video` render 640x480 with no overlays, so their clips
+stay comparable with the ones earlier reports were built from. Both take the
+same three switches:
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--video-size WxH` | `640x480` | Rendered frame size. Panel geometry scales with it, and a frame larger than the scene's offscreen buffer recompiles the scene to fit. `eval`'s stacked `--plots` panels follow the frame width. |
+| `--overlay-torque` | off | One signed bar per actuator against the env's effective torque limit, grouped by leg, along the bottom of the frame. Not the `--plots torques` strip, which is a full-episode matplotlib trace stacked under the video. |
+| `--overlay-camera` | off | The onboard depth view as a top-right inset, with the height-scan points projected onto it and colored by `height_scan.visible_mask`. |
+
+`--overlay-camera` needs a run whose task config carries a `height_scan`
+block: the depth camera is placed at that block's `mask` mount, pitch and
+vertical field of view, so the render and the analytic mask share a frustum.
+Without it there is no geometry to place the camera at and the flag is
+refused.
+
+`video-probe` is the showcase preset of the same stack: 960x720, torque bars
+and depth inset always on, plus the held 5x5 scan as a heatmap when the actor
+reads `height_scan`. It is a rendering tool, not a measurement: it reads no
+training config and writes none.
 
 ## Course benchmark (path following)
 
@@ -956,7 +987,10 @@ Each scenario runs `--seeds` rollouts (default 8) and reports median and worst,
 so a policy that only sometimes falls cannot pass by luck. Results go to
 `<run>/courses.json`; `--video` writes one mp4 per scenario (seed 0) and
 `--paths` one overhead commanded-vs-actual PNG per scenario, both into
-`<run>/courses/`.
+`<run>/courses/`. The clips take the render switches from "Rendering videos"
+above; with none of them they are the plain 640x480 chase-camera view. A
+machine with no usable GL drops the video with a warning and keeps the
+numbers.
 
 Cost: a single-env Python rollout loop, so measured ~30 s per 2600-step course
 per seed on CPU — roughly half an hour for the full 20 x 8 matrix, up to an

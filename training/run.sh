@@ -17,7 +17,7 @@ case "${1:-}" in
   # can never see it. `check-terrain --backend warp` is the gate for that.
   smoke) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.train smoke=true wandb.enable=false "$@" ;;
   eval)  shift; "$PY" -m wojtek_rl.eval "$@" ;;
-  video-probe) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.video_probe "$@" ;;  # torque bars + onboard depth inset
+  video-probe) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.video.probe "$@" ;;  # torque bars + onboard depth inset
   battery) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.battery "$@" ;;
   courses) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.courses "$@" ;;  # path-following benchmark
   report) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.report "$@" ;;

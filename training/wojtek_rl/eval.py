@@ -12,6 +12,9 @@ demo_sequence, instead of a constant command (--x-vel/--y-vel/--yaw-vel/
 Default output name is <scenario>.mp4 unless --out overrides it. A bare
 --out filename lands in videos/<run_name>/<timestamp>/ (gitignored); pass a
 path containing a directory to override.
+
+--video-size sets the rendered frame size; --overlay-torque and
+--overlay-camera draw wojtek_rl.video's in-frame overlays onto it.
 """
 
 import os
@@ -31,6 +34,7 @@ import numpy as np
 
 from wojtek_rl import paths
 from wojtek_rl.battery import battery_scenarios
+from wojtek_rl.video import SceneView, frame_size, write_video
 
 
 def _demo_sequence(i):
@@ -277,6 +281,26 @@ def main() -> None:
         "step walls hide the robot from track",
     )
     ap.add_argument(
+        "--video-size",
+        type=frame_size,
+        default=(640, 480),
+        metavar="WxH",
+        help="rendered frame size (default 640x480); the stacked --plots "
+        "panels follow the frame width",
+    )
+    ap.add_argument(
+        "--overlay-torque",
+        action="store_true",
+        help="draw the per-actuator torque bars into the frame, against the "
+        "env's effective limit (the video-probe strip, not the --plots one)",
+    )
+    ap.add_argument(
+        "--overlay-camera",
+        action="store_true",
+        help="draw the onboard depth view as an inset, with the height-scan "
+        "points projected onto it",
+    )
+    ap.add_argument(
         "--terrain-level",
         type=int,
         default=None,
@@ -343,6 +367,11 @@ def main() -> None:
         }
     env = make_env(task, env_cfg)
     print(f"scene: {env.xml_path}")
+    if args.overlay_camera and env._config.get("height_scan") is None:
+        sys.exit(
+            f"task {task!r} has no height_scan config, so there is no mask "
+            "geometry to place the depth camera at"
+        )
     # run.json may carry the training host's absolute checkpoint path
     # (cluster runs); fall back to the run dir itself.
     ckpt_dir = Path(run["checkpoint_dir"])
@@ -371,8 +400,10 @@ def main() -> None:
     import mujoco
 
     mj_model = env.mj_model
-    data = mujoco.MjData(mj_model)
-    with mujoco.Renderer(mj_model, height=480, width=640) as renderer:
+    with SceneView(
+        env, size=args.video_size, camera=args.camera,
+        torque=args.overlay_torque, onboard=args.overlay_camera,
+    ) as view:
         for i in range(n_steps):
             if task == "joystick":
                 state.info["command"] = cmd_at(i)
@@ -396,10 +427,9 @@ def main() -> None:
                 print(f"fell at step {i}")
                 break
             if i % render_every == 0:
-                data.qpos[:] = np.asarray(state.data.qpos)
-                mujoco.mj_forward(mj_model, data)
-                renderer.update_scene(data, camera=args.camera)
-                frames.append(renderer.render())
+                frames.append(
+                    view.frame(state.data.qpos, torque=state.data.actuator_force)
+                )
                 frame_meta.append(
                     (i * env.dt, np.asarray(state.info["command"]))
                 )
@@ -454,18 +484,7 @@ def main() -> None:
                 parts.append(grid_at(t))
             frames[k] = np.vstack(parts)
 
-    import shutil
-
-    import mediapy
-
-    if shutil.which("ffmpeg") is None:
-        # No system ffmpeg (common on a bare Mac); fall back to the binary
-        # bundled with imageio-ffmpeg, which is already in the venv.
-        import imageio_ffmpeg
-
-        mediapy.set_ffmpeg(imageio_ffmpeg.get_ffmpeg_exe())
-
-    mediapy.write_video(args.out, frames, fps=fps)
+    write_video(args.out, frames, fps)
     if args.scenario:
         print(f"scenario {args.scenario}  mean forward vx {np.mean(vels):+.2f}")
     else:

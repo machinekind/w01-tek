@@ -212,6 +212,15 @@ class SceneView:
                 xp=np,
             )
         )
+        if mask.occlusion and env._terrain_enabled:
+            cam = height_scan.camera_pos(qpos[0:3], qpos[3:7], self._mount, xp=np)
+            occ = np.asarray(
+                height_scan.occluded_mask(
+                    points, cam, lambda p: np.asarray(env._terrain.height(p)),
+                    mask.occlusion_samples, mask.occlusion_margin, xp=np,
+                )
+            )
+            visible = visible & ~occ
         u, v, ahead = project(
             points, self.data.cam_xpos[self._cam_id],
             self.data.cam_xmat[self._cam_id].reshape(3, 3), self._fovy,

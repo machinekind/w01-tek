@@ -60,6 +60,11 @@ def main() -> None:
     ap.add_argument("--vx", type=float, default=0.5, help="forward command, m/s")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument(
+        "--scan", choices=["clean", "dark"], default="clean",
+        help="dark feeds the actor a zero height scan, the blind fallback "
+        "when the camera stops delivering",
+    )
+    ap.add_argument(
         "--camera", default="track",
         help="chase camera for the main view; terrain scenes also define "
         "track_far, higher and farther out",
@@ -103,6 +108,8 @@ def main() -> None:
         # The clip holds one command; the env's own resample would hand the
         # actor a different one halfway up the obstacle.
         overrides["command"] = {"resample_steps": 10**9}
+    if args.scan == "dark":
+        overrides["height_scan"] = {"dark": True}
     run, env, ckpt, inf = load_checkpoint_policy(
         Path(args.run), flat=flat, env_overrides=overrides
     )
@@ -114,9 +121,10 @@ def main() -> None:
             "no mask geometry to place the depth camera at"
         )
     where = f"cell {cell.name}" if cell else f"arena {arena}"
+    dark = "_dark" if args.scan == "dark" else ""
     out = Path(args.out) if args.out else (
         paths.PROJECT_DIR / "videos" / run["run_name"]
-        / f"probe_{cell.name if cell else arena}.mp4"
+        / f"probe_{cell.name if cell else arena}{dark}.mp4"
     )
     print(f"scene: {env.xml_path}")
 

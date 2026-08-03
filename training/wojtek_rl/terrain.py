@@ -88,7 +88,7 @@ EDGE_TAPER = 0.25
 
 # Slope tiles: flat square platform (holds the pad), then a linear ramp.
 SLOPE_PLATFORM_HALF = 0.6
-# Stair tiles: flat square platform, then concentric 0.13 m treads.
+# Stair tiles: flat square platform, then concentric treads.
 #
 # Six risers, not the physical rig's four. N_STEPS counts risers; the flight
 # lays N_STEPS - 1 treads between the platform and the tile ground. Four
@@ -100,16 +100,46 @@ SLOPE_PLATFORM_HALF = 0.6
 # five treads end 1.25 m from the tile centre on a 1.50 m half-tile; the
 # platform cannot shrink below 0.51 m while spawn jitter stays at 0.15 m
 # (jitter plus the 0.36 m standing footprint).
+#
+# TREAD and N_STEPS are the legacy defaults. 0.13 m treads pack the risers
+# into a ~21 deg scramble at a 5 cm riser -- real stairs run 0.25-0.30 m
+# deep (Blondel: 2h + s = 0.60-0.65 m). `generate(stair_tread=...)` builds
+# stairs on any tread; the step count then comes from `stair_steps` so the
+# flight always fits the tile with RIM_MARGIN of flat ground at the rim.
 STAIR_PLATFORM_HALF = 0.6
 TREAD = 0.13
 N_STEPS = 6
+# Flat ground kept between the outermost riser and the tile border, so the
+# border stays seamless and a crossing meets flat ground before the edge.
+# The legacy geometry (0.6 platform + 5 x 0.13 treads = 1.25 m of 1.5 m)
+# leaves exactly this much; stair_steps reproduces it.
+RIM_MARGIN = 0.25
 
 
-def stair_pit_half(stair_platform_half: float = STAIR_PLATFORM_HALF) -> float:
+def stair_steps(
+    tread: float,
+    stair_platform_half: float = STAIR_PLATFORM_HALF,
+    tile_size: float = TILE_SIZE,
+) -> int:
+    """Risers that fit between the platform and the rim at this tread.
+
+    The legacy geometry round-trips: 0.13 m treads on a 0.6 m platform give
+    floor(0.65 / 0.13) = 5 treads, six risers. Clamped to [3, N_STEPS]: two
+    treads is the least that still walks a flight rather than one step, and
+    the legacy six is the most the wrapper's tables ever sized for."""
+    n_treads = int((tile_size / 2 - RIM_MARGIN - stair_platform_half) // tread)
+    return max(2, min(N_STEPS - 1, n_treads)) + 1
+
+
+def stair_pit_half(
+    stair_platform_half: float = STAIR_PLATFORM_HALF,
+    tread: float = TREAD,
+    n_steps: int = N_STEPS,
+) -> float:
     """Outer half-size of the stair terrace region, a CHEBYSHEV half-size: the
     terraces are concentric squares. The inverted pit is carved to this square
     and both stair types reach flat ground (0) at the rim."""
-    return stair_platform_half + (N_STEPS - 1) * TREAD
+    return stair_platform_half + (n_steps - 1) * tread
 
 # Rough tiles: white noise sampled on this coarse pitch then bilinearly
 # upsampled, so features are foot-scale rolling ground, not per-cell spikes.
@@ -196,6 +226,14 @@ class TileSpec:
     origin: tuple[float, float, float]  # tile-centre ground point (z = 0)
     pad_radius: float
     pad_height: float  # world z of the flat spawn pad at the tile centre
+    # Outer Chebyshev radius of the tile's feature: past it the ground is
+    # flat out to the border. Feature-band promotion reads it; 0 on the
+    # flat row, where there is no band to cross.
+    feature_radius: float = 0.0
+    # Realized stair geometry, stairs tiles only (0 elsewhere). Treads may
+    # differ per tile when the arena was built with a tread range.
+    stair_tread: float = 0.0
+    n_steps: int = 0
 
 
 @dataclass(frozen=True)
@@ -229,6 +267,13 @@ class TerrainSpec:
     hfield: HFieldSpec
     tiles: tuple[TileSpec, ...]
     flat_row: bool = False
+    # Stair tread the arena was built with: the legacy scalar, another fixed
+    # scalar, or a (lo, hi) range drawn per tile. Build/config agreement is
+    # checked the same way flat_row is.
+    stair_tread: float | tuple[float, float] = TREAD
+    # Per-type difficulty multiplier the arena was built with (None = 1.0
+    # everywhere). Compresses a column's rows into [0, cap].
+    type_caps: dict | None = None
 
 
 @dataclass
@@ -339,42 +384,47 @@ def _slope_patch(lx: np.ndarray, ly: np.ndarray, d: float, sign: float) -> np.nd
 
 
 def _pyramid_stair_boxes(
-    cx: float, cy: float, d: float, stair_half: float
+    cx: float, cy: float, d: float, stair_half: float,
+    tread: float = TREAD, n_steps: int = N_STEPS,
 ) -> tuple[list[Box], float]:
     """High central plateau; treads descend to ground (0) at the rim, so the
     tile border stays seamless. Boxes sit on the flat heightfield."""
     riser = stair_riser(d)
-    top = N_STEPS * riser
+    top = n_steps * riser
     boxes = [Box((cx, cy, top / 2), (stair_half, stair_half, top / 2))]
-    for k in range(1, N_STEPS):
-        r_in = stair_half + (k - 1) * TREAD
-        r_out = stair_half + k * TREAD
-        boxes.extend(_frame_boxes(cx, cy, r_in, r_out, top=(N_STEPS - k) * riser))
+    for k in range(1, n_steps):
+        r_in = stair_half + (k - 1) * tread
+        r_out = stair_half + k * tread
+        boxes.extend(_frame_boxes(cx, cy, r_in, r_out, top=(n_steps - k) * riser))
     return boxes, top
 
 
 def _pit_carve(
-    lx: np.ndarray, ly: np.ndarray, d: float, stair_half: float
+    lx: np.ndarray, ly: np.ndarray, d: float, stair_half: float,
+    tread: float = TREAD, n_steps: int = N_STEPS,
 ) -> np.ndarray:
     """Heightfield patch for an inverted-stairs pit: -H inside the pit square,
     0 outside, so the rim is flush with the tile ground."""
-    depth = N_STEPS * stair_riser(d)
-    return np.where(_cheby(lx, ly) <= stair_pit_half(stair_half), -depth, 0.0)
+    depth = n_steps * stair_riser(d)
+    return np.where(
+        _cheby(lx, ly) <= stair_pit_half(stair_half, tread, n_steps), -depth, 0.0
+    )
 
 
 def _inverted_stair_boxes(
-    cx: float, cy: float, d: float, stair_half: float
+    cx: float, cy: float, d: float, stair_half: float,
+    tread: float = TREAD, n_steps: int = N_STEPS,
 ) -> tuple[list[Box], float]:
     """Terraces inside the carved pit: each ring sits on the pit floor (-H) and
     rises one riser more outward. The topmost riser (-riser -> 0) is the carve
     wall itself, beveled over at most one cell (CELL_SIZE) by the heightfield.
     Central pad is the carved floor at -H, no plateau box."""
     riser = stair_riser(d)
-    depth = N_STEPS * riser
+    depth = n_steps * riser
     boxes: list[Box] = []
-    for j in range(1, N_STEPS):
-        r_in = stair_half + (j - 1) * TREAD
-        r_out = stair_half + j * TREAD
+    for j in range(1, n_steps):
+        r_in = stair_half + (j - 1) * tread
+        r_out = stair_half + j * tread
         boxes.extend(_frame_boxes(cx, cy, r_in, r_out, top=-depth + j * riser, base=-depth))
     return boxes, -depth
 
@@ -544,6 +594,8 @@ def generate(
     pad_radius: float = PAD_RADIUS,
     stair_platform_half: float = STAIR_PLATFORM_HALF,
     flat_row: bool = False,
+    stair_tread: float | tuple[float, float] = TREAD,
+    type_caps: dict | None = None,
 ) -> Arena:
     """Build one arena.
 
@@ -554,16 +606,27 @@ def generate(
     per-row stream in the same order, so a seed picks the same tile contents
     with or without an explicit difficulty list.
 
-    ``pad_radius`` sizes the flat spawn pad. It cannot go below 0.36 m: the
-    feet sit 0.31 m from the base centre and the foot radius is 0.046 m, so
-    that is the flat ground a standing robot needs. Anything above the
-    training default's spawn jitter (0.15 m) plus that footprint is safe.
+    ``pad_radius`` sizes the flat spawn pad. A pad-confined spawn (the legacy
+    mode) needs 0.36 m of flat ground under a standing robot -- feet 0.31 m
+    from the base centre plus the 0.046 m foot radius -- plus its jitter;
+    terrain_env enforces that at load. Feature spawns read the height under
+    the spawn point instead, so their arenas may shrink the pad to a summit
+    platform.
 
     ``flat_row`` prepends one genuinely flat row, which becomes level 0. A
     difficulty-0 row is not flat -- its stairs still have a 2 cm riser -- so
     flat ground is a row of its own rather than the ramps turned down. The row
     is additive: every terrain row keeps the difficulty and the seed streams it
     has without the flag and moves up one row index and one tile.
+
+    ``stair_tread`` is a fixed tread or a (lo, hi) range drawn per stairs
+    tile from the tile's own rng stream. The step count follows the tread
+    (``stair_steps``), so any tread fills the tile out to RIM_MARGIN. The
+    scalar default draws nothing, so legacy arenas stay bit-identical.
+
+    ``type_caps`` multiplies each listed type's realized difficulty, so a
+    column's rows span [0, cap] instead of [0, 1] -- finer rung spacing under
+    a ceiling the robot's body sets. Unlisted types keep the full ramp.
     """
     n_cols = len(TYPES)
     if difficulties is not None:
@@ -600,6 +663,7 @@ def generate(
                     row=0, col=j, terrain_type=ttype, difficulty=0.0,
                     origin=(float(cx), float(cy), 0.0),
                     pad_radius=pad_radius, pad_height=0.0,
+                    feature_radius=0.0,
                 )
             )
     for i in range(n_terrain_rows):
@@ -636,48 +700,68 @@ def generate(
             lx, ly = np.meshgrid(xs[ci0:ci1] - cx, ys[ri0:ri1] - cy)
             rng = _tile_rng(seed, i, j)
             pad_height = 0.0
+            # The type's realized difficulty: the row's, compressed by its cap.
+            dt = d * float(type_caps.get(ttype, 1.0)) if type_caps else d
+            # Boxes and clutter never reach past this ring; a crossing that
+            # gets here has met the feature. The continuous surfaces (slope,
+            # rough, wave) run to the border taper, so they share the ring
+            # the scattered boxes use.
+            feature_radius = TILE_SIZE / 2 - DISCRETE_EDGE_MARGIN
+            tread, n_steps = 0.0, 0
+            if ttype in ("pyramid_stairs", "inverted_pyramid_stairs"):
+                # A range draws per tile from the tile's own stream; the
+                # scalar path draws nothing, keeping legacy arenas
+                # bit-identical.
+                if isinstance(stair_tread, tuple):
+                    tread = float(rng.uniform(stair_tread[0], stair_tread[1]))
+                else:
+                    tread = float(stair_tread)
+                n_steps = stair_steps(tread, stair_platform_half, tile_size)
+                feature_radius = stair_pit_half(stair_platform_half, tread, n_steps)
             if ttype == "rough_uniform":
-                heights[ri0:ri1, ci0:ci1] = _rough_patch(lx, ly, d, rng, pad_radius)
+                heights[ri0:ri1, ci0:ci1] = _rough_patch(lx, ly, dt, rng, pad_radius)
             elif ttype == "pyramid_slope":
                 heights[ri0:ri1, ci0:ci1] = (
-                    _slope_patch(lx, ly, d, +1.0) + _overlay(lx, ly, d, rng, pad_radius)
+                    _slope_patch(lx, ly, dt, +1.0) + _overlay(lx, ly, dt, rng, pad_radius)
                 )
-                pad_height = slope_plateau_height(d)
+                pad_height = slope_plateau_height(dt)
             elif ttype == "inverted_pyramid_slope":
                 heights[ri0:ri1, ci0:ci1] = (
-                    _slope_patch(lx, ly, d, -1.0) + _overlay(lx, ly, d, rng, pad_radius)
+                    _slope_patch(lx, ly, dt, -1.0) + _overlay(lx, ly, dt, rng, pad_radius)
                 )
-                pad_height = -slope_plateau_height(d)
+                pad_height = -slope_plateau_height(dt)
             elif ttype == "pyramid_stairs":
                 tile_boxes, pad_height = _pyramid_stair_boxes(
-                    cx, cy, d, stair_platform_half
+                    cx, cy, dt, stair_platform_half, tread, n_steps
                 )
                 boxes.extend(tile_boxes)
             elif ttype == "inverted_pyramid_stairs":
                 heights[ri0:ri1, ci0:ci1] = _pit_carve(
-                    lx, ly, d, stair_platform_half
+                    lx, ly, dt, stair_platform_half, tread, n_steps
                 )
                 tile_boxes, pad_height = _inverted_stair_boxes(
-                    cx, cy, d, stair_platform_half
+                    cx, cy, dt, stair_platform_half, tread, n_steps
                 )
                 boxes.extend(tile_boxes)
             elif ttype == "discrete_obstacles":
-                heights[ri0:ri1, ci0:ci1] = _overlay(lx, ly, d, rng, pad_radius)
+                heights[ri0:ri1, ci0:ci1] = _overlay(lx, ly, dt, rng, pad_radius)
                 boxes.extend(_seat_boxes(
-                    _discrete_boxes(cx, cy, d, rng, pad_radius), heights, xs, ys
+                    _discrete_boxes(cx, cy, dt, rng, pad_radius), heights, xs, ys
                 ))
             elif ttype == "random_grid":
-                heights[ri0:ri1, ci0:ci1] = _overlay(lx, ly, d, rng, pad_radius)
+                heights[ri0:ri1, ci0:ci1] = _overlay(lx, ly, dt, rng, pad_radius)
                 boxes.extend(_seat_boxes(
-                    _random_grid_boxes(cx, cy, d, rng, pad_radius), heights, xs, ys
+                    _random_grid_boxes(cx, cy, dt, rng, pad_radius), heights, xs, ys
                 ))
             elif ttype == "wave":
-                heights[ri0:ri1, ci0:ci1] = _wave_patch(lx, ly, d, rng, pad_radius)
+                heights[ri0:ri1, ci0:ci1] = _wave_patch(lx, ly, dt, rng, pad_radius)
             tiles.append(
                 TileSpec(
-                    row=row, col=j, terrain_type=ttype, difficulty=d,
+                    row=row, col=j, terrain_type=ttype, difficulty=dt,
                     origin=(float(cx), float(cy), 0.0),
                     pad_radius=pad_radius, pad_height=float(pad_height),
+                    feature_radius=float(feature_radius),
+                    stair_tread=tread, n_steps=n_steps,
                 )
             )
 
@@ -718,6 +802,8 @@ def generate(
         ),
         tiles=tuple(tiles),
         flat_row=flat_row,
+        stair_tread=stair_tread,
+        type_caps=dict(type_caps) if type_caps else None,
     )
     return Arena(
         spec=spec, boxes=tuple(boxes),
@@ -749,8 +835,12 @@ def spec_to_dict(spec: TerrainSpec) -> dict:
 
     ``flat_row`` is written only when it is on, so an arena built without it is
     byte-identical to one built before the flag existed -- the eval arena's
-    spec is the measurement fingerprint, and readers use ``spec.get``."""
+    spec is the measurement fingerprint, and readers use ``spec.get``. The
+    stair-tread, type-cap and per-tile geometry keys follow the same rule:
+    written only when the arena was built with non-default stair geometry or
+    caps, so the legacy measurement arena stays byte-identical."""
     hf = spec.hfield
+    extended = spec.stair_tread != TREAD or spec.type_caps is not None
     out = {
         "seed": spec.seed,
         "n_rows": spec.n_rows,
@@ -777,10 +867,25 @@ def spec_to_dict(spec: TerrainSpec) -> dict:
                 "row": t.row, "col": t.col, "type": t.terrain_type,
                 "difficulty": t.difficulty, "origin": list(t.origin),
                 "pad_radius": t.pad_radius, "pad_height": t.pad_height,
+                **(
+                    {
+                        "feature_radius": t.feature_radius,
+                        "stair_tread": t.stair_tread,
+                        "n_steps": t.n_steps,
+                    }
+                    if extended else {}
+                ),
             }
             for t in spec.tiles
         ],
     }
     if spec.flat_row:
         out["flat_row"] = True
+    if extended:
+        out["stair_tread"] = (
+            list(spec.stair_tread)
+            if isinstance(spec.stair_tread, tuple) else spec.stair_tread
+        )
+        if spec.type_caps is not None:
+            out["type_caps"] = dict(spec.type_caps)
     return out

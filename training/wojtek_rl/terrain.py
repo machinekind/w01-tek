@@ -135,9 +135,22 @@ def stair_steps(
     The legacy geometry round-trips: 0.13 m treads on a 0.6 m platform give
     floor(0.65 / 0.13) = 5 treads, six risers. Clamped to [3, N_STEPS]: two
     treads is the least that still walks a flight rather than one step, and
-    the legacy six is the most the wrapper's tables ever sized for."""
+    the legacy six is the most the wrapper's tables ever sized for. The
+    two-tread floor can only fit when the platform leaves it room, so the
+    realized edge is checked against the rim: a tread/platform pair whose
+    flight would cross into the neighbouring tile is a build error, not a
+    silent overlap."""
     n_treads = int((tile_size / 2 - RIM_MARGIN - stair_platform_half) // tread)
-    return max(2, min(N_STEPS - 1, n_treads)) + 1
+    n_steps = max(2, min(N_STEPS - 1, n_treads)) + 1
+    edge = stair_platform_half + (n_steps - 1) * tread
+    if edge > tile_size / 2 - RIM_MARGIN + 1e-9:
+        raise ValueError(
+            f"stair flight breaches the tile rim: platform "
+            f"{stair_platform_half} m + {n_steps - 1} treads x {tread} m "
+            f"reaches {edge:.3f} m of the {tile_size / 2 - RIM_MARGIN:.3f} m "
+            f"available; use a smaller tread or platform"
+        )
+    return n_steps
 
 
 def stair_pit_half(
@@ -601,7 +614,7 @@ def generate(
     ordered: bool = False,
     difficulties: tuple[float, ...] | None = None,
     pad_radius: float = PAD_RADIUS,
-    stair_platform_half: float = STAIR_PLATFORM_HALF,
+    stair_platform_half: float | None = None,
     flat_row: bool = False,
     stair_tread: float | tuple[float, float] = TREAD,
     type_caps: dict | None = None,
@@ -636,7 +649,20 @@ def generate(
     ``type_caps`` multiplies each listed type's realized difficulty, so a
     column's rows span [0, cap] instead of [0, 1] -- finer rung spacing under
     a ceiling the robot's body sets. Unlisted types keep the full ramp.
+
+    ``stair_platform_half`` left at None resolves itself: the legacy 0.6 m
+    constant on legacy stair geometry, the summit rule
+    (``summit_platform_half`` of the pad) whenever ``stair_tread`` or
+    ``type_caps`` are set. One resolution point, so every builder of
+    extended geometry -- the CLI, the deep measurement course, tests --
+    gets the platform the load-time agreement check expects.
     """
+    extended_geometry = stair_tread != TREAD or type_caps is not None
+    if stair_platform_half is None:
+        stair_platform_half = (
+            summit_platform_half(pad_radius) if extended_geometry
+            else STAIR_PLATFORM_HALF
+        )
     n_cols = len(TYPES)
     if difficulties is not None:
         difficulties = tuple(float(d) for d in difficulties)

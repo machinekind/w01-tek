@@ -637,6 +637,19 @@ class WojtekJoystick(WojtekEnv):
         # The exporter rebuilds this env on the flat scene, so an enabled
         # scan still has to assemble without a height lookup.
         self._scan_live = self._scan_enabled and self._terrain_enabled
+        # no_progress patience is a TRAINING affordance. A measurement env
+        # (eval arenas) pins the legacy grace and hazard whatever the run's
+        # config says, so a v4.2 policy is scored under the same cut every
+        # baseline was -- patience on the course would be a comparability
+        # bug, not a kindness. (0.0, 1.0) means "no patience": the step
+        # falls back to the base grace_sec and p_max.
+        npg = self._config.no_progress
+        self._npg_patience = (0.0, 1.0)
+        if self._terrain_enabled and self._terrain.kind not in ("eval", "eval_deep"):
+            self._npg_patience = (
+                float(npg.get("terrain_grace_sec", 0.0)),
+                float(npg.get("terrain_p_max_scale", 1.0)),
+            )
         named = {"height_scan", "height_scan_clean"} & (
             set(self._config.obs.state)
             | set(self._config.obs.get("include", ()))
@@ -1314,11 +1327,12 @@ class WojtekJoystick(WojtekEnv):
             progress_ratio = info["progress_ema"] / jp.maximum(demand, 1e-6)
             # Terrain rows may carry their own grace and hazard scale; the
             # flat row (and every run without the fields) keeps the base
-            # values. Static when the fields are at their defaults.
+            # values. Static when the fields are at their defaults, and
+            # pinned to (0, 1) -- no patience -- on measurement arenas
+            # (see __init__), so scans stay comparable across recipes.
             grace_sec = npg.grace_sec
             p_max = npg.p_max
-            t_grace = npg.get("terrain_grace_sec", 0.0)
-            t_scale = npg.get("terrain_p_max_scale", 1.0)
+            t_grace, t_scale = self._npg_patience
             if self._terrain_enabled and (t_grace > 0.0 or t_scale != 1.0):
                 on_terrain = ~(
                     self._terrain.flat_row & (info["terrain_level"] == 0)

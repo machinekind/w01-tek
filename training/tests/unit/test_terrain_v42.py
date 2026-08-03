@@ -34,8 +34,18 @@ def test_stair_steps_round_trips_the_legacy_geometry():
     assert terrain.stair_steps(0.30) == 3
     # A summit platform buys one more.
     assert terrain.stair_steps(0.30, stair_platform_half=0.3) == 4
-    # The clamp floors at a two-tread flight.
-    assert terrain.stair_steps(1.0) == 3
+
+
+def test_stair_steps_refuses_a_flight_past_the_rim():
+    # The two-tread floor cannot fit 0.45 m treads next to the legacy
+    # platform; that has to fail loudly at build time, not overlap the
+    # neighbouring tile.
+    import pytest
+
+    with pytest.raises(ValueError, match="rim"):
+        terrain.stair_steps(0.45)
+    # The same tread on a summit platform fits.
+    assert terrain.stair_steps(0.45, stair_platform_half=0.3) == 3
 
 
 def test_tread_range_draws_per_tile_and_flight_fits_the_tile():
@@ -78,8 +88,10 @@ def test_feature_radius_per_type():
 
 
 def test_extended_spec_round_trips_through_the_dict():
+    # Wide treads need the summit pad: on the legacy 0.6 m platform the
+    # two-tread floor would breach the rim, and stair_steps refuses it.
     a = terrain.generate(seed=0, n_rows=3, stair_tread=(0.25, 0.45),
-                         type_caps={"pyramid_stairs": 0.7})
+                         pad_radius=0.3, type_caps={"pyramid_stairs": 0.7})
     d = terrain.spec_to_dict(a.spec)
     assert d["stair_tread"] == [0.25, 0.45]
     assert d["type_caps"] == {"pyramid_stairs": 0.7}

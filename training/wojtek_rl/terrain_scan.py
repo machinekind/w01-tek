@@ -407,7 +407,12 @@ def check_arena(spec: dict, kind: str = "eval") -> None:
         "ordered": terrain_suite.EVAL_ORDERED,
         "pad_radius": terrain_suite.EVAL_PAD_RADIUS,
         "n_steps": terrain.N_STEPS,
-        "stair_platform_half": terrain.STAIR_PLATFORM_HALF,
+        # Extended stair geometry (the deep course) sizes its platform by
+        # the summit rule; the legacy course keeps the constant.
+        "stair_platform_half": (
+            terrain.summit_platform_half(terrain_suite.EVAL_PAD_RADIUS)
+            if kind == "eval_deep" else terrain.STAIR_PLATFORM_HALF
+        ),
         # build-terrain passes these three through for every arena kind, so
         # this gate is the only place a non-default eval geometry is caught.
         "tile_size": terrain.TILE_SIZE,

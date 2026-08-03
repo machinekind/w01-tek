@@ -11,7 +11,7 @@ import jax.numpy as jp
 import numpy as np
 import pytest
 
-from wojtek_rl import build_terrain, paths, terrain
+from wojtek_rl import build_terrain, paths, terrain, terrain_env, terrain_suite
 from wojtek_rl import env as wojtek_env
 from wojtek_rl.terrain_wrapper import wrap_for_terrain_brax_training
 
@@ -52,6 +52,50 @@ def v42_env(v42_arena):
     cfg.no_progress.terrain_grace_sec = 4.0
     cfg.no_progress.terrain_p_max_scale = 0.5
     return wojtek_env.WojtekJoystick(cfg)
+
+
+def test_eval_deep_arena_builds_and_loads():
+    """The deep measurement course must load through the real require
+    checks, not just check_arena: the summit rule ties its platform to its
+    pad, and a drift between builder and loader makes the arena unloadable
+    (the review's finding 1). Writes the real eval_deep slot; the build is
+    deterministic, so this refreshes rather than perturbs it."""
+    arena = terrain.generate(**terrain_suite.deep_arena_kwargs())
+    assert arena.spec.stair_platform_half == terrain.summit_platform_half(
+        terrain_suite.EVAL_PAD_RADIUS
+    )
+    build_terrain.write_arena(arena, "eval_deep")
+    cfg = wojtek_env.default_config().terrain
+    cfg.enable = True
+    cfg.arena = "eval_deep"
+    cfg.pad_jitter = 0.0
+    cfg.spawn_yaw = False
+    loaded = terrain_env.load(cfg)  # raises on any geometry disagreement
+    assert loaded.kind == "eval_deep"
+    assert loaded.n_rows == len(terrain_suite.DIFFICULTIES)
+    # A v4.2 run's terrain keys must not poison an eval_deep load either:
+    # measurement arenas skip the build/config stair-geometry agreement.
+    cfg.stair_tread_range = [0.25, 0.45]
+    cfg.type_caps = {"pyramid_stairs": 0.7}
+    terrain_env.load(cfg)
+
+
+def test_measurement_env_pins_legacy_no_progress_patience(v42_env):
+    """Finding 2: the run's terrain patience must not follow the policy
+    onto the measurement course -- baselines were scanned at 2 s grace and
+    full hazard. The training-kind env keeps the patience; an env on an
+    eval arena resolves to none."""
+    assert v42_env._npg_patience == (4.0, 0.5)
+    cfg = wojtek_env.default_config()
+    cfg.no_progress.enable = True
+    cfg.no_progress.terrain_grace_sec = 4.0
+    cfg.no_progress.terrain_p_max_scale = 0.5
+    cfg.terrain.enable = True
+    cfg.terrain.arena = "eval_deep"
+    cfg.terrain.pad_jitter = 0.0
+    cfg.terrain.spawn_yaw = False
+    env = wojtek_env.WojtekJoystick(cfg)
+    assert env._npg_patience == (0.0, 1.0)
 
 
 def test_geometry_mismatch_is_refused(v42_arena):

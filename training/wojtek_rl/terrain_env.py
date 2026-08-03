@@ -375,9 +375,13 @@ def curriculum_step(
     onto a full episode -- a fall at step 50 of 1000 gets twenty times the
     distance commanded so far, so almost any fall fails. The projection is
     legged_gym's escape valve, kept as is. What changed is that one failure
-    no longer demotes: failures increment ``strikes``, a clean or promoted
-    episode clears them, and only ``demote_strikes`` consecutive failures
-    drop a level (and clear the count). One is the legacy behavior.
+    no longer demotes: failures increment ``strikes``, and only
+    ``demote_strikes`` accumulated failures drop a level (and clear the
+    count). Only a promotion or a clean MOVEMENT episode clears the count;
+    stand and spin episodes command no distance, cannot fail, and are
+    transparent -- fall, spin, fall still reaches the demotion, instead of
+    the spin laundering the first strike. One strike is the legacy
+    behavior.
 
     Grace: an episode that ended within ``grace_steps`` is neutral -- no
     strike, no promotion, strikes carried unchanged. Feature spawns can put
@@ -399,8 +403,11 @@ def curriculum_step(
     graced = steps_lived <= grace_steps
     promote = promote & ~graced
     fail = fail & ~graced & ~promote
-    clean = ~fail & ~graced
-    new_strikes = jp.where(clean, 0, jp.where(fail, strikes + 1, strikes))
+    # 0.05 m of full-episode commanded distance separates a movement
+    # episode from a stand/spin one; only the former can clear strikes.
+    moved = full_episode > 0.05
+    clear = promote | (~fail & ~graced & moved)
+    new_strikes = jp.where(clear, 0, jp.where(fail, strikes + 1, strikes))
     demote = new_strikes >= demote_strikes
     new_strikes = jp.where(demote & ~promote, 0, new_strikes)
     delta = jp.where(promote, 1, jp.where(demote, -1, 0))

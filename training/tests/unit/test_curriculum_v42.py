@@ -41,7 +41,7 @@ def test_crossed_replaces_the_walk_rule():
     assert lvl == 6
 
 
-def test_three_strikes_demote_and_a_clean_episode_clears():
+def test_three_strikes_demote_and_a_clean_walk_clears():
     fail = dict(walked=0.2, commanded=3.0, demote_strikes=3)
     lvl, s = _step(5, strikes=jp.int32(0), **fail)
     assert (lvl, s) == (5, 1)
@@ -49,10 +49,28 @@ def test_three_strikes_demote_and_a_clean_episode_clears():
     assert (lvl, s) == (5, 2)
     lvl, s = _step(5, strikes=jp.int32(2), **fail)
     assert (lvl, s) == (4, 0)  # third strike drops and clears
-    # A clean (neutral) episode clears the count without moving the level.
-    lvl, s = _step(5, walked=0.0, commanded=0.0, strikes=jp.int32(2),
+    # A clean MOVEMENT episode clears the count without moving the level
+    # (walked most of a modest commanded distance, no band crossing).
+    lvl, s = _step(5, walked=1.0, commanded=1.2, strikes=jp.int32(2),
                    demote_strikes=3)
     assert (lvl, s) == (5, 0)
+
+
+def test_stand_and_spin_episodes_are_strike_transparent():
+    # A stand/spin episode (no commanded distance) neither clears nor
+    # strikes: fall, spin, fall, spin, fall still demotes on the third fail.
+    fail = dict(walked=0.2, commanded=3.0, demote_strikes=3)
+    spin = dict(walked=0.02, commanded=0.0, demote_strikes=3)
+    _, s = _step(5, strikes=jp.int32(0), **fail)
+    assert s == 1
+    lvl, s = _step(5, strikes=jp.int32(s), **spin)
+    assert (lvl, s) == (5, 1)  # transparent, count held
+    _, s = _step(5, strikes=jp.int32(s), **fail)
+    assert s == 2
+    lvl, s = _step(5, strikes=jp.int32(s), **spin)
+    assert (lvl, s) == (5, 2)
+    lvl, s = _step(5, strikes=jp.int32(s), **fail)
+    assert (lvl, s) == (4, 0)
 
 
 def test_grace_falls_are_neutral_and_keep_strikes():

@@ -338,11 +338,15 @@ def arena_fingerprint() -> dict:
 
 def deep_arena_fingerprint() -> dict:
     """The deep arena's own fingerprint, recorded separately so the legacy
-    `arena` fingerprint -- what the gate compares -- never changes shape."""
+    `arena` fingerprint -- what the gate compares -- never changes shape.
+    Extended stair geometry sizes its platform by the summit rule, so the
+    deep course's platform follows its pad."""
+    platform = terrain.summit_platform_half(EVAL_PAD_RADIUS)
     return {
         **arena_fingerprint(),
         "stair_tread": DEEP_TREAD,
-        "n_steps": terrain.stair_steps(DEEP_TREAD),
+        "stair_platform_half": platform,
+        "n_steps": terrain.stair_steps(DEEP_TREAD, platform),
     }
 
 

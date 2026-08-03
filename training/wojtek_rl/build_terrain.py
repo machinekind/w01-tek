@@ -258,12 +258,9 @@ def main() -> None:
         stair_tread=terrain.TREAD if stair_tread is None else stair_tread,
         type_caps=type_caps,
     )
-    if stair_tread is not None or type_caps is not None:
-        # Extended stair geometry sizes the platform from the pad (summit
-        # rule), so a shrunken pad shrinks the stairs' flat top with it.
-        kwargs["stair_platform_half"] = terrain.summit_platform_half(
-            kwargs["pad_radius"]
-        )
+    # The stair platform is not passed: terrain.generate resolves it itself
+    # (legacy constant, or the summit rule on extended stair geometry), so
+    # every build path gets the platform the load-time check expects.
     if args.arena in ("eval", "eval_deep"):
         # The measurement courses are definitions, not CLI choices: their
         # seed, rows, column order, pad radius and stair geometry come from

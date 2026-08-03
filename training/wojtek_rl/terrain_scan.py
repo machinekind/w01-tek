@@ -196,7 +196,7 @@ def cell_lines() -> list[str]:
     so the two tools cannot disagree about what a cell is called.
     """
     lines = []
-    for c in terrain_suite.CELLS:
+    for c in terrain_suite.ALL_CELLS:
         value, unit = terrain_suite.realized_dimension(c.terrain_type, c.difficulty)
         bar = (
             "tracked" if c.tracked else
@@ -387,7 +387,7 @@ def load_baseline(ref: str | None) -> dict | None:
     return json.loads(Path(local).read_text())
 
 
-def check_arena(spec: dict) -> None:
+def check_arena(spec: dict, kind: str = "eval") -> None:
     """Refuse to scan an arena that is not the one the suite defines.
 
     The recorded fingerprint comes from the suite's constants, and the gate
@@ -396,6 +396,10 @@ def check_arena(spec: dict) -> None:
     change) would produce numbers filed under a fingerprint that describes
     something else. The cells are defined by row index, so a row table that does
     not match is not a difficulty mismatch, it is a different terrain.
+
+    ``kind`` picks which course: `eval` is the legacy arena (whose spec must
+    carry no stair-tread key at all -- that is its byte-identity), `eval_deep`
+    the deep-tread one.
     """
     want = {
         "seed": terrain_suite.EVAL_SEED,
@@ -409,6 +413,7 @@ def check_arena(spec: dict) -> None:
         "tile_size": terrain.TILE_SIZE,
         "border": terrain.BORDER,
         "cell_size": terrain.CELL_SIZE,
+        "stair_tread": terrain_suite.DEEP_TREAD if kind == "eval_deep" else None,
     }
     wrong = {
         key: (spec.get(key), value)
@@ -423,8 +428,8 @@ def check_arena(spec: dict) -> None:
     if wrong:
         detail = "; ".join(f"{k}: found {f!r}, expected {w!r}" for k, (f, w) in wrong.items())
         raise ValueError(
-            f"the eval arena is not the measurement course ({detail}). Rebuild "
-            "it: `./training/run.sh build-terrain --arena eval`"
+            f"the {kind} arena is not the measurement course ({detail}). Rebuild "
+            f"it: `./training/run.sh build-terrain --arena {kind}`"
         )
 
 
@@ -879,11 +884,11 @@ def scan(
     from wojtek_rl.battery import load_checkpoint_policy
 
     cells = [
-        c for c in terrain_suite.CELLS
+        c for c in terrain_suite.ALL_CELLS
         if cell_names is None or c.name in cell_names
     ]
     if cell_names:
-        unknown = set(cell_names) - {c.name for c in terrain_suite.CELLS}
+        unknown = set(cell_names) - {c.name for c in terrain_suite.ALL_CELLS}
         if unknown:
             raise KeyError(f"unknown cell(s) {sorted(unknown)}")
 
@@ -891,47 +896,58 @@ def scan(
     # reference must not throw away a finished scan.
     baseline = load_baseline(baseline_ref)
 
-    # One dispatch carries every cell unless --per-cell asks for the reference
-    # rollout. Warp sizes its contact pool from this number at make_data, so it
-    # has to be the batch the rollout actually runs.
-    batch_envs = terrain_suite.RUNS_PER_CELL_SPEED * (1 if per_cell else len(cells))
-    sim_overrides = {
-        "backend": backend,
-        "num_envs": batch_envs,
-        # Warp allocates its contact pool up front and drops overflow
-        # silently. The recorded nacon_max is what says whether the
-        # budget was enough.
-        "naconmax_per_env": naconmax_per_env,
-    }
-    if njmax is not None:
-        sim_overrides["njmax"] = njmax
+    # Cells are scored per arena: the legacy course first, then the
+    # deep-tread course. Each group gets its own env (the arena is baked
+    # into the scene), its own dispatch, and its own contact budget.
+    arena_kinds = [
+        kind for kind in ("eval", "eval_deep")
+        if any(c.arena == kind for c in cells)
+    ]
     if scan_mode not in ("clean", "dark"):
         raise ValueError(f"scan mode must be clean or dark, got {scan_mode!r}")
-    env_overrides = {"height_scan": {"dark": True}} if scan_mode == "dark" else {}
-    run, env, ckpt, inf = load_checkpoint_policy(
-        run_dir,
-        flat=False,
-        env_overrides={
-            **env_overrides,
-            "terrain": {
-                "enable": True,
-                "arena": "eval",
-                # The spawn is written into qpos, so jitter and random yaw would
-                # only make the course non-reproducible.
-                "pad_jitter": 0.0,
-                "spawn_yaw": False,
+    mode_overrides = {"height_scan": {"dark": True}} if scan_mode == "dark" else {}
+
+    def build_env(kind: str, group: list):
+        # One dispatch carries the group's cells unless --per-cell asks for
+        # the reference rollout. Warp sizes its contact pool from this
+        # number at make_data, so it has to be the batch the rollout runs.
+        batch_envs = terrain_suite.RUNS_PER_CELL_SPEED * (
+            1 if per_cell else len(group)
+        )
+        sim_overrides = {
+            "backend": backend,
+            "num_envs": batch_envs,
+            # Warp allocates its contact pool up front and drops overflow
+            # silently. The recorded nacon_max is what says whether the
+            # budget was enough.
+            "naconmax_per_env": naconmax_per_env,
+        }
+        if njmax is not None:
+            sim_overrides["njmax"] = njmax
+        run, env, ckpt, inf = load_checkpoint_policy(
+            run_dir,
+            flat=False,
+            env_overrides={
+                **mode_overrides,
+                "terrain": {
+                    "enable": True,
+                    "arena": kind,
+                    # The spawn is written into qpos, so jitter and random
+                    # yaw would only make the course non-reproducible.
+                    "pad_jitter": 0.0,
+                    "spawn_yaw": False,
+                },
+                "sim": sim_overrides,
+                # The course drives the command itself; a mid-episode
+                # resample would walk the robot off the tile.
+                "command": {"resample_steps": 10**9},
             },
-            "sim": sim_overrides,
-            # The course drives the command itself; a mid-episode resample would
-            # walk the robot off the tile.
-            "command": {"resample_steps": 10**9},
-        },
-    )
-    check_arena(json.loads(env._terrain.files["spec"].read_text()))
-    runner = (
-        make_cell_runner(env, inf) if per_cell
-        else make_batch_runner(env, inf, len(cells))
-    )
+        )
+        check_arena(json.loads(env._terrain.files["spec"].read_text()), kind)
+        return run, env, ckpt, inf
+
+    groups = {k: [c for c in cells if c.arena == k] for k in arena_kinds}
+    run, env, ckpt, inf = build_env(arena_kinds[0], groups[arena_kinds[0]])
 
     result = {
         "schema": SCAN_SCHEMA,
@@ -952,9 +968,12 @@ def scan(
         "warnings": command_box_warnings(run, speeds),
         "cells": {},
     }
+    result["suite_version"] = terrain_suite.SUITE_VERSION
+    if "eval_deep" in groups:
+        result["deep_arena"] = terrain_suite.deep_arena_fingerprint()
     if cell_names:
         result["warnings"].append(
-            f"partial scan: {len(cells)} of {len(terrain_suite.CELLS)} cells"
+            f"partial scan: {len(cells)} of {len(terrain_suite.ALL_CELLS)} cells"
         )
     if tuple(speeds) != tuple(terrain_suite.SPEEDS):
         result["warnings"].append(
@@ -971,9 +990,67 @@ def scan(
     }
     t0 = time.perf_counter()
     rollout = _rollout_per_cell if per_cell else _rollout_batched
-    result["cells"], env_steps = rollout(
-        runner, env, cells, speeds, deadlines, budgets, eval_seed
-    )
+    result["cells"] = {}
+    env_steps = 0
+    for i, kind in enumerate(arena_kinds):
+        group = groups[kind]
+        if i > 0:
+            # A second course means a second scene; the checkpoint is the
+            # same, the arena and the batch size are not.
+            _, env, _, inf = build_env(kind, group)
+        runner = (
+            make_cell_runner(env, inf) if per_cell
+            else make_batch_runner(env, inf, len(group))
+        )
+        entries, steps = rollout(
+            runner, env, group, speeds, deadlines, budgets, eval_seed
+        )
+        result["cells"].update(entries)
+        env_steps += steps
+
+        nacon_max = max(
+            (r["nacon_max"] for c in group for r in result["cells"][c.name].values()),
+            default=0,
+        )
+        nefc_max = max(
+            (r["nefc_max"] for c in group for r in result["cells"][c.name].values()),
+            default=0,
+        )
+        # The pool covers the whole dispatch, which is every group cell at
+        # once unless --per-cell was asked for. This is the number make_data
+        # was given for this group's env.
+        capacity = naconmax_per_env * int(env._config.sim.num_envs)
+        contacts = {
+            "nacon_max": nacon_max,
+            "capacity": capacity,
+            # Warp discards overflow silently, so a scan that hit the ceiling
+            # is not a measurement of the policy.
+            "overflow": bool(env._backend == "warp" and nacon_max >= capacity),
+            # The second budget: constraint rows per world. Rows past
+            # sim.njmax apply no force, silently -- one contact costs 6 rows
+            # at condim=4 with a pyramidal cone, so this ceiling is nearer
+            # than it looks.
+            "nefc_max": nefc_max,
+            "njmax": result["njmax"],
+            "rows_overflow": bool(
+                env._backend == "warp" and nefc_max >= result["njmax"]
+            ),
+        }
+        # The legacy course keeps the legacy key, so old baselines and every
+        # reader of contacts.rows_overflow stay valid; the deep course
+        # records its own budget check beside it.
+        result["contacts" if kind == "eval" else "contacts_deep"] = contacts
+        if contacts["overflow"]:
+            result["warnings"].append(
+                f"{kind}: contact pool overflowed ({nacon_max} >= {capacity}); "
+                "raise --naconmax-per-env and rescan, those cells are not valid"
+            )
+        if contacts["rows_overflow"]:
+            result["warnings"].append(
+                f"{kind}: constraint rows overflowed ({nefc_max} >= "
+                f"{result['njmax']}); raise --njmax and rescan, those cells "
+                "are not valid"
+            )
 
     wall = time.perf_counter() - t0
     result["perf"] = {
@@ -981,42 +1058,6 @@ def scan(
         "env_steps": env_steps,
         "env_steps_per_s": round(env_steps / max(wall, 1e-9)),
     }
-    nacon_max = max(
-        (r["nacon_max"] for per in result["cells"].values() for r in per.values()),
-        default=0,
-    )
-    nefc_max = max(
-        (r["nefc_max"] for per in result["cells"].values() for r in per.values()),
-        default=0,
-    )
-    # The pool covers the whole dispatch, which is every cell at once unless
-    # --per-cell was asked for. This is the number make_data was given.
-    capacity = naconmax_per_env * int(env._config.sim.num_envs)
-    result["contacts"] = {
-        "nacon_max": nacon_max,
-        "capacity": capacity,
-        # Warp discards overflow silently, so a scan that hit the ceiling is not
-        # a measurement of the policy.
-        "overflow": bool(env._backend == "warp" and nacon_max >= capacity),
-        # The second budget: constraint rows per world. Rows past sim.njmax
-        # apply no force, silently -- one contact costs 6 rows at condim=4
-        # with a pyramidal cone, so this ceiling is nearer than it looks.
-        "nefc_max": nefc_max,
-        "njmax": result["njmax"],
-        "rows_overflow": bool(
-            env._backend == "warp" and nefc_max >= result["njmax"]
-        ),
-    }
-    if result["contacts"]["overflow"]:
-        result["warnings"].append(
-            f"contact pool overflowed ({nacon_max} >= {capacity}); raise "
-            "--naconmax-per-env and rescan, the numbers above are not valid"
-        )
-    if result["contacts"]["rows_overflow"]:
-        result["warnings"].append(
-            f"constraint rows overflowed ({nefc_max} >= {result['njmax']}); "
-            "raise --njmax and rescan, the numbers above are not valid"
-        )
     result["gate"] = {
         # The completeness reference is the FULL suite, whatever subset this
         # scan measured: "the pairs I measured are fine" must not read as

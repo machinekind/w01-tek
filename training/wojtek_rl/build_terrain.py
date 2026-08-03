@@ -13,11 +13,13 @@ Generates the arena with wojtek_rl.terrain and writes, next to the robot XML
   - terrain_lookup.npz  -- ground-truth height grid + extents/resolution
 
 `--arena eval` writes a separate file set holding the fixed measurement course
-(wojtek_rl.terrain_suite): its 12 rows, sorted columns and 0.40 m pads. Its
-row/pad settings come from the suite, so `--rows`, `--ordered`, `--pad-radius`
-and `--flat-row` do not apply there. `--arena test` is a scratch set for the
-test suite. Separate sets are what keeps a measurement from overwriting the
-arena a policy trained on.
+(wojtek_rl.terrain_suite): its rows, sorted columns and 0.40 m pads. Its
+row/pad settings come from the suite, so `--rows`, `--ordered`, `--pad-radius`,
+`--stair-tread`, `--type-caps` and `--flat-row` do not apply there.
+`--arena eval_deep` is the suite's second course: the same rows on real
+0.30 m stair treads, for the deep-tread stair cells. `--arena test` is a
+scratch set for the test suite. Separate sets are what keeps a measurement
+from overwriting the arena a policy trained on.
 
 `--flat-row` prepends a flat row to the arena as level 0. It is a property of
 the built arena, so the run that trains on it declares the same thing to the
@@ -256,25 +258,31 @@ def main() -> None:
         stair_tread=terrain.TREAD if stair_tread is None else stair_tread,
         type_caps=type_caps,
     )
-    if args.arena == "eval":
-        # The measurement course is a definition, not a CLI choice: its seed,
-        # rows, column order and pad radius come from the suite. Overriding one
-        # of them silently would produce an arena the scan then stamps with the
-        # suite's fingerprint -- numbers filed under a description of a
-        # different terrain -- so a conflicting flag is an error, not a
-        # preference. (terrain_scan.check_arena refuses such an arena too.)
-        suite = terrain_suite.eval_arena_kwargs()
+    if args.arena in ("eval", "eval_deep"):
+        # The measurement courses are definitions, not CLI choices: their
+        # seed, rows, column order, pad radius and stair geometry come from
+        # the suite. Overriding one silently would produce an arena the scan
+        # then stamps with the suite's fingerprint -- numbers filed under a
+        # description of a different terrain -- so a conflicting flag is an
+        # error, not a preference. (terrain_scan.check_arena refuses such an
+        # arena too.)
+        suite = (
+            terrain_suite.eval_arena_kwargs() if args.arena == "eval"
+            else terrain_suite.deep_arena_kwargs()
+        )
         conflicts = sorted(flag for flag, given in owned.items() if given is not None)
         if conflicts:
             p.error(
-                f"--arena eval defines {', '.join(conflicts)} itself "
+                f"--arena {args.arena} defines {', '.join(conflicts)} itself "
                 "(wojtek_rl.terrain_suite); drop them or build a `train` arena"
             )
         kwargs.update(suite)
+        tread = suite.get("stair_tread", terrain.TREAD)
         print(
-            f"eval arena: seed {terrain_suite.EVAL_SEED}, "
+            f"{args.arena} arena: seed {terrain_suite.EVAL_SEED}, "
             f"{len(terrain_suite.DIFFICULTIES)} rows "
-            f"{terrain_suite.DIFFICULTIES}, pad {terrain_suite.EVAL_PAD_RADIUS} m"
+            f"{terrain_suite.DIFFICULTIES}, pad {terrain_suite.EVAL_PAD_RADIUS} m, "
+            f"stair tread {tread} m"
         )
     if kwargs["flat_row"]:
         print("flat row: level 0 is flat ground, every terrain row shifts up one")

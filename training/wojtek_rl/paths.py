@@ -38,7 +38,7 @@ def scene_xml(name: str) -> Path:
 # written to a temporary directory does not compile. Separate sets are what
 # keeps a measurement or a test run from overwriting the arena a policy
 # trained on.
-TERRAIN_KINDS = ("train", "eval", "test")
+TERRAIN_KINDS = ("train", "eval", "eval_deep", "test")
 
 
 def terrain_paths(kind: str = "train") -> dict[str, Path]:

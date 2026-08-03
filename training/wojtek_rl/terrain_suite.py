@@ -130,6 +130,10 @@ class Cell:
     difficulty: float
     row: int
     bar: float | None  # pass rate at PLAN_SPEED; None = tracked, never gated
+    # Which measurement arena the cell lives on. The legacy cells share the
+    # `eval` arena; the deep-tread stair cells need their own geometry and
+    # so their own file set.
+    arena: str = "eval"
 
     @property
     def tracked(self) -> bool:
@@ -267,6 +271,42 @@ CELLS_BY_NAME = {c.name: c for c in CELLS}
 # with a second noise draw, so every out-of-32 number is incomparable.
 CELLS_VERSION = "v3"
 
+# The deep-tread stair cells: real stair geometry (Blondel-plausible treads)
+# on the same rows, headings and budgets. They live on their own arena
+# (`eval_deep`) so the legacy arena -- and every score ever taken on it --
+# stays byte-identical; suite version 2 is the legacy suite plus these.
+# Tracked, not gated: the plan has no bars for the geometry yet. Grand
+# totals are only comparable within one suite version; cross-version
+# comparisons happen per cell family.
+SUITE_VERSION = 2
+DEEP_TREAD = 0.30
+_DEEP_RISER = (0.03, 0.05, 0.07, 0.09)  # m
+
+
+def _build_deep() -> tuple[Cell, ...]:
+    index = {d: i for i, d in enumerate(DIFFICULTIES)}
+    cells = []
+    for ttype in ("pyramid_stairs", "inverted_pyramid_stairs"):
+        for riser in _DEEP_RISER:
+            key = _row_key(terrain.stair_difficulty(riser))
+            text = f"{riser * 100:.1f}".rstrip("0").rstrip(".")
+            cells.append(
+                Cell(
+                    name=f"{ttype}_deep_{text}cm",
+                    terrain_type=ttype,
+                    difficulty=key,
+                    row=index[key],
+                    bar=None,
+                    arena="eval_deep",
+                )
+            )
+    return tuple(cells)
+
+
+DEEP_CELLS = _build_deep()
+ALL_CELLS = CELLS + DEEP_CELLS
+ALL_CELLS_BY_NAME = {c.name: c for c in ALL_CELLS}
+
 
 def eval_arena_kwargs() -> dict:
     """`terrain.generate` kwargs for the measurement arena."""
@@ -278,6 +318,12 @@ def eval_arena_kwargs() -> dict:
     }
 
 
+def deep_arena_kwargs() -> dict:
+    """`terrain.generate` kwargs for the deep-tread measurement arena: the
+    legacy course's rows, order and pads, on real stair treads."""
+    return {**eval_arena_kwargs(), "stair_tread": DEEP_TREAD}
+
+
 def arena_fingerprint() -> dict:
     """What a scan records so two scans can be checked for comparability."""
     return {
@@ -287,6 +333,16 @@ def arena_fingerprint() -> dict:
         "stair_platform_half": terrain.STAIR_PLATFORM_HALF,
         "n_steps": terrain.N_STEPS,
         "cells": CELLS_VERSION,
+    }
+
+
+def deep_arena_fingerprint() -> dict:
+    """The deep arena's own fingerprint, recorded separately so the legacy
+    `arena` fingerprint -- what the gate compares -- never changes shape."""
+    return {
+        **arena_fingerprint(),
+        "stair_tread": DEEP_TREAD,
+        "n_steps": terrain.stair_steps(DEEP_TREAD),
     }
 
 

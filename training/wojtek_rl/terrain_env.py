@@ -126,7 +126,7 @@ def require_stair_geometry(spec: dict, kind: str, terrain_cfg) -> None:
     The measurement arenas are their own definition (terrain_suite), so like
     the flat row this check applies to the arena a policy trains on, not the
     one it is measured on."""
-    if kind == "eval":
+    if kind in ("eval", "eval_deep"):
         return
     want_tread = terrain_cfg.get("stair_tread_range", None)
     want_caps = terrain_cfg.get("type_caps", None)
@@ -160,11 +160,11 @@ def require_flat_row(spec: dict, kind: str, want: bool) -> None:
     without the row the run trains a level short of its configuration, and with
     a row nobody asked for every logged level names a different terrain.
 
-    The flag describes the training arena. The eval arena never carries the
-    row (build-terrain refuses to add it), so eval loads ignore the run's
-    flag: a flat-row policy still scores on the standard course.
+    The flag describes the training arena. The measurement arenas never
+    carry the row (build-terrain refuses to add it), so eval loads ignore
+    the run's flag: a flat-row policy still scores on the standard course.
     """
-    if kind == "eval":
+    if kind in ("eval", "eval_deep"):
         want = False
     has = bool(spec.get("flat_row", False))
     if has == want:

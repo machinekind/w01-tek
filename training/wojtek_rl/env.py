@@ -175,6 +175,20 @@ def default_config() -> config_dict.ConfigDict:
             # (0.000 m/s). Applied after fast and before zeroing.
             pure_back_prob=0.0,
             back_vx=(-0.8, -0.2),
+            # Terrain rows draw from these probabilities instead (the flat
+            # row keeps the base set): standing and spinning on a stairs
+            # tile happen on the spawn's local ground and never meet the
+            # feature, so terrain rows lean forward. Off by default; enable
+            # only makes sense with terrain on. arc/fast keep the base
+            # probabilities either way.
+            terrain_bias=config_dict.create(
+                enable=False,
+                zero_prob=0.10,
+                pure_wz_prob=0.10,
+                pure_vy_prob=0.05,
+                pure_slow_prob=0.30,
+                pure_back_prob=0.10,
+            ),
         ),
         push=config_dict.create(enable=True, interval_steps=200, vel=0.4),
         action_delay=1,  # control steps of latency between policy and motors
@@ -366,6 +380,12 @@ def default_config() -> config_dict.ConfigDict:
             ema_sec=1.0,     # smoothing horizon of the progress measure
             risk_below=0.5,  # hazard starts below this fraction of demand
             p_max=0.02,      # per-step hazard at zero progress
+            # Terrain rows get their own patience: standing at a riser and
+            # pushing IS the learning this cut was never meant to punish.
+            # 0.0 / 1.0 keep the base values everywhere (the flat row keeps
+            # them regardless).
+            terrain_grace_sec=0.0,   # grace on terrain rows; 0 = grace_sec
+            terrain_p_max_scale=1.0,  # p_max multiplier on terrain rows
         ),
         # Trot clock: fbb_v2 skated at 7 Hz instead of stepping (duty factor
         # ~1.0); the phase reward makes periodic swings the only way to score.
@@ -686,10 +706,24 @@ class WojtekJoystick(WojtekEnv):
                 m.actuator_ctrlrange[idx, 1], limit
             )
 
-    def _sample_command(self, rng):
-        """(vx, vy, wz, height). Zeroing (stand training) keeps the height."""
+    def _sample_command(self, rng, on_flat=None):
+        """(vx, vy, wz, height). Zeroing (stand training) keeps the height.
+
+        ``on_flat`` is a traced bool selecting between the base draw
+        probabilities and ``command.terrain_bias`` (terrain rows lean
+        forward). None -- and any config with the bias disabled -- keeps the
+        base set everywhere, draw for draw."""
         r1, r2, r3, r4, r5, r6, r7 = jax.random.split(rng, 7)
         c = self._config.command
+        bias = c.get("terrain_bias", None)
+        biased = bias is not None and bias.enable and on_flat is not None
+
+        def prob(name):
+            base = c.get(name, 0.0)
+            if not biased:
+                return base
+            return jp.where(on_flat, base, bias[name])
+
         vel = jp.array(
             [
                 jax.random.uniform(r1, minval=c.vx[0], maxval=c.vx[1]),
@@ -698,10 +732,10 @@ class WojtekJoystick(WojtekEnv):
             ]
         )
         # spin-in-place training: keep wz, zero the linear part
-        pure_wz = jax.random.bernoulli(r6, c.get("pure_wz_prob", 0.0))
+        pure_wz = jax.random.bernoulli(r6, prob("pure_wz_prob"))
         vel = jp.where(pure_wz, vel.at[:2].set(0.0), vel)
         # pure-strafe training: keep vy, zero vx and wz
-        pure_vy = jax.random.bernoulli(r7, c.get("pure_vy_prob", 0.0))
+        pure_vy = jax.random.bernoulli(r7, prob("pure_vy_prob"))
         vel = jp.where(pure_vy, jp.array([0.0, vel[1], 0.0]), vel)
         # forward-arc training: redraw vx from arc_vx, zero vy, keep wz.
         # Gated on the static config value and keyed off a fold_in of the
@@ -717,11 +751,12 @@ class WojtekJoystick(WojtekEnv):
             vel = jp.where(arc, jp.array([vx_arc, 0.0, vel[2]]), vel)
         # slow-walk training: redraw vx from slow_vx, zero vy and wz.
         # Gated and fold_in-keyed like arc, so presets with the prob at 0
-        # keep their sampling stream bit-identical.
+        # keep their sampling stream bit-identical. The bias opens the gate
+        # too: a biased run draws on every tile and selects the prob.
         slow_p = c.get("pure_slow_prob", 0.0)
-        if slow_p:
+        if slow_p or biased:
             r10, r11 = jax.random.split(jax.random.fold_in(rng, 2))
-            slow = jax.random.bernoulli(r10, slow_p)
+            slow = jax.random.bernoulli(r10, prob("pure_slow_prob"))
             vx_slow = jax.random.uniform(
                 r11, minval=c.slow_vx[0], maxval=c.slow_vx[1]
             )
@@ -739,14 +774,14 @@ class WojtekJoystick(WojtekEnv):
         # backward training: redraw vx from back_vx, zero vy and wz.
         # Gated and fold_in-keyed like arc/slow/fast (index 4), stream-safe.
         back_p = c.get("pure_back_prob", 0.0)
-        if back_p:
+        if back_p or biased:
             r14, r15 = jax.random.split(jax.random.fold_in(rng, 4))
-            back = jax.random.bernoulli(r14, back_p)
+            back = jax.random.bernoulli(r14, prob("pure_back_prob"))
             vx_back = jax.random.uniform(
                 r15, minval=c.back_vx[0], maxval=c.back_vx[1]
             )
             vel = jp.where(back, jp.array([vx_back, 0.0, 0.0]), vel)
-        zero = jax.random.bernoulli(r4, c.zero_prob)
+        zero = jax.random.bernoulli(r4, prob("zero_prob"))
         vel = jp.where(zero, jp.zeros(3), vel)
         height = jax.random.uniform(r5, minval=c.height[0], maxval=c.height[1])
         return jp.concatenate([vel, height[None]])
@@ -954,19 +989,12 @@ class WojtekJoystick(WojtekEnv):
     # -- reset / step -------------------------------------------------------
     def reset(self, rng: jax.Array) -> mjx_env.State:
         rng, r_cmd, r_pos = jax.random.split(rng, 3)
-        command = self._sample_command(r_cmd)
-        # Start posed for the commanded height: legs on the pose reference
-        # (the measured settled pose when calibrated, else the ctrl
-        # anchor), plus joint noise; ctrl holds the ctrl-space anchor.
-        anchor = self._height_ctrl(command[3])
-        qpos = self._home_qpos.at[self._qadr].set(
-            self._pose_ref(command[3])
-            + jax.random.uniform(r_pos, (12,), minval=-0.05, maxval=0.05)
-        )
-        qpos = qpos.at[2].set(command[3])
-        # Terrain spawn: random type, easy starting row, base lifted by the
-        # pad height. The disabled branch draws no rng and adds no info
-        # keys, so flat runs are untouched.
+        # Terrain draws run before the command so a biased command draw can
+        # see which row it lands on. The keys are fixed by the split
+        # structure, not the call order, so unbiased runs keep their
+        # trajectories bit for bit. The disabled branch draws no rng and
+        # adds no info keys, so flat runs are untouched.
+        on_flat = None
         if self._terrain_enabled:
             rng, r_type, r_level, r_spawn, r_trng = jax.random.split(rng, 5)
             terrain_type = jax.random.randint(r_type, (), 0, self._terrain.n_types)
@@ -979,8 +1007,8 @@ class WojtekJoystick(WojtekEnv):
                     1, round(self._terrain.n_rows * self._terrain.init_level_frac)
                 )
                 level = jax.random.randint(r_level, (), 0, init_rows)
+            on_flat = self._terrain.flat_row & (level == 0)
             if self._terrain.spawn_mode == "feature":
-                on_flat = self._terrain.flat_row & (level == 0)
                 spawn_xy, pad_height, quat = terrain_env.sample_feature_spawn(
                     r_spawn, terrain_type, level, on_flat,
                     self._terrain.origin_xy, self._terrain.pad_h,
@@ -996,6 +1024,17 @@ class WojtekJoystick(WojtekEnv):
                     self._terrain.origin_xy, self._terrain.pad_h,
                     self._terrain.pad_jitter, self._terrain.spawn_yaw,
                 )
+        command = self._sample_command(r_cmd, on_flat)
+        # Start posed for the commanded height: legs on the pose reference
+        # (the measured settled pose when calibrated, else the ctrl
+        # anchor), plus joint noise; ctrl holds the ctrl-space anchor.
+        anchor = self._height_ctrl(command[3])
+        qpos = self._home_qpos.at[self._qadr].set(
+            self._pose_ref(command[3])
+            + jax.random.uniform(r_pos, (12,), minval=-0.05, maxval=0.05)
+        )
+        qpos = qpos.at[2].set(command[3])
+        if self._terrain_enabled:
             qpos = qpos.at[0:2].set(spawn_xy)
             qpos = qpos.at[2].set(ground + command[3])
             qpos = qpos.at[3:7].set(quat)
@@ -1265,19 +1304,38 @@ class WojtekJoystick(WojtekEnv):
                 (1.0 - alpha) * info["progress_ema"] + alpha * served
             )
             progress_ratio = info["progress_ema"] / jp.maximum(demand, 1e-6)
-            hazard = npg.p_max * jp.clip(
+            # Terrain rows may carry their own grace and hazard scale; the
+            # flat row (and every run without the fields) keeps the base
+            # values. Static when the fields are at their defaults.
+            grace_sec = npg.grace_sec
+            p_max = npg.p_max
+            t_grace = npg.get("terrain_grace_sec", 0.0)
+            t_scale = npg.get("terrain_p_max_scale", 1.0)
+            if self._terrain_enabled and (t_grace > 0.0 or t_scale != 1.0):
+                on_terrain = ~(
+                    self._terrain.flat_row & (info["terrain_level"] == 0)
+                )
+                grace_sec = jp.where(
+                    on_terrain & (t_grace > 0.0), t_grace, npg.grace_sec
+                )
+                p_max = npg.p_max * jp.where(on_terrain, t_scale, 1.0)
+            hazard = p_max * jp.clip(
                 (npg.risk_below - progress_ratio) / npg.risk_below, 0.0, 1.0
             )
             armed = (demand > 0.05) & (
-                info["steps_since_cmd"] * self.dt >= npg.grace_sec
+                info["steps_since_cmd"] * self.dt >= grace_sec
             )
             no_progress_cut = jax.random.bernoulli(
                 r_term, jp.where(armed, hazard, 0.0)
             )
             done = done | no_progress_cut
         resample = info["steps_since_cmd"] >= self._config.command.resample_steps
+        row_flat = (
+            self._terrain.flat_row & (info["terrain_level"] == 0)
+            if self._terrain_enabled else None
+        )
         info["command"] = jp.where(
-            resample, self._sample_command(r_cmd), info["command"]
+            resample, self._sample_command(r_cmd, row_flat), info["command"]
         )
         info["steps_since_cmd"] = jp.where(resample, 0, info["steps_since_cmd"])
         if self._config.no_progress.enable:

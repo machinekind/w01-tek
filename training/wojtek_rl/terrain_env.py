@@ -46,15 +46,21 @@ class Arena:
     cell_y: float
     origin_xy: jp.ndarray  # (n_rows, n_types, 2) tile centres
     pad_h: jp.ndarray  # (n_rows, n_types) spawn pad heights
+    feature_r: jp.ndarray  # (n_rows, n_types) outer Chebyshev feature radii
     n_rows: int  # curriculum levels, the flat row included when there is one
     flat_row: bool  # true: level 0 is flat, every terrain row sits one higher
     n_types: int
     tile_size: float
+    pad_radius: float  # the arena's flat pad radius, from its spec
     pad_jitter: float
     spawn_yaw: bool
     demote_fraction: float
     init_level_frac: float
     spawn_level: int
+    spawn_mode: str  # pad | feature
+    spawn_grace_sec: float
+    pinned_frac: float
+    demote_strikes: int
 
     def height(self, xy):
         """Terrain surface height under world ``xy`` (``(..., 2)``)."""
@@ -109,6 +115,43 @@ def require_current_geometry(spec: dict, kind: str) -> None:
         )
 
 
+def require_stair_geometry(spec: dict, kind: str, terrain_cfg) -> None:
+    """Refuse an arena whose stair treads, caps or pad differ from the run's.
+
+    These are baked into the generated files the way the flat row is, so the
+    build and the preset have to agree. The config's None means the legacy
+    defaults, which an arena spec expresses by omitting the keys (the legacy
+    measurement arena stays byte-identical that way).
+
+    The measurement arenas are their own definition (terrain_suite), so like
+    the flat row this check applies to the arena a policy trains on, not the
+    one it is measured on."""
+    if kind == "eval":
+        return
+    want_tread = terrain_cfg.get("stair_tread_range", None)
+    want_caps = terrain_cfg.get("type_caps", None)
+    want_pad = terrain_cfg.get("pad_radius", None)
+    has_tread = spec.get("stair_tread", None)
+    has_caps = spec.get("type_caps", None)
+    has_pad = float(spec["pad_radius"])
+    problems = []
+    want_tread_l = list(want_tread) if want_tread is not None else None
+    if want_tread_l != (list(has_tread) if isinstance(has_tread, list) else has_tread):
+        problems.append(f"stair_tread: arena has {has_tread!r}, run wants {want_tread_l!r}")
+    want_caps_d = dict(want_caps) if want_caps is not None else None
+    if want_caps_d != has_caps:
+        problems.append(f"type_caps: arena has {has_caps!r}, run wants {want_caps_d!r}")
+    if want_pad is not None and abs(float(want_pad) - has_pad) > 1e-9:
+        problems.append(f"pad_radius: arena has {has_pad}, run wants {want_pad}")
+    if problems:
+        raise ValueError(
+            f"the {kind} terrain arena disagrees with the run's stair "
+            f"geometry ({'; '.join(problems)}). Rebuild it: "
+            f"`./training/run.sh build-terrain --arena {kind}` with this "
+            f"run's geometry flags, or fix the preset to match the arena."
+        )
+
+
 def require_flat_row(spec: dict, kind: str, want: bool) -> None:
     """Refuse an arena whose flat row does not match what the run asked for.
 
@@ -159,19 +202,25 @@ def load(terrain_cfg) -> Arena:
     # here rather than a missing default.
     want_flat = bool(terrain_cfg.get("flat_row", False))
     require_flat_row(spec, kind, want_flat)
+    require_stair_geometry(spec, kind, terrain_cfg)
     # The arena's own truth, not the run's flag: an eval load under a
     # flat-row run carries no row.
     flat_row = bool(spec.get("flat_row", False))
-    origin_xy, pad_h = tables_from_spec(spec, terrain.TYPES)
+    origin_xy, pad_h, feature_r = tables_from_spec(spec, terrain.TYPES)
 
-    # A coarse fit check: the spawn scatter plus the standing footprint has to
-    # fit the arena's flat pad, or spawns start with feet on the features. The
-    # linear sum ignores corner draws, but the pad's taper band absorbs that
-    # fringe; what this catches is a category error -- training with the
-    # default 0.15 m jitter on the eval arena's deliberately small 0.40 m pads.
+    # A coarse fit check for pad-confined spawns: the spawn scatter plus the
+    # standing footprint has to fit the arena's flat pad, or spawns start
+    # with feet on the features. The linear sum ignores corner draws, but the
+    # pad's taper band absorbs that fringe; what this catches is a category
+    # error -- training with the default 0.15 m jitter on the eval arena's
+    # deliberately small 0.40 m pads. Feature spawns read the ground height
+    # under the spawn point instead, so the pad owes them nothing.
+    spawn_mode = str(terrain_cfg.get("spawn_mode", "pad"))
+    if spawn_mode not in ("pad", "feature"):
+        raise ValueError(f"terrain.spawn_mode={spawn_mode!r}: use 'pad' or 'feature'")
     pad_jitter = float(terrain_cfg.pad_jitter)
     pad_radius = float(spec["pad_radius"])
-    if pad_jitter + terrain.FOOTPRINT_REACH > pad_radius:
+    if spawn_mode == "pad" and pad_jitter + terrain.FOOTPRINT_REACH > pad_radius:
         raise ValueError(
             f"terrain.pad_jitter={pad_jitter} scatters spawns off the {kind} "
             f"arena's flat pad: jitter + the {terrain.FOOTPRINT_REACH} m "
@@ -189,33 +238,63 @@ def load(terrain_cfg) -> Arena:
         cell_y=(y_max - y_min) / (nrow - 1),
         origin_xy=jp.asarray(origin_xy),
         pad_h=jp.asarray(pad_h),
+        feature_r=jp.asarray(feature_r),
         n_rows=int(spec["n_rows"]),
         flat_row=flat_row,
         n_types=len(terrain.TYPES),
         tile_size=float(spec["tile_size"]),
+        pad_radius=pad_radius,
         pad_jitter=pad_jitter,
         spawn_yaw=bool(terrain_cfg.spawn_yaw),
         demote_fraction=float(terrain_cfg.demote_fraction),
         init_level_frac=float(terrain_cfg.init_level_frac),
         spawn_level=int(terrain_cfg.get("spawn_level", -1)),
+        spawn_mode=spawn_mode,
+        spawn_grace_sec=float(terrain_cfg.get("spawn_grace_sec", 0.0)),
+        pinned_frac=float(terrain_cfg.get("pinned_frac", 0.0)),
+        demote_strikes=int(terrain_cfg.get("demote_strikes", 1)),
     )
 
 
-def tables_from_spec(spec: dict, types) -> tuple[np.ndarray, np.ndarray]:
-    """Tile-centre xy and pad height for every (row, type) pair.
+def tables_from_spec(spec: dict, types) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Tile-centre xy, pad height and feature radius for every (row, type) pair.
 
     Indexed by type, not column, because each row shuffles its column order.
-    Shapes: ``(n_rows, n_types, 2)`` and ``(n_rows, n_types)``."""
+    Shapes: ``(n_rows, n_types, 2)`` and ``(n_rows, n_types)`` twice.
+
+    Legacy specs carry no per-tile ``feature_radius``; the fallback rebuilds
+    it from the spec's own stair constants, matching what the generator would
+    have written (the flat row, when present, has no band and reads 0)."""
     n_rows = int(spec["n_rows"])
     type_idx = {t: i for i, t in enumerate(types)}
     origin_xy = np.zeros((n_rows, len(types), 2), dtype=np.float32)
     pad_h = np.zeros((n_rows, len(types)), dtype=np.float32)
+    feature_r = np.zeros((n_rows, len(types)), dtype=np.float32)
+    stair_fallback = terrain.stair_pit_half(
+        float(spec["stair_platform_half"]), terrain.TREAD, int(spec["n_steps"])
+    )
+    ring_fallback = float(spec["tile_size"]) / 2 - terrain.DISCRETE_EDGE_MARGIN
+    flat_row = bool(spec.get("flat_row", False))
     for t in spec["tiles"]:
         r = int(t["row"])
         j = type_idx[t["type"]]
         origin_xy[r, j] = (t["origin"][0], t["origin"][1])
         pad_h[r, j] = t["pad_height"]
-    return origin_xy, pad_h
+        if "feature_radius" in t:
+            feature_r[r, j] = t["feature_radius"]
+        elif flat_row and r == 0:
+            feature_r[r, j] = 0.0
+        elif t["type"] in ("pyramid_stairs", "inverted_pyramid_stairs"):
+            feature_r[r, j] = stair_fallback
+        else:
+            feature_r[r, j] = ring_fallback
+    return origin_xy, pad_h, feature_r
+
+
+# A feature spawn keeps this much Chebyshev clearance to the tile border, so
+# the standing footprint (reach 0.31 m + foot radius) starts on the tile it
+# is scored on rather than astride a border.
+SPAWN_EDGE_MARGIN = 0.35
 
 
 def sample_tile_spawn(rng, terrain_type, level, origin_xy, pad_h, pad_jitter, yaw_enable):
@@ -237,54 +316,94 @@ def sample_tile_spawn(rng, terrain_type, level, origin_xy, pad_h, pad_jitter, ya
     return spawn_xy, ph, quat
 
 
+def sample_feature_spawn(
+    rng, terrain_type, level, on_flat, origin_xy, pad_h, pad_jitter,
+    tile_size, yaw_enable,
+):
+    """Pick a spawn pose anywhere on one tile's interior.
+
+    xy lands uniformly inside the tile's Chebyshev square minus
+    SPAWN_EDGE_MARGIN -- on the stairs, the rubble, the slope, wherever.
+    The flat row keeps the pad draw (there is no feature to land on, and
+    the pad jitter is its identity). The caller sets z from the terrain
+    height under the returned xy; the returned height is only the flat
+    row's pad height, used where ``on_flat`` is true.
+
+    Both candidate draws always run, so the rng cost is fixed; ``on_flat``
+    is traced and selects between them."""
+    xy0 = origin_xy[level, terrain_type]
+    ph = pad_h[level, terrain_type]
+    r_feat, r_pad, ry = jax.random.split(rng, 3)
+    half = tile_size / 2 - SPAWN_EDGE_MARGIN
+    feat_xy = xy0 + jax.random.uniform(r_feat, (2,), minval=-half, maxval=half)
+    pad_xy = xy0 + jax.random.uniform(
+        r_pad, (2,), minval=-pad_jitter, maxval=pad_jitter
+    )
+    spawn_xy = jp.where(on_flat, pad_xy, feat_xy)
+    if yaw_enable:
+        yaw = jax.random.uniform(ry, minval=-jp.pi, maxval=jp.pi)
+        quat = jp.array([jp.cos(yaw / 2), 0.0, 0.0, jp.sin(yaw / 2)])
+    else:
+        quat = jp.array([1.0, 0.0, 0.0, 0.0])
+    return spawn_xy, ph, quat
+
+
 def curriculum_step(
     level, walked, commanded_dist, steps_lived, episode_length,
     rng, n_rows, tile_size, demote_fraction,
+    strikes=0, demote_strikes=1, crossed=None, grace_steps=0, pinned=False,
 ):
-    """Move one env's level after an episode, legged_gym style.
+    """Move one env's level after an episode, legged_gym style with three
+    v4.2 amendments: band promotion, strike demotion, and spawn grace.
 
-    Walked more than half a tile: one level up. Covered less than
-    ``demote_fraction`` of the distance the commands asked for over a FULL
-    episode: one level down. Otherwise stay, which covers standing episodes
-    too. Levels stay inside ``[0, n_rows-1]``, except going up from the top
-    level lands on a random row, so easy terrain stays in training. Promotion
-    wins when both fire, matching legged_gym's ``move_down * ~move_up``. The
-    rng always advances, so the caller can gate everything on ``done`` with
-    one where.
+    Promotion: with ``crossed=None``, the legacy rule -- walked more than
+    half a tile, a Euclidean distance whose diagonal leak the v4.1 ledger
+    documents. The caller that has the geometry passes ``crossed`` instead:
+    a traced bool saying the episode actually crossed the tile's feature
+    band (Chebyshev, terrain_wrapper computes it). Going up from the top
+    level lands on a random row, so easy terrain stays in training.
+    Promotion wins when promote and fail both fire, matching legged_gym's
+    ``move_down * ~move_up``.
 
-    The demote threshold is projected onto the full episode. legged_gym
-    compares walked distance against half the commanded speed times the whole
-    episode length, using the command held at reset; this env resamples the
-    command mid-episode, so the equivalent is to scale the commanded distance
-    actually accumulated by ``episode_length / steps_lived``. A timeout has
-    ``steps_lived == episode_length``, so the factor is 1 and the threshold is
-    what it always was. A fall at step 50 of 1000 gets twenty times the
-    distance commanded so far, so almost any fall demotes -- the escape valve
-    legged_gym has, and falling is the dominant termination on terrain.
+    Demotion: an episode fails when it covered less than
+    ``demote_fraction`` of the distance its commands asked for, projected
+    onto a full episode -- a fall at step 50 of 1000 gets twenty times the
+    distance commanded so far, so almost any fall fails. The projection is
+    legged_gym's escape valve, kept as is. What changed is that one failure
+    no longer demotes: failures increment ``strikes``, a clean or promoted
+    episode clears them, and only ``demote_strikes`` consecutive failures
+    drop a level (and clear the count). One is the legacy behavior.
 
-    Note the asymmetry: the promote threshold is hardcoded at half a tile,
-    while demote is configurable. Half a tile knows nothing about how long the
-    obstacle is, which is what bounds the stair flight at six steps (treads end
-    at 1.25 m of a 1.5 m half-tile). A longer flight needs promotion defined
-    against the feature band instead.
+    Grace: an episode that ended within ``grace_steps`` is neutral -- no
+    strike, no promotion, strikes carried unchanged. Feature spawns can put
+    the robot on a stair edge mid four-bar-closure relaxation; those falls
+    say nothing about the level.
 
-    The threshold is heading-dependent for the same reason: ``walked`` is a
-    Euclidean distance while every feature is a concentric square, so 1.5 m on
-    a diagonal is only 1.06 m out in Chebyshev terms -- tread 4 of 6. About a
-    quarter of headings promote without crossing the whole flight. Kept as-is
-    because it is legged_gym's rule; the measurement scan uses Chebyshev radii
-    for exactly this reason.
+    ``pinned`` freezes the env: level and strikes pass through untouched.
+    The 20% coverage slice rides on this.
+
+    The rng always advances, so the caller can gate everything on ``done``
+    with one where. Returns (new_level, new_strikes, rng).
     """
-    promote = walked > 0.5 * tile_size
+    promote = (walked > 0.5 * tile_size) if crossed is None else crossed
     # steps_lived is 0 only before the first step has run, where commanded_dist
     # is 0 too and the threshold is 0 either way; the maximum just keeps the
     # division finite.
     full_episode = commanded_dist * episode_length / jp.maximum(steps_lived, 1)
-    demote = walked < demote_fraction * full_episode
+    fail = walked < demote_fraction * full_episode
+    graced = steps_lived <= grace_steps
+    promote = promote & ~graced
+    fail = fail & ~graced & ~promote
+    clean = ~fail & ~graced
+    new_strikes = jp.where(clean, 0, jp.where(fail, strikes + 1, strikes))
+    demote = new_strikes >= demote_strikes
+    new_strikes = jp.where(demote & ~promote, 0, new_strikes)
     delta = jp.where(promote, 1, jp.where(demote, -1, 0))
     stepped = jp.clip(level + delta, 0, n_rows - 1)
     at_max = level >= (n_rows - 1)
     rng, sub = jax.random.split(rng)
     rand_row = jax.random.randint(sub, (), 0, n_rows)
     new_level = jp.where(promote & at_max, rand_row, stepped)
-    return new_level, rng
+    new_level = jp.where(pinned, level, new_level)
+    new_strikes = jp.where(pinned, strikes, new_strikes)
+    return new_level, new_strikes, rng

@@ -224,6 +224,36 @@ def default_config() -> config_dict.ConfigDict:
             # Drop a level when the episode walked less than this fraction
             # of its commanded distance.
             demote_fraction=0.5,
+            # Where episodes start. `pad` is the legacy flat pad at the tile
+            # centre; `feature` spawns anywhere on the tile's interior with
+            # the base height read from the terrain under the spawn point
+            # (the flat row keeps pad spawns). Promotion then requires
+            # actually crossing the tile's feature band instead of 1.5 m of
+            # Euclidean drift.
+            spawn_mode="pad",
+            # An episode that ends within this many seconds of its spawn is
+            # curriculum-neutral and pays no termination penalty: feature
+            # spawns can land on a stair edge mid four-bar-closure
+            # relaxation, and those falls say nothing about the level.
+            spawn_grace_sec=0.0,
+            # Fraction of envs pinned across the rungs (env index mod
+            # n_rows) instead of riding the ladder, so every difficulty
+            # keeps live coverage whatever the promote/demote equilibrium.
+            pinned_frac=0.0,
+            # Consecutive failed episodes before a level drop. 1 is the
+            # legacy fall-and-drop; 3 lets an env grind on a hard tile.
+            demote_strikes=1,
+            # Stair treads the training arena was built with: null is the
+            # legacy 0.13 m; a [lo, hi] pair means per-tile draws. Checked
+            # against the arena spec at load, like flat_row.
+            stair_tread_range=None,
+            # Per-type difficulty caps the arena was built with (null =
+            # full ramps). Checked against the arena spec at load.
+            type_caps=None,
+            # The arena's pad radius, when the build overrode the default
+            # (feature-spawn arenas shrink pads to summit platforms).
+            # Checked against the arena spec at load; null skips the check.
+            pad_radius=None,
         ),
         # Body-frame grid of terrain heights ahead of the robot, relative to
         # the lowest foot. Terrain only: on the flat scene there is no
@@ -949,13 +979,25 @@ class WojtekJoystick(WojtekEnv):
                     1, round(self._terrain.n_rows * self._terrain.init_level_frac)
                 )
                 level = jax.random.randint(r_level, (), 0, init_rows)
-            spawn_xy, pad_height, quat = terrain_env.sample_tile_spawn(
-                r_spawn, terrain_type, level,
-                self._terrain.origin_xy, self._terrain.pad_h,
-                self._terrain.pad_jitter, self._terrain.spawn_yaw,
-            )
+            if self._terrain.spawn_mode == "feature":
+                on_flat = self._terrain.flat_row & (level == 0)
+                spawn_xy, pad_height, quat = terrain_env.sample_feature_spawn(
+                    r_spawn, terrain_type, level, on_flat,
+                    self._terrain.origin_xy, self._terrain.pad_h,
+                    self._terrain.pad_jitter, self._terrain.tile_size,
+                    self._terrain.spawn_yaw,
+                )
+                ground = jp.where(
+                    on_flat, pad_height, self._terrain.height(spawn_xy)
+                )
+            else:
+                spawn_xy, ground, quat = terrain_env.sample_tile_spawn(
+                    r_spawn, terrain_type, level,
+                    self._terrain.origin_xy, self._terrain.pad_h,
+                    self._terrain.pad_jitter, self._terrain.spawn_yaw,
+                )
             qpos = qpos.at[0:2].set(spawn_xy)
-            qpos = qpos.at[2].set(pad_height + command[3])
+            qpos = qpos.at[2].set(ground + command[3])
             qpos = qpos.at[3:7].set(quat)
         data = self._make_data()
         data = data.replace(qpos=qpos, qvel=jp.zeros(self._mj_model.nv), ctrl=anchor)
@@ -1039,6 +1081,8 @@ class WojtekJoystick(WojtekEnv):
         # wrapper rewrites the rest on done. The env refreshes last_xy and
         # commanded_dist every step.
         if self._terrain_enabled:
+            tile_origin = self._terrain.origin_xy[level, terrain_type]
+            r0 = jp.max(jp.abs(spawn_xy - tile_origin))
             info.update(
                 terrain_type=terrain_type,
                 terrain_level=level,
@@ -1047,6 +1091,13 @@ class WojtekJoystick(WojtekEnv):
                 last_xy=spawn_xy,
                 commanded_dist=jp.zeros(()),
                 terrain_rng=r_trng,
+                # Feature-band promotion state: the episode's Chebyshev
+                # radial range around its tile centre. The wrapper reads
+                # them on done and resets them at the new spawn.
+                tile_origin=tile_origin,
+                cheby_min=r0,
+                cheby_max=r0,
+                curriculum_strikes=jp.array(0, dtype=jp.int32),
             )
             metrics["terrain_level_per_step"] = level.astype(jp.float32)
             # Diagnostic, written every step below. Zero here: the spawn stands
@@ -1146,6 +1197,25 @@ class WojtekJoystick(WojtekEnv):
         rewards, done = self._get_reward(
             data, info, action, motor_targets, first_contact, contact
         )
+        # Spawn grace: a fall this early is the spawn's fault, not the
+        # policy's -- feature spawns land on stair edges mid four-bar
+        # relaxation. The episode still ends (a fallen robot has nothing to
+        # learn lying there) but the penalty is waived; the curriculum side
+        # of the grace lives in curriculum_step. `steps` is EpisodeWrapper's
+        # per-episode counter, absent on bare eval envs, where there is no
+        # auto-respawn and so no grace either.
+        if (
+            self._terrain_enabled
+            and self._terrain.spawn_grace_sec > 0
+            and "steps" in info
+        ):
+            in_grace = (
+                info["steps"].astype(jp.float32) * self.dt
+                < self._terrain.spawn_grace_sec
+            )
+            rewards["termination"] = rewards["termination"] * jp.where(
+                in_grace, 0.0, 1.0
+            )
         info["swing_apex"] = jp.where(contact_filt, 0.0, info["swing_apex"])
         info["feet_air_time"] = jp.where(
             contact_filt, 0.0, info["feet_air_time"] + self.dt
@@ -1163,6 +1233,9 @@ class WojtekJoystick(WojtekEnv):
             info["commanded_dist"] = info["commanded_dist"] + (
                 jp.linalg.norm(info["command"][:2]) * self.dt
             )
+            r = jp.max(jp.abs(data.qpos[0:2] - info["tile_origin"]))
+            info["cheby_min"] = jp.minimum(info["cheby_min"], r)
+            info["cheby_max"] = jp.maximum(info["cheby_max"], r)
         # Master clock advances at the speed the CURRENT command asks for
         # (frozen when standing); per-leg phases come from _leg_phases.
         phase = info["phase"] + self._phase_dt(info["command"])

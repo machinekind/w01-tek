@@ -55,6 +55,13 @@ env:
     init_level_frac: 0.5 # first spawns come from the easiest half of rows
     spawn_level: -1 # pin every spawn to this row; -1 samples per init_level_frac
     demote_fraction: 0.5 # drop a level if walked < this * commanded distance
+    spawn_mode: pad # pad = legacy flat-pad spawns; feature = anywhere on the tile
+    spawn_grace_sec: 0.0 # falls this soon after a spawn are curriculum-neutral
+    pinned_frac: 0.0 # fraction of envs pinned across the rungs, off the ladder
+    demote_strikes: 1 # consecutive failed episodes before a level drop
+    stair_tread_range: null # [lo, hi] per-tile tread draws; null = legacy 0.13
+    type_caps: null # per-type difficulty caps baked into the arena build
+    pad_radius: null # arena pad radius when the build overrode the default
 
   # Terrain-height grid ahead of the robot, off by default. Components:
   # height_scan_clean (critic) and height_scan (actor: masked, held,

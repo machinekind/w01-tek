@@ -90,6 +90,16 @@ class TerrainAutoResetWrapper(Wrapper):
         self._pad_jitter = base._terrain.pad_jitter
         self._spawn_yaw = base._terrain.spawn_yaw
         self._demote_fraction = base._terrain.demote_fraction
+        # v4.2 curriculum state (all inert at the legacy defaults):
+        # feature spawns, band promotion, strike demotion, pinned coverage.
+        self._spawn_mode = base._terrain.spawn_mode
+        self._feature_r = base._terrain.feature_r
+        self._pad_radius = base._terrain.pad_radius
+        self._flat_row = base._terrain.flat_row
+        self._height = base._terrain.height
+        self._grace_steps = int(round(base._terrain.spawn_grace_sec / base.dt))
+        self._demote_strikes = base._terrain.demote_strikes
+        self._pinned_frac = base._terrain.pinned_frac
         # For reseeding the no-progress meter on respawn (see step below).
         self._cmd_speed = base._cmd_speed
         # EpisodeWrapper's length, for projecting the demote threshold onto a
@@ -124,27 +134,57 @@ class TerrainAutoResetWrapper(Wrapper):
         return state
 
     def _respawn(self, done, level, ttype, spawn_xy, last_xy, commanded, spawn_h,
-                 steps_lived, cached_qpos, rng):
+                 steps_lived, cached_qpos, rng, strikes, cheby_min, cheby_max,
+                 pinned, pinned_level):
         """One env's teleport. Everything returned is gated on ``done``; a
         live env keeps its values."""
         walked = jp.linalg.norm(last_xy - spawn_xy)
-        new_level, rng2 = terrain_env.curriculum_step(
+        crossed = None
+        if self._spawn_mode == "feature":
+            # Promotion means crossing the tile's feature band: the episode's
+            # Chebyshev range around the tile centre reached inside the
+            # platform AND past the feature's outer ring. The flat row has no
+            # band, so it keeps the legacy walked-distance rule.
+            f_r = self._feature_r[level, ttype]
+            band = (
+                (cheby_min <= self._pad_radius) & (cheby_max >= f_r) & (f_r > 0)
+            )
+            on_flat = self._flat_row & (level == 0)
+            crossed = jp.where(on_flat, walked > 0.5 * self._tile_size, band)
+        new_level, new_strikes, rng2 = terrain_env.curriculum_step(
             level, walked, commanded, steps_lived, self._episode_length, rng,
             self._n_rows, self._tile_size, self._demote_fraction,
+            strikes=strikes, demote_strikes=self._demote_strikes,
+            crossed=crossed, grace_steps=self._grace_steps, pinned=pinned,
         )
+        # A pinned env holds its own rung, whatever level its first reset
+        # happened to draw; its first respawn moves it there for good.
+        new_level = jp.where(pinned, pinned_level, new_level)
         rng2, r_spawn = jax.random.split(rng2)
-        new_xy, pad_h, quat = terrain_env.sample_tile_spawn(
-            r_spawn, ttype, new_level,
-            self._origin_xy, self._pad_h, self._pad_jitter, self._spawn_yaw,
-        )
+        if self._spawn_mode == "feature":
+            on_flat_new = self._flat_row & (new_level == 0)
+            new_xy, pad_h, quat = terrain_env.sample_feature_spawn(
+                r_spawn, ttype, new_level, on_flat_new,
+                self._origin_xy, self._pad_h, self._pad_jitter,
+                self._tile_size, self._spawn_yaw,
+            )
+            ground = jp.where(on_flat_new, pad_h, self._height(new_xy))
+        else:
+            new_xy, ground, quat = terrain_env.sample_tile_spawn(
+                r_spawn, ttype, new_level,
+                self._origin_xy, self._pad_h, self._pad_jitter, self._spawn_yaw,
+            )
         qpos = cached_qpos
         qpos = qpos.at[0:2].set(jp.where(done, new_xy, qpos[0:2]))
-        qpos = qpos.at[2].set(jp.where(done, pad_h + spawn_h, qpos[2]))
+        qpos = qpos.at[2].set(jp.where(done, ground + spawn_h, qpos[2]))
         qpos = qpos.at[3:7].set(jp.where(done, quat, qpos[3:7]))
         level_out = jp.where(done, new_level, level)
         spawn_out = jp.where(done, new_xy, spawn_xy)
+        strikes_out = jp.where(done, new_strikes, strikes)
         rng_out = jp.where(done, rng2, rng)
-        return qpos, level_out, spawn_out, rng_out
+        origin_out = self._origin_xy[level_out, ttype]
+        r0 = jp.max(jp.abs(spawn_out - origin_out))
+        return qpos, level_out, spawn_out, rng_out, strikes_out, origin_out, r0
 
     def _scan_pose(self, teleport_data, new_qpos, cached_qpos):
         """The teleported pose as the scan reads it.
@@ -226,7 +266,21 @@ class TerrainAutoResetWrapper(Wrapper):
         steps_lived = info.get(
             "steps", jp.full_like(done, self._episode_length, dtype=jp.int32)
         )
-        new_qpos, new_level, new_spawn_xy, new_rng = jax.vmap(self._respawn)(
+        # The pinned coverage slice: the first pinned_frac of the batch sits
+        # one env per rung, round-robin, and never rides the ladder. Batch
+        # size is trace-time static, so this costs nothing per step.
+        n_envs = done.shape[0]
+        if self._pinned_frac > 0:
+            idx = jp.arange(n_envs)
+            pinned = idx < int(round(self._pinned_frac * n_envs))
+            pinned_level = idx % self._n_rows
+        else:
+            pinned = jp.zeros(n_envs, dtype=bool)
+            pinned_level = jp.zeros(n_envs, dtype=jp.int32)
+        (
+            new_qpos, new_level, new_spawn_xy, new_rng,
+            new_strikes, new_origin, new_r0,
+        ) = jax.vmap(self._respawn)(
             done,
             info["terrain_level"],
             info["terrain_type"],
@@ -237,6 +291,11 @@ class TerrainAutoResetWrapper(Wrapper):
             steps_lived,
             reset_data.qpos,
             info["terrain_rng"],
+            info["curriculum_strikes"],
+            info["cheby_min"],
+            info["cheby_max"],
+            pinned,
+            pinned_level,
         )
         teleport_data = reset_data.replace(qpos=new_qpos)
 
@@ -271,6 +330,12 @@ class TerrainAutoResetWrapper(Wrapper):
             done, jp.zeros_like(info["commanded_dist"]), info["commanded_dist"]
         )
         info["terrain_rng"] = new_rng
+        info["curriculum_strikes"] = new_strikes
+        info["tile_origin"] = jp.where(
+            done[:, None], new_origin, info["tile_origin"]
+        )
+        info["cheby_min"] = jp.where(done, new_r0, info["cheby_min"])
+        info["cheby_max"] = jp.where(done, new_r0, info["cheby_max"])
         if "progress_ema" in info:
             # A respawn keeps the dead episode's command and clocks (the
             # auto-reset contract here), so the no-progress meter restarts

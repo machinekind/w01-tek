@@ -159,7 +159,7 @@ EPISODE = 1000
 def _curr(level, walked, commanded, key=0, steps_lived=EPISODE, episode=EPISODE):
     """`steps_lived == episode` by default: a timeout, where the projection
     factor is 1 and the threshold is the pre-projection one."""
-    lvl, _ = terrain_env.curriculum_step(
+    lvl, _, _ = terrain_env.curriculum_step(
         jp.int32(level), jp.float32(walked), jp.float32(commanded),
         jp.int32(steps_lived), episode,
         jax.random.PRNGKey(key), N_ROWS, TILE, DEMOTE,
@@ -242,7 +242,7 @@ def test_curriculum_max_level_random_respawn():
     keys = jax.random.split(jax.random.PRNGKey(0), 200)
 
     def one(k):
-        lvl, _ = terrain_env.curriculum_step(
+        lvl, _, _ = terrain_env.curriculum_step(
             jp.int32(N_ROWS - 1), jp.float32(2.0), jp.float32(3.0),
             jp.int32(EPISODE), EPISODE,
             k, N_ROWS, TILE, DEMOTE,

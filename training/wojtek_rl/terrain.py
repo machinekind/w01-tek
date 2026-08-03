@@ -116,6 +116,15 @@ N_STEPS = 6
 RIM_MARGIN = 0.25
 
 
+def summit_platform_half(pad_radius: float) -> float:
+    """The stair platform that goes with a given pad: it shrinks with the
+    pad down to a 0.3 m summit (the standing footprint without jitter) and
+    never grows past the legacy 0.6 m. Feature-spawn arenas shrink both
+    together; build_terrain and the arena-agreement check share this rule so
+    they cannot drift."""
+    return min(STAIR_PLATFORM_HALF, max(pad_radius, 0.3))
+
+
 def stair_steps(
     tread: float,
     stair_platform_half: float = STAIR_PLATFORM_HALF,

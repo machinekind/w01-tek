@@ -91,12 +91,17 @@ def require_current_geometry(spec: dict, kind: str) -> None:
     own boxes -- so a stale arena raises nothing and trains fine. It just trains
     on terrain nobody asked for: an arena built before the stair flight went from
     four steps to six has four-step stairs, and the run's own run.json would say
-    six. Rows, seed and tile size are per-experiment and not checked; the stair
-    geometry is a code constant, so a mismatch is always staleness.
+    six. Rows, seed and tile size are per-experiment and not checked. The stair
+    geometry was a pure code constant before v4.2; an arena whose spec declares
+    extended stair geometry (a `stair_tread` key) sizes its platform from its
+    own pad instead, by the shared summit rule.
     """
     expected = {
         "n_steps": terrain.N_STEPS,
-        "stair_platform_half": terrain.STAIR_PLATFORM_HALF,
+        "stair_platform_half": (
+            terrain.summit_platform_half(float(spec["pad_radius"]))
+            if "stair_tread" in spec else terrain.STAIR_PLATFORM_HALF
+        ),
     }
     stale = {
         key: (spec.get(key), value)

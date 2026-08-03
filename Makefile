@@ -51,8 +51,11 @@ empty :=
 space := $(empty) $(empty)
 TRAIN_VARS = EXPERIMENT RUN_NAME NUM_ENVS BATCH TERRAIN FLAT_ROW WANDB
 TRAIN_EXPORTS = $(subst $(space),,$(foreach v,$(TRAIN_VARS),$(if $($(v)),$(comma)$(v)=$($(v)))))
+# TERRAIN_FLAGS rides the submit shell, not --export: its --type-caps
+# value contains commas, which --export would split on. --export=ALL
+# carries the submit shell's environment into the job.
 hpc-train: hpc-vars
-	ssh $(HPC) "cd $(REMOTE) && mkdir -p logs && sbatch \
+	ssh $(HPC) "cd $(REMOTE) && mkdir -p logs && $(if $(TERRAIN_FLAGS),TERRAIN_FLAGS='$(TERRAIN_FLAGS)' )sbatch \
 	  --export=ALL$(TRAIN_EXPORTS)$(if $(EXTRA),$(comma)EXTRA='$(EXTRA)') \
 	  $(if $(TIME),--time=$(TIME)) training/hpc/train.slurm"
 

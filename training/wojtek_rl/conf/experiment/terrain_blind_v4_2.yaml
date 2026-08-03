@@ -18,13 +18,19 @@
 #     the full stand/spin/strafe/backward mix.
 #   no_progress terrain patience -- grace 4 s and half the hazard on
 #     terrain rows; standing at a riser and pushing is learning.
-# PROBE-GATED (stairs-probe verdict pending): type_caps values and the leg
-# caps (knee_target_max, orientation_tol_deg, action_scale, command.height)
-# below carry v4.1's numbers until probes A/B(/C) decide them.
+# Leg caps are geometry-derived (2026-08-03, Marcin's call): the stairs
+# probes came back inconclusive (undertrained by design, and probe B's
+# raised clamp was unreachable through the unchanged action window), so
+# the caps come from the leg-length curve instead. knee 4.0 rad reaches
+# ~22 cm of leg (0.9 rad short of the four-bar toggle), the knee action
+# scale 1.35 lets the policy actually command it, and height 0.18 uses
+# the taller stand. Together: ~9 cm of usable foot lift, sized for the
+# 7 cm riser ceiling the type_caps set. Tilt tolerance stays 20 deg --
+# on real treads a 7 cm riser is a 13 deg slope.
 # Launch notes:
 #   ./training/run.sh build-terrain --arena train --flat-row \
 #     --pad-radius 0.3 --stair-tread 0.25 0.45 \
-#     --type-caps pyramid_stairs=0.7,inverted_pyramid_stairs=0.7,discrete_obstacles=0.7,random_grid=0.55
+#     --type-caps pyramid_stairs=0.7,inverted_pyramid_stairs=0.7,discrete_obstacles=0.8,random_grid=0.45
 #   (train.slurm: FLAT_ROW=1 and TERRAIN_FLAGS with the same geometry; the
 #   env refuses an arena that disagrees with the preset.)
 #   XLA_PYTHON_CLIENT_PREALLOC=false ./training/run.sh train \
@@ -38,12 +44,14 @@ defaults:
 
 task:
   env:
-    action_scale: [0.25, 0.5, 0.5]
+    # Knee: window and clamp move together (raising one without the other
+    # is a no-op -- stance 2.65 + 0.5 sat exactly at the old 3.15 clamp).
+    action_scale: [0.25, 0.5, 1.35]
     pd_kp: 40.0
     pd_kd: 1.6
     max_torque: 32.0
     abduction_ctrl_limit: 0.44
-    knee_target_max: 3.15
+    knee_target_max: 4.0
     latency:
       enable: true
     encoder:
@@ -89,7 +97,7 @@ task:
       vx: [-0.8, 1.2]
       vy: [-0.5, 0.5]
       wz: [-1.5, 1.5]
-      height: [0.10, 0.16]
+      height: [0.10, 0.18]
       zero_prob: 0.25
       pure_wz_prob: 0.25
       pure_vy_prob: 0.2
@@ -165,14 +173,13 @@ task:
       demote_strikes: 3
       stair_tread_range: [0.25, 0.45]
       pad_radius: 0.3
-      # PROBE-GATED: caps derived from the 7.2 cm stroke under the current
-      # knee cap; recomputed from the leg-length curve when the probe
-      # verdict lands.
+      # Sized to the opened legs (~9 cm of usable lift): stairs top out at
+      # 7 cm risers, blocks at ~6.6 cm, rubble boxes at ~7 cm.
       type_caps:
         pyramid_stairs: 0.7
         inverted_pyramid_stairs: 0.7
-        discrete_obstacles: 0.7
-        random_grid: 0.55
+        discrete_obstacles: 0.8
+        random_grid: 0.45
     fall:
       # A lying robot is the expensive simulation state and the source of
       # every heightfield contact overflow; it carries no locomotion signal.

@@ -38,6 +38,24 @@ from mujoco_playground._src.wrapper import (
 from wojtek_rl import height_scan, symmetry, terrain_env
 
 
+def _nefc_of(data):
+    """Warp's live constraint-row count, max over worlds; 0 on the jax
+    backend, whose nefc is a static buffer size rather than a measurement.
+    Same read the terrain scan uses."""
+    value = getattr(data._impl, "nefc", None)
+    if value is None or getattr(value, "ndim", 0) == 0:
+        return jp.zeros((), jp.int32)
+    return jp.max(jp.asarray(value)).astype(jp.int32)
+
+
+def _nefc_warning(peak, njmax):
+    print(
+        f"WARNING: constraint rows peaked at {int(peak)} of njmax {njmax}; "
+        f"rows past the cap apply no force -- raise task.env.sim.njmax",
+        flush=True,
+    )
+
+
 def _component_slice(names, target):
     """Where `target` sits in a concatenated observation, or None."""
     offset = 0
@@ -100,6 +118,11 @@ class TerrainAutoResetWrapper(Wrapper):
         self._grace_steps = int(round(base._terrain.spawn_grace_sec / base.dt))
         self._demote_strikes = base._terrain.demote_strikes
         self._pinned_frac = base._terrain.pinned_frac
+        # Constraint-row telemetry, warp only (the jax impl has no live
+        # count). The warning threshold leaves headroom: at 90% of the cap
+        # the tail of the peak distribution is already being clipped.
+        self._nefc_watch = base._backend == "warp"
+        self._njmax = int(base._config.sim.njmax)
         # For reseeding the no-progress meter on respawn (see step below).
         self._cmd_speed = base._cmd_speed
         # EpisodeWrapper's length, for projecting the demote threshold onto a
@@ -258,6 +281,23 @@ class TerrainAutoResetWrapper(Wrapper):
         state = state.replace(done=jp.zeros_like(state.done))
         state = self.env.step(state, action)
         done = state.done  # fall or timeout; both are set below this wrapper
+
+        if self._nefc_watch and "nefc_peak" in state.info:
+            peak_now = _nefc_of(state.data)
+            prev = state.info["nefc_peak"]
+            peak = jp.maximum(prev, peak_now)
+            threshold = int(0.9 * self._njmax)
+            # Fires once: the running peak crosses the threshold one time
+            # per run. jax.debug.callback is vmap/cond-safe.
+            first_cross = (prev[0] < threshold) & (peak[0] >= threshold)
+            jax.lax.cond(
+                first_cross,
+                lambda p: jax.debug.callback(_nefc_warning, p, self._njmax),
+                lambda p: None,
+                peak[0],
+            )
+            state.info["nefc_peak"] = peak
+            state.metrics["nefc_peak_per_step"] = peak.astype(jp.float32)
 
         info = state.info
         # Steps in the episode that just ended: zeroed on done above, before

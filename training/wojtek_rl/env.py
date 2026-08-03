@@ -1143,6 +1143,14 @@ class WojtekJoystick(WojtekEnv):
             # on a flat pad and no episode has run yet.
             metrics["base_contact_alive_per_step"] = jp.zeros(())
             metrics["base_contact_at_done"] = jp.zeros(())
+            if self._backend == "warp":
+                # Running fleet-wide constraint-row peak, written by the
+                # terrain wrapper (the raw warp buffer is only readable on
+                # the batched data above the vmap). Rows past sim.njmax
+                # apply no force with no warning, so the peak is the only
+                # thing that makes an overflow visible in training.
+                info["nefc_peak"] = jp.zeros((), jp.int32)
+                metrics["nefc_peak_per_step"] = jp.zeros(())
         if self._scan_live:
             info.update(
                 scan_regime=scan_regime,

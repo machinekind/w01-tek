@@ -38,7 +38,14 @@
 # PREALLOC=false is mandatory on terrain, not a tuning preference. train.py
 # pins ppo.num_resets_per_eval=0 whenever terrain is on.
 # DEPLOYMENT: the exported schema-2 contract carries max_torque=32 and the
-# launch clamp follows it.
+# launch clamp follows it. The knee window/cap changes above ride the same
+# contract; a control loop that hardcodes the old 3.15 knee clamp cannot
+# run this policy.
+# KEEPER (2026-08-04, frozen -- do not retune):
+# Artifacts: https://huggingface.co/<HF_ORGANIZATION>/wojtek-terrain-blind-locomotion-v42
+# (deploy pair + checkpoint + clean scans + courses + 25 videos + as-run hpc/).
+# First policy over the 5 cm real-tread wall: 56/64 forward (all prior
+# policies 0/64), edge at 7 cm. Not a default anywhere -- load by reference.
 defaults:
   - override /task: joystick
 

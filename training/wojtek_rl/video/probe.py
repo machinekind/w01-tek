@@ -85,10 +85,12 @@ def main() -> None:
         ap.error("--cell already selects the eval arena; drop --arena")
     cell = None
     if args.cell:
-        cell = terrain_suite.CELLS_BY_NAME.get(args.cell)
+        cell = terrain_suite.ALL_CELLS_BY_NAME.get(args.cell)
         if cell is None:
             ap.error(f"unknown cell {args.cell!r}; --list-cells prints them all")
-    arena = args.arena or ("eval" if cell else "train")
+    # A cell knows which measurement arena it lives on (deep-tread cells
+    # are on eval_deep), so the arena follows the cell, not a constant.
+    arena = args.arena or (cell.arena if cell else "train")
 
     import jax
     import jax.numpy as jp

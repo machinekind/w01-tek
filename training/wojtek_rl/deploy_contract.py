@@ -109,6 +109,9 @@ COMMAND_TRAINING_KEYS = {
     # commands drawn within the trained box's negative vx range.
     "pure_back_prob",
     "back_vx",
+    # v4.2 tile-aware draw probabilities: reweights which commands terrain
+    # rows practice, all inside the trained box.
+    "terrain_bias",
 }
 
 

@@ -439,8 +439,12 @@ def check_arena(spec: dict, kind: str = "eval") -> None:
 
 
 def check_arena_of(env) -> None:
-    """`check_arena` on the arena an env actually loaded."""
-    check_arena(json.loads(env._terrain.files["spec"].read_text()))
+    """`check_arena` on the arena an env actually loaded, judged as the kind
+    it was loaded as -- the deep-tread course has its own fingerprint."""
+    check_arena(
+        json.loads(env._terrain.files["spec"].read_text()),
+        kind=env._terrain.kind,
+    )
 
 
 def command_box_warnings(run: dict, speeds=terrain_suite.SPEEDS) -> list[str]:

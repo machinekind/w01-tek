@@ -492,8 +492,16 @@ def default_config() -> config_dict.ConfigDict:
             # local height spread reaches `rough_ref`. landing_soften
             # discounts the feet_landing charge by the same measure, so a
             # foot may be planted hard on a riser. Terrain only.
+            # orientation_tol_flat_deg shrinks the orientation cone to this
+            # half-angle on smooth ground, opening back to
+            # orientation_tol_deg as the same roughness measure rises. 0
+            # keeps one static cone everywhere.
             terrain_gate=config_dict.create(
-                enable=False, floor=0.15, rough_ref=0.05, landing_soften=0.5
+                enable=False,
+                floor=0.15,
+                rough_ref=0.05,
+                landing_soften=0.5,
+                orientation_tol_flat_deg=0.0,
             ),
             scales=config_dict.create(
                 tracking_lin_vel=1.5,
@@ -611,6 +619,16 @@ class WojtekJoystick(WojtekEnv):
                 )
             )
         )
+        # The gated flat-ground cone, resolved the same way. None unless the
+        # terrain gate is on and the flat tolerance is set, so every other
+        # configuration keeps the static-cone expression bit-exact.
+        self._orientation_tol_flat = None
+        _tg = self._config.reward.terrain_gate
+        _flat_deg = _tg.get("orientation_tol_flat_deg", 0.0)
+        if _tg.enable and _flat_deg:
+            self._orientation_tol_flat = float(
+                np.square(np.sin(np.radians(_flat_deg)))
+            )
         # Kinematic standing family (see real_pose_ref in default_config):
         # gain-invariant by construction — settled on a quasi-rigid copy,
         # so it depends on the geometry only, never on this run's gains.
@@ -1576,6 +1594,7 @@ class WojtekJoystick(WojtekEnv):
         # off, so the terms are the expressions they always were.
         gate = 1.0
         landing_soften = 1.0
+        orientation_tol = self._orientation_tol
         if self._terrain_enabled and self._config.reward.terrain_gate.enable:
             tg = self._config.reward.terrain_gate
             strip = height_scan.world_xy(
@@ -1593,13 +1612,20 @@ class WojtekJoystick(WojtekEnv):
             )
             gate = tg.floor + (1.0 - tg.floor) * rough
             landing_soften = 1.0 - tg.landing_soften * rough
+            if self._orientation_tol_flat is not None:
+                orientation_tol = (
+                    self._orientation_tol_flat
+                    + (self._orientation_tol - self._orientation_tol_flat)
+                    * rough
+                )
 
         # sin^2 of the tilt from vertical, less the tolerance cone (see
-        # reward.orientation_tol_deg). Static config, so 0 leaves the legacy
-        # expression untouched.
+        # reward.orientation_tol_deg). With the gated flat cone the
+        # tolerance follows the local roughness; otherwise it is the static
+        # config value, and 0 leaves the legacy expression untouched.
         orientation = jp.sum(jp.square(gravity[:2]))
-        if self._orientation_tol:
-            orientation = jp.maximum(orientation - self._orientation_tol, 0.0)
+        if self._orientation_tol or self._orientation_tol_flat is not None:
+            orientation = jp.maximum(orientation - orientation_tol, 0.0)
 
         rewards = {
             "tracking_lin_vel": k_lin,

@@ -55,4 +55,5 @@ def test_terrain_gate_defaults():
         "floor": 0.15,
         "rough_ref": 0.05,
         "landing_soften": 0.5,
+        "orientation_tol_flat_deg": 0.0,
     }

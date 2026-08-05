@@ -28,10 +28,10 @@ duty factor) over each scenario's moving window; angular tracking error
 springiness -- peak-to-peak amplitude and 2-4 Hz spectral power fraction
 (stand_to_trot_ramp hold window only); foot-planting step count, post-
 switch clearance, and quiet-stance qvel (walk_to_stop only); sim2real
-symptom metrics, every scenario -- nose-down/up pitch p95 and 15-deg
-nosedive count, front/rear stance half-width of feet in contact, signed
-per-leg abduction mean, front-foot forward reach p95 and stride span,
-mean base height.
+symptom metrics, every scenario -- nose-down/up pitch p95, roll p95, and
+15-deg nosedive count, front/rear stance half-width of feet in contact,
+signed per-leg abduction mean, front-foot forward reach p95 and stride
+span, mean base height.
 """
 
 import argparse
@@ -122,6 +122,16 @@ def pitch_down_deg(gravity_hist):
     Verified sign: +20 deg about body +y gives gravity_body[0] = +sin(20)."""
     g = np.asarray(gravity_hist, dtype=float)
     return np.degrees(np.arctan2(g[:, 0], -g[:, 2]))
+
+
+def roll_deg(gravity_hist):
+    """Roll (deg) per step, magnitude only: unlike pitch_down_deg/-up,
+    no left/right split -- no roll asymmetry is hypothesized, so a single
+    two-sided reading covers it.
+    Verified sign: +20 deg about body +x gives gravity_body[1] = -sin(20);
+    the abs() below makes the direction moot either way."""
+    g = np.asarray(gravity_hist, dtype=float)
+    return np.abs(np.degrees(np.arcsin(np.clip(g[:, 1], -1.0, 1.0))))
 
 
 def excursion_count(series, thresh):
@@ -461,6 +471,7 @@ def scenario_result(name, rec, fell_at, dt, torque_cap):
     pitch = pitch_down_deg(rec["gravity"])
     r["pitch_down_p95_deg"] = round(float(np.percentile(np.clip(pitch, 0, None), 95)), 2)
     r["pitch_up_p95_deg"] = round(float(np.percentile(np.clip(-pitch, 0, None), 95)), 2)
+    r["roll_p95_deg"] = round(float(np.percentile(roll_deg(rec["gravity"]), 95)), 2)
     r["pitch_events_15deg"] = excursion_count(pitch, 15.0)
     xy = rec["foot_xy_body"]
     c = rec["contact"]

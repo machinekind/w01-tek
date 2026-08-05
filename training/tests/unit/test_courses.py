@@ -8,6 +8,7 @@ the intended alarm when someone "improves" a constant.
 """
 
 import math
+import sys
 
 import jax
 import jax.numpy as jp
@@ -38,6 +39,7 @@ from wojtek_rl.courses import (
     spin_seed_result,
     step_budget,
 )
+from wojtek_rl.courses import runner
 
 
 # -- geometry --------------------------------------------------------------
@@ -684,3 +686,46 @@ def test_spin_right_command_is_negative_and_scored_by_magnitude():
     )
     assert r["subscores"]["rotation"] == pytest.approx(10.0, rel=1e-2)
     assert r["score"] > 0
+
+
+# -- CLI: --seed-base flag passthrough --------------------------------------
+#
+# courses runs CPU-deterministic (run.sh sets JAX_PLATFORMS=cpu for the
+# `courses` subcommand), so without --seed-base a rescan reuses seed=0..N-1
+# bit-for-bit and measures exactly zero replicate delta. These tests mock
+# `run_courses` (the function that owns the seed loop) rather than running a
+# real checkpoint, per the tests/unit env-free guard.
+
+
+def _fake_run_courses(calls):
+    def fake(run_dir, **kwargs):
+        calls["run_dir"] = run_dir
+        calls.update(kwargs)
+        return {"run": "r", "checkpoint": "c", "seeds": kwargs["seeds"], "courses": {}}
+
+    return fake
+
+
+def test_seed_base_flag_reaches_run_courses(tmp_path, monkeypatch):
+    calls = {}
+    monkeypatch.setattr(runner, "run_courses", _fake_run_courses(calls))
+    monkeypatch.setattr(
+        sys, "argv",
+        ["courses", "--run", str(tmp_path), "--seed-base", "100"],
+    )
+    runner.main()
+    assert calls["run_dir"] == tmp_path
+    # argparse must coerce via type=int: a string "100" would still reach
+    # run_courses without error but break `seed_base + s` arithmetic in the
+    # seed loop (str + int raises, or worse, silently concatenates under a
+    # different signature).
+    assert calls["seed_base"] == 100
+    assert isinstance(calls["seed_base"], int)
+
+
+def test_seed_base_defaults_to_zero(tmp_path, monkeypatch):
+    calls = {}
+    monkeypatch.setattr(runner, "run_courses", _fake_run_courses(calls))
+    monkeypatch.setattr(sys, "argv", ["courses", "--run", str(tmp_path)])
+    runner.main()
+    assert calls["seed_base"] == 0

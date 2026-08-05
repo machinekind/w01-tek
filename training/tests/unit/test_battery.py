@@ -9,6 +9,7 @@ from wojtek_rl.battery import (
     duty_factor,
     lateral_corr,
     plant_step,
+    roll_deg,
     saturation_fractions,
     tracking_error,
 )
@@ -131,6 +132,26 @@ def test_abduction_p95_known_value():
         q[:, idx] = 1000.0
     expected = float(np.percentile(np.abs(np.tile(vals, 4)), 95))
     assert abduction_p95(q) == expected
+
+
+# -- roll_deg ------------------------------------------------------------
+
+
+def test_roll_deg_two_sided_magnitude():
+    # gravity[:, 1] = -sin(phi) for a +phi deg roll about body +x (see
+    # roll_deg's docstring); left and right roll must read as the same
+    # positive magnitude, unlike pitch's one-sided down/up split.
+    phis = np.array([20.0, -20.0, 0.0, 90.0])
+    g = np.zeros((4, 3))
+    g[:, 1] = -np.sin(np.radians(phis))
+    assert roll_deg(g) == pytest.approx(np.abs(phis))
+
+
+def test_roll_deg_clips_out_of_range_gravity():
+    # A slightly-over-unit-norm gravity read (numerical noise) must not
+    # NaN through arcsin.
+    g = np.array([[0.0, 1.0001, 0.0], [0.0, -1.0001, 0.0]])
+    assert roll_deg(g) == pytest.approx([90.0, 90.0])
 
 
 # -- saturation_fractions -----------------------------------------------------

@@ -777,3 +777,163 @@ def test_still_running_deadline_is_per_run():
     np.testing.assert_array_equal(
         terrain_scan.still_running(diagonal, crossings, fell, deadline), [False, False]
     )
+
+
+# -- M1: dump-step-stats and its aggregation ------------------------------------
+
+
+def test_flatten_step_history_drops_the_settle_window_and_stopped_runs():
+    """Two envs, three steps: env 0 is running throughout, env 1 stops (falls
+    or finishes) after step 0. With settle_steps=1, step 0 is dropped for
+    both (the settle window) and step 1 is dropped for env 1 (not running),
+    leaving exactly step 1 of env 0 and step 2 of env 0."""
+    rough = np.array([[0.1, 0.9], [0.2, 0.8], [0.3, 0.7]])
+    pitch = np.array([[1.0, 9.0], [2.0, 8.0], [3.0, 7.0]])
+    direction = np.array([[1.0, -1.0], [1.0, -1.0], [1.0, -1.0]])
+    running = np.array([[True, True], [True, False], [True, False]])
+
+    r, p, d = terrain_scan.flatten_step_history(
+        rough, pitch, direction, running, settle_steps=1
+    )
+    np.testing.assert_array_equal(sorted(r), [0.2, 0.3])
+    np.testing.assert_array_equal(sorted(p), [2.0, 3.0])
+    assert set(d) == {1.0}
+
+
+def test_flat_pitch_cost_matches_the_reward_expression():
+    """Reproduces the plan's own pricing table (section 1.3): a 12 deg
+    transient on flat ground (rough=0, gate=1) prices at ~1.73/step (w=10)
+    and ~4.33/step (w=25), tol_deg=2."""
+    cost_w10 = terrain_scan.flat_pitch_cost(12.0, 0.0, w=10, cut=0.25, tol_deg=2.0)
+    cost_w25 = terrain_scan.flat_pitch_cost(12.0, 0.0, w=25, cut=0.25, tol_deg=2.0)
+    assert cost_w10 == pytest.approx(1.73, abs=0.01)
+    assert cost_w25 == pytest.approx(4.33, abs=0.01)
+    # doubling w exactly doubles the linear-in-w price
+    assert cost_w25 == pytest.approx(2.5 * cost_w10)
+
+
+def test_flat_pitch_cost_is_zero_inside_the_tolerance_cone():
+    assert terrain_scan.flat_pitch_cost(2.0, 0.0, w=25, cut=0.25) == 0.0
+    assert terrain_scan.flat_pitch_cost(0.0, 0.0, w=25, cut=0.25) == 0.0
+
+
+def test_flat_pitch_cost_is_zero_once_rough_reaches_the_cut():
+    """The gate saturates at rough >= cut: any lower cut only makes this
+    truer, never charges more."""
+    assert terrain_scan.flat_pitch_cost(12.0, 0.25, w=25, cut=0.25) == 0.0
+    assert terrain_scan.flat_pitch_cost(12.0, 0.4, w=25, cut=0.25) == 0.0
+
+
+def test_m1_report_leakage_and_cost_on_a_hand_built_population():
+    """Four steep forward steps, two under cut=0.25 (leakage 0.5), two
+    backward steps neither steep -- n_steep 0 reports leakage as None rather
+    than a division by zero."""
+    direction = np.array([1.0, 1.0, 1.0, 1.0, -1.0, -1.0])
+    pitch = np.array([10.0, 10.0, 10.0, 3.0, 1.0, 2.0])
+    rough = np.array([0.10, 0.20, 0.30, 0.05, 0.5, 0.5])
+
+    report = terrain_scan.m1_report(
+        rough, pitch, direction,
+        pitch_gate_deg=5.0, cuts=(0.25, 0.15), ws=(10,), tol_deg=2.0,
+    )
+    fwd = report["forward"]
+    assert fwd["n_steps"] == 4
+    assert fwd["n_steep"] == 3
+    assert fwd["leakage"]["0.25"] == pytest.approx(2 / 3)  # 0.10, 0.20 < 0.25
+    assert fwd["leakage"]["0.15"] == pytest.approx(1 / 3)  # only 0.10 < 0.15
+    expected_cost = float(
+        terrain_scan.flat_pitch_cost(pitch[:4], rough[:4], w=10, cut=0.25).mean()
+    )
+    assert fwd["cost_per_step"]["w10_cut0.25"] == pytest.approx(expected_cost)
+
+    back = report["backward"]
+    assert back["n_steps"] == 2
+    assert back["n_steep"] == 0
+    assert back["leakage"]["0.25"] is None
+    assert back["leakage"]["0.15"] is None
+
+
+def test_m1_report_empty_direction_reports_zero_not_nan():
+    """A dump with no backward steps at all (e.g. a single-leg replay) must
+    not crash the aggregation or report NaN costs."""
+    direction = np.array([1.0, 1.0])
+    pitch = np.array([10.0, 3.0])
+    rough = np.array([0.1, 0.1])
+    report = terrain_scan.m1_report(rough, pitch, direction)
+    back = report["backward"]
+    assert back["n_steps"] == 0
+    assert back["leakage"]["0.25"] is None
+    assert all(v == 0.0 for v in back["cost_per_step"].values())
+
+
+def _fake_gate_env(raise_m: float):
+    """The pieces `_state_rough_pitch` reads, faked -- no env, no model. The
+    terrain height function is a plane the test raises under one strip
+    point by a known amount, so `rough` is exact arithmetic rather than
+    something read off real terrain geometry."""
+    from types import SimpleNamespace
+
+    import jax.numpy as jp
+
+    from wojtek_rl import env as env_mod
+
+    gate_strip = jp.array(
+        [[x, y] for x in env_mod.GATE_STRIP_X for y in env_mod.GATE_STRIP_Y]
+    )
+
+    def height(xy):
+        raised = jp.all(jp.isclose(xy, jp.array([0.5, 0.0]), atol=1e-3), axis=-1)
+        return jp.where(raised, raise_m, 0.0)
+
+    return SimpleNamespace(
+        _config=SimpleNamespace(
+            reward=SimpleNamespace(terrain_gate=SimpleNamespace(rough_ref=0.05))
+        ),
+        _gate_strip=gate_strip,
+        _quat=lambda data: data.quat,
+        _terrain=SimpleNamespace(height=height),
+        _foot_geom_ids=jp.array([0, 1, 2, 3]),
+        _gravity_body=lambda data: data.gravity,
+    )
+
+
+def test_state_rough_pitch_matches_the_env_reward_definition():
+    """`_state_rough_pitch` has to be the read-only replica its docstring
+    claims: env.py's own rough formula (env.py:1610-1613) and the
+    flat_pitch pitch_down definition (plan section 1.2). Built from a fake
+    env whose terrain height and gravity are picked by hand -- (0.17, 0.5)
+    x (-0.2, 0, 0.2) is the real gate strip (env.GATE_STRIP_X/Y), and the
+    test raises the terrain exactly under the one strip point at (0.5, 0.0)
+    while both feet and every other strip point stay at height 0."""
+    import math
+    from types import SimpleNamespace
+
+    import jax.numpy as jp
+
+    env = _fake_gate_env(raise_m=0.025)  # half of rough_ref=0.05 -> rough=0.5
+    data = SimpleNamespace(
+        qpos=jp.array([0.0, 0.0, 0.125, 1.0, 0.0, 0.0, 0.0]),
+        geom_xpos=jp.zeros((4, 3)),
+        quat=jp.array([1.0, 0.0, 0.0, 0.0]),  # identity: yaw 0, strip unrotated
+        # +20 deg about body +y: gravity_body[0] = +sin(20 deg), per
+        # battery.pitch_down_deg's verified sign convention.
+        gravity=jp.array(
+            [math.sin(math.radians(20.0)), 0.0, -math.cos(math.radians(20.0))]
+        ),
+    )
+    rough, pitch = terrain_scan._state_rough_pitch(env, data)
+    assert float(rough) == pytest.approx(0.5)
+    assert float(pitch) == pytest.approx(20.0, abs=1e-3)
+
+
+def test_the_cli_has_the_m1_flags(monkeypatch, capsys):
+    """--dump-step-stats and --aggregate need no checkpoint to be visible in
+    --help; the rollout and env-building they drive are exercised the same
+    way the rest of this file's rollout machinery is -- tests/integration,
+    on a real checkpoint."""
+    monkeypatch.setattr(sys, "argv", ["terrain-scan", "--help"])
+    with pytest.raises(SystemExit):
+        terrain_scan.main()
+    out = capsys.readouterr().out
+    assert "--dump-step-stats" in out
+    assert "--aggregate" in out

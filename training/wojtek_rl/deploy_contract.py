@@ -75,6 +75,11 @@ TRAINING_ONLY_KEYS = {
     # the observation layout unchanged (no world position/heading reaches the
     # actor), so nothing about it changes what the robot does with the policy.
     "terrain",
+    # Scan grid geometry, camera masking and sensor corruption model the
+    # training-time depth sensor. When a policy observes the scan, the
+    # component it must be fed is named in the exported obs_layout, which is
+    # what the runtime reads; none of the keys here reach the control loop.
+    "height_scan",
     # CaT-style early termination for episodes that ignore their command: a
     # PPO training signal (future value zero), no reward term, nothing in the
     # control loop. The robot has no episodes to cut.
@@ -104,6 +109,9 @@ COMMAND_TRAINING_KEYS = {
     # commands drawn within the trained box's negative vx range.
     "pure_back_prob",
     "back_vx",
+    # v4.2 tile-aware draw probabilities: reweights which commands terrain
+    # rows practice, all inside the trained box.
+    "terrain_bias",
 }
 
 

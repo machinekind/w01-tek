@@ -159,7 +159,7 @@ EPISODE = 1000
 def _curr(level, walked, commanded, key=0, steps_lived=EPISODE, episode=EPISODE):
     """`steps_lived == episode` by default: a timeout, where the projection
     factor is 1 and the threshold is the pre-projection one."""
-    lvl, _ = terrain_env.curriculum_step(
+    lvl, _, _ = terrain_env.curriculum_step(
         jp.int32(level), jp.float32(walked), jp.float32(commanded),
         jp.int32(steps_lived), episode,
         jax.random.PRNGKey(key), N_ROWS, TILE, DEMOTE,
@@ -242,7 +242,7 @@ def test_curriculum_max_level_random_respawn():
     keys = jax.random.split(jax.random.PRNGKey(0), 200)
 
     def one(k):
-        lvl, _ = terrain_env.curriculum_step(
+        lvl, _, _ = terrain_env.curriculum_step(
             jp.int32(N_ROWS - 1), jp.float32(2.0), jp.float32(3.0),
             jp.int32(EPISODE), EPISODE,
             k, N_ROWS, TILE, DEMOTE,
@@ -507,7 +507,7 @@ def test_scan_reset_places_a_run_on_its_tile(terrain_env_inst):
     cell = terrain_suite.Cell(
         name="probe", terrain_type="pyramid_stairs", difficulty=0.5, row=1, bar=None
     )
-    centre, spawn, yaw, pad_h = terrain_scan._spawn_table(env, cell)
+    centre, spawn, yaw, pad_h = terrain_scan.spawn_table(env, cell)
     # the tile the cell names, from the env's own spawn table
     j = terrain.TYPES.index(cell.terrain_type)
     np.testing.assert_allclose(centre[0], np.array(env._terrain.origin_xy)[cell.row, j])
@@ -567,7 +567,7 @@ def test_the_batched_rollout_matches_the_per_cell_one(monkeypatch):
 
     The flat scene, because the heightfield one costs about four minutes per
     program to trace and compile and nothing under test here is
-    terrain-specific; `_spawn_table` reads nothing but the arena's tile
+    terrain-specific; `spawn_table` reads nothing but the arena's tile
     origins, so a stand-in arena stands in for the eval one.
 
     The per-step metrics are NOT compared, and the reason is not this code: one
@@ -614,7 +614,7 @@ def test_the_batched_rollout_matches_the_per_cell_one(monkeypatch):
     # A different deadline per cell, so runs stop at different steps inside the
     # one batch and a slice taken from the wrong cell lands on the wrong count.
     deadlines = [np.full(runs, 2 + row, np.int32) for row, _ in enumerate(cells)]
-    tables = [terrain_scan._spawn_table(arena, c) for c in cells]
+    tables = [terrain_scan.spawn_table(arena, c) for c in cells]
     centre, spawn, yaw, pad_h = [np.concatenate(x) for x in zip(*tables)]
 
     reference = terrain_scan.make_cell_runner(env, inf)

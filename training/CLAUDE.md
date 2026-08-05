@@ -1,6 +1,6 @@
 # Training project guide
 
-Read the root `CLAUDE.md` first for the resolve/smoke/full-run workflow and
+Read the root `CLAUDE.md` first for the resolve/bounded-run/full-run workflow and
 the validation rules. This file adds the HPC-script conventions for
 `training/hpc/`.
 
@@ -54,6 +54,6 @@ namespaces.
 
 cluster specifics (partitions, quotas, debugging) live in the opt-in
 `cluster-hpc` skill; see `skills/README.md`. Per the root `CLAUDE.md`, do not
-submit HPC jobs without explicit user authorization — resolve and smoke
+submit HPC jobs without explicit user authorization — resolve
 locally first, and keep wandb enabled on every real run (offline mode needs
 no key; sync from the login node).

@@ -4,7 +4,6 @@ import math
 
 import jax
 import jax.numpy as jp
-import mujoco
 import numpy as np
 
 from wojtek_rl.courses.follower import Pursuit
@@ -86,7 +85,7 @@ def _settle(env, reset, step, inf, seed):
 _SETTLE_FALL_INFO = {"fell_at": 0, "completed": False, "steps": 0, "frames": []}
 
 
-def course_rollout(env, reset, step, inf, course, foot_radius, seed=0, renderer=None):
+def course_rollout(env, reset, step, inf, course, foot_radius, seed=0, view=None):
     """Walk `course` once under `inf`; record what the score needs.
 
     `reset`/`step` are the jitted env fns (passed in so the caller compiles
@@ -96,8 +95,8 @@ def course_rollout(env, reset, step, inf, course, foot_radius, seed=0, renderer=
 
     Returns (rec, info) where `rec` maps signal -> np.ndarray over the
     course steps (the standing settle excluded) and `info` carries
-    `fell_at`, `completed`, `steps` and, when `renderer` is given, the
-    rendered `frames`.
+    `fell_at`, `completed`, `steps` and, when `view` (a video.SceneView) is
+    given, the rendered `frames`.
     """
     rng, state = _settle(env, reset, step, inf, seed)
     if state is None:
@@ -107,8 +106,6 @@ def course_rollout(env, reset, step, inf, course, foot_radius, seed=0, renderer=
     pursuit = Pursuit.from_course(course, float(q[0]), float(q[1]), quat_to_yaw(*q[3:7]))
     n_steps = step_budget(course, env.dt)
 
-    mj_model = env.mj_model
-    render_data = mujoco.MjData(mj_model) if renderer is not None else None
     render_every = max(1, round(1 / (30 * env.dt)))
 
     rec = {
@@ -167,11 +164,8 @@ def course_rollout(env, reset, step, inf, course, foot_radius, seed=0, renderer=
         # vertical foot speed, for swing-apex and touchdown-softness stats.
         rec["foot_clear"].append(gx[:, 2] - foot_radius)
         rec["foot_vz"].append(fv[:, 2].copy())
-        if renderer is not None and i % render_every == 0:
-            render_data.qpos[:] = np.asarray(d.qpos)
-            mujoco.mj_forward(mj_model, render_data)
-            renderer.update_scene(render_data, camera="track")
-            frames.append(renderer.render())
+        if view is not None and i % render_every == 0:
+            frames.append(view.frame(d.qpos, torque=d.actuator_force))
 
     return {k: np.asarray(v) for k, v in rec.items()}, {
         "fell_at": fell_at,
@@ -183,7 +177,7 @@ def course_rollout(env, reset, step, inf, course, foot_radius, seed=0, renderer=
     }
 
 
-def spin_rollout(env, reset, step, inf, spin: SpinCourse, seed=0, renderer=None):
+def spin_rollout(env, reset, step, inf, spin: SpinCourse, seed=0, view=None):
     """Hold `spin`'s pure-spin command until the rotation completes.
 
     No follower: the command is [0, 0, wz, HEIGHT_CMD] every step. Progress
@@ -207,8 +201,6 @@ def spin_rollout(env, reset, step, inf, spin: SpinCourse, seed=0, renderer=None)
     cmd = jp.array([0.0, 0.0, spin.wz, HEIGHT_CMD])
     n_steps = step_budget(spin, env.dt)
 
-    mj_model = env.mj_model
-    render_data = mujoco.MjData(mj_model) if renderer is not None else None
     render_every = max(1, round(1 / (30 * env.dt)))
 
     rec = {"yaw_progress": [], "wz": [], "drift": [], "h": [], "qvel": []}
@@ -235,11 +227,8 @@ def spin_rollout(env, reset, step, inf, spin: SpinCourse, seed=0, renderer=None)
         rec["drift"].append(float(np.hypot(*(q[:2] - start_xy))))
         rec["h"].append(float(q[2]))
         rec["qvel"].append(np.asarray(d.qvel[env._vadr]))
-        if renderer is not None and i % render_every == 0:
-            render_data.qpos[:] = np.asarray(q)
-            mujoco.mj_forward(mj_model, render_data)
-            renderer.update_scene(render_data, camera="track")
-            frames.append(renderer.render())
+        if view is not None and i % render_every == 0:
+            frames.append(view.frame(q, torque=d.actuator_force))
         if progress >= required:
             completed = True
             break

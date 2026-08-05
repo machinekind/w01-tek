@@ -6,7 +6,6 @@ from datetime import datetime
 from pathlib import Path
 
 import jax
-import mujoco
 import numpy as np
 from mujoco import mjx
 
@@ -30,6 +29,7 @@ from wojtek_rl.courses.scoring import (
     spin_seed_result,
 )
 from wojtek_rl.courses.spec import Course, SpinCourse
+from wojtek_rl.video import SceneView, frame_size, write_video
 
 
 def write_path_plot(out_png: Path, course: Course, path: np.ndarray, trails: list):
@@ -65,19 +65,6 @@ def write_path_plot(out_png: Path, course: Course, path: np.ndarray, trails: lis
     plt.close(fig)
 
 
-def write_video(out_mp4: Path, frames, fps):
-    import mediapy
-
-    try:
-        import imageio_ffmpeg
-
-        mediapy.set_ffmpeg(imageio_ffmpeg.get_ffmpeg_exe())
-    except Exception:  # noqa: BLE001 -- mediapy finds ffmpeg itself if present
-        pass
-    out_mp4.parent.mkdir(parents=True, exist_ok=True)
-    mediapy.write_video(str(out_mp4), frames, fps=fps)
-
-
 class _NullCtx:
     """`with` wrapper yielding None, so the render path needs no branch."""
 
@@ -95,11 +82,19 @@ def run_courses(
     video: bool = False,
     paths_plot: bool = False,
     out_dir: Path | None = None,
+    video_size: tuple[int, int] = (640, 480),
+    overlay_torque: bool = False,
+    overlay_camera: bool = False,
 ) -> dict:
     """Run the course benchmark against `run_dir`'s latest checkpoint."""
     from wojtek_rl.build_model import FOOT_RADIUS
 
     run, env, ckpt, inf = load_checkpoint_policy(run_dir)
+    if overlay_camera and env._config.get("height_scan") is None:
+        raise SystemExit(
+            f"task {run.get('task')!r} has no height_scan config, so there is "
+            "no mask geometry to place the depth camera at"
+        )
     foot_radius = FOOT_RADIUS
     catalogue = course_catalogue()
     names = only or list(catalogue)
@@ -172,24 +167,27 @@ def run_courses(
         ctx = _NullCtx()
         if video:
             try:
-                ctx = mujoco.Renderer(env.mj_model, height=480, width=640)
+                ctx = SceneView(
+                    env, size=video_size, camera="track",
+                    torque=overlay_torque, onboard=overlay_camera,
+                )
             except Exception as exc:  # noqa: BLE001 -- any GL failure, same fallback
                 print(f"warning: no video, renderer unavailable ({exc})")
                 video = False
-        with ctx as maybe_renderer:
+        with ctx as maybe_view:
             for s in range(seeds):
                 # Video from seed 0 only: one clip per scenario is the point,
                 # not eight of the same course.
-                renderer = maybe_renderer if (video and s == 0) else None
+                view = maybe_view if (video and s == 0) else None
                 if isinstance(course, SpinCourse):
                     rec, info = spin_rollout(
-                        env, reset, step, inf, course, seed=s, renderer=renderer,
+                        env, reset, step, inf, course, seed=s, view=view,
                     )
                     seed_rows.append(spin_seed_result(rec, info, env.dt, course.wz))
                 else:
                     rec, info = course_rollout(
                         env, reset, step, inf, course, foot_radius, seed=s,
-                        renderer=renderer,
+                        view=view,
                     )
                     seed_rows.append(seed_result(rec, info, env.dt))
                 trails.append(rec.get("xy", np.empty((0, 2))))
@@ -198,7 +196,7 @@ def run_courses(
                 if course_path is None and info.get("path") is not None:
                     course_path = info["path"]
                     course_length = info["total_length"]
-                if renderer is not None and info["frames"]:
+                if view is not None and info["frames"]:
                     render_every = max(1, round(1 / (30 * env.dt)))
                     write_video(
                         out_dir / f"{name}.mp4",
@@ -273,6 +271,20 @@ def main():
         help="render one mp4 per scenario (seed 0) into <run>/courses/",
     )
     ap.add_argument(
+        "--video-size", type=frame_size, default=(640, 480), metavar="WxH",
+        help="rendered frame size (default 640x480)",
+    )
+    ap.add_argument(
+        "--overlay-torque", action="store_true",
+        help="draw the per-actuator torque bars into the frame, against the "
+        "env's effective limit",
+    )
+    ap.add_argument(
+        "--overlay-camera", action="store_true",
+        help="draw the onboard depth view as an inset, with the height-scan "
+        "points projected onto it",
+    )
+    ap.add_argument(
         "--paths", action="store_true",
         help="write one overhead commanded-vs-actual PNG per scenario",
     )
@@ -310,6 +322,9 @@ def main():
         only=args.only,
         video=args.video,
         paths_plot=args.paths,
+        video_size=args.video_size,
+        overlay_torque=args.overlay_torque,
+        overlay_camera=args.overlay_camera,
     )
     print_table(results)
     out = Path(args.out) if args.out else run_dir / "courses.json"

@@ -1,0 +1,223 @@
+# @package _global_
+# terrain_blind_v4_3 -- terrain_blind_v4_2's recipe with three fixes, all
+# aimed at flat-ground manners (docs/plans/terrain-training/
+# 2026-08-04-v43-plan.md):
+#   reward.terrain_gate.orientation_tol_flat_deg=5 -- v4.2 walks with a
+#     constant ~5 deg nose-down lean everywhere (flat battery: pitch-down
+#     p95 4.7-7.7 deg vs v4.1's 0.2-0.3): the 20 deg orientation cone is
+#     free tilt, and a policy that trains mostly on features keeps its
+#     climbing stance on flat ground. The cone now follows the terrain
+#     gate's roughness measure: 5 deg on smooth ground, opening to the
+#     full 20 deg as the local height spread rises. Climbing keeps its
+#     freedom; flat ground asks for a level back.
+#   command.terrain_bias spin/strafe shares up (wz 0.10->0.18,
+#     vy 0.05->0.10) -- v4.2's terrain rows lean forward so hard that
+#     global spin exposure fell to roughly a third of v4.1's, and the
+#     courses halved v4.1's spin edge. Terrain rows get a real slice of
+#     spins and strafes back (turning on features is a wanted skill);
+#     forward still dominates.
+#   obs.privileged drops `phase` -- the July reward redesign removed the
+#     gait clock from the rewards (feet_phase and contact_match are 0.0
+#     in the whole family) but the critic kept eating the 8-dim clock
+#     signal by preset copy-paste. Nothing synchronizes the real footfall
+#     to that clock, so it is a spurious rhythm input; now it is gone.
+#     Actor layout and the deployment contract are untouched; a v4.2
+#     checkpoint cannot restore into this critic shape (from-scratch run,
+#     no warm start planned).
+# Everything else -- caps, spawns, curriculum, treads, njmax, DR -- is
+# v4.2's frozen recipe, unchanged.
+# Launch notes (same arena geometry as v4.2):
+#   ./training/run.sh build-terrain --arena train --flat-row \
+#     --pad-radius 0.3 --stair-tread 0.25 0.45 \
+#     --type-caps pyramid_stairs=0.7,inverted_pyramid_stairs=0.7,discrete_obstacles=0.8,random_grid=0.45
+#   (train.slurm: FLAT_ROW=1 and TERRAIN_FLAGS with the same geometry; the
+#   env refuses an arena that disagrees with the preset.)
+#   XLA_PYTHON_CLIENT_PREALLOC=false ./training/run.sh train \
+#     +experiment=terrain_blind_v4_3
+# PREALLOC=false is mandatory on terrain, not a tuning preference. train.py
+# pins ppo.num_resets_per_eval=0 whenever terrain is on.
+# DEPLOYMENT: the exported schema-2 contract carries max_torque=32 and the
+# launch clamp follows it. The knee window/cap ride the same contract; a
+# control loop that hardcodes the old 3.15 knee clamp cannot run this
+# policy.
+defaults:
+  - override /task: joystick
+
+task:
+  env:
+    # Knee: window and clamp move together (raising one without the other
+    # is a no-op -- stance 2.65 + 0.5 sat exactly at the old 3.15 clamp).
+    action_scale: [0.25, 0.5, 1.35]
+    pd_kp: 40.0
+    pd_kd: 1.6
+    max_torque: 32.0
+    abduction_ctrl_limit: 0.44
+    knee_target_max: 4.0
+    latency:
+      enable: true
+    encoder:
+      enable: true
+    symmetry:
+      enable: true
+      mirror_prob: 0.5
+    no_progress:
+      enable: true
+      grace_sec: 2.0
+      ema_sec: 1.0
+      risk_below: 0.5
+      p_max: 0.02
+      terrain_grace_sec: 4.0
+      terrain_p_max_scale: 0.5
+    obs:
+      # The terrain family's frozen actor layout: the kp40 line's joint,
+      # action and command channels plus the IMU (gyro and gravity, named as
+      # in conf/obs/full.yaml). It is deliberately incompatible with every
+      # flat checkpoint. Before this family can run on the robot, the
+      # deployment side has to wire the CANdle-hat BMI into the policy node.
+      include:
+        - gyro
+        - gravity
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+      # No `phase`: the critic sees what the actor sees plus true state,
+      # not a free-running clock the gait is never rewarded to follow.
+      privileged:
+        - gyro
+        - gravity
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+        - linvel
+        - foot_contact
+        - height_scan_clean
+    height_scan:
+      enable: true
+    command:
+      vx: [-0.8, 1.2]
+      vy: [-0.5, 0.5]
+      wz: [-1.5, 1.5]
+      height: [0.10, 0.18]
+      zero_prob: 0.25
+      pure_wz_prob: 0.25
+      pure_vy_prob: 0.2
+      arc_prob: 0.2
+      arc_vx: [0.3, 0.8]
+      pure_slow_prob: 0.1
+      slow_vx: [0.15, 0.35]
+      # A draw probability, not a realized share: the zero overwrite
+      # runs last, so 0.2 lands at 0.15 of commands as clean backward.
+      pure_back_prob: 0.2
+      back_vx: [-0.8, -0.2]
+      # Terrain rows still lean forward, but spins and strafes keep a real
+      # slice (v4.2's 0.10/0.05 starved them fleet-wide); the flat row
+      # keeps the base mix above.
+      terrain_bias:
+        enable: true
+        zero_prob: 0.10
+        pure_wz_prob: 0.18
+        pure_vy_prob: 0.10
+        pure_slow_prob: 0.30
+        pure_back_prob: 0.10
+    push:
+      vel: 0.8
+    gait:
+      swing_height: 0.08
+      air_time_cap: 0.35
+    reward:
+      tracking_rel_sigma: 0.5
+      tracking_rel_floor_ang: 0.7
+      tracking_far_weight: 0.25
+      tracking_far_sigma: 2.5
+      pose_leg_weight: 0.1
+      tracking_product: true
+      tracking_relative: true
+      shaping_tracking_gate: true
+      torque_limit_frac: 0.25
+      orientation_tol_deg: 20.0
+      apex_target: 0.05
+      terrain_gate:
+        enable: true
+        floor: 0.15
+        rough_ref: 0.05
+        landing_soften: 0.5
+        # Level back on flat ground, full climbing freedom on rough: the
+        # cone interpolates 5 -> 20 deg with the same roughness measure
+        # that gates the lift shaping.
+        orientation_tol_flat_deg: 5.0
+      scales:
+        tracking_lin_vel: 4.0
+        tracking_ang_vel: 2.4
+        height_tracking: 1.0
+        lin_vel_z: 0.0
+        ang_vel_xy: 0.0
+        orientation: -5.0
+        torques: -6.0e-4
+        torque_rate: -0.02
+        torque_limit: -0.2
+        action_rate: -0.25
+        action_accel: 0.0
+        energy: 0.0
+        pose: -1.0
+        feet_air_time: 4.0
+        feet_slip: -0.35
+        feet_phase: 0.0
+        contact_match: 0.0
+        feet_apex: 5.0
+        feet_landing: -0.5
+        high_step: 4.0
+        stand_still: -2.5
+        stand_feet_down: -30.0
+        termination: -1.0
+    terrain:
+      enable: true
+      arena: train
+      flat_row: true
+      spawn_mode: feature
+      spawn_grace_sec: 1.0
+      pinned_frac: 0.2
+      demote_strikes: 3
+      stair_tread_range: [0.25, 0.45]
+      pad_radius: 0.3
+      # Sized to the opened legs (~9 cm of usable lift): stairs top out at
+      # 7 cm risers, blocks at ~6.6 cm, rubble boxes at ~7 cm.
+      type_caps:
+        pyramid_stairs: 0.7
+        inverted_pyramid_stairs: 0.7
+        discrete_obstacles: 0.8
+        random_grid: 0.45
+    fall:
+      # A lying robot is the expensive simulation state and the source of
+      # every heightfield contact overflow; it carries no locomotion signal.
+      # The check is analytic (height lookup), so the chessboard gaps in the
+      # base collider cannot be rested on undetected.
+      on_base_contact: true
+    sim:
+      # Floor from the robot's collision set: 29 geoms that can pair with
+      # the heightfield (20 leg geoms + the 9-cell base chessboard), 4
+      # contacts each. A measured walking scan peaked at 12 contacts/env
+      # against the previous 88 pool with nothing tripped.
+      naconmax_per_env: 116
+      # The August 2026 clean scans measured nefc peaks of 647-681 in
+      # pile-up states, over the family's old 640 cap; rows past the cap
+      # apply no force with no warning. 1024 leaves headroom and the
+      # terrain wrapper logs the live peak (warning at 90%).
+      njmax: 1024
+
+dr:
+  motor_strength: { enable: true, range: [0.5, 1.1] }
+  joint_gains: { enable: true, gain_pct: 0.2, kd_pct: 0.2 }
+  # Per-foot-geom multiplier, and the feet take contact priority, so this
+  # draw is the contact friction the policy actually walks on.
+  foot_friction: { enable: true, range: [0.4, 1.35] }
+
+ppo:
+  # terrain_lvl_train is the curriculum signal. The eval env starts fresh at
+  # every evaluation, so its terrain_lvl never climbs (configuration.md,
+  # Terrain curriculum).
+  log_training_metrics: true
+  num_timesteps: 2000000000
+
+run_name: wojtek_terrain_blind_v4_3

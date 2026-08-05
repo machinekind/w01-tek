@@ -94,7 +94,6 @@ from wojtek_rl.courses.runner import (
     print_table,
     run_courses,
     write_path_plot,
-    write_video,
 )
 from wojtek_rl.courses.scoring import (
     MIN_SCORE_STEPS,
@@ -126,5 +125,5 @@ __all__ = [
     "SpinCourse", "aggregate", "arc", "course_catalogue", "course_rollout",
     "friction_geom_ids", "join", "lead_in", "line", "main", "print_table",
     "run_courses", "seed_result", "sine_slalom", "spin_rollout",
-    "spin_seed_result", "step_budget", "write_path_plot", "write_video",
+    "spin_seed_result", "step_budget", "write_path_plot",
 ]

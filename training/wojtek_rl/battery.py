@@ -291,6 +291,12 @@ def load_checkpoint_policy(run_dir: Path, *, flat: bool = True, env_overrides=No
     # sided result (spin left vs right, strafe courses) lands in a coin-flip
     # frame. The robot always runs un-mirrored.
     env_cfg["symmetry"] = {**env_cfg.get("symmetry", {}), "enable": False}
+    # Measure the sensor, not a draw from its failure distribution: the mask
+    # and the sample-and-hold stay, the per-episode corruption regime goes.
+    if "height_scan" in env_cfg:
+        hs = dict(env_cfg["height_scan"])
+        hs["corrupt"] = {**(hs.get("corrupt") or {}), "enable": False}
+        env_cfg["height_scan"] = hs
     if "terrain" in env_cfg:
         if flat:
             env_cfg["terrain"] = {**env_cfg["terrain"], "enable": False}

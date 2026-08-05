@@ -398,7 +398,7 @@ def test_the_batched_policy_call_is_the_per_cell_one():
 
 
 def _fake_env():
-    """Just the tile table `_spawn_table` reads: no model, no device."""
+    """Just the tile table `spawn_table` reads: no model, no device."""
     from types import SimpleNamespace
 
     from wojtek_rl import terrain

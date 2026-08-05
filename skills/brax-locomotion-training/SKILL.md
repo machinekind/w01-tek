@@ -1,6 +1,6 @@
 ---
 name: brax-locomotion-training
-description: Design, run, evaluate, and debug MuJoCo MJX locomotion training with Brax PPO. Use for deployable observations and rewards, smoke/probe/full-run gates, NaN divergence, pytree scan-carry errors, gait quality and vibration metrics, and judging run health.---
+description: Design, run, evaluate, and debug MuJoCo MJX locomotion training with Brax PPO. Use for deployable observations and rewards, bounded-run/probe/full-run gates, NaN divergence, pytree scan-carry errors, gait quality and vibration metrics, and judging run health.---
 
 # Train locomotion policies with Brax
 
@@ -13,7 +13,7 @@ Prepare the model with the `mjx-robot-model-prep` skill first; for GPU-box opera
 | Stage | Gate |
 | --- | --- |
 | Unit/static tests | Wiring tests pass |
-| CPU smoke | Reset, step, PPO, checkpoint, and `run.json` paths all execute |
+| Bounded GPU run | Reset, step, PPO, checkpoint, and `run.json` paths all execute (CPU smokes are compile-bound and not viable; do not run them) |
 | GPU probe | Real model and config: eval values finite, behavior improves |
 | Full run | Selected budget spent once, no divergence |
 | Policy evaluation | Fixed battery and videos meet success criteria |

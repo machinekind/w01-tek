@@ -58,6 +58,7 @@ env:
     spawn_mode: pad # pad = legacy flat-pad spawns; feature = anywhere on the tile
     spawn_grace_sec: 0.0 # falls this soon after a spawn are curriculum-neutral
     pinned_frac: 0.0 # fraction of envs pinned across the rungs, off the ladder
+    pinned_flat_frac: 0.0 # extra fraction pinned to the flat row (level 0)
     demote_strikes: 1 # consecutive failed episodes before a level drop
     stair_tread_range: null # [lo, hi] per-tile tread draws; null = legacy 0.13
     type_caps: null # per-type difficulty caps baked into the arena build

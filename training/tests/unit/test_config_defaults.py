@@ -70,3 +70,13 @@ def test_v44_knobs_default_off():
     assert cfg.reward.scales.flat_pitch == 0.0
     assert cfg.command.pure_wz_sticky is False
     assert cfg.terrain.pinned_flat_frac == 0.0
+
+
+def test_default_config_is_classified_for_export():
+    # Every default_config key must be classified in deploy_contract, or
+    # export_policy dies at build_contract on every run trained with the
+    # new default -- exactly how the v4.4 night lost its first export wave
+    # (pure_wz_sticky, 2026-08-06).
+    from wojtek_rl import deploy_contract
+
+    deploy_contract.check_config_covered(wojtek_env.default_config().to_dict())

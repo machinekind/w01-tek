@@ -3,8 +3,9 @@
 # (docs/plans/terrain-training/2026-08-05-v44-plan.md, arm B: the posture
 # bracket end). Diffs vs terrain_blind_v4_2, nothing else:
 #   obs.privileged: phase removed (settled by v4.3: curriculum 6.39 vs 6.28)
-#   reward.terrain_gate.flat_pitch_tol_deg 2.0, flat_pitch_rough_cut 0.25
-#     (0.15 or flat_pitch_row_only=true per the M1 pre-flight rule)
+#   reward.terrain_gate.flat_pitch_tol_deg 2.0, flat_pitch_rough_cut 0.15
+#     (M1 resolved 2026-08-05: backward-climb leakage 10.5% at 0.25 tripped
+#     the >5% rule; 9.9% at 0.15 clears the >10% row_only trigger)
 #   reward.scales.flat_pitch -25.0
 # Launch: same arena and flags as terrain_blind_v4_2 (FLAT_ROW=1 +
 # TERRAIN_FLAGS, no rebuild; the env refuses a mismatched arena).
@@ -109,11 +110,11 @@ task:
         floor: 0.15
         rough_ref: 0.05
         landing_soften: 0.5
-        # flat_pitch gate: quadratic hard-closer, zero at rough >= 0.25
-        # (12.5 mm local spread at rough_ref 0.05); riser-straddling climb
-        # states saturate rough and pay nothing.
+        # flat_pitch gate: quadratic hard-closer, zero at rough >= 0.15
+        # (7.5 mm local spread at rough_ref 0.05, the M1-tightened cut);
+        # riser-straddling climb states saturate rough and pay nothing.
         flat_pitch_tol_deg: 2.0
-        flat_pitch_rough_cut: 0.25
+        flat_pitch_rough_cut: 0.15
       scales:
         tracking_lin_vel: 4.0
         tracking_ang_vel: 2.4

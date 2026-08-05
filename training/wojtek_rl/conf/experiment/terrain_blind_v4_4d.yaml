@@ -6,8 +6,9 @@
 # verdict (the -10.0 is a placeholder for that edit) and only if C's spin
 # verdict is PASS or PARTIAL. Diffs vs terrain_blind_v4_2, nothing else:
 #   obs.privileged: phase removed (settled by v4.3: curriculum 6.39 vs 6.28)
-#   reward.terrain_gate.flat_pitch_tol_deg 2.0, flat_pitch_rough_cut 0.25
-#     (0.15 or flat_pitch_row_only=true per the M1 pre-flight rule)
+#   reward.terrain_gate.flat_pitch_tol_deg 2.0, flat_pitch_rough_cut 0.15
+#     (M1 resolved 2026-08-05: backward-climb leakage 10.5% at 0.25 tripped
+#     the >5% rule; 9.9% at 0.15 clears the >10% row_only trigger)
 #   reward.scales.flat_pitch -10.0 (PLACEHOLDER -- morning A/B verdict)
 #   command.pure_wz_prob 0.25 -> 0.40, pure_wz_sticky true (flat rows only)
 #   terrain.pinned_flat_frac 0.10 (dedicated flat slice, out of the ladder)
@@ -118,11 +119,11 @@ task:
         floor: 0.15
         rough_ref: 0.05
         landing_soften: 0.5
-        # flat_pitch gate: quadratic hard-closer, zero at rough >= 0.25
-        # (12.5 mm local spread at rough_ref 0.05); riser-straddling climb
-        # states saturate rough and pay nothing.
+        # flat_pitch gate: quadratic hard-closer, zero at rough >= 0.15
+        # (7.5 mm local spread at rough_ref 0.05, the M1-tightened cut);
+        # riser-straddling climb states saturate rough and pay nothing.
         flat_pitch_tol_deg: 2.0
-        flat_pitch_rough_cut: 0.25
+        flat_pitch_rough_cut: 0.15
       scales:
         tracking_lin_vel: 4.0
         tracking_ang_vel: 2.4

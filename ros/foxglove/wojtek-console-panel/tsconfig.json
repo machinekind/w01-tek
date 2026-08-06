@@ -1,0 +1,10 @@
+{
+  "extends": "create-foxglove-extension/tsconfig/tsconfig.json",
+  "include": ["./src/**/*"],
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "jsx": "react",
+    "lib": ["ES2022", "DOM"]
+  }
+}

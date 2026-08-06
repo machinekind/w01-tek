@@ -91,7 +91,10 @@ access). On macOS GL-heavy RViz over X11 is slow, so run the launch with
 `rviz:=false` and start `foxglove_bridge` from `viz.launch.py foxglove:=true`
 in a second shell — then open the native
 [Foxglove](https://foxglove.dev/download) app and connect to
-`ws://localhost:8765` (add a 3D panel).
+`ws://localhost:8765` (add a 3D panel). The web console can live INSIDE
+Foxglove as a panel — see
+[`foxglove/wojtek-console-panel`](foxglove/wojtek-console-panel/README.md)
+(`npm run local-install`, restart Foxglove, add the "Wojtek console" panel).
 
 **Bluetooth Xbox pad**: left stick = vx/yaw, right stick left-right = strafe,
 **A** toggles arm, D-pad up/down steps the standing height; on the `joy`

@@ -40,8 +40,14 @@ the off-switch for weak machines). It needs a physics-backed plant, so it is
 inert with hw:=mock. camera_depth_hz/camera_color_hz tune the render rates.
 """
 
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 from wojtek_bringup.launch_common import common_launch_description
 
@@ -54,13 +60,43 @@ def generate_launch_description():
         with_rviz=True, bag_default="false", hardware="sim",
     )
     for action in (
-        # D435-compatible virtual camera. Declared here so the callers that
-        # pass these through (sim.sh, `ros2 run wojtek_bringup robot --sim`)
-        # keep working, but the renderer needs a physics state to draw from:
-        # it comes back with hw:=mujoco and is inert until then.
+        # D435-compatible virtual camera: a separate node now, because the
+        # physics lives inside ros2_control_node and the renderer is Python.
+        # It mirrors the plant's /sim/qpos into its own copy of the model, so
+        # there is still one physics state. Needs something to mirror, hence
+        # the hw:=mujoco condition -- with the mock there is no pose to draw.
         DeclareLaunchArgument("camera", default_value="true"),
         DeclareLaunchArgument("camera_depth_hz", default_value="15.0"),
         DeclareLaunchArgument("camera_color_hz", default_value="5.0"),
+        Node(
+            package="wojtek_pc",
+            executable="sim_camera_node",
+            output="screen",
+            condition=IfCondition(
+                PythonExpression([
+                    "'", LaunchConfiguration("camera"),
+                    "'.lower() in ('true', '1') and '",
+                    LaunchConfiguration("hw"), "' == 'mujoco'",
+                ])
+            ),
+            parameters=[
+                {
+                    "model_xml": PythonExpression([
+                        "'", LaunchConfiguration("model_xml"), "' or ",
+                        repr(os.path.join(
+                            get_package_share_directory("wojtek_pc"),
+                            "config", "scene_mjx.xml",
+                        )),
+                    ]),
+                    "depth_hz": ParameterValue(
+                        LaunchConfiguration("camera_depth_hz"), value_type=float
+                    ),
+                    "color_hz": ParameterValue(
+                        LaunchConfiguration("camera_color_hz"), value_type=float
+                    ),
+                }
+            ],
+        ),
         # Text-command bridge (wojtek#92), resident by design -- see the
         # module docstring for why that is safe.
         Node(

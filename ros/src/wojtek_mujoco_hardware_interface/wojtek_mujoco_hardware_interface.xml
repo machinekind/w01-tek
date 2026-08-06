@@ -1,0 +1,11 @@
+<library path="wojtek_mujoco_hardware_interface">
+  <class name="wojtek_mujoco_hardware_interface/MujocoHardwareInterface"
+         type="wojtek_mujoco_hardware_interface::MujocoHardwareInterface"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      MuJoCo as a ros2_control system component: joint position commands with
+      position/velocity/effort states reported relative to the activation pose
+      (the MD80 semantics), plus the robot's IMU sensor interfaces.
+    </description>
+  </class>
+</library>

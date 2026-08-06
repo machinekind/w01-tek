@@ -29,9 +29,13 @@
   <xacro:arg name="kd" default="1.6" />
   <xacro:arg name="max_torque" default="9.0" />
   <xacro:arg name="hw" default="mock" />
-  <!-- Physics scene for hw:=mujoco; empty = the plugin's own default
-       (scene_mjx.xml from this package's share/config). -->
-  <xacro:arg name="model_xml" default="" />
+  <!-- Physics scene for hw:=mujoco. The launch resolves this from this
+       package's share; the default here is for running the xacro by hand. -->
+  <xacro:arg name="model_xml" default="$(find wojtek_pc)/config/scene_mjx.xml" />
+  <!-- Pose the plant starts in, i.e. the pose the drives would be powered up
+       in. Wired from the launch's boot_pose, the same argument real_io_node
+       takes: the two must agree or zeroing starts from a lie. -->
+  <xacro:arg name="boot_pose" default="home" />
   <!-- Bench mode, the simulated analogue of the real one: physics runs but
        commands are not applied, so the robot goes limp. Ignored by the mock,
        which has no torque to withhold. -->
@@ -79,7 +83,17 @@
       <xacro:unless value="${'$(arg hw)' == 'mock'}">
         <plugin>wojtek_mujoco_hardware_interface/MujocoHardwareInterface</plugin>
         <param name="model_xml">$(arg model_xml)</param>
+        <!-- The MJX XMLs ship in a share directory, the meshes they reference
+             in another: the plugin restages the scene with meshdir rewritten. -->
+        <param name="mesh_dir">$(find wojtek_description)/meshes</param>
+        <!-- The URDF/MuJoCo sign and offset table, read from the same file
+             wojtek_policy reads. No second copy of the fitted values. -->
+        <param name="joint_map_yaml">$(find wojtek_policy)/config/joint_map.yaml</param>
+        <param name="initial_pose">$(arg boot_pose)</param>
         <param name="dry_run">$(arg dry_run)</param>
+        <!-- Emulate the physical mount (URDF imu_joint: rpy 0 pi 0) so
+             policy_node's imu_mount_rpy is exercised rather than bypassed. -->
+        <param name="imu_mount_rpy">0 3.141592653589793 0</param>
       </xacro:unless>
     </hardware>
 

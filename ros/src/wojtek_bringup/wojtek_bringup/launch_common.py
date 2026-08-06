@@ -78,13 +78,17 @@ def _launch_setup(context, with_rviz, hardware):
         # wojtek_pc is PC-side and never deployed, so this import-by-name is
         # resolved only when a simulation is actually launched -- wojtek_bringup
         # must not depend on it.
-        xacro_file = os.path.join(
-            get_package_share_directory("wojtek_pc"), "urdf",
-            "wojtek_sim.urdf.xacro",
-        )
+        pc_share = get_package_share_directory("wojtek_pc")
+        xacro_file = os.path.join(pc_share, "urdf", "wojtek_sim.urdf.xacro")
+        # The plant starts in the pose real_io_node is told the robot is in;
+        # anything else and zeroing would start from a lie.
         xacro_args += [
             " hw:=", LaunchConfiguration("hw"),
-            " model_xml:=", LaunchConfiguration("model_xml"),
+            " boot_pose:=", LaunchConfiguration("boot_pose"),
+            " model_xml:=" + (
+                LaunchConfiguration("model_xml").perform(context)
+                or os.path.join(pc_share, "config", "scene_mjx.xml")
+            ),
         ]
     robot_description = ParameterValue(
         Command(["xacro ", xacro_file] + xacro_args), value_type=str,

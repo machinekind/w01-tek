@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>wojtek_mujoco_hardware_interface</name>
+  <version>0.1.0</version>
+  <description>
+    MuJoCo behind ros2_control: the simulated plant for wojtek, exporting the
+    same interfaces the MD80 and IMU drivers export on the robot. Lets the
+    real bringup (controller_manager, the broadcasters, real_io_node,
+    policy_node) run unchanged over simulated physics, so arming, zeroing and
+    the ramps are exercised on the desk. PC-side only; never deployed.
+
+    MuJoCo itself comes from the pip wheel (see CMakeLists), the same
+    dependency the sim tooling and training already have.
+  </description>
+  <maintainer email="kchmielewski707@gmail.com">Jakub Chmielewski</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>geometry_msgs</depend>
+  <depend>hardware_interface</depend>
+  <depend>pluginlib</depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_lifecycle</depend>
+  <depend>std_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>yaml_cpp_vendor</depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+  <!-- The joint map test reads wojtek_policy's own joint_map.yaml rather than
+       a fixture copy: a fixture would be a second place to keep the signs and
+       offsets correct. -->
+  <test_depend>ament_index_cpp</test_depend>
+  <test_depend>wojtek_policy</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

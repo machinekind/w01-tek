@@ -64,6 +64,28 @@ symulacji **wykonywane**, a nie omijane.
 | `mock` | `mock_components/GenericSystem` — komenda wraca jako stan, zero dynamiki | logika stacku (arm/zero/rampy/watchdog), CI; robot nie upadnie i nie pójdzie |
 | `mujoco` | fizyka z `scene_mjx.xml` (`wojtek_mujoco_hardware_interface`) | zachowanie robota: chód, upadki, `boot_pose:=folded`, wirtualna kamera |
 
+**Plugin MuJoCo** (`wojtek_mujoco_hardware_interface`, C++) wchodzi w to samo
+gniazdo pluginlib co `md80_hardware_interface` + `imu_i2c_hardware_interface` i
+eksportuje te same interfejsy. Trzy rzeczy w nim nie są „tylko symulacją":
+
+- **stany boot-relative**: `on_activate` zapamiętuje bieżącą pozę jako zero, a
+  komendy są czytane w tej samej ramce — dokładnie semantyka MD80, dzięki
+  której `/wojtek/zero` i offsety są testowane, nie omijane. Poza startową
+  bierze z `boot_pose`, tego samego argumentu co `real_io_node`;
+- **akumulacja czasu**: fizyka idzie o okres kontrolera z przeniesieniem
+  reszty (dt=4 ms pod pętlą 2,5 ms), a nie o całe kroki — inaczej dostajemy
+  jitter, którego robot nie ma;
+- **montaż IMU**: odczyty są obracane do ramki fizycznego czujnika
+  (`imu_mount_rpy`, domyślnie 0,π,0), więc `policy_node` odkręca realny montaż,
+  a nie zero. Magnetometr jest syntetyzowany (pole ziemskie); hard-iron
+  świadomie nie — to osobna robota.
+
+Ground truth (którego robot nie ma) publikuje sam plugin, 100 Hz:
+`TF odom→base_link`, `/odom_vel`, `/sim/rtf`, `/sim/qpos`. **Kamera** to osobny
+node `sim_camera_node`: fizyka żyje w `ros2_control_node` (C++), renderer jest
+w Pythonie, więc nie dzielą `MjData` — node lustruje `/sim/qpos` we własnej
+kopii modelu i renderuje z niej (kontrakt tematów: `wojtek_pc/camera_spec.py`).
+
 Czego symulacja nie pokryje — patrz [kontrakt testowy](sim-test-contract.md).
 
 Poniższy schemat opisuje **starą** ścieżkę `mujoco_sim_node` (node dalej

@@ -166,10 +166,11 @@ if { [ "$VIZ" = rviz ] || $WANT_QT; } && ! $HAVE_X; then
 fi
 
 # robot --sim orchestrates the session and its teardown: sim.launch.py (which
-# owns console:= and gamepad:=) plus viz.launch.py with the sim RViz layout.
-# --no-console is unconditional here -- the console is the launch's job, this
-# flag only stops robot.py from starting a second one of its own.
-CMD=(ros2 run wojtek_bringup robot --sim --no-console)
+# owns console:= and gamepad:=, web console by default) plus viz.launch.py
+# with the sim RViz layout. No console flags here: robot.py translates its
+# own flags into console:= arguments now, so passing --no-console would mean
+# console:=none -- a session with no console at all.
+CMD=(ros2 run wojtek_bringup robot --sim)
 case "$VIZ" in
   foxglove) CMD+=(--foxglove) ;;
   none) CMD+=(--no-viz) ;;

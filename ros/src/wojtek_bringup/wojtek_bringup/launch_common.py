@@ -220,8 +220,13 @@ def _launch_setup(context, with_rviz, hardware):
     return nodes
 
 
+DEFAULT_POLICY = ("<HF_ORGANIZATION>/wojtek-stiff-height-locomotion"
+                  "@4dda27e12101a68dbf52bb134721b18dc166a7d3")
+
+
 def common_launch_description(
     with_rviz, bag_default, with_gamepad=False, hardware="real",
+    policy_default=DEFAULT_POLICY,
 ):
     """LaunchDescription shared by the real-robot and simulation launches.
 
@@ -229,7 +234,10 @@ def common_launch_description(
     bag_default is the rosbag `bag` default ("true"/"false") for this launch's
     workflow; with_gamepad offers the robot-side pad teleop (its `gamepad`
     arg); hardware is "real" (MD80 + I2C IMU) or "sim" (simulated plugin from
-    wojtek_pc's xacro), which selects the URDF and the hardware-specific args.
+    wojtek_pc's xacro), which selects the URDF and the hardware-specific args;
+    policy_default is the policy reference this workflow comes up with when
+    none is given (a simulation and the robot may reasonably differ on which
+    policy is the one to look at by default).
     """
     if hardware not in ("real", "sim"):
         raise ValueError(f"hardware must be 'real' or 'sim', got {hardware!r}")
@@ -241,11 +249,7 @@ def common_launch_description(
         # revision needs network + an HF token on the RPi (prefetch:
         # python3 -m wojtek_policy.policy_source <ref>); afterwards it loads
         # from the local HF cache.
-        DeclareLaunchArgument(
-            "policy",
-            default_value="<HF_ORGANIZATION>/wojtek-stiff-height-locomotion"
-            "@4dda27e12101a68dbf52bb134721b18dc166a7d3",
-        ),
+        DeclareLaunchArgument("policy", default_value=policy_default),
         # Explicit overrides of the policy contract's servo settings (empty =
         # from the contract). E.g. max_torque:=2 for cautious first tests.
         DeclareLaunchArgument("kp", default_value=""),

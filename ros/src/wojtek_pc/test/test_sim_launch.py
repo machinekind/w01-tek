@@ -167,7 +167,7 @@ def test_ground_truth_and_static_tf_never_publish_the_same_transform():
 
 
 def test_sim_launch_keeps_the_arguments_its_callers_pass():
-    """sim.sh and `ros2 run wojtek_bringup robot --sim` pass these by name;
+    """A session drives the simulation through these by name;
     dropping one turns into a launch error at the worst moment."""
     spec = importlib.util.spec_from_file_location(
         "sim_launch", PKG_DIR / "launch" / "sim.launch.py",
@@ -180,5 +180,5 @@ def test_sim_launch_keeps_the_arguments_its_callers_pass():
     }
     assert {
         "rviz", "policy", "camera", "camera_depth_hz", "camera_color_hz",
-        "boot_pose", "hw", "model_xml",
+        "boot_pose", "hw", "model_xml", "console", "gamepad",
     } <= declared

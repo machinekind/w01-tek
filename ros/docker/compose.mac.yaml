@@ -1,4 +1,4 @@
-# macOS overrides for compose.yaml (../sim.sh stacks this on Darwin):
+# macOS overrides for compose.yaml (../dev.sh stacks this on Darwin):
 #   docker compose -f compose.yaml -f compose.mac.yaml up -d
 # Docker Desktop's Linux VM breaks two assumptions of the base file:
 #  * network_mode: host only reaches the VM, not the Mac -- so the Foxglove

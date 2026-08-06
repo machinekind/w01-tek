@@ -1,7 +1,12 @@
 """Simulation bringup: the robot's own node graph over a simulated plant.
 
+Everything a simulation session needs, from one command inside the container
+(./dev.sh gets you the shell): the plant, the control stack, the policy, the
+virtual camera, RViz, the operator console and optionally a gamepad.
+
     ros2 launch wojtek_pc sim.launch.py [hw:=mock|mujoco] [rviz:=false]
                                        [boot_pose:=folded] [camera:=false]
+                                       [console:=web|qt|none] [gamepad:=true]
 
 This is `robot.launch.py` with the hardware plugin swapped -- same
 controller_manager at 400 Hz, same broadcasters, same real_io_node, same
@@ -18,17 +23,19 @@ That is the point of this launch: a run here exercises the arming path, the
 zero offset, the ramps and the watchdog, so a failure shows up on the desk
 instead of on the robot. What it cannot show is in docs/sim-test-contract.md.
 
-hw:=mock (the default) runs ros2_control's GenericSystem: no dynamics, the
-commands come straight back as states. Everything above still works, the
-robot just cannot fall over or walk. hw:=mujoco puts the trained plant under
-it (see wojtek_mujoco_hardware_interface).
+hw:=mujoco (the default) is the trained plant, physics included, from
+wojtek_mujoco_hardware_interface. hw:=mock swaps in ros2_control's
+GenericSystem: no dynamics, commands come straight back as states -- the
+arming path above still works, the robot just cannot fall over or walk, which
+makes it the fast option for testing the stack's own logic.
 
 boot_pose:=folded starts from the real robot's boot/zeroing pose instead of
 standing, which is how you rehearse the real startup.
 
-Drive with any Twist teleop, e.g.:
+Drive from the operator console (console:=web, the default, on
+http://localhost:8080), from a pad with gamepad:=true, or from any Twist
+teleop in a second container shell:
     ros2 run teleop_twist_keyboard teleop_twist_keyboard
-    ros2 launch wojtek_teleop gamepad.launch.py   # bluetooth Xbox pad
 
 text_commander (wojtek#92) is always up: text commands on /wojtek/nav_command
 (the web console's VLM panel, or `ros2 topic pub`) drive /cmd_vel with a 2 s
@@ -45,7 +52,11 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import (
+    EqualsSubstitution,
+    LaunchConfiguration,
+    PythonExpression,
+)
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -57,7 +68,7 @@ def generate_launch_description():
     # everything else -- nodes, parameters, the arming procedure -- shared
     # verbatim with the robot bringup.
     ld = common_launch_description(
-        with_rviz=True, bag_default="false", hardware="sim",
+        with_rviz=True, bag_default="false", hardware="sim", with_gamepad=True,
     )
     for action in (
         # D435-compatible virtual camera: a separate node now, because the
@@ -108,6 +119,31 @@ def generate_launch_description():
             package="wojtek_teleop",
             executable="text_commander",
             output="screen",
+        ),
+        # The manual-control surface, so a session never needs raw service
+        # calls: "web" is the browser console (no X11, works from a phone),
+        # "qt" the X11 one, "none" for a headless run.
+        DeclareLaunchArgument(
+            "console", default_value="web", choices=["web", "qt", "none"],
+        ),
+        Node(
+            package="wojtek_pc",
+            executable="web_console",
+            output="screen",
+            condition=IfCondition(
+                EqualsSubstitution(LaunchConfiguration("console"), "web")
+            ),
+            # The console reads its command box from the same policy contract
+            # the plant and the policy node do.
+            parameters=[{"policy": LaunchConfiguration("policy")}],
+        ),
+        Node(
+            package="wojtek_pc",
+            executable="console",
+            output="screen",
+            condition=IfCondition(
+                EqualsSubstitution(LaunchConfiguration("console"), "qt")
+            ),
         ),
     ):
         ld.add_action(action)

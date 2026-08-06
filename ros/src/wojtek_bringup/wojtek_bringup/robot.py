@@ -96,7 +96,7 @@ def main():
                          "by the systemd RT path, which uses the service's "
                          "own launch arguments.")
     # ros2-launch style name:=value tokens (e.g. camera:=false) pass through
-    # to the launch file, so every launch argument is reachable from sim.sh
+    # to the launch file, so every launch argument is reachable from here
     # without growing a bespoke flag here per argument. parse_known_args
     # would swallow typos silently, hence the strict shape check: anything
     # unrecognised that is not name:=value is still a hard error.

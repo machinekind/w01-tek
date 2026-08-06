@@ -96,6 +96,19 @@ t0(){
     ok "package.xml parses: ${pxml#ros/src/}" python3 -c "import sys,xml.etree.ElementTree as ET; ET.parse(sys.argv[1])" "$pxml"
   done
 
+  # Every package in src/ is known to the PC image. The Dockerfile lists them
+  # twice on purpose (manifests for the cached rosdep layer, then the build
+  # selection) and cannot glob, so a package added to src/ and forgotten here
+  # breaks `build.sh` -- and only there, long after the commit that added it.
+  # A package may sit out the build selection deliberately (nothing does
+  # today); missing from the COPY list always breaks rosdep.
+  for pkg in ros/src/*/; do
+    pkg="$(basename "$pkg")"
+    [ -f "ros/src/$pkg/package.xml" ] || continue
+    ok "docker image knows $pkg" \
+      grep -q "COPY ./src/$pkg/package.xml" ros/docker/Dockerfile
+  done
+
   # paths.py points at ros/, not the dropped quadruped dir
   ok "paths.py model dir -> ros/"   grep -q 'ros/src/wojtek_description/mujoco' training/wojtek_rl/paths.py
   absent "paths.py free of quadruped" 'quadruped_ros2_original' training/wojtek_rl/paths.py

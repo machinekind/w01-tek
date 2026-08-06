@@ -6,7 +6,7 @@ Pair the pad over bluetooth on the machine this runs on first (bluetoothctl:
 scan on -> pair -> trust -> connect; the pad must show up under /dev/input).
 On the RPi the bluez/ERTM groundwork comes from deploy/rpi/install.sh. Runs
 unchanged against the sim or the real stack -- it publishes the same
-/cmd_vel the consoles do. `./sim.sh --gamepad` brings this up in place of
+/cmd_vel the consoles do. `sim.launch.py gamepad:=true` brings this up next to
 the web console; see wojtek_teleop/gamepad_teleop.py for the stick mapping.
 """
 

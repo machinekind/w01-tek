@@ -1,0 +1,69 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>wojtek_pc</name>
+  <version>0.1.0</version>
+  <description>
+    Workstation-side tooling for wojtek: the MuJoCo simulation of the robot
+    (the same ROS graph as the real bringup, hardware plugin swapped), plus
+    RViz/PlotJuggler/teleop and the operator consoles for a live robot.
+    PC-side only -- deliberately kept out of wojtek_bringup so the robot
+    (RPi) build never needs GUI/simulation dependencies.
+  </description>
+  <maintainer email="kchmielewski707@gmail.com">Jakub Chmielewski</maintainer>
+  <license>MIT</license>
+
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>tf2_ros</depend>
+  <depend>python3-numpy</depend>
+  <depend>wojtek_policy</depend>
+  <depend>wojtek_description</depend>
+  <!-- sim.launch.py IS the robot bringup with the hardware plugin swapped:
+       it imports wojtek_bringup.launch_common (shared nodes and parameters)
+       and runs that package's real_io_node and real_controllers.yaml, so the
+       simulation cannot drift away from the robot's own configuration. -->
+  <depend>wojtek_bringup</depend>
+  <!-- ros2_control runtime for the simulated stack: the manager, the
+       controllers/broadcasters, and the magnetometer broadcaster (a plain
+       controller, no hardware of its own). -->
+  <exec_depend>controller_manager</exec_depend>
+  <exec_depend>ros2_controllers</exec_depend>
+  <exec_depend>magnetometer_broadcaster</exec_depend>
+  <!-- operator_console.py: the Qt operator GUI (arm/pose/jog/drive in one). -->
+  <depend>python3-pyqt5</depend>
+  <!-- web_console.py: the browser twin of the Qt console (no X11 needed;
+       works on macOS / phones). One port: HTTP page + JSON websocket. -->
+  <depend>python3-websockets</depend>
+  <!-- web_console.py VLM panel: colour camera frames JPEG-encoded for the
+       browser. Soft dependency in code (no Pillow = no frames, console
+       still works), declared so the container image carries it. -->
+  <depend>python3-pil</depend>
+
+  <!-- Gamepad teleop moved to wojtek_teleop (robot-side, no GUI deps);
+       "./sim.sh gamepad mode" launches it from there. -->
+  <exec_depend>wojtek_teleop</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <!-- viz.launch.py foxglove:=true: websocket bridge for the native Foxglove
+       app (the macOS path, where X11 RViz is not an option). -->
+  <exec_depend>foxglove_bridge</exec_depend>
+  <exec_depend>plotjuggler</exec_depend>
+  <exec_depend>teleop_twist_keyboard</exec_depend>
+  <!-- viz.launch.py bag:=true records the whole run (ros2 bag record -a) from the PC. -->
+  <exec_depend>ros2bag</exec_depend>
+  <exec_depend>rosbag2_transport</exec_depend>
+  <exec_depend>rosbag2_storage_default_plugins</exec_depend>
+  <!-- mujoco is a pip package (no reliable rosdep key); installed via pip,
+       see docker/Dockerfile. Only mujoco_sim_node needs it. -->
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

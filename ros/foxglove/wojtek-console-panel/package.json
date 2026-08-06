@@ -1,0 +1,24 @@
+{
+  "name": "wojtek-console-panel",
+  "displayName": "Wojtek console",
+  "description": "Embeds the Wojtek web operator console (drive pad, arm/pose buttons, telemetry) as a Foxglove panel.",
+  "publisher": "machinekind",
+  "version": "0.1.0",
+  "license": "MIT",
+  "main": "./dist/extension.js",
+  "keywords": [
+    "foxglove",
+    "extension"
+  ],
+  "scripts": {
+    "build": "foxglove-extension build",
+    "foxglove:prepublish": "foxglove-extension build --mode production",
+    "local-install": "foxglove-extension install",
+    "package": "foxglove-extension package"
+  },
+  "devDependencies": {
+    "@foxglove/extension": "^2",
+    "create-foxglove-extension": "^1",
+    "typescript": "^5"
+  }
+}

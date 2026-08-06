@@ -47,8 +47,53 @@ flowchart LR
 
 ## Przepływ danych — symulacja (`sim.launch.py`)
 
-`mujoco_sim_node` zastępuje cały lewy słupek (hardware + broadcastery + real_io_node).
-`policy_node` jest **identyczny** — różnią się tylko remapy i parametry.
+**Od 2026-08-06 symulacja to ten sam graf co robot z podmienionym pluginem
+sprzętowym.** `sim.launch.py` i `robot.launch.py` wołają to samo
+`wojtek_bringup.launch_common`, więc controller_manager (400 Hz), broadcastery,
+`forward_position_controller`, `real_io_node` i **wszystkie parametry
+`policy_node`** są identyczne — nie „podobne". Test
+`wojtek_pc/test/test_sim_launch.py` pilnuje tej równości, a
+`test_sim_xacro.py` zgodności interfejsów obu URDF-ów. Skutek: `zero`,
+`stand_up`/`lie_down`, arm gate, guard `max_arm_jump_rad` i watchdog są w
+symulacji **wykonywane**, a nie omijane.
+
+`hw:=` wybiera plant:
+
+| `hw` | Plant | Do czego |
+|---|---|---|
+| `mock` | `mock_components/GenericSystem` — komenda wraca jako stan, zero dynamiki | logika stacku (arm/zero/rampy/watchdog), CI; robot nie upadnie i nie pójdzie |
+| `mujoco` | fizyka z `scene_mjx.xml` (`wojtek_mujoco_hardware_interface`) | zachowanie robota: chód, upadki, `boot_pose:=folded`, wirtualna kamera |
+
+**Plugin MuJoCo** (`wojtek_mujoco_hardware_interface`, C++) wchodzi w to samo
+gniazdo pluginlib co `md80_hardware_interface` + `imu_i2c_hardware_interface` i
+eksportuje te same interfejsy. Trzy rzeczy w nim nie są „tylko symulacją":
+
+- **stany boot-relative**: `on_activate` zapamiętuje bieżącą pozę jako zero, a
+  komendy są czytane w tej samej ramce — dokładnie semantyka MD80, dzięki
+  której `/wojtek/zero` i offsety są testowane, nie omijane. Poza startową
+  bierze z `boot_pose`, tego samego argumentu co `real_io_node`;
+- **akumulacja czasu**: fizyka idzie o okres kontrolera z przeniesieniem
+  reszty (dt=4 ms pod pętlą 2,5 ms), a nie o całe kroki — inaczej dostajemy
+  jitter, którego robot nie ma;
+- **montaż IMU**: odczyty są obracane do ramki fizycznego czujnika
+  (`imu_mount_rpy`, domyślnie 0,π,0), więc `policy_node` odkręca realny montaż,
+  a nie zero. Magnetometr jest syntetyzowany (pole ziemskie); hard-iron
+  świadomie nie — to osobna robota.
+
+Ground truth (którego robot nie ma) publikuje sam plugin, 100 Hz:
+`TF odom→base_link`, `/odom_vel`, `/sim/rtf`, `/sim/qpos`. **Kamera** to osobny
+node `sim_camera_node`: fizyka żyje w `ros2_control_node` (C++), renderer jest
+w Pythonie, więc nie dzielą `MjData` — node lustruje `/sim/qpos` we własnej
+kopii modelu i renderuje z niej (kontrakt tematów: `wojtek_pc/camera_spec.py`).
+
+Czego symulacja nie pokryje — patrz [kontrakt testowy](sim-test-contract.md).
+
+Poniższy schemat opisuje **starą** ścieżkę `mujoco_sim_node` (node dalej
+istnieje i da się go odpalić przez `ros2 run wojtek_pc mujoco_sim_node`, ale
+nie jest już tym, co stawia `sim.launch.py`; idzie do usunięcia razem z
+sesją sprzątania). `mujoco_sim_node` zastępował cały lewy słupek (hardware +
+broadcastery + real_io_node); `policy_node` był identyczny co do kodu, ale
+dostawał inne parametry.
 
 ```mermaid
 flowchart LR
@@ -134,11 +179,20 @@ Parametry: `policy_dir`, `joint_map_yaml`, `max_arm_jump_rad` (0.15 — odmowa A
 
 Zabezpieczenia: startuje DISARMED; arm/rampa/zero wzajemnie się wykluczają; filtr non-finite tuż przed napędami (ostatnia linia obrony — topic komend jest otwarty dla każdego).
 
-## 3. `wojtek_viz` — strona PC (Python, ament_python)
+## 3. `wojtek_pc` — narzędzia PC (Python, ament_python)
 
-Symulacja, wizualizacja i ręczne sterowanie. Nie buduje się na RPi.
+Symulacja, wizualizacja i ręczne sterowanie. Nie jedzie na RPi (`deploy.sh`
+wyklucza `wojtek_pc/` z rsynca). Do 2026-08-06 paczka nazywała się
+`wojtek_viz`; przemianowana, bo nosi symulator, nie tylko podglądanie.
+Workspace zbudowany przed zmianą trzyma starą paczkę w overlayu i przesłania
+nową — `rm -rf build/wojtek_viz install/wojtek_viz` raz, przed rebuildem.
 
-**Pliki:** `launch/sim.launch.py`, `launch/viz.launch.py`, `config/{scene_mjx,wojtek_mjx}.xml` (kopie modeli MJX), `config/perception.rviz` (widok głębi/chmury, port z gałęzi percepcji), `urdf/wojtek_sim.urdf.xacro`, `wojtek_viz/camera_spec.py` (kontrakt kamery D435: intrinsics/mount/frame'y/tematy), `wojtek_viz/depth_camera.py` (offscreen renderer + wstrzykiwanie kamery przez MjSpec).
+`sim.launch.py` **nie ma własnych parametrów sterowania** — deleguje do
+`wojtek_bringup.launch_common` (patrz sekcja o przepływie danych w symulacji)
+i dokłada tylko rzeczy PC-owe: RViz z `config/sim.rviz`, `text_commander` i
+wirtualną kamerę.
+
+**Pliki:** `launch/sim.launch.py`, `launch/viz.launch.py`, `config/{scene_mjx,wojtek_mjx}.xml` (kopie modeli MJX), `config/perception.rviz` (widok głębi/chmury, port z gałęzi percepcji), `urdf/wojtek_sim.urdf.xacro`, `wojtek_pc/camera_spec.py` (kontrakt kamery D435: intrinsics/mount/frame'y/tematy), `wojtek_pc/depth_camera.py` (offscreen renderer + wstrzykiwanie kamery przez MjSpec).
 
 **Node: `mujoco_sim_node`** (nazwa: `wojtek_mujoco_sim`) — symulator real-time zamykający pętlę z policy_node na dokładnie tej fizyce, na której trenowano (`scene_mjx.xml`: serwa kp=20/kd=1, forcerange ±6, dt=0.004), krokowany do zegara ściennego (z limitem kroków — brak spirali śmierci przy lagu).
 
@@ -156,7 +210,7 @@ Symulacja, wizualizacja i ręczne sterowanie. Nie buduje się na RPi.
 | pub | `/camera/camera/color/camera_info` | `sensor_msgs/CameraInfo` |
 | srv | `/sim/reset` | `std_srvs/Trigger` |
 
-Wirtualna kamera D435 (#91): tematy, kodowanie i frame'y identyczne z realnym stosem `wojtek_perception_bringup`, więc `cloud_reduce`/planner/VLM działają w symulacji bez zmian. Render offscreen (MuJoCo `Renderer`, EGL) na osobnym wątku z prywatną `MjData` — fizyka nie zwalnia; stemple obrazów = stemple TF `odom→base_link` z tego samego ticku fizyki. Kamera jest wstrzykiwana do modelu przy starcie przez `MjSpec` (pozycja/FOV z `wojtek_viz/camera_spec.py`, jedno źródło prawdy dla MJCF, URDF i CameraInfo; patrz #93 dla docelowego przeniesienia do `build_model.py`). TF `base_link→camera_link→camera_depth_optical_frame` daje URDF (`with_camera` w `body.urdf.xacro`), nie plik konfiguracyjny. Bez działającego backendu GL kamera degraduje się do off z warningiem — fizyka działa dalej. QoS: sensor data (best effort). Głębia: 0 = brak zwrotu (jak RealSense), okno 0.3–3.0 m.
+Wirtualna kamera D435 (#91): tematy, kodowanie i frame'y identyczne z realnym stosem `wojtek_perception_bringup`, więc `cloud_reduce`/planner/VLM działają w symulacji bez zmian. Render offscreen (MuJoCo `Renderer`, EGL) na osobnym wątku z prywatną `MjData` — fizyka nie zwalnia; stemple obrazów = stemple TF `odom→base_link` z tego samego ticku fizyki. Kamera jest wstrzykiwana do modelu przy starcie przez `MjSpec` (pozycja/FOV z `wojtek_pc/camera_spec.py`, jedno źródło prawdy dla MJCF, URDF i CameraInfo; patrz #93 dla docelowego przeniesienia do `build_model.py`). TF `base_link→camera_link→camera_depth_optical_frame` daje URDF (`with_camera` w `body.urdf.xacro`), nie plik konfiguracyjny. Bez działającego backendu GL kamera degraduje się do off z warningiem — fizyka działa dalej. QoS: sensor data (best effort). Głębia: 0 = brak zwrotu (jak RealSense), okno 0.3–3.0 m.
 
 Parametry: `model_xml` (puste = przygotuj MJX z share z przepisaniem meshdir), `joint_map_yaml`, `publish_rate_hz` (100), `realtime_factor`, `initial_pose` (`home`/`folded` — folded uzyskiwane przez fizyczne "osiadanie" z home, żeby domknięcie czworoboku było spójne), `folded_knee_rad`, `camera` (true; wyłącznik dla słabszych maszyn), `camera_depth_hz` (15), `camera_color_hz` (5), `depth_min_m`/`depth_max_m` (0.3/3.0).
 

@@ -84,6 +84,30 @@ t0(){
   absent "no live 'fbb.rviz' ref (renamed -> wojtek.rviz)" 'fbb\.rviz' . ':(exclude)*.md'
   absent "no live urdf fbb_*/four_bar_bot xacro tokens (renamed -> wojtek_*)" 'fbb_(real|sim|joint|ros2_control|imu_ros2_control|bmi160_imu_ros2_control)|four_bar_bot_body|four_bar_bot\.urdf\.xacro' . ':(exclude)*.md'
   absent "removed legacy launches not referenced" '(bringup|robot_state_publisher)\.launch\.py' 'ros/src/*/launch/*.py'
+  # The PC package grew past "viz" (it carries the simulator), renamed 2026-08-06.
+  # docs/plans/ is a historical record and keeps the old name on purpose.
+  absent "no live 'wojtek_viz' ref (renamed -> wojtek_pc)" 'wojtek_viz' . ':(exclude)*.md' ':(exclude)docs/plans/*'
+
+  # Every package.xml parses. colcon does NOT fail on a malformed one -- it
+  # silently reads zero dependencies, so an XML slip (a double hyphen inside a
+  # comment is the classic) would make deploy.sh build wojtek_bringup alone,
+  # without the hardware drivers, and nothing would say a word.
+  for pxml in ros/src/*/package.xml; do
+    ok "package.xml parses: ${pxml#ros/src/}" python3 -c "import sys,xml.etree.ElementTree as ET; ET.parse(sys.argv[1])" "$pxml"
+  done
+
+  # Every package in src/ is known to the PC image. The Dockerfile lists them
+  # twice on purpose (manifests for the cached rosdep layer, then the build
+  # selection) and cannot glob, so a package added to src/ and forgotten here
+  # breaks `build.sh` -- and only there, long after the commit that added it.
+  # A package may sit out the build selection deliberately (nothing does
+  # today); missing from the COPY list always breaks rosdep.
+  for pkg in ros/src/*/; do
+    pkg="$(basename "$pkg")"
+    [ -f "ros/src/$pkg/package.xml" ] || continue
+    ok "docker image knows $pkg" \
+      grep -q "COPY ./src/$pkg/package.xml" ros/docker/Dockerfile
+  done
 
   # paths.py points at ros/, not the dropped quadruped dir
   ok "paths.py model dir -> ros/"   grep -q 'ros/src/wojtek_description/mujoco' training/wojtek_rl/paths.py

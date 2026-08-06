@@ -54,6 +54,28 @@ _SSH_OPTS = ["-o", "StrictHostKeyChecking=no",
 SSH = ["ssh"] + _SSH_OPTS + [RPI_HOST]              # non-interactive
 SSH_TTY = ["ssh", "-tt"] + _SSH_OPTS + [RPI_HOST]   # foreground w/ signal propagation
 
+def sim_session_args(args):
+    """Translate this script's console/gamepad flags into sim.launch.py
+    arguments.
+
+    The sim launch owns the whole session since sim.sh was folded into it:
+    console:=web|qt|none (web is its default) and gamepad:=true are launch
+    arguments there. Spawning a console or the pad teleop from here on top of
+    the launch is how a plain `robot --sim` ends up with the launch's web
+    console AND this script's Qt one -- so in sim mode these flags become
+    launch arguments instead of processes. They go in front of the
+    passthrough tokens, so an explicit console:=/gamepad:= still wins.
+    """
+    out = []
+    if args.no_console:
+        out.append("console:=none")
+    elif args.web_console:
+        out.append("console:=web")
+    if args.gamepad:
+        out.append("gamepad:=true")
+    return out
+
+
 ARMING_HINT = """
 >> Stack is up and DISARMED. Use the operator console (opens with this command,
    unless --no-console): pose the robot in the boot pose (home), check it matches
@@ -96,7 +118,7 @@ def main():
                          "by the systemd RT path, which uses the service's "
                          "own launch arguments.")
     # ros2-launch style name:=value tokens (e.g. camera:=false) pass through
-    # to the launch file, so every launch argument is reachable from sim.sh
+    # to the launch file, so every launch argument is reachable from here
     # without growing a bespoke flag here per argument. parse_known_args
     # would swallow typos silently, hence the strict shape check: anything
     # unrecognised that is not name:=value is still a hard error.
@@ -119,9 +141,14 @@ def main():
     # ---- robot side --------------------------------------------------------
     policy_arg = [f"policy:={args.policy}"] if args.policy else []
     if args.sim:
-        print(">> [sim] MuJoCo sim (local, in container)")
-        spawn(["ros2", "launch", "wojtek_viz", "sim.launch.py", "rviz:=false"]
-              + policy_arg + launch_args)
+        # The simulation runs the robot's own graph (ros2_control + real_io +
+        # policy), so the startup procedure below is the robot's procedure.
+        # Which plant is underneath comes from sim.launch.py's hw:= argument
+        # and can be passed through: hw:=mujoco for physics.
+        print(">> [sim] local simulation in the container: the robot's node "
+              "graph over a simulated plant (hw:=mujoco for physics)")
+        spawn(["ros2", "launch", "wojtek_pc", "sim.launch.py", "rviz:=false"]
+              + sim_session_args(args) + policy_arg + launch_args)
     elif args.dry_run:
         print(f">> [BENCH] launching on {RPI_HOST} WITHOUT RT, no torque")
         gamepad = str(args.gamepad).lower()
@@ -151,14 +178,14 @@ def main():
         fox = str(args.foxglove).lower()
         rviz = str(not args.foxglove).lower()
         print(f">> launching visualization (rviz={rviz}, foxglove={fox}, plotjuggler={pj})")
-        viz_cmd = ["ros2", "launch", "wojtek_viz", "viz.launch.py",
+        viz_cmd = ["ros2", "launch", "wojtek_pc", "viz.launch.py",
                    f"rviz:={rviz}", f"foxglove:={fox}", f"plotjuggler:={pj}"]
         if args.sim:
             # Sim layout: the plain live-robot view plus the virtual D435's
             # image panels, so the camera is visible without any clicking.
             from ament_index_python.packages import get_package_share_directory
             sim_rviz = os.path.join(
-                get_package_share_directory("wojtek_viz"), "config", "sim.rviz"
+                get_package_share_directory("wojtek_pc"), "config", "sim.rviz"
             )
             viz_cmd.append(f"rviz_config:={sim_rviz}")
         spawn(viz_cmd)
@@ -173,31 +200,32 @@ def main():
     # ../dev.sh sets up -- same as RViz.
     # The consoles/teleop read their command box from the same policy
     # contract; without --policy they fall back to conservative defaults.
+    # In sim mode the console is sim.launch.py's (console:=, web by default;
+    # sim_session_args carried the flags there) -- nothing to start here.
     console_policy = (
         ["--ros-args", "-p", f"policy:={args.policy}"] if args.policy else []
     )
-    if not args.no_console:
+    if not args.sim and not args.no_console:
         if args.web_console:
             print(">> launching web operator console -- open http://localhost:8080")
-            spawn(["ros2", "run", "wojtek_viz", "web_console"] + console_policy)
+            spawn(["ros2", "run", "wojtek_pc", "web_console"] + console_policy)
         else:
-            print(">> launching operator console (ros2 run wojtek_viz console)")
-            spawn(["ros2", "run", "wojtek_viz", "console"])
+            print(">> launching operator console (ros2 run wojtek_pc console)")
+            spawn(["ros2", "run", "wojtek_pc", "console"])
 
     # ---- gamepad teleop (bluetooth Xbox pad -> /cmd_vel) --------------------
     # Independent of the console choice: the pad drives, the console (if any)
-    # keeps the pose/jog/telemetry surface. On the real robot the teleop runs
-    # ON the RPi (pair the pad with the robot): the systemd service already
-    # launches with gamepad:=true, and the --dry-run path passes the same arg,
-    # so there is nothing to start here -- and driving survives the PC dropping
-    # off. Only the sim, which lives in this container, reads a pad paired with
-    # this machine.
+    # keeps the pose/jog/telemetry surface. Never started from here: on the
+    # real robot the teleop runs ON the RPi (pair the pad with the robot) --
+    # the systemd service already launches with gamepad:=true, the --dry-run
+    # path passes the same arg, and driving survives the PC dropping off. In
+    # sim the launch runs it too (gamepad:=true, via sim_session_args); the
+    # pad pairs with this machine there.
     if args.gamepad:
         if args.sim:
-            print(">> launching gamepad teleop (left stick vx/yaw, right stick "
-                  "strafe, A arms, Y/B stand up / lie down, D-pad height)")
-            spawn(["ros2", "launch", "wojtek_teleop", "gamepad.launch.py"]
-                  + policy_arg)
+            print(">> gamepad teleop is part of the sim launch (gamepad:=true): "
+                  "left stick vx/yaw, right stick strafe, A arms, "
+                  "Y/B stand up / lie down, D-pad height")
         elif not args.dry_run:
             print(">> gamepad teleop is resident in the RPi service "
                   "(gamepad:=true) -- pair the pad with the RPi and drive")

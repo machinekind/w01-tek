@@ -13,7 +13,7 @@
        publishes the camera_link->*_optical chain itself and two publishers
        of the same TF edge fight. The sim URDF turns it on: there the
        robot model owns the ground-truth extrinsics (machinekind/wojtek#91).
-       The mount numbers must match wojtek_viz/camera_spec.py (MOUNT_XYZ,
+       The mount numbers must match wojtek_pc/camera_spec.py (MOUNT_XYZ,
        MOUNT_PITCH_RAD); a test cross-checks them. -->
   <xacro:macro name="wojtek_body" params="with_camera:=false">
     <material name="grey">

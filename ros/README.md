@@ -16,11 +16,52 @@ AP (`wojtek-link`) when mobile. See [`deploy/rpi/README.md`](deploy/rpi/README.m
 
 ## PC (dev / viz) — quickstart
 
-**Just want the simulator?** One command, Linux or macOS (only Docker needed;
-first run builds the image):
+Everything ROS-side on the PC happens **inside the container**. Enter it once,
+work in the shell — the workspace is a lab you walk into, not a set of wrapper
+scripts:
 
 ```bash
-./sim.sh        # MuJoCo sim + policy + viz + drive UI, torn down on Ctrl-C
+./build.sh      # build the image (once)
+./dev.sh        # shell inside the container; ROS + the workspace already sourced
+```
+
+Then, from that shell:
+
+```bash
+ros2 launch wojtek_pc sim.launch.py      # the whole simulation session
+```
+
+That one launch brings up the plant (MuJoCo), the robot's own control stack
+(ros2_control at 400 Hz, `real_io_node`, `policy_node`), the virtual D435,
+RViz and the operator console. Ctrl-C tears the session down; the container
+stays for the next one. Open a second `./dev.sh` shell for service calls,
+`ros2 topic echo` and teleop while it runs.
+
+Useful arguments (`ros2 launch wojtek_pc sim.launch.py --show-args` lists all):
+
+```bash
+hw:=mock            # no dynamics, just the node graph (fast, CI-friendly)
+boot_pose:=folded   # start from the real boot/zeroing pose
+console:=qt|none    # Qt window instead of the browser, or nothing
+gamepad:=true       # bluetooth Xbox pad paired with THIS machine
+camera:=false       # no virtual D435 (weak machines)
+rviz:=false         # headless
+```
+
+The startup procedure is the robot's, on purpose — see
+[`../docs/sim-test-contract.md`](../docs/sim-test-contract.md) for what a
+simulation run does and does not prove.
+
+`./sim.sh` from the host collapses the above into one command: it starts the
+container, sorts out X11/XQuartz, picks RViz (Linux/X11) or Foxglove (macOS,
+headless) for the platform, and runs the session. Every `name:=value` argument
+passes straight through to `sim.launch.py`, so the launch vocabulary above is
+the only one:
+
+```bash
+./sim.sh                          # sim + viz + web console, Ctrl-C tears down
+./sim.sh hw:=mock console:=none   # any launch argument passes through
+./sim.sh --rviz | --foxglove      # override the platform viz default
 ```
 
 The operator console (drive pad, arm/pose buttons, jog, telemetry) is the
@@ -45,11 +86,15 @@ Speeds are parameters (`v_forward` 0.3 m/s, `w_turn` 0.5 rad/s) and a 2 s
 dead-man (`command_timeout`) stops the robot when commands stop coming —
 keep clicking (or talking) to keep walking.
 
-3D visualization: on Linux `sim.sh` opens RViz (X11). On macOS GL-heavy RViz
-over X11 is slow, so it starts `foxglove_bridge` instead — open the native
+3D visualization: `sim.launch.py` opens RViz over X11 (`./dev.sh` sets up the
+access). On macOS GL-heavy RViz over X11 is slow, so run the launch with
+`rviz:=false` and start `foxglove_bridge` from `viz.launch.py foxglove:=true`
+in a second shell — then open the native
 [Foxglove](https://foxglove.dev/download) app and connect to
-`ws://localhost:8765` (add a 3D panel). `--rviz` / `--foxglove` override the
-platform default.
+`ws://localhost:8765` (add a 3D panel). The web console can live INSIDE
+Foxglove as a panel — see
+[`foxglove/wojtek-console-panel`](foxglove/wojtek-console-panel/README.md)
+(`npm run local-install`, restart Foxglove, add the "Wojtek console" panel).
 
 **Bluetooth Xbox pad**: left stick = vx/yaw, right stick left-right = strafe,
 **A** toggles arm, D-pad up/down steps the standing height; on the `joy`
@@ -61,38 +106,39 @@ paths, same drive mapping:
 - The **web console reads a pad in the browser** (Gamepad API): pair the pad
   with whatever machine the browser runs on (macOS included), open the
   console page and press any pad button — the sticks take over the drive pad.
-- `./sim.sh --gamepad` runs the in-container `joy` driver + `gamepad_teleop`
-  (from `wojtek_teleop`) instead of the web console. Linux only (the
-  container sees the pad through the `/dev` mount; Docker on macOS can't
-  pass input devices, so there this flag falls back to the web console path
-  with a hint).
+- `sim.launch.py gamepad:=true` runs the in-container `joy` driver +
+  `gamepad_teleop` (from `wojtek_teleop`) alongside the console. Linux only:
+  the container sees the pad through the `/dev` mount, Docker on macOS cannot
+  pass input devices (use the browser pad path above there).
 - On the real robot the pad can pair with the **RPi itself** — no PC in the
   loop: `robot.launch.py gamepad:=true` (the `wojtek_teleop` package is part
   of the RPi build; bluez/ERTM groundwork comes from `deploy/rpi/install.sh`,
   pairing itself is a one-time `bluetoothctl` scan/pair/trust/connect).
 
-`--qt-console` switches to the original Qt operator console (an X11 app).
-On macOS that needs a one-time XQuartz setup — `sim.sh` then starts XQuartz
-itself when needed:
+`console:=qt` switches to the original Qt operator console (an X11 app).
+On macOS that needs a one-time XQuartz setup, and XQuartz has to be running
+before you enter the container:
 
 ```bash
 brew install --cask xquartz
 defaults write org.xquartz.X11 nolisten_tcp -bool false   # allow TCP :6000
 ```
 
-For everything else (real robot, deploys, hand-run launches):
+For the real robot you also need the link profile, once, on the host:
 
 ```bash
-git clone <this repo> && cd wojtek_ws
-./build.sh                 # build the ROS 2 Jazzy Docker image (once)
-./deploy/pc/setup-net.sh   # create the wojtek-eth link profile (once)
-./dev.sh                   # drop into a shell in the container (ROS already sourced)
+./deploy/pc/setup-net.sh   # create the wojtek-eth profile
 ```
-Inside the container, e.g.:
-```bash
-ros2 launch wojtek_viz viz.launch.py            # RViz/PlotJuggler for the live robot
-ros2 launch wojtek_viz sim.launch.py            # MuJoCo sim
-```
+
+and then, from the container shell, `ros2 launch wojtek_pc viz.launch.py`
+(RViz/PlotJuggler against the live robot) or `ros2 run wojtek_bringup robot`
+(see "Run the robot" below).
+
+`wojtek_pc` was called `wojtek_viz` until 2026-08-06 (it carries the
+simulator, not just visualization). A workspace built before the rename keeps
+the old package in its overlay and shadows the new one; clear it once with
+`rm -rf build/wojtek_viz install/wojtek_viz` before rebuilding.
+
 `setup-net.sh` makes a normal internet cable "just work"; dock the robot by
 cable with `nmcli con up wojtek-eth`. (Details: the "PC side" table in
 [`deploy/rpi/README.md`](deploy/rpi/README.md).)
@@ -164,12 +210,12 @@ std_srvs/srv/Trigger`.
 | Path | What |
 |---|---|
 | `build.sh` / `dev.sh`      | PC: build image / enter container |
-| `sim.sh`                  | PC: one-command full sim (web console + RViz on Linux / Foxglove on macOS) |
+| `sim.sh`                  | PC: one-command sim session from the host (container + X11 + platform viz around `sim.launch.py`) |
 | `deploy/pc/setup-net.sh`  | PC: create the `wojtek-eth` link profile |
 | `deploy.sh`               | host orchestrator: provision + build the RPi |
 | `.env.example`            | template for secrets (Ubuntu Pro token) |
 | `deploy/rpi/flash-card.sh`| flash a fresh card: image + cloud-init + SSH key |
 | `deploy/rpi/`             | RPi provisioning: `install.sh`, network + service configs, `IMAGE.md`, `cloud-init/` |
 | `deploy/wojtek-robot.service` | RPi systemd unit (RT control stack) |
-| `src/`                    | ROS 2 packages (`wojtek_bringup`, `wojtek_policy`, `wojtek_viz`, hardware ifaces) |
+| `src/`                    | ROS 2 packages (`wojtek_bringup`, `wojtek_policy`, `wojtek_pc`, hardware ifaces) |
 | `docker/`                 | PC image + compose |

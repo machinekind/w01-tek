@@ -1,5 +1,5 @@
 # NVIDIA GPU passthrough (Linux only). Layered on top of compose.yaml by
-# sim.sh/dev.sh WHEN docker reports the `nvidia` runtime -- i.e. when
+# dev.sh WHEN docker reports the `nvidia` runtime -- i.e. when
 # nvidia-container-toolkit is installed and registered:
 #
 #   sudo dnf install nvidia-container-toolkit     # (nvidia's repo)
@@ -15,7 +15,7 @@
 # (RViz) and EGL (MuJoCo camera) on the same driver the host runs.
 #
 # Harmless to include on a non-NVIDIA machine ONLY IF the nvidia runtime
-# exists, hence the runtime detection in sim.sh/dev.sh instead of putting
+# exists, hence the runtime detection in dev.sh instead of putting
 # this in compose.yaml.
 services:
   wojtek_robot:

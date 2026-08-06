@@ -3,11 +3,17 @@
 # starts the container if needed (idempotent - safe to run repeatedly, a
 # no-op if it's already running), then attaches.
 #
-# Once inside, ROS is already sourced (~/.bashrc in the image, since `docker
-# exec` bypasses the image's ENTRYPOINT) - just run plain ROS commands, e.g.:
+# This is THE way into the workspace: enter once, work in the shell. Inside,
+# ROS is already sourced (~/.bashrc in the image, since `docker exec` bypasses
+# the image's ENTRYPOINT) - just run plain ROS commands, e.g.:
+#   ros2 launch wojtek_pc sim.launch.py            # full simulation session
 #   ros2 launch wojtek_bringup real.launch.py dry_run:=true
-#   ros2 launch wojtek_bringup sim.launch.py rviz:=false
-#   colcon build   # after editing anything under src/ on the host
+#   colcon build --packages-skip md80_hardware_interface
+# (md80 is skipped because this bind mount hides the candle checkout the image
+# built it from; its install/ from image build time stays valid.)
+#
+# Open a second shell the same way for service calls, topic echoes and teleop
+# while a launch runs in the first.
 #
 # Handles X11 access for RViz GUI (sim.launch.py's rviz:=true default)
 # itself - skipped safely if there's no display (headless/SSH without X
@@ -33,9 +39,8 @@ else
   echo "!! no SSH agent ($SSH_AUTH_SOCK) -- SSH to the RPi will prompt for a password"
 fi
 
-# Same file stack as ../sim.sh so the two never recreate the container back
-# and forth over a config diff (macOS needs bridge networking + the published
-# Foxglove port -- see compose.mac.yaml).
+# Compose file stack: macOS needs bridge networking + the published Foxglove
+# port (compose.mac.yaml), an NVIDIA runtime gets hardware GL (compose.gpu.yaml).
 COMPOSE=(docker compose)
 if [ "$(uname -s)" = "Darwin" ]; then
   COMPOSE+=(-f compose.yaml -f compose.mac.yaml)

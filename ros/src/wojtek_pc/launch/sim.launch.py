@@ -72,6 +72,11 @@ def generate_launch_description():
             package="wojtek_pc",
             executable="sim_camera_node",
             output="screen",
+            # Rendering needs a GL backend named up front: left to guess inside
+            # the container MuJoCo picks one whose library is missing and
+            # ABORTS the process instead of raising. An explicit MUJOCO_GL in
+            # the environment still wins.
+            additional_env={"MUJOCO_GL": os.environ.get("MUJOCO_GL", "egl")},
             condition=IfCondition(
                 PythonExpression([
                     "'", LaunchConfiguration("camera"),

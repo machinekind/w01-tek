@@ -296,7 +296,7 @@ def common_launch_description(
             # graph, which makes it the fast way to test the stack's own logic
             # (arming, zeroing, ramps, watchdog) and the CI-friendly one.
             DeclareLaunchArgument(
-                "hw", default_value="mock",
+                "hw", default_value="mujoco",
                 choices=["mock", "mujoco"],
             ),
             # Physics scene for hw:=mujoco; empty = the plugin's default

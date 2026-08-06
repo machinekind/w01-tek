@@ -21,7 +21,7 @@ exactly the one the policy trained against; without it the XML defaults
               /camera/camera/color/image_raw       rgb8, ~5 Hz (for the VLM)
               /camera/camera/color/camera_info
               (sensor-data QoS; stamps match the odom->base_link TF; see
-              wojtek_viz.camera_spec for the contract, depth_camera for the
+              wojtek_pc.camera_spec for the contract, depth_camera for the
               renderer, and machinekind/wojtek#91 for the requirements)
   services    /sim/reset (std_srvs/Trigger) -- back to the initial pose
 
@@ -50,7 +50,7 @@ from tf2_ros import TransformBroadcaster
 
 from wojtek_policy.joint_map import JointMap
 from wojtek_policy import poses
-from wojtek_viz import camera_spec
+from wojtek_pc import camera_spec
 
 # `import mujoco` RAISES if MUJOCO_GL names a backend whose library is
 # missing (no libEGL in a slim container, say). Physics needs no GL at all,
@@ -80,7 +80,7 @@ from ament_index_python.packages import get_package_share_directory
 def _prepare_model_xml():
     """Copy the MJX scene next to the installed meshes so includes resolve.
 
-    wojtek_viz ships the MJX XMLs in its share/config; the robot file
+    wojtek_pc ships the MJX XMLs in its share/config; the robot file
     expects meshdir ../meshes relative to itself, so rewrite it to the
     meshes installed by wojtek_description.
     """
@@ -88,7 +88,7 @@ def _prepare_model_xml():
     import tempfile
     from pathlib import Path
 
-    share = Path(get_package_share_directory("wojtek_viz")) / "config"
+    share = Path(get_package_share_directory("wojtek_pc")) / "config"
     meshes = Path(get_package_share_directory("wojtek_description")) / "meshes"
     tmp = Path(tempfile.mkdtemp(prefix="wojtek_mj_"))
     robot = (share / "wojtek_mjx.xml").read_text()
@@ -134,7 +134,7 @@ class MujocoSimNode(Node):
             self._camera_on = False
         self.model = None
         if self._camera_on:
-            from wojtek_viz.depth_camera import load_model_with_camera
+            from wojtek_pc.depth_camera import load_model_with_camera
 
             try:
                 self.model = load_model_with_camera(xml)
@@ -221,7 +221,7 @@ class MujocoSimNode(Node):
         self._render_stop = threading.Event()
         self._render_thread = None
         if self._camera_on:
-            from wojtek_viz.depth_camera import SimDepthCamera
+            from wojtek_pc.depth_camera import SimDepthCamera
 
             self._cam = SimDepthCamera(
                 self.model,

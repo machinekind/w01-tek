@@ -90,9 +90,14 @@ git clone <this repo> && cd wojtek_ws
 ```
 Inside the container, e.g.:
 ```bash
-ros2 launch wojtek_viz viz.launch.py            # RViz/PlotJuggler for the live robot
-ros2 launch wojtek_viz sim.launch.py            # MuJoCo sim
+ros2 launch wojtek_pc viz.launch.py             # RViz/PlotJuggler for the live robot
+ros2 launch wojtek_pc sim.launch.py             # MuJoCo sim
 ```
+`wojtek_pc` was called `wojtek_viz` until 2026-08-06 (it carries the
+simulator, not just visualization). A workspace built before the rename keeps
+the old package in its overlay and shadows the new one; clear it once with
+`rm -rf build/wojtek_viz install/wojtek_viz` before rebuilding.
+
 `setup-net.sh` makes a normal internet cable "just work"; dock the robot by
 cable with `nmcli con up wojtek-eth`. (Details: the "PC side" table in
 [`deploy/rpi/README.md`](deploy/rpi/README.md).)
@@ -171,5 +176,5 @@ std_srvs/srv/Trigger`.
 | `deploy/rpi/flash-card.sh`| flash a fresh card: image + cloud-init + SSH key |
 | `deploy/rpi/`             | RPi provisioning: `install.sh`, network + service configs, `IMAGE.md`, `cloud-init/` |
 | `deploy/wojtek-robot.service` | RPi systemd unit (RT control stack) |
-| `src/`                    | ROS 2 packages (`wojtek_bringup`, `wojtek_policy`, `wojtek_viz`, hardware ifaces) |
+| `src/`                    | ROS 2 packages (`wojtek_bringup`, `wojtek_policy`, `wojtek_pc`, hardware ifaces) |
 | `docker/`                 | PC image + compose |

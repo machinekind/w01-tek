@@ -67,14 +67,14 @@ sim bags from the stock node as plumbing checks, not recovery tests.
 
 ```bash
 # terminal 1: the simulator
-ros2 run wojtek_viz mujoco_sim_node
+ros2 run wojtek_pc mujoco_sim_node
 
 # terminal 2: the recorder
 ros2 bag record -o bags/sysid_air /wojtek/joint_targets /joint_states /imu/data
 
 # terminal 3: the excitation program (anchors at the current pose, then
 # ramps -> paired-amplitude chirps -> steps -> multisine; ~2 min)
-ros2 run wojtek_viz sysid_excitation
+ros2 run wojtek_pc sysid_excitation
 ```
 
 Stop the recording when the node logs `program done`.

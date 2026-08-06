@@ -1,10 +1,10 @@
 """Offscreen MuJoCo renderer emulating the RealSense D435 for the sim node.
 
-Two responsibilities, both driven by wojtek_viz.camera_spec:
+Two responsibilities, both driven by wojtek_pc.camera_spec:
 
 * ``load_model_with_camera`` -- inject the ``d435_depth`` camera into the sim
   model at load time via ``mujoco.MjSpec``. The sim still runs the model copy
-  shipped in wojtek_viz/config (see machinekind/wojtek#93 for retiring it);
+  shipped in wojtek_pc/config (see machinekind/wojtek#93 for retiring it);
   injecting here keeps this feature physics-neutral: a camera adds no mass,
   no geoms, no dynamics.
 * ``SimDepthCamera`` -- owns the offscreen renderers and a PRIVATE MjData.
@@ -19,7 +19,7 @@ only want depth_to_mm re-exports) before the sim node has settled MUJOCO_GL.
 
 import numpy as np
 
-from wojtek_viz import camera_spec
+from wojtek_pc import camera_spec
 
 
 def _free_root_body(spec, mujoco):

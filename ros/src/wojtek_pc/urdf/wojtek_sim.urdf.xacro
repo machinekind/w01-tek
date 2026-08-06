@@ -1,0 +1,162 @@
+<?xml version="1.0"?>
+<!--
+  Simulation URDF: the same mechanics as wojtek_description's
+  wojtek.urdf.xacro (base + imu + 4 legs, camera extrinsics included) and the
+  same ros2_control interfaces as wojtek_bringup's wojtek_real.urdf.xacro.
+  Only the hardware plugin differs, which is the whole point: the simulation
+  runs the real node graph (controller_manager, the broadcasters,
+  real_io_node, policy_node) over a simulated plant, so arming, zeroing,
+  ramps and the watchdog are exercised rather than bypassed.
+
+  hw picks the plant:
+    "mujoco" - physics from the MJX scene, the plant the policy trained on.
+    "mock"   - ros2_control's own GenericSystem: commands are echoed back as
+               states, no dynamics. Useless for gait, ideal for testing the
+               stack's own logic (and fast enough for CI).
+
+  The interface names, the sensor name and the joint set MUST stay identical
+  to the real xacro: real_controllers.yaml binds the broadcasters by sensor
+  name ("imu") and the policy binds joints by name. A test cross-checks the
+  two files.
+-->
+<robot name="quadruped" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:include filename="$(find wojtek_description)/urdf/body.urdf.xacro" />
+
+  <!-- Servo contract; the launch feeds these from the loaded policy's
+       policy_meta.json pd block, exactly as it does for the real robot. The
+       defaults here only apply when the xacro is run by hand. -->
+  <xacro:arg name="kp" default="40.0" />
+  <xacro:arg name="kd" default="1.6" />
+  <xacro:arg name="max_torque" default="9.0" />
+  <xacro:arg name="hw" default="mock" />
+  <!-- Physics scene for hw:=mujoco; empty = the plugin's own default
+       (scene_mjx.xml from this package's share/config). -->
+  <xacro:arg name="model_xml" default="" />
+  <!-- Bench mode, the simulated analogue of the real one: physics runs but
+       commands are not applied, so the robot goes limp. Ignored by the mock,
+       which has no torque to withhold. -->
+  <xacro:arg name="dry_run" default="false" />
+  <!-- Bring the stack up without the IMU (drops the sensor component and,
+       with it, both sensor broadcasters). The policy then has no gravity or
+       gyro, so this is a plumbing switch, not a way to walk. -->
+  <xacro:arg name="use_imu" default="true" />
+
+  <!-- In sim the robot model owns the camera extrinsics (ground truth) -
+       robot_state_publisher latches base_link->camera_link->optical frames
+       matching the MJCF render camera; see wojtek_pc/camera_spec.py. -->
+  <xacro:wojtek_body with_camera="true" />
+
+  <!-- Same interface set as wojtek_bringup's wojtek_joint macro: a position
+       command (impedance target) and position/velocity/effort states. The
+       gains travel as params so the mujoco plugin can write them into the
+       actuators; the mock ignores them. -->
+  <xacro:macro name="wojtek_sim_joint" params="name kp kd max_torque">
+    <joint name="${name}">
+      <command_interface name="position" />
+      <state_interface name="position">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="velocity">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="effort">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <param name="ddq_kp">${kp}</param>
+      <param name="ddq_kd">${kd}</param>
+      <param name="max_torque">${max_torque}</param>
+    </joint>
+  </xacro:macro>
+
+  <ros2_control name="WojtekSim" type="system">
+    <hardware>
+      <xacro:if value="${'$(arg hw)' == 'mock'}">
+        <plugin>mock_components/GenericSystem</plugin>
+        <!-- Integrate velocity from the position commands instead of
+             reporting zero, so /joint_states is not obviously fake. -->
+        <param name="calculate_dynamics">true</param>
+      </xacro:if>
+      <xacro:unless value="${'$(arg hw)' == 'mock'}">
+        <plugin>wojtek_mujoco_hardware_interface/MujocoHardwareInterface</plugin>
+        <param name="model_xml">$(arg model_xml)</param>
+        <param name="dry_run">$(arg dry_run)</param>
+      </xacro:unless>
+    </hardware>
+
+    <xacro:wojtek_sim_joint name="front_left_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
+    <xacro:wojtek_sim_joint name="front_left_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
+    <xacro:wojtek_sim_joint name="front_left_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
+
+    <xacro:wojtek_sim_joint name="front_right_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
+    <xacro:wojtek_sim_joint name="front_right_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
+    <xacro:wojtek_sim_joint name="front_right_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
+
+    <xacro:wojtek_sim_joint name="rear_right_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
+    <xacro:wojtek_sim_joint name="rear_right_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
+    <xacro:wojtek_sim_joint name="rear_right_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
+
+    <xacro:wojtek_sim_joint name="rear_left_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
+    <xacro:wojtek_sim_joint name="rear_left_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
+    <xacro:wojtek_sim_joint name="rear_left_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
+
+    <!-- One component carries both the joints and the IMU, unlike the real
+         robot where they are separate drivers on separate buses: the plugin
+         owns a single physics state and splitting it across two components
+         would mean sharing MjData between them. The sensor name and its
+         interfaces are what the broadcasters bind to, so those match the
+         real xacro exactly.
+
+         The initial values matter for the mock, which has no physics to
+         produce them: they describe a level robot with the IMU in its real
+         mounting (rotated pi about y). orientation (w0 x0 y1 z0) is that
+         rotation, and the accelerometer reads -9.81 on its own z; either
+         path through policy_node (the quaternion, or the complementary
+         filter over the accelerometer) then resolves gravity to [0,0,-1] in
+         base_link. The magnetometer values are a plausible mid-latitude
+         field in microtesla (the broadcaster converts to tesla); nothing in
+         the control path reads them yet. -->
+    <xacro:if value="$(arg use_imu)">
+      <sensor name="imu">
+        <state_interface name="orientation.x">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="orientation.y">
+          <param name="initial_value">1.0</param>
+        </state_interface>
+        <state_interface name="orientation.z">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="orientation.w">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="magnetometer.x">
+          <param name="initial_value">20.0</param>
+        </state_interface>
+        <state_interface name="magnetometer.y">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="magnetometer.z">
+          <param name="initial_value">-44.0</param>
+        </state_interface>
+        <state_interface name="angular_velocity.x">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="angular_velocity.y">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="angular_velocity.z">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="linear_acceleration.x">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="linear_acceleration.y">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="linear_acceleration.z">
+          <param name="initial_value">-9.81</param>
+        </state_interface>
+      </sensor>
+    </xacro:if>
+  </ros2_control>
+</robot>

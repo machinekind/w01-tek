@@ -1,9 +1,9 @@
-"""Renderer tests for the simulated D435 (wojtek_viz.depth_camera).
+"""Renderer tests for the simulated D435 (wojtek_pc.depth_camera).
 
 These need mujoco AND a working offscreen GL backend; they skip cleanly
 where either is missing. Run for real inside the dev container:
 
-    docker exec wojtek_robot python3 -m pytest /ros2_ws/src/wojtek_viz/test -q
+    docker exec wojtek_robot python3 -m pytest /ros2_ws/src/wojtek_pc/test -q
 
 The wall test is the acceptance test the issue asks for: a box at a known
 distance must read back within tolerance, with the expected value computed
@@ -25,8 +25,8 @@ sys.path.insert(0, str(PKG))
 
 mujoco = pytest.importorskip("mujoco")
 
-from wojtek_viz import camera_spec  # noqa: E402
-from wojtek_viz.depth_camera import SimDepthCamera, inject_camera  # noqa: E402
+from wojtek_pc import camera_spec  # noqa: E402
+from wojtek_pc.depth_camera import SimDepthCamera, inject_camera  # noqa: E402
 
 REPO_ROS_SRC = PKG.parent  # .../ros/src
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Operator console -- one PC-side GUI for every manual robot capability.
 
-    ros2 run wojtek_viz console
+    ros2 run wojtek_pc console
 
 Instead of typing raw `ros2 service call` / `ros2 topic pub`, this gathers all
 the hand-operated controls in one window. It talks to the SAME services/topics

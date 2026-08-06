@@ -1,11 +1,12 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>wojtek_viz</name>
+  <name>wojtek_pc</name>
   <version>0.1.0</version>
   <description>
-    Visualization, debugging and MuJoCo simulation for wojtek: RViz,
-    PlotJuggler and teleop for the live robot, plus the MuJoCo sim node.
+    Workstation-side tooling for wojtek: the MuJoCo simulation of the robot
+    (the same ROS graph as the real bringup, hardware plugin swapped), plus
+    RViz/PlotJuggler/teleop and the operator consoles for a live robot.
     PC-side only -- deliberately kept out of wojtek_bringup so the robot
     (RPi) build never needs GUI/simulation dependencies.
   </description>
@@ -21,6 +22,17 @@
   <depend>python3-numpy</depend>
   <depend>wojtek_policy</depend>
   <depend>wojtek_description</depend>
+  <!-- sim.launch.py IS the robot bringup with the hardware plugin swapped:
+       it imports wojtek_bringup.launch_common (shared nodes and parameters)
+       and runs that package's real_io_node and real_controllers.yaml, so the
+       simulation cannot drift away from the robot's own configuration. -->
+  <depend>wojtek_bringup</depend>
+  <!-- ros2_control runtime for the simulated stack: the manager, the
+       controllers/broadcasters, and the magnetometer broadcaster (a plain
+       controller, no hardware of its own). -->
+  <exec_depend>controller_manager</exec_depend>
+  <exec_depend>ros2_controllers</exec_depend>
+  <exec_depend>magnetometer_broadcaster</exec_depend>
   <!-- operator_console.py: the Qt operator GUI (arm/pose/jog/drive in one). -->
   <depend>python3-pyqt5</depend>
   <!-- web_console.py: the browser twin of the Qt console (no X11 needed;

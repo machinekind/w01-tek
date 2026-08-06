@@ -24,7 +24,7 @@
 # (see .env.example); it is sourced below and never committed.
 #
 # Only the robot subset is built (colcon --packages-up-to wojtek_bringup), so
-# wojtek_viz / rviz / plotjuggler / mujoco never land on the RPi.
+# wojtek_pc / rviz / plotjuggler / mujoco never land on the RPi.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -101,7 +101,7 @@ rsync -az --delete \
     --exclude 'build/' --exclude 'install/' --exclude 'log/' \
     --exclude '__pycache__/' \
     --exclude 'md80_hardware_interface/3rd_party/candle/' \
-    --exclude 'wojtek_viz/' \
+    --exclude 'wojtek_pc/' \
     "${HERE}/src/" "${RPI_HOST}:${REMOTE_WS}/src/"
 
 echo ">> remote: ensure candle @ ${CANDLE_COMMIT}, rosdep, colcon build, restart"

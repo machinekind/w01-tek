@@ -1,6 +1,6 @@
 """PC-side visualization/debug for the LIVE robot (running on the RPi).
 
-    ros2 launch wojtek_viz viz.launch.py [rviz:=true] [plotjuggler:=false]
+    ros2 launch wojtek_pc viz.launch.py [rviz:=true] [plotjuggler:=false]
                                          [foxglove:=false] [bag:=true]
 
 foxglove:=true starts foxglove_bridge on ws://localhost:8765 for the native
@@ -66,7 +66,7 @@ def generate_launch_description():
         [
             DeclareLaunchArgument("rviz", default_value="true"),
             # Layout to load. Default = the plain live-robot view; the sim
-            # bringup (robot.py --sim) passes wojtek_viz's sim.rviz, which
+            # bringup (robot.py --sim) passes wojtek_pc's sim.rviz, which
             # adds the virtual camera's image panels.
             DeclareLaunchArgument(
                 "rviz_config",

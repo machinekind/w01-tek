@@ -119,8 +119,13 @@ def main():
     # ---- robot side --------------------------------------------------------
     policy_arg = [f"policy:={args.policy}"] if args.policy else []
     if args.sim:
-        print(">> [sim] MuJoCo sim (local, in container)")
-        spawn(["ros2", "launch", "wojtek_viz", "sim.launch.py", "rviz:=false"]
+        # The simulation runs the robot's own graph (ros2_control + real_io +
+        # policy), so the startup procedure below is the robot's procedure.
+        # Which plant is underneath comes from sim.launch.py's hw:= argument
+        # and can be passed through: hw:=mujoco for physics.
+        print(">> [sim] local simulation in the container: the robot's node "
+              "graph over a simulated plant (hw:=mujoco for physics)")
+        spawn(["ros2", "launch", "wojtek_pc", "sim.launch.py", "rviz:=false"]
               + policy_arg + launch_args)
     elif args.dry_run:
         print(f">> [BENCH] launching on {RPI_HOST} WITHOUT RT, no torque")
@@ -151,14 +156,14 @@ def main():
         fox = str(args.foxglove).lower()
         rviz = str(not args.foxglove).lower()
         print(f">> launching visualization (rviz={rviz}, foxglove={fox}, plotjuggler={pj})")
-        viz_cmd = ["ros2", "launch", "wojtek_viz", "viz.launch.py",
+        viz_cmd = ["ros2", "launch", "wojtek_pc", "viz.launch.py",
                    f"rviz:={rviz}", f"foxglove:={fox}", f"plotjuggler:={pj}"]
         if args.sim:
             # Sim layout: the plain live-robot view plus the virtual D435's
             # image panels, so the camera is visible without any clicking.
             from ament_index_python.packages import get_package_share_directory
             sim_rviz = os.path.join(
-                get_package_share_directory("wojtek_viz"), "config", "sim.rviz"
+                get_package_share_directory("wojtek_pc"), "config", "sim.rviz"
             )
             viz_cmd.append(f"rviz_config:={sim_rviz}")
         spawn(viz_cmd)
@@ -179,10 +184,10 @@ def main():
     if not args.no_console:
         if args.web_console:
             print(">> launching web operator console -- open http://localhost:8080")
-            spawn(["ros2", "run", "wojtek_viz", "web_console"] + console_policy)
+            spawn(["ros2", "run", "wojtek_pc", "web_console"] + console_policy)
         else:
-            print(">> launching operator console (ros2 run wojtek_viz console)")
-            spawn(["ros2", "run", "wojtek_viz", "console"])
+            print(">> launching operator console (ros2 run wojtek_pc console)")
+            spawn(["ros2", "run", "wojtek_pc", "console"])
 
     # ---- gamepad teleop (bluetooth Xbox pad -> /cmd_vel) --------------------
     # Independent of the console choice: the pad drives, the console (if any)

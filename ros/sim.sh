@@ -36,7 +36,14 @@
 #   ./sim.sh camera:=false      # no virtual D435 (default on; the camera
 #                               # publishes /camera/camera/depth/* + color
 #                               # like the real perception stack)
-#   ./sim.sh initial_pose:=folded
+#   ./sim.sh boot_pose:=folded  # start in the robot's boot/zeroing pose
+#   ./sim.sh hw:=mujoco         # physics plant (hw:=mock is the default:
+#                               # the full node graph, no dynamics)
+#
+# Since 2026-08-06 the simulation IS the robot bringup with the hardware
+# plugin swapped, so the startup procedure is the robot's own: zero ->
+# stand_up -> arm (see docs/sim-test-contract.md). The old sim-only
+# `initial_pose:=` is now `boot_pose:=`, the same argument the robot takes.
 #
 # Ctrl-C tears the session down; the container stays up for reuse (same one
 # ./dev.sh attaches to).

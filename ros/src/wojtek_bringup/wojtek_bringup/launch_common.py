@@ -1,10 +1,16 @@
-"""Shared launch body for the real-robot bringups (real/robot launch files).
+"""Shared launch body for every bringup: the real robot and the simulation.
 
-Both start the same MD80 + IMU + policy node set from a policy reference and
-differ only in two things: whether RViz runs (PC vs the headless RPi service)
-and the rosbag default. Those are the `with_rviz`/`bag_default` parameters
-here; the per-file docstrings document the two workflows. The robot-side
-launch additionally offers the pad teleop (`with_gamepad`).
+One node set (ros2_control + real_io_node + policy_node + rsp + bag), one set
+of parameters, one arming procedure. The launch files differ only in:
+
+  hardware      "real" = MD80 over CAN + the I2C IMU; "sim" = the same graph
+                with the hardware plugin swapped for a simulated one, from
+                wojtek_pc's xacro. This is the whole point: the simulation is
+                not a second stack, so soft_start_s/clamp_knee/watchdog and
+                the IMU mount can not drift apart between the two.
+  with_rviz     RViz on (PC) or off (the headless RPi service).
+  bag_default   rosbag on/off for this workflow.
+  with_gamepad  offer the robot-side pad teleop.
 
 Imported by the launch files at launch time. The same environment that lets
 them import wojtek_policy.policy_source makes this sibling module importable.
@@ -26,6 +32,7 @@ from launch.substitutions import (
     Command,
     LaunchConfiguration,
     PathJoinSubstitution,
+    PythonExpression,
     TextSubstitution,
 )
 from launch_ros.actions import Node
@@ -35,10 +42,9 @@ from launch_ros.substitutions import FindPackageShare
 from wojtek_policy.policy_source import load_policy
 
 
-def _launch_setup(context, with_rviz):
+def _launch_setup(context, with_rviz, hardware):
     share = get_package_share_directory("wojtek_bringup")
     policy_share = get_package_share_directory("wojtek_policy")
-    xacro_file = os.path.join(share, "urdf", "wojtek_real.urdf.xacro")
 
     loaded = load_policy(
         LaunchConfiguration("policy").perform(context),
@@ -50,19 +56,38 @@ def _launch_setup(context, with_rviz):
           f"kp={pd['kp']:g} kd={pd['kd']:g} max_torque={pd['max_torque']:g}")
 
     use_imu = LaunchConfiguration("use_imu")
+    # The servo contract (gains, torque cap), the IMU switch and the bench flag
+    # are the same question on both sides, so they go to both xacros. What
+    # differs is what the plugin needs to reach its hardware: a CAN link and an
+    # I2C address for the real drives, a physics backend for the simulated one.
+    xacro_args = [
+        f" kp:={pd['kp']} kd:={pd['kd']} max_torque:={pd['max_torque']}",
+        " use_imu:=", use_imu,
+        " dry_run:=", LaunchConfiguration("dry_run"),
+    ]
+    if hardware == "real":
+        xacro_file = os.path.join(share, "urdf", "wojtek_real.urdf.xacro")
+        xacro_args += [
+            " imu_bus:=", LaunchConfiguration("imu_bus"),
+            " imu_addr_ag:=", LaunchConfiguration("imu_addr_ag"),
+            " imu_addr_mag:=", LaunchConfiguration("imu_addr_mag"),
+            " bus:=", LaunchConfiguration("bus"),
+            " can_baud:=", LaunchConfiguration("can_baud"),
+        ]
+    else:
+        # wojtek_pc is PC-side and never deployed, so this import-by-name is
+        # resolved only when a simulation is actually launched -- wojtek_bringup
+        # must not depend on it.
+        xacro_file = os.path.join(
+            get_package_share_directory("wojtek_pc"), "urdf",
+            "wojtek_sim.urdf.xacro",
+        )
+        xacro_args += [
+            " hw:=", LaunchConfiguration("hw"),
+            " model_xml:=", LaunchConfiguration("model_xml"),
+        ]
     robot_description = ParameterValue(
-        Command(
-            ["xacro ", xacro_file,
-             f" kp:={pd['kp']} kd:={pd['kd']} max_torque:={pd['max_torque']}",
-             " use_imu:=", use_imu,
-             " imu_bus:=", LaunchConfiguration("imu_bus"),
-             " imu_addr_ag:=", LaunchConfiguration("imu_addr_ag"),
-             " imu_addr_mag:=", LaunchConfiguration("imu_addr_mag"),
-             " bus:=", LaunchConfiguration("bus"),
-             " can_baud:=", LaunchConfiguration("can_baud"),
-             " dry_run:=", LaunchConfiguration("dry_run")]
-        ),
-        value_type=str,
+        Command(["xacro ", xacro_file] + xacro_args), value_type=str,
     )
 
     # One rosbag per run: a fresh timestamped subdirectory under bag_dir, named
@@ -106,13 +131,17 @@ def _launch_setup(context, with_rviz):
             parameters=[{"robot_description": robot_description}],
             remappings=[("joint_states", "wojtek/joint_states_abs")],
         ),
-        # wojtek.rviz uses odom as the fixed frame (the sim publishes ground
-        # truth odom -> base_link); there is no odometry on the real robot
-        # yet, so pin base_link at the origin for visualization.
+        # The RViz views use odom as the fixed frame; there is no odometry on
+        # the real robot yet, so pin base_link at the origin for visualization.
+        # A physics-backed simulation knows the true base pose and publishes
+        # that transform itself, so there the static one would fight it.
         Node(
             package="tf2_ros",
             executable="static_transform_publisher",
             arguments=["--frame-id", "odom", "--child-frame-id", "base_link"],
+            condition=IfCondition(
+                PythonExpression(["'", LaunchConfiguration("hw"), "' != 'mujoco'"])
+            ) if hardware == "sim" else None,
         ),
         Node(
             package="wojtek_bringup",
@@ -156,7 +185,7 @@ def _launch_setup(context, with_rviz):
             Node(
                 package="rviz2",
                 executable="rviz2",
-                arguments=["-d", os.path.join(policy_share, "rviz", "wojtek.rviz")],
+                arguments=["-d", LaunchConfiguration("rviz_config")],
                 condition=IfCondition(LaunchConfiguration("rviz")),
             )
         )
@@ -187,13 +216,19 @@ def _launch_setup(context, with_rviz):
     return nodes
 
 
-def common_launch_description(with_rviz, bag_default, with_gamepad=False):
-    """LaunchDescription shared by real.launch.py and robot.launch.py.
+def common_launch_description(
+    with_rviz, bag_default, with_gamepad=False, hardware="real",
+):
+    """LaunchDescription shared by the real-robot and simulation launches.
 
-    with_rviz adds the RViz node (and its `rviz` toggle arg); bag_default is
-    the rosbag `bag` default ("true"/"false") for this launch's workflow;
-    with_gamepad offers the robot-side pad teleop (its `gamepad` arg).
+    with_rviz adds the RViz node (and its `rviz`/`rviz_config` args);
+    bag_default is the rosbag `bag` default ("true"/"false") for this launch's
+    workflow; with_gamepad offers the robot-side pad teleop (its `gamepad`
+    arg); hardware is "real" (MD80 + I2C IMU) or "sim" (simulated plugin from
+    wojtek_pc's xacro), which selects the URDF and the hardware-specific args.
     """
+    if hardware not in ("real", "sim"):
+        raise ValueError(f"hardware must be 'real' or 'sim', got {hardware!r}")
     default_bag_dir = os.path.join(os.path.expanduser("~"), "wojtek_bags")
     args = [
         # Which policy runs: a Hugging Face repo id (org/name[@revision]) or a
@@ -212,20 +247,11 @@ def common_launch_description(with_rviz, bag_default, with_gamepad=False):
         DeclareLaunchArgument("kp", default_value=""),
         DeclareLaunchArgument("kd", default_value=""),
         DeclareLaunchArgument("max_torque", default_value=""),
-        # CAN link to the drives: CANdle HAT over SPI at 8M by default (the
-        # drives' flashed baudrate since 2026-07-17). bus:=usb can_baud:=1 =
-        # the legacy USB dongle, only after flashing the drives back to 1M
-        # (ros/hw_tests: candle_bus_test baud).
-        DeclareLaunchArgument("bus", default_value="spi"),
-        DeclareLaunchArgument("can_baud", default_value="8"),
-        # IMU is the Adafruit 5543 (LSM6DS3TR-C + LIS3MDL) straight on I2C1 --
-        # imu_i2c_hardware_interface. On by default; use_imu:=false brings the
-        # stack up with the sensor absent/unwired.
+        # The IMU switch is a question on both sides: use_imu:=false brings the
+        # stack up with the sensor absent (unwired on the robot, left out of
+        # the simulated component). It also drops the two sensor broadcasters,
+        # so the policy runs without gravity/gyro -- bench use only.
         DeclareLaunchArgument("use_imu", default_value="true"),
-        DeclareLaunchArgument("imu_bus", default_value="/dev/i2c-1"),
-        # 0x6B/0x1E if the board's SDO pins are pulled high.
-        DeclareLaunchArgument("imu_addr_ag", default_value="0x6A"),
-        DeclareLaunchArgument("imu_addr_mag", default_value="0x1C"),
         DeclareLaunchArgument("dry_run", default_value="false"),
         # Pose the robot is in when the motors activate / zero. "home"
         # (standing, position 0) by default; "folded" only if the drives' raw
@@ -243,8 +269,56 @@ def common_launch_description(with_rviz, bag_default, with_gamepad=False):
         # recorder's disk I/O off the control loop's isolated RT cores.
         DeclareLaunchArgument("bag_cpus", default_value=""),
     ]
+    if hardware == "real":
+        args += [
+            # CAN link to the drives: CANdle HAT over SPI at 8M by default (the
+            # drives' flashed baudrate since 2026-07-17). bus:=usb can_baud:=1 =
+            # the legacy USB dongle, only after flashing the drives back to 1M
+            # (ros/hw_tests: candle_bus_test baud).
+            DeclareLaunchArgument("bus", default_value="spi"),
+            DeclareLaunchArgument("can_baud", default_value="8"),
+            # IMU is the Adafruit 5543 (LSM6DS3TR-C + LIS3MDL) straight on I2C1
+            # -- imu_i2c_hardware_interface.
+            DeclareLaunchArgument("imu_bus", default_value="/dev/i2c-1"),
+            # 0x6B/0x1E if the board's SDO pins are pulled high.
+            DeclareLaunchArgument("imu_addr_ag", default_value="0x6A"),
+            DeclareLaunchArgument("imu_addr_mag", default_value="0x1C"),
+        ]
+    else:
+        args += [
+            # Which simulated hardware plugin runs. "mujoco" is the physics
+            # backend; "mock" is ros2_control's own GenericSystem, which just
+            # echoes commands back as states -- no dynamics, but the full node
+            # graph, which makes it the fast way to test the stack's own logic
+            # (arming, zeroing, ramps, watchdog) and the CI-friendly one.
+            DeclareLaunchArgument(
+                "hw", default_value="mock",
+                choices=["mock", "mujoco"],
+            ),
+            # Physics scene for hw:=mujoco; empty = the plugin's default
+            # (scene_mjx.xml shipped by wojtek_pc).
+            DeclareLaunchArgument("model_xml", default_value=""),
+        ]
     if with_rviz:
-        args.append(DeclareLaunchArgument("rviz", default_value="false"))
+        # On the desk the simulation is watched, so RViz comes up by itself;
+        # against the real robot viz is opt-in (viz.launch.py / robot.py own
+        # that decision, and a stray RViz on the control machine is noise).
+        args.append(
+            DeclareLaunchArgument(
+                "rviz", default_value="true" if hardware == "sim" else "false",
+            )
+        )
+        args.append(
+            DeclareLaunchArgument(
+                "rviz_config",
+                default_value=os.path.join(
+                    get_package_share_directory("wojtek_pc"), "config", "sim.rviz",
+                ) if hardware == "sim" else os.path.join(
+                    get_package_share_directory("wojtek_policy"), "rviz",
+                    "wojtek.rviz",
+                ),
+            )
+        )
     if with_gamepad:
         args += [
             # Bluetooth Xbox pad paired with the RPi itself: joy driver +
@@ -291,6 +365,9 @@ def common_launch_description(with_rviz, bag_default, with_gamepad=False):
             }.items(),
             condition=IfCondition(LaunchConfiguration("perception")),
         ),
-        OpaqueFunction(function=_launch_setup, kwargs={"with_rviz": with_rviz}),
+        OpaqueFunction(
+            function=_launch_setup,
+            kwargs={"with_rviz": with_rviz, "hardware": hardware},
+        ),
     ]
     return LaunchDescription(args)

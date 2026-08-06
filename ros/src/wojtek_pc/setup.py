@@ -2,7 +2,7 @@ from glob import glob
 
 from setuptools import setup
 
-package_name = "wojtek_viz"
+package_name = "wojtek_pc"
 
 setup(
     name=package_name,
@@ -20,14 +20,14 @@ setup(
     zip_safe=True,
     maintainer="Jakub Chmielewski",
     maintainer_email="kchmielewski707@gmail.com",
-    description="PC-side viz/debug/sim (RViz, PlotJuggler, teleop, MuJoCo) for wojtek.",
+    description="PC-side tooling for wojtek: MuJoCo sim, RViz/PlotJuggler, teleop, consoles.",
     license="MIT",
     entry_points={
         "console_scripts": [
-            "mujoco_sim_node = wojtek_viz.mujoco_sim_node:main",
-            "console = wojtek_viz.operator_console:main",
-            "web_console = wojtek_viz.web_console:main",
-            "sysid_excitation = wojtek_viz.sysid_excitation_node:main",
+            "mujoco_sim_node = wojtek_pc.mujoco_sim_node:main",
+            "console = wojtek_pc.operator_console:main",
+            "web_console = wojtek_pc.web_console:main",
+            "sysid_excitation = wojtek_pc.sysid_excitation_node:main",
         ],
     },
 )

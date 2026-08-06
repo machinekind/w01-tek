@@ -6,7 +6,7 @@
   <description>
     Robot-side teleop input for wojtek: bluetooth Xbox pad behind the
     standard joy driver, publishing the same /cmd_vel surface the operator
-    consoles use. Split out of wojtek_viz (PC-only, GUI deps) so the RPi
+    consoles use. Split out of wojtek_pc (PC-only, GUI deps) so the RPi
     build can carry it -- pair the pad with the ROBOT and drive without a
     PC in the loop. Also carries text_commander, the text-command
     (/wojtek/nav_command) to /cmd_vel bridge that freezes the VLM contract.

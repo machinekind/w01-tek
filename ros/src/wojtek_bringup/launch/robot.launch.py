@@ -2,7 +2,7 @@
 
 This is the canonical launch for the RPi. It starts only hardware/control
 nodes -- no RViz, no GUI. Run visualization/debug on the PC separately:
-    ros2 launch wojtek_viz viz.launch.py
+    ros2 launch wojtek_pc viz.launch.py
 
     ros2 launch wojtek_bringup robot.launch.py [policy:=org/name@sha]
                                                [max_torque:=2.0] [dry_run:=true]

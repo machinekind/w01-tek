@@ -7,7 +7,7 @@
     Robot-side bringup for wojtek: launches wojtek_policy against the real
     robot (MD80 + IMU through ros2_control). Deliberately free of GUI/sim
     dependencies so the RPi build stays lean -- RViz/PlotJuggler/teleop/MuJoCo
-    live in wojtek_viz (PC-side).
+    live in wojtek_pc (PC-side).
   </description>
   <maintainer email="kchmielewski707@gmail.com">Jakub Chmielewski</maintainer>
   <license>MIT</license>
@@ -21,9 +21,6 @@
   <depend>python3-numpy</depend>
   <depend>wojtek_policy</depend>
   <depend>wojtek_description</depend>
-  <depend>md80_hardware_interface</depend>
-  <depend>bmx160_serial_hardware_interface</depend>
-  <depend>bmi160_serial_hardware_interface</depend>
   <!-- Robot-side pad teleop: an exec_depend keeps it inside deploy.sh's
        "packages-up-to wojtek_bringup" build, so gamepad:=true has the
        node available on the RPi. -->
@@ -32,8 +29,22 @@
        exec_depend is what pulls it into deploy.sh's "packages-up-to
        wojtek_bringup" build, so the RPi has it at all. -->
   <exec_depend>wojtek_perception_bringup</exec_depend>
-  <depend>imu_i2c_hardware_interface</depend>
-  <depend>magnetometer_broadcaster</depend>
+  <!-- Hardware plugins and the sensor broadcaster: pluginlib loads them at
+       runtime from the name in the URDF, and this package is ament_python, so
+       it compiles nothing against them. Exec, not build: a build dependency
+       drags md80's vendored candle (CMake add_subdirectory) into every PC
+       build that touches this package, including the simulation, which needs
+       none of it. deploy.sh's "packages-up-to wojtek_bringup" still carries
+       exec_depends, so the RPi gets the drivers exactly as before (same
+       mechanism as wojtek_teleop above). Verify with a colcon list run in
+       "packages up to wojtek_bringup" mode: these five must still show up. -->
+  <exec_depend>md80_hardware_interface</exec_depend>
+  <exec_depend>imu_i2c_hardware_interface</exec_depend>
+  <exec_depend>magnetometer_broadcaster</exec_depend>
+  <!-- Retired serial IMUs (superseded by imu_i2c_hardware_interface); still
+       built for the robot until the packages themselves go. -->
+  <exec_depend>bmx160_serial_hardware_interface</exec_depend>
+  <exec_depend>bmi160_serial_hardware_interface</exec_depend>
 
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>xacro</exec_depend>

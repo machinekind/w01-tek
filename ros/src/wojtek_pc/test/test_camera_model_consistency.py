@@ -21,7 +21,7 @@ import pytest
 PKG = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PKG))
 
-from wojtek_viz import camera_spec  # noqa: E402
+from wojtek_pc import camera_spec  # noqa: E402
 
 BODY_XACRO = (
     PKG.parent / "wojtek_description" / "urdf" / "body.urdf.xacro"

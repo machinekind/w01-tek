@@ -15,7 +15,7 @@ services:
       # foxglove_bridge (viz.launch.py foxglove:=true) -- the native Foxglove
       # app on the Mac connects to ws://localhost:8765.
       - "8765:8765"
-      # web operator console (wojtek_viz web_console) -- browser opens
+      # web operator console (wojtek_pc web_console) -- browser opens
       # http://localhost:8080 (page + JSON websocket on one port).
       - "8080:8080"
     volumes:

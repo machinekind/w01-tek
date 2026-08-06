@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Web operator console -- the browser twin of operator_console.py.
 
-    ros2 run wojtek_viz web_console        # then open http://localhost:8080
+    ros2 run wojtek_pc web_console        # then open http://localhost:8080
 
 Same manual-control surface as the Qt console (services / telemetry / joint
 jog / drive pad), served as a single self-contained web page instead of an
@@ -61,7 +61,7 @@ from std_msgs.msg import String
 from std_srvs.srv import SetBool, Trigger
 
 from wojtek_policy.policy_source import load_meta
-from wojtek_viz import camera_spec
+from wojtek_pc import camera_spec
 
 try:
     from PIL import Image as PILImage
@@ -488,7 +488,7 @@ def main():
     node = ConsoleNode(emit, has_clients)
     port = node.declare_parameter("port", 8080).value
 
-    share = get_package_share_directory("wojtek_viz")
+    share = get_package_share_directory("wojtek_pc")
     page = open(os.path.join(share, "web", "index.html"), "rb").read()
     server = Server(node, page, loop)
 

@@ -1,7 +1,7 @@
-"""Unit tests for the D435 camera contract (wojtek_viz.camera_spec).
+"""Unit tests for the D435 camera contract (wojtek_pc.camera_spec).
 
 Pure math + numpy -- no ROS, no mujoco, no GL. Run anywhere:
-    pytest ros/src/wojtek_viz/test/test_camera_spec.py
+    pytest ros/src/wojtek_pc/test/test_camera_spec.py
 """
 
 import math
@@ -13,7 +13,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from wojtek_viz import camera_spec  # noqa: E402
+from wojtek_pc import camera_spec  # noqa: E402
 
 
 class TestIntrinsics:

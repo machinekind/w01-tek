@@ -52,6 +52,18 @@ The startup procedure is the robot's, on purpose — see
 [`../docs/sim-test-contract.md`](../docs/sim-test-contract.md) for what a
 simulation run does and does not prove.
 
+`./sim.sh` from the host collapses the above into one command: it starts the
+container, sorts out X11/XQuartz, picks RViz (Linux/X11) or Foxglove (macOS,
+headless) for the platform, and runs the session. Every `name:=value` argument
+passes straight through to `sim.launch.py`, so the launch vocabulary above is
+the only one:
+
+```bash
+./sim.sh                          # sim + viz + web console, Ctrl-C tears down
+./sim.sh hw:=mock console:=none   # any launch argument passes through
+./sim.sh --rviz | --foxglove      # override the platform viz default
+```
+
 The operator console (drive pad, arm/pose buttons, jog, telemetry) is the
 **web console** by default — open <http://localhost:8080> in any browser (a
 phone on the robot's AP works too). Drive commands are dead-man guarded:
@@ -195,6 +207,7 @@ std_srvs/srv/Trigger`.
 | Path | What |
 |---|---|
 | `build.sh` / `dev.sh`      | PC: build image / enter container |
+| `sim.sh`                  | PC: one-command sim session from the host (container + X11 + platform viz around `sim.launch.py`) |
 | `deploy/pc/setup-net.sh`  | PC: create the `wojtek-eth` link profile |
 | `deploy.sh`               | host orchestrator: provision + build the RPi |
 | `.env.example`            | template for secrets (Ubuntu Pro token) |

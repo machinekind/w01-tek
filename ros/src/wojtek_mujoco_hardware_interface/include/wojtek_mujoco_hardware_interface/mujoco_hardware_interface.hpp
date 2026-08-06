@@ -70,7 +70,7 @@ public:
     const rclcpp::Time & time, const rclcpp::Duration & period) override;
 
 private:
-  void publishGroundTruth(const rclcpp::Time & time, const rclcpp::Duration & period);
+  void publishGroundTruth(const rclcpp::Duration & period);
 
   rclcpp::Logger logger_{rclcpp::get_logger("MujocoHardwareInterface")};
   MujocoPlant plant_;

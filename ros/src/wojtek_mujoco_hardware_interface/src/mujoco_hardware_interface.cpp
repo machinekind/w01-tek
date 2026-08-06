@@ -288,7 +288,7 @@ hardware_interface::CallbackReturn MujocoHardwareInterface::on_deactivate(
 }
 
 hardware_interface::return_type MujocoHardwareInterface::read(
-  const rclcpp::Time & time, const rclcpp::Duration & period)
+  const rclcpp::Time & /*time*/, const rclcpp::Duration & period)
 {
   const double seconds = period.seconds();
   plant_.advance(seconds);
@@ -316,7 +316,7 @@ hardware_interface::return_type MujocoHardwareInterface::read(
     }
   }
 
-  publishGroundTruth(time, period);
+  publishGroundTruth(period);
   return hardware_interface::return_type::OK;
 }
 
@@ -336,12 +336,19 @@ hardware_interface::return_type MujocoHardwareInterface::write(
   return hardware_interface::return_type::OK;
 }
 
-void MujocoHardwareInterface::publishGroundTruth(
-  const rclcpp::Time & time, const rclcpp::Duration & period)
+void MujocoHardwareInterface::publishGroundTruth(const rclcpp::Duration & period)
 {
   if (!node_) {
     return;
   }
+  // NOT read()'s time argument: controller_manager runs its cycles off the
+  // steady clock, so that time is monotonic-since-boot while every other
+  // publisher in the graph (the broadcasters, real_io_node, robot_state_
+  // publisher) stamps in ROS time. Mixing the two silently breaks TF -- any
+  // lookup crossing odom->base_link plus a joint transform lands in a
+  // different epoch and comes back as ExtrapolationException, which reads
+  // like "half the tree is missing".
+  const auto stamp = node_->now();
   wall_in_window_ += period.seconds();
   since_ground_truth_ += period.seconds();
   if (since_ground_truth_ < ground_truth_period_) {
@@ -351,7 +358,7 @@ void MujocoHardwareInterface::publishGroundTruth(
 
   const auto pose = plant_.basePose();
   geometry_msgs::msg::TransformStamped tf;
-  tf.header.stamp = time;
+  tf.header.stamp = stamp;
   tf.header.frame_id = "odom";
   tf.child_frame_id = "base_link";
   tf.transform.translation.x = pose[0];

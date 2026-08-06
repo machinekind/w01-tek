@@ -36,6 +36,14 @@
 #                               perception stack)
 #   ./sim.sh boot_pose:=folded  start in the robot's boot/zeroing pose
 #   ./sim.sh policy:=<ref>      org/name[@rev] or a local artifact directory
+#   ./sim.sh --no-build         skip the workspace freshness pass (see below)
+#
+# The source is this repo (bind mount) but the build overlay lives in the
+# container, so after a pull the workspace can be stale -- and after a package
+# rename the old install shadows the new package entirely (seen for real:
+# wojtek_viz vs wojtek_pc). Before each session this script prunes installs
+# whose source package is gone and runs an incremental colcon build; a no-op
+# build is seconds, --no-build skips even that.
 #
 # macOS one-time setup, only for the X11 paths (--rviz / console:=qt):
 #   brew install --cask xquartz
@@ -51,6 +59,7 @@ cd "$(dirname "$0")/docker"
 
 VIZ=auto
 PLOTJUGGLER=false
+BUILD=true
 WANT_QT=false
 WANT_GAMEPAD=false
 EXTRA=()
@@ -60,6 +69,7 @@ for arg in "$@"; do
     --foxglove) VIZ=foxglove ;;
     --no-viz) VIZ=none ;;
     --plotjuggler) PLOTJUGGLER=true ;;
+    --no-build) BUILD=false ;;
     # Old-vocabulary aliases, kept so muscle memory still works; the launch
     # arguments on the right are the real interface.
     --qt-console) EXTRA+=("console:=qt") ;;
@@ -166,7 +176,35 @@ case "$VIZ" in
 esac
 if $PLOTJUGGLER; then CMD+=(--plotjuggler); fi
 
-"${COMPOSE[@]}" up -d
+"${COMPOSE[@]}" up -d --remove-orphans
+
+# ---- workspace freshness (the "it should just work" pass) -------------------
+# The bind mount brings new source in, nothing rebuilds it: prune installs
+# whose source package no longer exists (a renamed package's old install
+# would otherwise shadow the new one in the overlay), then an incremental
+# colcon build. md80 is never touched: the bind mount hides the candle
+# checkout the image built it from, so its image-time install must stay.
+if $BUILD; then
+  docker exec wojtek_robot bash -c '
+    set -e
+    cd /ros2_ws
+    source /opt/ros/${ROS_DISTRO:-jazzy}/setup.bash
+    src_pkgs=" $(colcon list --base-paths src --names-only | tr "\n" " ") "
+    for d in build install; do
+      for p in "$d"/*/; do
+        [ -d "$p" ] || continue
+        name=$(basename "$p")
+        [ "$name" = md80_hardware_interface ] && continue
+        case "$src_pkgs" in
+          *" $name "*) ;;
+          *) echo ">> pruning stale $d/$name (no such source package)"
+             rm -rf "$p" ;;
+        esac
+      done
+    done
+    colcon build --packages-skip md80_hardware_interface \
+      --event-handlers status- desktop_notification-'
+fi
 
 if [ "$VIZ" = foxglove ]; then
   echo ">> Foxglove: open the app and connect to ws://localhost:8765"

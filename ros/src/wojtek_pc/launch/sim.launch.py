@@ -66,8 +66,8 @@ from wojtek_bringup.launch_common import common_launch_description
 # purpose: an unpinned repo id follows whatever main is, so what you watch
 # walking today would silently be a different policy tomorrow. Override for
 # one run with policy:=<repo>@<sha> or a local artifact directory.
-SIM_POLICY = ("<HF_ORGANIZATION>/wojtek-stiff-height-locomotion"
-              "@2f385ebff1e3d784047dc0e240b4a3ea500e97ed")
+SIM_POLICY = ("<HF_ORGANIZATION>/wojtek-terrain-blind-locomotion-v41"
+              "@6aa9163750a15cec53ce832b6eefa5717892f5f6")
 
 
 def generate_launch_description():

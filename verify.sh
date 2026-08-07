@@ -125,6 +125,17 @@ t0(){
     training/demo/app.py training/demo/navigation.py training/demo/static/index.html; do
     ok "exists: $f" test -f "$f"; done
 
+  # Committed benchmark tag PDFs are generated artifacts under the same
+  # contract as the generated MJCF models: byte-diffed against their source
+  # (config/apriltags.yaml) so a stale regeneration fails here instead of
+  # drifting silently. Regenerate: ros/src/wojtek_benchmark/scripts/generate_tags.py
+  if python3 -c "import yaml" >/dev/null 2>&1; then
+    ok "benchmark tag PDFs match apriltags.yaml" \
+       python3 ros/src/wojtek_benchmark/scripts/generate_tags.py --check
+  else
+    skip "benchmark tag PDFs match apriltags.yaml" "python3-yaml not available"
+  fi
+
   # gitignore hygiene: big artifacts must not leak into status, and every pattern is ignored
   ok "big artifacts don't leak into git status" \
      bash -c '! git status --porcelain --untracked-files=all | grep -qE "training/(\.venv|runs|videos|pose_previews|\.jax_cache|policies)/|ros/(build|install|log)/|\.log$|\.DS_Store$"'

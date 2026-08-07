@@ -30,6 +30,7 @@ COPY ./src/wojtek_teleop/package.xml ./src/wojtek_teleop/package.xml
 COPY ./src/magnetometer_broadcaster/package.xml ./src/magnetometer_broadcaster/package.xml
 COPY ./src/wojtek_perception_bringup/package.xml ./src/wojtek_perception_bringup/package.xml
 COPY ./src/wojtek_mujoco_hardware_interface/package.xml ./src/wojtek_mujoco_hardware_interface/package.xml
+COPY ./src/wojtek_benchmark/package.xml ./src/wojtek_benchmark/package.xml
 
 # This is a dev/build environment, not a slimmed-down production image:
 # ros-dev-tools (colcon, rosdep, compilers, git, ...) stay installed so
@@ -52,7 +53,7 @@ RUN apt-get update && \
     (rosdep init || true) && \
     rosdep update --rosdistro "$ROS_DISTRO" && \
     rosdep install --from-paths src -y -i && \
-    pip3 install --break-system-packages mujoco huggingface_hub && \
+    pip3 install --break-system-packages mujoco huggingface_hub pupil-apriltags && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -68,6 +69,7 @@ RUN /bin/bash -c "source /opt/ros/$ROS_DISTRO/setup.bash && \
             imu_i2c_hardware_interface \
             wojtek_teleop wojtek_policy wojtek_bringup wojtek_pc magnetometer_broadcaster \
             wojtek_perception_bringup wojtek_mujoco_hardware_interface \
+            wojtek_benchmark \
         --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF"
 
 # So an interactive `docker exec -it <container> bash` also has ROS +

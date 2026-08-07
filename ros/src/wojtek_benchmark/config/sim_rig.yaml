@@ -1,0 +1,52 @@
+# Where the benchmark rig sits in the SIMULATION world (scene_mjx.xml
+# coordinates, meters/degrees).  This file plays the role reality assigns
+# to the tape measure and the tripod: floor-tag placements (from which the
+# leg lengths the tracker must verify are DERIVED, never written), the
+# robot tag's mount pose, and the rig camera.
+#
+# Tag identity (ids, roles, physical sizes) stays in apriltags.yaml -- this
+# file must not repeat it.
+#
+# The robot's home keyframe spawns it at the sim origin, so the L is placed
+# around that point with the camera far enough back to see all three floor
+# tags and the robot's back tag at once.
+
+floor_tags:
+  world_origin: {center_xy: [-0.5, -1.0], yaw_deg: 0.0}
+  world_x:      {center_xy: [ 1.5, -1.0], yaw_deg: 0.0}   # 2.0 m leg
+  # 2.0 m leg. Not closer: the ray from the camera to this tag must clear
+  # the robot standing at the origin (checked by sim_rig_check.py).
+  world_y:      {center_xy: [-0.5,  1.0], yaw_deg: 0.0}
+
+robot_tag:
+  # base_link-frame mount pose.  Stand-in for the future apriltag_link in
+  # the wojtek_description URDF: once the physical mount is measured, that
+  # link becomes the source of truth and this must match it.
+  # z: torso mesh top is 0.1196 in the base frame (measured from
+  # base_link mesh vertices); 0.125 floats the tag 5 mm proud so it cannot
+  # clip through the shell.
+  pos: [-0.06, 0.0, 0.125]      # flat on the back, behind the head bracket
+  rpy_deg: [0.0, 0.0, 0.0]
+
+camera:
+  # "Tripod" pose. Constraints that shaped it: all three floor tags AND the
+  # robot's back tag in frame at once; high enough that the ray to world_y
+  # clears the robot standing at the origin; and enough pixels that the
+  # 150 mm robot tag square keeps >= ~4 px per tag cell (the decode limit
+  # -- if the robot tag drops out, tighten fovy or add pixels, not detector
+  # tweaks).  720p + 36 deg rather than 1080p + 45: same px-per-cell on the
+  # robot tag at 44% of the render cost and message size, which matters
+  # under llvmpipe (a 1080p software render took 1.6 s/frame and starved
+  # the 400 Hz control loop) and for DDS (the 2 MB 1080p frame fragmented
+  # into ~1400 best-effort UDP datagrams and NEVER survived -- see the
+  # camera node's QoS note).
+  pos: [0.3, -1.5, 2.8]
+  look_at: [0.3, -0.2, 0.0]
+  fovy_deg: 36.0
+  width: 1280
+  height: 720
+  # Upper bound: under llvmpipe (2 capped threads, see the launch) the
+  # render takes ~0.3 s at this size, so ~3 Hz is what actually arrives;
+  # the camera node logs the achieved rate.  With hardware GL the timer
+  # rate is the limit.
+  hz: 5.0

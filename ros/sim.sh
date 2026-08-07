@@ -36,6 +36,11 @@
 #                               perception stack)
 #   ./sim.sh boot_pose:=folded  start in the robot's boot/zeroing pose
 #   ./sim.sh policy:=<ref>      org/name[@rev] or a local artifact directory
+#   ./sim.sh --benchmark        also start the AprilTag benchmark rig: tripod
+#                               camera render, tag tracker, and the ground-truth
+#                               error monitor (/benchmark/pose_error_mm,
+#                               /benchmark/yaw_error_deg). Needs the physics
+#                               plant, so don't combine with hw:=mock.
 #   ./sim.sh --no-build         skip the workspace freshness pass (see below)
 #
 # The source is this repo (bind mount) but the build overlay lives in the

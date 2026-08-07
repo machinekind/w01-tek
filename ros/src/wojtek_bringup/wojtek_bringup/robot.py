@@ -2,7 +2,7 @@
 """One-command robot bring-up, run FROM the PC dev container.
 
     ros2 run wojtek_bringup robot [--dry-run] [--sim] [--no-viz] [--foxglove]
-                                  [--plotjuggler] [--gamepad]
+                                  [--plotjuggler] [--gamepad] [--benchmark]
 
 You work from one container shell (./dev.sh). This starts BOTH sides for a
 session and tears them down on Ctrl-C:
@@ -111,6 +111,12 @@ def main():
                          "here (pair with this machine). Combine with "
                          "--no-console to replace the console entirely")
     ap.add_argument("--plotjuggler", action="store_true", help="also open PlotJuggler")
+    ap.add_argument("--benchmark", action="store_true",
+                    help="with --sim: also start the AprilTag benchmark rig "
+                         "(tripod camera render, tag tracker, ground-truth "
+                         "error monitor on /benchmark/pose_error_mm). Needs "
+                         "the physics plant (hw:=mujoco, the default) -- with "
+                         "hw:=mock there is no /sim/qpos to render from")
     ap.add_argument("--policy", default=None,
                     help="policy reference for policy_node: HF repo id "
                          "(org/name[@revision]) or a local artifact directory; "
@@ -129,6 +135,12 @@ def main():
         if not sep or not name.replace("_", "").isalnum() or not name[0].isalpha():
             ap.error(f"unrecognized argument: {tok}")
         launch_args.append(tok)
+    if args.benchmark and not args.sim:
+        # The real-course rig consumes a physical camera driver, not the sim
+        # render; that wiring does not exist yet, and half-starting it here
+        # would look like a working benchmark.
+        ap.error("--benchmark currently requires --sim "
+                 "(the real-course camera path is not wired up yet)")
 
     procs = []
     stop_remote = None  # callable to stop the RPi side on exit
@@ -149,6 +161,15 @@ def main():
               "graph over a simulated plant (hw:=mujoco for physics)")
         spawn(["ros2", "launch", "wojtek_pc", "sim.launch.py", "rviz:=false"]
               + sim_session_args(args) + policy_arg + launch_args)
+        if args.benchmark:
+            # External instrumentation, so a sibling launch rather than a
+            # sim.launch.py argument -- also keeps wojtek_pc free of a
+            # wojtek_benchmark dependency (the benchmark package already
+            # depends on wojtek_pc; the reverse edge would be a cycle).
+            print(">> [benchmark] AprilTag rig: tripod camera + tracker + "
+                  "ground-truth monitor (/benchmark/pose_error_mm, "
+                  "/benchmark/yaw_error_deg)")
+            spawn(["ros2", "launch", "wojtek_benchmark", "sim_rig.launch.py"])
     elif args.dry_run:
         print(f">> [BENCH] launching on {RPI_HOST} WITHOUT RT, no torque")
         gamepad = str(args.gamepad).lower()

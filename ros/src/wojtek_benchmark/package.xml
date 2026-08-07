@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>wojtek_benchmark</name>
+  <version>0.1.0</version>
+  <description>
+    Real-robot benchmark instrumentation for Wojtek: AprilTag-based
+    ground-truth pose tracking ("motion-capture-lite").  Three floor tags in
+    an L define the world frame and scale, one tag on the robot gives its
+    pose in that frame, and benchmark runs are scored against the same
+    course scenarios as the simulation battery.
+
+    config/apriltags.yaml is the single source of truth for tag semantics
+    (an AprilTag itself only encodes an ID).  tags/*.pdf are committed
+    generated artifacts: regenerate with scripts/generate_tags.py after
+    editing the yaml, never hand-edit them.
+  </description>
+  <maintainer email="michal.pogoda@bards.ai">Michał Pogoda</maintainer>
+  <license>MIT</license>
+
+  <depend>python3-yaml</depend>
+  <depend>python3-numpy</depend>
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>tf2_ros</depend>
+  <!-- camera_info_msg + the /sim/qpos mirroring contract for the sim rig
+       camera; the tracker and the printable-tag pipeline don't need it. -->
+  <exec_depend>wojtek_pc</exec_depend>
+  <!-- The tracker also needs pupil-apriltags (no rosdep key; installed via
+       pip in ros/docker/Dockerfile) and the sim rig camera needs mujoco
+       (same pip line). Both are imported lazily so everything else in this
+       package works without them. -->
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

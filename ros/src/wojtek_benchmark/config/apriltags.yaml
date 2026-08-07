@@ -1,0 +1,52 @@
+# AprilTag inventory for the real-robot benchmark.
+#
+# This file is the single source of truth for tag semantics.  An AprilTag
+# itself only encodes an ID -- everything else ("id 0 is the world origin",
+# "the robot tag is 80 mm") lives here, and every consumer (tag printing,
+# camera->world calibration, apriltag_ros detector config, scoring) must
+# read it from here rather than repeat it.
+#
+# After editing, regenerate the committed printable tags:
+#   ros/src/wojtek_benchmark/scripts/generate_tags.py
+# verify.sh T0 diffs tags/*.pdf against this file, so a stale regeneration
+# fails the static gate.
+#
+# size_m is the BLACK square's outer edge (the "tag size" apriltag_ros and
+# the apriltag library expect).  The printed sheet is wider: tag36h11 adds a
+# one-cell white quiet zone, so the printed square is size_m * 10/8.  Pose
+# scale comes entirely from this value, and printers silently rescale --
+# after printing, measure the black edge with a ruler and correct size_m
+# here to the measured value (then regenerate so the sheets state it).
+
+family: tag36h11
+
+tags:
+  # Three floor tags in an L fix the world frame: origin at the corner tag,
+  # +x toward the world_x tag, +y toward the world_y tag, z up from the
+  # floor.  Three tags instead of one because a single tag's orientation
+  # error grows linearly with distance across the arena, and because the two
+  # measured legs give an independent scale check: calibration must refuse
+  # to proceed if the vision-estimated leg length disagrees with the tape
+  # measure (the error is directly in meters -- no tuned threshold).
+  - id: 0
+    role: world_origin
+    size_m: 0.160
+  - id: 1
+    role: world_x
+    size_m: 0.160
+    # Center-to-center tape-measured distance to the origin tag.  null until
+    # the course is laid out and measured; calibration must refuse null.
+    distance_from_origin_m: null
+  - id: 2
+    role: world_y
+    size_m: 0.160
+    distance_from_origin_m: null
+
+  # Mounted on the robot; its rigid transform to base_link belongs in the
+  # wojtek_description URDF (apriltag_link), measured once at mount time.
+  # 120 mm, not smaller: sim_rig_check.py showed an 80 mm tag from a ~3 m
+  # tripod is ~2-3 px per tag cell after foreshortening -- below the decode
+  # limit.  150 mm printed square still fits the robot's back.
+  - id: 10
+    role: robot
+    size_m: 0.120

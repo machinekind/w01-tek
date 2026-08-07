@@ -17,14 +17,22 @@ image would triple the DDS load for nothing (wojtek_perception_bringup's
 README documents Python deserialization, not bandwidth, as the ceiling).
 
 Look at /benchmark/camera/preview in Foxglove, not image_raw: the full-res
-frame is ~2 MB and the foxglove_bridge websocket drops most of them, while
-the preview is ~130 KB and survives.  Expect the configured hz only with
-hardware GL; under llvmpipe (macOS Docker) a 1080p software render is the
-bottleneck and the timer just runs late -- the node logs the achieved rate
-so the slowdown is visible in its own words instead of as a mystery.
+frame is large and the foxglove_bridge websocket drops most of them, while
+the preview survives.  Expect the configured hz only with hardware GL;
+under llvmpipe (macOS Docker) the software render is the bottleneck and
+the timer just runs late -- the node logs the achieved rate so the
+slowdown is visible in its own words instead of as a mystery.
 qpos goes in on the rendering side only -- the tag poses come back out
 through pixels, which is what keeps the tracker sim-agnostic and the error
 monitor's comparison against /sim/qpos non-circular.
+
+QoS: image_raw and camera_info are RELIABLE, deliberately not the sensor
+profile.  A large image on best-effort fragments into hundreds of UDP
+datagrams, and losing any ONE of them loses the whole frame; measured in
+this container, best-effort 2 MB frames delivered exactly ZERO messages
+to any subscriber while small topics flowed fine.  Reliable retransmits
+fragments and actually delivers.  The preview stays best-effort: small
+enough to survive, and a dropped preview frame costs nothing.
 """
 
 import os
@@ -38,7 +46,16 @@ import numpy as np
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import (
+    QoSProfile,
+    QoSReliabilityPolicy,
+    qos_profile_sensor_data,
+)
+
+# See the module docstring: reliable-or-nothing for the big frames.
+RELIABLE_IMAGE_QOS = QoSProfile(
+    depth=2, reliability=QoSReliabilityPolicy.RELIABLE
+)
 from sensor_msgs.msg import Image
 from std_msgs.msg import Float64MultiArray
 
@@ -115,12 +132,12 @@ class BenchmarkCameraNode(Node):
             Float64MultiArray, "sim/qpos", self._on_qpos, qos_profile_sensor_data
         )
         self._pub_image = self.create_publisher(
-            Image, IMAGE_TOPIC, qos_profile_sensor_data
+            Image, IMAGE_TOPIC, RELIABLE_IMAGE_QOS
         )
         from sensor_msgs.msg import CameraInfo
 
         self._pub_info = self.create_publisher(
-            CameraInfo, INFO_TOPIC, qos_profile_sensor_data
+            CameraInfo, INFO_TOPIC, RELIABLE_IMAGE_QOS
         )
         self._pub_preview = self.create_publisher(
             Image, PREVIEW_TOPIC, qos_profile_sensor_data

@@ -26,8 +26,25 @@ import yaml
 from . import png, tag36h11
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_RIG_CONFIG = PACKAGE_ROOT / "config" / "sim_rig.yaml"
-DEFAULT_TAGS_CONFIG = PACKAGE_ROOT / "config" / "apriltags.yaml"
+
+
+def _default_config(name):
+    """Config path that works from the source tree AND a colcon install.
+
+    In the source tree config/ sits next to the module's parent; in an
+    install it lives in the package share directory instead (parents[1] is
+    site-packages there, which is why a naive relative default 404s).
+    """
+    src = PACKAGE_ROOT / "config" / name
+    if src.exists():
+        return src
+    from ament_index_python.packages import get_package_share_directory
+
+    return Path(get_package_share_directory("wojtek_benchmark")) / "config" / name
+
+
+DEFAULT_RIG_CONFIG = _default_config("sim_rig.yaml")
+DEFAULT_TAGS_CONFIG = _default_config("apriltags.yaml")
 
 CAMERA_NAME = "benchmark_rig_camera"
 FLOOR_ROLES = ("world_origin", "world_x", "world_y")

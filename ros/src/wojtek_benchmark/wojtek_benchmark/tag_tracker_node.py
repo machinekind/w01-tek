@@ -37,7 +37,18 @@ import rclpy
 from geometry_msgs.msg import PoseStamped, TransformStamped
 from nav_msgs.msg import Path
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy
+
+# Matches the benchmark camera's publisher: RELIABLE, because large frames
+# on best-effort QoS fragment into hundreds of UDP datagrams and one lost
+# fragment loses the whole frame -- measured as 100% loss in-container.
+# A real camera driver publishing the sensor profile still matches: a
+# reliable subscription is what's incompatible with a best-effort
+# PUBLISHER, so image_topic must then be remapped or the driver configured
+# reliable -- the tracker warns if nothing arrives.
+RELIABLE_IMAGE_QOS = QoSProfile(
+    depth=2, reliability=QoSReliabilityPolicy.RELIABLE
+)
 from sensor_msgs.msg import CameraInfo, Image
 from std_srvs.srv import Trigger
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
@@ -111,12 +122,16 @@ class TagTrackerNode(Node):
 
         self.create_subscription(
             CameraInfo, self.get_parameter("info_topic").value,
-            self._on_info, qos_profile_sensor_data,
+            self._on_info, RELIABLE_IMAGE_QOS,
         )
         self.create_subscription(
             Image, self.get_parameter("image_topic").value,
-            self._on_image, qos_profile_sensor_data,
+            self._on_image, RELIABLE_IMAGE_QOS,
         )
+        # Silence is the one failure mode this node cannot log its way out
+        # of from inside a callback -- so watch for it from a timer.
+        self._last_image_time = None
+        self.create_timer(5.0, self._check_liveness)
         self._pub_pose = self.create_publisher(PoseStamped, POSE_TOPIC, 10)
         self._pub_path = self.create_publisher(Path, POSE_TOPIC.replace("_pose", "_path"), 10)
         self._path = Path()
@@ -132,6 +147,20 @@ class TagTrackerNode(Node):
         )
 
     # -- inputs ---------------------------------------------------------------
+    def _check_liveness(self):
+        if self._last_image_time is None:
+            self.get_logger().warning(
+                f"no images on {self.get_parameter('image_topic').value} yet "
+                "-- is the publisher up, and is its QoS RELIABLE-compatible? "
+                "(a best-effort publisher never matches this reliable "
+                "subscription; large frames on best-effort also fragment "
+                "away entirely -- see RELIABLE_IMAGE_QOS)"
+            )
+        elif (self.get_clock().now() - self._last_image_time).nanoseconds > 5e9:
+            self.get_logger().warning(
+                "image stream stalled (no frame for > 5 s)", throttle_duration_sec=30.0
+            )
+
     def _on_info(self, msg):
         self._intrinsics = (msg.k[0], msg.k[4], msg.k[2], msg.k[5])
         if any(abs(d) > 1e-12 for d in msg.d):
@@ -152,7 +181,12 @@ class TagTrackerNode(Node):
         return None
 
     def _on_image(self, msg):
+        self._last_image_time = self.get_clock().now()
         if self._intrinsics is None:
+            self.get_logger().warning(
+                "images arriving but no CameraInfo yet -- not detecting",
+                throttle_duration_sec=10.0,
+            )
             return
         gray = self._gray(msg)
         if gray is None:

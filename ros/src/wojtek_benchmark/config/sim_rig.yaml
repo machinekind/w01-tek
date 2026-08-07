@@ -31,13 +31,20 @@ robot_tag:
 camera:
   # "Tripod" pose. Constraints that shaped it: all three floor tags AND the
   # robot's back tag in frame at once; high enough that the ray to world_y
-  # clears the robot standing at the origin; close enough that the 100 mm
-  # robot tag square keeps >= ~4 px per tag cell at this resolution (the
-  # decode limit -- if the robot tag drops out, move closer or add pixels,
-  # not detector tweaks).
+  # clears the robot standing at the origin; and enough pixels that the
+  # 150 mm robot tag square keeps >= ~4 px per tag cell (the decode limit
+  # -- if the robot tag drops out, tighten fovy or add pixels, not detector
+  # tweaks).  720p + 36 deg rather than 1080p + 45: same px-per-cell on the
+  # robot tag at 44% of the render cost and message size, which matters
+  # under llvmpipe (a 1080p software render took 1.6 s/frame and starved
+  # the 400 Hz control loop) and for DDS (the 2 MB 1080p frame fragmented
+  # into ~1400 best-effort UDP datagrams and NEVER survived -- see the
+  # camera node's QoS note).
   pos: [0.3, -1.5, 2.8]
   look_at: [0.3, -0.2, 0.0]
-  fovy_deg: 45.0
-  width: 1920
-  height: 1080
-  hz: 15.0
+  fovy_deg: 36.0
+  width: 1280
+  height: 720
+  # Under llvmpipe the render takes ~0.7 s at this size, so the timer runs
+  # late and this is an upper bound; the camera node logs the achieved rate.
+  hz: 5.0

@@ -8,12 +8,20 @@ subscription exists because the *scene* moves: without qpos the robot (and
 the tag on its back) would render frozen at spawn.
 
   subscribes  /sim/qpos                        (Float64MultiArray)
-  publishes   /benchmark/camera/image_raw      mono8
+  publishes   /benchmark/camera/image_raw      mono8, full res -- the tracker's
               /benchmark/camera/camera_info    pinhole, zero distortion
+              /benchmark/camera/preview        mono8, 1/4 res -- for HUMANS
 
 mono8, not rgb8: the tracker grayscales anyway, and at 1080p the color
 image would triple the DDS load for nothing (wojtek_perception_bringup's
 README documents Python deserialization, not bandwidth, as the ceiling).
+
+Look at /benchmark/camera/preview in Foxglove, not image_raw: the full-res
+frame is ~2 MB and the foxglove_bridge websocket drops most of them, while
+the preview is ~130 KB and survives.  Expect the configured hz only with
+hardware GL; under llvmpipe (macOS Docker) a 1080p software render is the
+bottleneck and the timer just runs late -- the node logs the achieved rate
+so the slowdown is visible in its own words instead of as a mystery.
 qpos goes in on the rendering side only -- the tag poses come back out
 through pixels, which is what keeps the tracker sim-agnostic and the error
 monitor's comparison against /sim/qpos non-circular.
@@ -22,6 +30,8 @@ monitor's comparison against /sim/qpos non-circular.
 import os
 import re
 import tempfile
+import time
+from collections import deque
 from pathlib import Path
 
 import numpy as np
@@ -39,6 +49,8 @@ from wojtek_benchmark import sim_rig
 FRAME_ID = "benchmark_camera_optical_frame"
 IMAGE_TOPIC = "/benchmark/camera/image_raw"
 INFO_TOPIC = "/benchmark/camera/camera_info"
+PREVIEW_TOPIC = "/benchmark/camera/preview"
+PREVIEW_STRIDE = 4
 
 
 def _staged_scene(model_xml):
@@ -110,7 +122,13 @@ class BenchmarkCameraNode(Node):
         self._pub_info = self.create_publisher(
             CameraInfo, INFO_TOPIC, qos_profile_sensor_data
         )
-        self.create_timer(1.0 / float(cam["hz"]), self._render)
+        self._pub_preview = self.create_publisher(
+            Image, PREVIEW_TOPIC, qos_profile_sensor_data
+        )
+        self._render_times = deque(maxlen=32)
+        self._last_rate_log = time.monotonic()
+        self._configured_hz = float(cam["hz"])
+        self.create_timer(1.0 / self._configured_hz, self._render)
         self.get_logger().info(
             f"benchmark rig camera {self._size[0]}x{self._size[1]} @ "
             f"{cam['hz']:g} Hz mirroring /sim/qpos from {model_xml}"
@@ -119,6 +137,17 @@ class BenchmarkCameraNode(Node):
     def _on_qpos(self, msg):
         self._stamp = self.get_clock().now().to_msg()
         self._qpos = np.asarray(msg.data, dtype=np.float64)
+
+    def _image_msg(self, gray, stamp):
+        msg = Image()
+        msg.header.stamp = stamp
+        msg.header.frame_id = FRAME_ID
+        msg.height, msg.width = gray.shape
+        msg.encoding = "mono8"
+        msg.is_bigendian = 0
+        msg.step = gray.strides[0]
+        msg.data = gray.tobytes()
+        return msg
 
     def _render(self):
         if self._qpos is None:
@@ -131,6 +160,7 @@ class BenchmarkCameraNode(Node):
             )
             return
         stamp = self._stamp
+        t0 = time.monotonic()
         self._data.qpos[:] = self._qpos
         self._data.qvel[:] = 0.0
         self._mujoco.mj_forward(self.model, self._data)
@@ -140,21 +170,29 @@ class BenchmarkCameraNode(Node):
             (rgb @ np.array([0.299, 0.587, 0.114])).astype(np.uint8)
         )
 
-        msg = Image()
-        msg.header.stamp = stamp
-        msg.header.frame_id = FRAME_ID
-        msg.height, msg.width = gray.shape
-        msg.encoding = "mono8"
-        msg.is_bigendian = 0
-        msg.step = gray.strides[0]
-        msg.data = gray.tobytes()
-        self._pub_image.publish(msg)
-
+        self._pub_image.publish(self._image_msg(gray, stamp))
+        self._pub_preview.publish(self._image_msg(
+            np.ascontiguousarray(gray[::PREVIEW_STRIDE, ::PREVIEW_STRIDE]), stamp
+        ))
         info = camera_spec.camera_info_msg(
             self._size[0], self._size[1], FRAME_ID, fovy_deg=self._fovy
         )
         info.header.stamp = stamp
         self._pub_info.publish(info)
+
+        # Achieved rate, in the node's own log: under software GL the render
+        # is the bottleneck and the timer just runs late -- say so instead of
+        # letting a slow Foxglove image read as a transport mystery.
+        self._render_times.append(time.monotonic() - t0)
+        now = time.monotonic()
+        if now - self._last_rate_log > 10.0 and len(self._render_times) >= 8:
+            self._last_rate_log = now
+            mean = sum(self._render_times) / len(self._render_times)
+            self.get_logger().info(
+                f"render {1000 * mean:.0f} ms/frame -> effective "
+                f"{min(1.0 / mean, self._configured_hz):.1f} Hz "
+                f"(configured {self._configured_hz:g} Hz)"
+            )
 
 
 def main():

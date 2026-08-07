@@ -62,25 +62,14 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 from wojtek_bringup.launch_common import common_launch_description
 
-# Which policy a simulation session comes up with. Pinned to a revision on
-# purpose: an unpinned repo id follows whatever main is, so what you watch
-# walking today would silently be a different policy tomorrow. Override for
-# one run with policy:=<repo>@<sha> or a local artifact directory.
-SIM_POLICY = ("<HF_ORGANIZATION>/wojtek-terrain-blind-locomotion-v41"
-              "@6aa9163750a15cec53ce832b6eefa5717892f5f6")
-
 
 def generate_launch_description():
     # RViz on by default (this is the desk workflow), recording opt-in, and
-    # everything else -- nodes, parameters, the arming procedure -- shared
-    # verbatim with the robot bringup.
+    # everything else -- nodes, parameters, the arming procedure, and the
+    # default policy (launch_common.DEFAULT_POLICY) -- shared verbatim with the
+    # robot bringup, so what you watch here is what the robot comes up with.
     ld = common_launch_description(
         with_rviz=True, bag_default="false", hardware="sim", with_gamepad=True,
-        # The simulation's own default, so a session is one command. The
-        # robot-side default (launch_common.DEFAULT_POLICY) is pinned to a
-        # revision that no longer exists on the Hub, which is a live bug on
-        # that path -- not one to inherit here in the meantime.
-        policy_default=SIM_POLICY,
     )
     for action in (
         # D435-compatible virtual camera: a separate node now, because the

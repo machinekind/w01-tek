@@ -53,7 +53,7 @@ RUN apt-get update && \
     (rosdep init || true) && \
     rosdep update --rosdistro "$ROS_DISTRO" && \
     rosdep install --from-paths src -y -i && \
-    pip3 install --break-system-packages mujoco huggingface_hub && \
+    pip3 install --break-system-packages mujoco huggingface_hub pupil-apriltags && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 

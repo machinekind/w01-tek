@@ -44,6 +44,9 @@ tags:
 
   # Mounted on the robot; its rigid transform to base_link belongs in the
   # wojtek_description URDF (apriltag_link), measured once at mount time.
+  # 120 mm, not smaller: sim_rig_check.py showed an 80 mm tag from a ~3 m
+  # tripod is ~2-3 px per tag cell after foreshortening -- below the decode
+  # limit.  150 mm printed square still fits the robot's back.
   - id: 10
     role: robot
-    size_m: 0.080
+    size_m: 0.120

@@ -19,6 +19,20 @@
   <license>MIT</license>
 
   <depend>python3-yaml</depend>
+  <depend>python3-numpy</depend>
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>tf2_ros</depend>
+  <!-- camera_info_msg + the /sim/qpos mirroring contract for the sim rig
+       camera; the tracker and the printable-tag pipeline don't need it. -->
+  <exec_depend>wojtek_pc</exec_depend>
+  <!-- The tracker also needs pupil-apriltags (no rosdep key; installed via
+       pip in ros/docker/Dockerfile) and the sim rig camera needs mujoco
+       (same pip line). Both are imported lazily so everything else in this
+       package works without them. -->
 
   <test_depend>python3-pytest</test_depend>
 

@@ -13,6 +13,7 @@ setup(
         (f"share/{package_name}", ["package.xml"]),
         (f"share/{package_name}/config", glob("config/*")),
         (f"share/{package_name}/tags", glob("tags/*.pdf")),
+        (f"share/{package_name}/launch", glob("launch/*.launch.py")),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
@@ -23,6 +24,9 @@ setup(
     entry_points={
         "console_scripts": [
             "generate_tags = wojtek_benchmark.generate_tags:main",
+            "benchmark_camera_node = wojtek_benchmark.benchmark_camera_node:main",
+            "tag_tracker_node = wojtek_benchmark.tag_tracker_node:main",
+            "rig_error_monitor = wojtek_benchmark.rig_error_monitor:main",
         ],
     },
 )

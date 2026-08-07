@@ -8,11 +8,11 @@ against the same course scenarios as the simulation battery
 (`./training/run.sh courses`), so sim and real numbers are directly
 comparable.
 
-**Status:** the printable-tag pipeline is implemented (this page).  The
-camera→world calibration, the live tracker, the scorer, and the robot tag's
-`apriltag_link` in `wojtek_description` are not written yet — the tags can
-be printed and the course laid out before any of that exists, which is why
-this slice ships first.
+**Status:** the printable-tag pipeline, the tracker (detection →
+calibration → world-frame pose), and the full simulation rig are
+implemented.  Still missing: the course scorer and the robot tag's
+`apriltag_link` in `wojtek_description` (its mount pose lives in
+`sim_rig.yaml` until the physical mount is measured).
 
 ## One source of truth
 
@@ -27,7 +27,7 @@ scoring later) must read it from there.
 | 0  | world_origin | 160 mm     | floor, the L corner; world origin, z = floor |
 | 1  | world_x      | 160 mm     | floor, along +x from the origin tag |
 | 2  | world_y      | 160 mm     | floor, along +y from the origin tag |
-| 10 | robot        | 80 mm      | mounted on the robot (transform → URDF, pending) |
+| 10 | robot        | 120 mm     | mounted on the robot (transform → URDF, pending) |
 
 Three floor tags instead of one because a single tag's orientation error
 grows linearly with distance across the arena, and because the two
@@ -89,3 +89,50 @@ detect, but every ground-truth yaw would be silently wrong.
 ```bash
 python3 -m pytest ros/src/wojtek_benchmark/test/ -q
 ```
+
+## The whole rig in simulation
+
+The sim is where the rig proves itself: MuJoCo's state is *perfect* ground
+truth, so the difference between the tracked pose and `/sim/qpos` is the
+end-to-end error of detection + calibration + tracking.  Measured on the
+current config: **3–7 mm position, < 0.05° yaw** across robot poses, under
+ideal imaging — the rig's error floor.  Real-world scores sit on top of
+optics, print quality, and placement.
+
+Nothing edits the generated scene XML: `sim_rig.py` injects the rig into a
+loaded `MjSpec` — the same physics-neutral pattern as the sim's virtual
+D435 — using textures rendered from the same `tag36h11` bitmaps as the
+printable PDFs.  [config/sim_rig.yaml](config/sim_rig.yaml) plays the role
+reality assigns to the tape measure and the tripod: floor-tag placements
+(leg lengths are *derived* from them, then fed to the tracker's refusal
+gate), the robot tag's mount pose, and the camera.
+
+Run it (container, two shells):
+
+```bash
+ros2 launch wojtek_pc sim.launch.py            # the robot, hw:=mujoco
+ros2 launch wojtek_benchmark sim_rig.launch.py # camera + tracker + monitor
+```
+
+Then drive the robot from the web console and watch
+`/benchmark/pose_error_mm` and `/benchmark/yaw_error_deg`.  The tracker
+node is the deployment tracker: on the real course, point `image_topic` /
+`info_topic` at the webcam driver and drop the monitor (there is no ground
+truth in reality — that's why the rig exists).
+
+Headless, no ROS (this is also the CI-able geometry check):
+
+```bash
+MUJOCO_GL=cgl ros/src/wojtek_benchmark/scripts/sim_rig_check.py   # macOS
+MUJOCO_GL=egl ros/src/wojtek_benchmark/scripts/sim_rig_check.py   # Linux
+```
+
+It renders the rig camera, detects, calibrates, and compares against
+ground truth, failing on >20 mm / >2° — try `--xy 0.4 -0.3 --yaw 40` to
+move the robot, `--save render.png` to look through the rig camera.
+Needs `pip install mujoco pupil-apriltags pyyaml numpy` (the ROS container
+image already has them).
+
+Sim-vs-print contract in one line: the pixels the sim camera sees and the
+ink on the printed sheets come from the same verified bitmaps, so a
+sign/orientation bug cannot pass in sim and fail on paper.

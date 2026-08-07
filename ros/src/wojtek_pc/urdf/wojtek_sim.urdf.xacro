@@ -91,9 +91,12 @@
         <param name="joint_map_yaml">$(find wojtek_policy)/config/joint_map.yaml</param>
         <param name="initial_pose">$(arg boot_pose)</param>
         <param name="dry_run">$(arg dry_run)</param>
-        <!-- Emulate the physical mount (URDF imu_joint: rpy 0 pi 0) so
-             policy_node's imu_mount_rpy is exercised rather than bypassed. -->
-        <param name="imu_mount_rpy">0 3.141592653589793 0</param>
+        <!-- Emulate the physical mount (URDF imu_joint: rpy 0 0 0, i.e. the
+             sensor is upright, see body.urdf.xacro). The simulated IMU must
+             keep matching the real one: while this said pi and the hardware
+             said 0, the simulation exercised a compensation the robot did
+             not need, and walked while the robot shook. -->
+        <param name="imu_mount_rpy">0 0 0</param>
       </xacro:unless>
     </hardware>
 

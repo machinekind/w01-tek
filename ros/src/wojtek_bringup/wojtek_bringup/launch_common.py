@@ -168,8 +168,13 @@ def _launch_setup(context, with_rviz, hardware):
                     # loads the same files without resolving the ref again.
                     "policy": str(loaded.directory),
                     "policy_source": loaded.source,
-                    # URDF imu_joint: rpy 0 pi 0 relative to base_link.
-                    "imu_mount_rpy": [0.0, 3.141592653589793, 0.0],
+                    # URDF imu_joint: rpy 0 0 0 relative to base_link -- the
+                    # sensor sits upright and its driver publishes the chip
+                    # axes unmodified, so nothing needs rotating here. Keep
+                    # this equal to body.urdf.xacro's imu_joint: the value is
+                    # a copy, not derived, and the two drifting apart is what
+                    # fed v41 an upside-down gravity vector.
+                    "imu_mount_rpy": [0.0, 0.0, 0.0],
                     "auto_enable": True,  # real_io arming is the gate
                     "soft_start_s": 2.0,
                     "clamp_knee": True,

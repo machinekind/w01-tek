@@ -48,10 +48,17 @@
     </joint>
 
     <link name="imu_link" />
+    <!-- The Adafruit 5543 sits UPRIGHT: measured at rest on the robot,
+         linear_acceleration.z = +10.05 m/s2, and imu_i2c.cpp reads the chip
+         axes straight into x/y/z with no remap. The rpy 0 pi 0 that stood
+         here was left over from the previous IMU and made policy_node flip
+         gravity and the gyro's x/z, which stayed invisible until a policy
+         actually read the IMU (terrain_blind v41). That one then fought a
+         robot it believed was upside down. -->
     <joint name="imu_joint" type="fixed">
       <parent link="base_link" />
       <child link="imu_link" />
-      <origin xyz="0.0 0.0 0.1" rpy=" 0.0 ${pi} 0.0" />
+      <origin xyz="0.0 0.0 0.1" rpy="0.0 0.0 0.0" />
     </joint>
 
     <xacro:if value="${with_camera}">

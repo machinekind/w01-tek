@@ -107,7 +107,13 @@ reality assigns to the tape measure and the tripod: floor-tag placements
 (leg lengths are *derived* from them, then fed to the tracker's refusal
 gate), the robot tag's mount pose, and the camera.
 
-Run it (container, two shells):
+Run it from the host, one command:
+
+```bash
+ros/sim.sh --benchmark
+```
+
+or inside the container, two shells:
 
 ```bash
 ros2 launch wojtek_pc sim.launch.py            # the robot, hw:=mujoco

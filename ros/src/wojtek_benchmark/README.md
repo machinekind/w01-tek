@@ -121,7 +121,19 @@ ros2 launch wojtek_benchmark sim_rig.launch.py # camera + tracker + monitor
 ```
 
 Then drive the robot from the web console and watch
-`/benchmark/pose_error_mm` and `/benchmark/yaw_error_deg`.  The tracker
+`/benchmark/pose_error_mm` and `/benchmark/yaw_error_deg`.
+
+To *see* the global positioning in Foxglove: open a 3D panel and set its
+**display frame to `bench_world`** (the tag-defined world), then add
+`/benchmark/robot_tag_path` (the measured trajectory),
+`/benchmark/robot_tag_pose` (current pose arrow), and the TF layer.  In
+sim the error monitor bridges `bench_world -> odom`, so the ground-truth
+robot model renders in the same scene — the visible gap between the model
+and the measured pose/path is the rig error.  Prefer
+`/benchmark/camera/preview` for the camera image (full-res `image_raw` is
+~2 MB/frame and the Foxglove bridge drops most of them).  On the real
+course the same panel works minus the robot model: there is no ground
+truth, only the tag-measured path.  The tracker
 node is the deployment tracker: on the real course, point `image_topic` /
 `info_topic` at the webcam driver and drop the monitor (there is no ground
 truth in reality — that's why the rig exists).

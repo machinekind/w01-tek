@@ -11,6 +11,16 @@ says whether real-world benchmark scores can be trusted.
               /sim/qpos                  (Float64MultiArray, ground truth)
   publishes   /benchmark/pose_error_mm   (Float32)
               /benchmark/yaw_error_deg   (Float32)
+              static TF bench_world -> odom
+
+The static TF is the display bridge: the sim's odom frame IS the sim world
+(the hardware plugin broadcasts ground-truth odom -> base_link), and
+sim_rig.yaml pins where bench_world sits in it.  Publishing that edge
+joins the rig's TF tree to the robot's, so one 3D scene (display frame
+bench_world) shows the ground-truth robot model, the tag-measured pose,
+and the trajectory -- the visible gap between model and measurement is the
+rig error.  Sim-only on purpose: reality has no ground-truth odom, which
+is the whole reason the rig exists.
 
 Timing: images are stamped with their qpos arrival time (sim_camera_node's
 documented deviation), so the monitor buffers recent qpos and matches by
@@ -22,10 +32,11 @@ from collections import deque
 
 import numpy as np
 import rclpy
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, TransformStamped
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import Float32, Float64MultiArray
+from tf2_ros import StaticTransformBroadcaster
 
 from wojtek_benchmark import tracker
 from wojtek_benchmark.sim_rig import (
@@ -55,6 +66,8 @@ class RigErrorMonitor(Node):
         self.declare_parameter("rig_config", str(DEFAULT_RIG_CONFIG))
         self.declare_parameter("qpos_buffer_s", 1.0)
         self.declare_parameter("log_period_s", 2.0)
+        self.declare_parameter("world_frame", "bench_world")
+        self.declare_parameter("odom_frame", "odom")
 
         rig_cfg = load_rig_config(self.get_parameter("rig_config").value)
         self._T_bench_sim = tracker.inv_se3(world_frame_in_sim(rig_cfg))
@@ -72,6 +85,25 @@ class RigErrorMonitor(Node):
         self._pub_pos = self.create_publisher(Float32, "/benchmark/pose_error_mm", 10)
         self._pub_yaw = self.create_publisher(Float32, "/benchmark/yaw_error_deg", 10)
         self._last_log = None
+
+        # Display bridge (see module docstring): pose of odom (= the sim
+        # world) expressed in bench_world, exact from sim_rig.yaml.
+        T_bench_sim = self._T_bench_sim
+        tf = TransformStamped()
+        tf.header.stamp = self.get_clock().now().to_msg()
+        tf.header.frame_id = self.get_parameter("world_frame").value
+        tf.child_frame_id = self.get_parameter("odom_frame").value
+        tf.transform.translation.x, tf.transform.translation.y, \
+            tf.transform.translation.z = map(float, T_bench_sim[:3, 3])
+        R = T_bench_sim[:3, :3]
+        # bench_world differs from the sim world by a planar pose only.
+        yaw = np.arctan2(R[1, 0], R[0, 0])
+        tf.transform.rotation.w = float(np.cos(yaw / 2.0))
+        tf.transform.rotation.z = float(np.sin(yaw / 2.0))
+        # Kept on self: a static broadcaster's latched publisher must outlive
+        # this constructor or late subscribers never receive the transform.
+        self._tf_static = StaticTransformBroadcaster(self)
+        self._tf_static.sendTransform(tf)
         self.get_logger().info("comparing tracked pose against /sim/qpos")
 
     def _on_qpos(self, msg):

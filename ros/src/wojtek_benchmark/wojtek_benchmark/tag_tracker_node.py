@@ -21,13 +21,21 @@ Two phases:
   subscribes  image_topic  (sensor_msgs/Image: mono8, rgb8 or bgr8)
               info_topic   (sensor_msgs/CameraInfo)
   publishes   /benchmark/robot_tag_pose  (PoseStamped, world frame)
-              TF world_frame -> robot_tag_frame, static world_frame -> camera
+              /benchmark/robot_tag_path  (nav_msgs/Path, the world-frame
+              trajectory -- the thing to LOOK at; throttled + bounded)
   services    /benchmark/recalibrate    (std_srvs/Trigger)
+
+TF: world_frame -> robot_tag_frame per detection, static world_frame ->
+camera at calibration.  In a 3D panel set the display frame to world_frame
+(bench_world) and add the path; in sim the error monitor also bridges
+bench_world -> odom, so the ground-truth robot model and the tag-measured
+trajectory render in one scene and their gap IS the rig error.
 """
 
 import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseStamped, TransformStamped
+from nav_msgs.msg import Path
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo, Image
@@ -83,6 +91,11 @@ class TagTrackerNode(Node):
         self.declare_parameter("calib_frames", 30)
         self.declare_parameter("world_frame", "bench_world")
         self.declare_parameter("robot_tag_frame", "benchmark_robot_tag")
+        # Trajectory display: bounded so an hour-long session cannot grow an
+        # unbounded message, throttled because republishing the whole path
+        # every frame is display bandwidth for no information.
+        self.declare_parameter("path_max_poses", 2000)
+        self.declare_parameter("path_publish_hz", 2.0)
 
         tags = load_tags_config(self.get_parameter("tags_config").value)
         self._sizes_by_id = {t["id"]: t["size_m"] for t in tags.values()}
@@ -105,6 +118,9 @@ class TagTrackerNode(Node):
             self._on_image, qos_profile_sensor_data,
         )
         self._pub_pose = self.create_publisher(PoseStamped, POSE_TOPIC, 10)
+        self._pub_path = self.create_publisher(Path, POSE_TOPIC.replace("_pose", "_path"), 10)
+        self._path = Path()
+        self._last_path_pub = self.get_clock().now()
         self._tf = TransformBroadcaster(self)
         self._tf_static = StaticTransformBroadcaster(self)
         self.create_service(Trigger, "/benchmark/recalibrate", self._on_recalibrate)
@@ -199,6 +215,17 @@ class TagTrackerNode(Node):
         pose.pose.orientation.y = float(y)
         pose.pose.orientation.z = float(z)
         self._pub_pose.publish(pose)
+
+        self._path.header = pose.header
+        self._path.poses.append(pose)
+        limit = int(self.get_parameter("path_max_poses").value)
+        if len(self._path.poses) > limit:
+            del self._path.poses[: len(self._path.poses) - limit]
+        now = self.get_clock().now()
+        period = 1.0 / float(self.get_parameter("path_publish_hz").value)
+        if (now - self._last_path_pub).nanoseconds > period * 1e9:
+            self._last_path_pub = now
+            self._pub_path.publish(self._path)
 
         tf = TransformStamped()
         tf.header.stamp = header.stamp

@@ -62,7 +62,15 @@ def make_detector(nthreads=1):
     the decode limit of a few px per cell, and decimation would throw those
     pixels away for speed the tracker does not need at rig frame rates.
     """
-    from pupil_apriltags import Detector
+    try:
+        from pupil_apriltags import Detector
+    except ImportError as e:
+        raise RuntimeError(
+            "pupil-apriltags is not installed (no rosdep key; it comes from "
+            "the pip line in ros/docker/Dockerfile). In a standing container "
+            "built before it was added, install once with: "
+            "pip3 install --break-system-packages pupil-apriltags"
+        ) from e
 
     return Detector(families="tag36h11", nthreads=nthreads, quad_decimate=1.0)
 

@@ -242,9 +242,23 @@ def inject_rig(spec, rig_cfg=None, tags_cfg=None, texture_dir=None):
 
 
 def load_model_with_rig(xml_path, rig_cfg=None, tags_cfg=None):
-    """Compile xml_path with the benchmark rig injected."""
+    """Compile xml_path with the benchmark rig injected.
+
+    The compiled model also drops 4x multisampling and the shadow map:
+    the rig camera's output goes to pupil-apriltags, not to human eyes,
+    and the detector's margins are identical without them (validated by
+    sim_rig_check).  Measured on llvmpipe this is roughly speed-neutral --
+    the render cost lives in rasterization threads, bounded via
+    LP_NUM_THREADS in the launch -- so the strip earns its keep as a 4x
+    smaller offscreen framebuffer and no shadow-map allocation, not as a
+    speedup.  Baked in here, not in the node, so the headless check
+    validates exactly the pixels the node ships.
+    """
     import mujoco
 
     spec = mujoco.MjSpec.from_file(str(xml_path))
     inject_rig(spec, rig_cfg=rig_cfg, tags_cfg=tags_cfg)
-    return spec.compile()
+    model = spec.compile()
+    model.vis.quality.offsamples = 0
+    model.vis.quality.shadowsize = 0
+    return model

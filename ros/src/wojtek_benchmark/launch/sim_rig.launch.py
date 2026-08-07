@@ -42,9 +42,23 @@ def generate_launch_description():
             package="wojtek_benchmark",
             executable="benchmark_camera_node",
             output="screen",
-            # Same GL contract as the other sim renderer: name the backend
-            # up front or MuJoCo may abort on a missing library.
-            additional_env={"MUJOCO_GL": os.environ.get("MUJOCO_GL", "egl")},
+            # The render is a background instrumentation task and must lose
+            # every CPU fight with the 400 Hz control loop -- measured
+            # unbounded, llvmpipe spawned a thread per core (243% CPU) and
+            # controller_manager missed cycles.
+            prefix="nice -n 15",
+            additional_env={
+                # Same GL contract as the other sim renderer: name the
+                # backend up front or MuJoCo may abort on a missing library.
+                "MUJOCO_GL": os.environ.get("MUJOCO_GL", "egl"),
+                # llvmpipe defaults to one raster thread per core; cap it so
+                # software rendering is bounded. Measured in-container under
+                # a live session: 2 threads render 720p in ~300 ms (~3 Hz)
+                # and more threads don't meaningfully help, so the extra
+                # cores would only be taken from the control loop. Harmless
+                # with hardware GL (llvmpipe never loads).
+                "LP_NUM_THREADS": os.environ.get("LP_NUM_THREADS", "2"),
+            },
             parameters=[{
                 "rig_config": rig_config,
                 "tags_config": tags_config,

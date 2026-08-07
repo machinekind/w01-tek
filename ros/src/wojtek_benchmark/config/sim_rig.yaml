@@ -45,6 +45,8 @@ camera:
   fovy_deg: 36.0
   width: 1280
   height: 720
-  # Under llvmpipe the render takes ~0.7 s at this size, so the timer runs
-  # late and this is an upper bound; the camera node logs the achieved rate.
+  # Upper bound: under llvmpipe (2 capped threads, see the launch) the
+  # render takes ~0.3 s at this size, so ~3 Hz is what actually arrives;
+  # the camera node logs the achieved rate.  With hardware GL the timer
+  # rate is the limit.
   hz: 5.0

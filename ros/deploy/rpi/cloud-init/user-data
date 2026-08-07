@@ -13,7 +13,7 @@ manage_etc_hosts: true
 
 users:
   - name: rpi
-    # Passwordless sudo, matching the existing setup. Key-only SSH.
+    # Passwordless sudo, matching the existing setup.
     sudo: ALL=(ALL) NOPASSWD:ALL
     groups: [adm, dialout, sudo, plugdev, netdev, gpio, i2c, spi, input]
     shell: /bin/bash
@@ -22,7 +22,12 @@ users:
       # >>> PASTE THE PC's SSH PUBLIC KEY HERE (contents of ~/.ssh/id_*.pub) <<<
       - ssh-ed25519 AAAA...REPLACE_ME... user@pc
 
-# Optional: set a login password for console access (SSH stays key-only above).
+# Login password, valid on the console AND over SSH (ssh_pwauth below).
+# Password SSH exists for the field case -- a laptop/phone on the robot's AP
+# with no authorized key. The password is weak and public in this repo, but
+# the only network that can reach sshd is the robot's own AP/ethernet link
+# (no route from the internet); anyone on that link is already physically at
+# the robot. Change the password here if that stops being true.
 chpasswd:
   expire: false
   users:
@@ -30,4 +35,4 @@ chpasswd:
       password: rpi
       type: text
 
-ssh_pwauth: false
+ssh_pwauth: true

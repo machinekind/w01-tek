@@ -15,6 +15,7 @@ without it. ANTHROPIC_API_KEY comes from the environment.
 from __future__ import annotations
 
 import asyncio
+import itertools
 import math
 import re
 from dataclasses import dataclass
@@ -39,6 +40,11 @@ CMD_TIMEOUT_S = 30.0
 POLL_S = 0.1
 MAX_CONSECUTIVE_FAILURES = 2
 HISTORY_MAX = 8        # entries shown to the VLM
+# Evidence-based stop, for runs with no step budget (max_steps=None): a robot
+# whose every command comes back blocked is wedged, and no number of further
+# decisions will unwedge it. This is what a benchmark's step cap stands in for
+# outside a benchmark -- a counter cannot tell progress from thrashing.
+MAX_CONSECUTIVE_BLOCKED = 6
 
 MOVE_ACTIONS = ("turn_left", "turn_right", "forward", "backward")
 ACTIONS = MOVE_ACTIONS + ("stop", "done")
@@ -135,11 +141,16 @@ def situation_text(
     goal: str,
     history: list[dict],
     step: int,
-    max_steps: int,
+    max_steps: int | None,
     pose: tuple[float, float, float],
 ) -> str:
-    """The textual half of a navigation turn (goal, history, odometry)."""
-    lines = [f"Goal: {goal}", f"Step {step} of {max_steps}."]
+    """The textual half of a navigation turn (goal, history, odometry).
+
+    max_steps=None means no budget (the interactive demo): say nothing about
+    a remaining count rather than inventing one -- telling a model it is on
+    "step 40 of 60" pressures it to declare `done` early.
+    """
+    lines = [f"Goal: {goal}", f"Step {step}." if max_steps is None else f"Step {step} of {max_steps}."]
     if history:
         lines.append("Recent commands:")
         for j, h in enumerate(history[-HISTORY_MAX:], 1):
@@ -253,7 +264,7 @@ class VlmNavigator:
         self,
         sim,
         client: VlmClientProto,
-        max_steps: int = MAX_STEPS,
+        max_steps: int | None = MAX_STEPS,
         vlm_timeout_s: float = VLM_TIMEOUT_S,
         cmd_timeout_s: float = CMD_TIMEOUT_S,
         poll_s: float = POLL_S,
@@ -396,7 +407,13 @@ class VlmNavigator:
         self.history = history  # exposed for eval logging (read-only)
         failures = 0
         rotations = 0  # consecutive turns in place (anti-spin, see max_rotation)
-        for step in range(1, self.max_steps + 1):
+        blocked_run = 0  # consecutive commands the executor could not carry out
+        # max_steps=None: no budget. A benchmark caps steps so episodes are
+        # comparable; interactively that cap just guillotines a route mid-way,
+        # so the run ends on evidence instead -- the model says done/stop, the
+        # user cancels, the agent spins in place, or it is wedged (below).
+        steps = itertools.count(1) if self.max_steps is None else range(1, self.max_steps + 1)
+        for step in steps:
             self._set_state("thinking", step=step)
             try:
                 if self._pending is not None:
@@ -458,7 +475,7 @@ class VlmNavigator:
             self._set_state("executing", step=step)
             resets_before = self.sim.resets
             blocked_before = getattr(self.sim.executor, "blocked", 0)
-            if self.overlap and step < self.max_steps:
+            if self.overlap and (self.max_steps is None or step < self.max_steps):
                 self._pending = asyncio.create_task(self._think_ahead(goal, history, step + 1))
             result = await self._wait_executor()
             abnormal = True
@@ -478,6 +495,14 @@ class VlmNavigator:
             else:
                 abnormal = False
                 history.append({"cmd": cmd_h, "result": "completed"})
+            # Wedged: nothing the executor is handed can be carried out. Ending
+            # here is a finding, not a budget running out.
+            blocked_run = blocked_run + 1 if abnormal else 0
+            if blocked_run >= MAX_CONSECUTIVE_BLOCKED:
+                self.sim.submit_command("stop")
+                logger.warning(f"vlm step {step}: {blocked_run} commands in a row blocked -- giving up")
+                self._set_state("done", reason="stuck")
+                return
             # A prefetched decision assumed the command completed cleanly; on an
             # abnormal outcome discard it so the next step re-thinks with the
             # real result (blocked/fell) now in history.

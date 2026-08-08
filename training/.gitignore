@@ -12,15 +12,17 @@
 /outputs/
 
 # Room-scan artifacts (recreated by ./run.sh room-assets + build-room);
-# only the LICENSE/attribution file is tracked.
-/assets/room/raw/
-/assets/room/processed/
+# only the LICENSE/attribution file is tracked. No trailing slash: in a git
+# worktree these are symlinks into the main checkout rather than real
+# directories, and a `dir/` pattern does not match a symlink.
+/assets/room/raw
+/assets/room/processed
 /assets/room/manifest.json
 /assets/room/occupancy.npz
 # Named scan scenes (recreated by room-assets --name X + build-room --name X
 # + grid --name X); objects.json is hand-authored and stays tracked.
-/assets/scenes/*/raw/
-/assets/scenes/*/processed/
+/assets/scenes/*/raw
+/assets/scenes/*/processed
 /assets/scenes/*/manifest.json
 /assets/scenes/*/occupancy.npz
 /assets/scenes/*/LICENSE.md

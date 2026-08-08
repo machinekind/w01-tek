@@ -13,12 +13,14 @@ import pytest
 from wojtek_rl.midlevel import parse_command
 from wojtek_rl.vlm_nav import (
     MAX_FORWARD_M,
+    MAX_STEPS,
     MAX_TURN_DEG,
     VlmDecision,
     VlmNavigator,
     build_messages,
     decision_to_command,
     parse_response,
+    situation_text,
 )
 
 POSE = (0.0, 0.0, 0.0)
@@ -321,3 +323,74 @@ def test_cancel_returns_to_idle():
     assert nav.status()["state"] == "idle"
     assert not nav.running
     assert sim.submitted[-1] == "stop"
+
+
+# -- no step budget (interactive demo) -------------------------------------
+
+
+class BlockingExecutor:
+    """Every command comes back blocked: the wedged robot.
+
+    `blocked` rises when the command FINISHES, like the real executors --
+    the navigator samples the counter after submitting, so a fake that
+    increments on submit would look like no change at all.
+    """
+
+    def __init__(self):
+        self.blocked = 0
+        self._left = 0
+        self._running = False
+
+    def begin(self):
+        self._left = 1
+        self._running = True
+
+    @property
+    def active(self):
+        if self._left > 0:
+            self._left -= 1
+            return True
+        if self._running:
+            self._running = False
+            self.blocked += 1
+        return False
+
+
+def test_max_steps_none_runs_past_the_default_budget():
+    """A benchmark caps steps for comparable episodes; interactively the cap
+    just guillotines a route mid-way, so None means 'run until it resolves'."""
+    sim = FakeSim()
+    script = [dec("forward", 0.3) for _ in range(MAX_STEPS + 5)] + [dec("done")]
+    nav = make_nav(sim, FakeClient(script), max_steps=None)
+    run(nav)
+    assert len(sim.submitted) == MAX_STEPS + 5  # would have stopped at MAX_STEPS
+    assert nav.status()["reason"] == "vlm_done"
+    assert nav.status()["max_steps"] is None
+
+
+def test_uncapped_run_still_stops_when_wedged():
+    sim = FakeSim()
+    sim.executor = BlockingExecutor()
+    nav = make_nav(sim, FakeClient([dec("forward", 0.3) for _ in range(50)]), max_steps=None)
+    run(nav)
+    assert nav.status()["state"] == "done"
+    assert nav.status()["reason"] == "stuck"
+    assert sim.submitted[-1] == "stop"
+    assert len(sim.submitted) < 20  # gave up on evidence, not on a counter
+
+
+def test_uncapped_run_still_stops_when_spinning():
+    sim = FakeSim()
+    nav = make_nav(
+        sim, FakeClient([dec("turn_left", 30) for _ in range(60)]),
+        max_steps=None, max_rotation=14,
+    )
+    run(nav)
+    assert nav.status()["reason"] == "max_rotation"
+
+
+def test_situation_text_omits_the_budget_when_uncapped():
+    capped = situation_text("go", [], 3, 20, POSE)
+    uncapped = situation_text("go", [], 3, None, POSE)
+    assert "Step 3 of 20." in capped
+    assert "Step 3." in uncapped and " of " not in uncapped.splitlines()[1]

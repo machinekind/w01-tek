@@ -1,5 +1,17 @@
 # Wojtek
 
+## Origins
+
+The robot began as **4BarBot**, a quadruped designed in The Mechatronics
+and Robotics Laboratory of the Wrocław University of Science and
+Technology, within the Mechatronics and Theory of Mechanisms Team.
+[Jakub Delicat](https://github.com/delipl)'s master thesis,
+[*Comparative studies on walking control algorithms for the quadruped robot
+4BarBot*](docs/comparative-studies-on-walking-control-algorithms-for-the-quadruped-robot-4barbot.pdf)
+(2025), covers the robot and its first walking controllers, and his
+[delipl/quadruped_ros2](https://github.com/delipl/quadruped_ros2) repository
+is the ROS 2 stack this workspace grew out of.
+
 ## Documentation
 
 - [Agent guide](CLAUDE.md)

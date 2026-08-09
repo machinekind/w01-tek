@@ -27,6 +27,17 @@ keep the command, seed, and resulting run directory together.
 - Remote execution and machine provisioning live in a separate private
   operations repository; this repository holds only cluster-agnostic job
   payloads under `training/jobs/`.
+- This repository is public.  Never commit credentials or the identity of
+  private infrastructure: passwords, tokens, keys; hostnames, IPs, logins,
+  or port maps of private machines; cluster site, account, grant, or
+  partition names; personal emails or aliases.  Such values enter at run
+  time through an environment variable declared at the top of the script
+  and filled from the gitignored `.env` (see `.env.example`) — the
+  `UBUNTU_PRO_TOKEN` and `WOJTEK_AP_PSK` handling in `ros/deploy.sh` is
+  the pattern to copy.  A script that targets one concrete private machine
+  does not belong here at all; it goes to the operations repository.
+  `training/tests/unit/test_job_scripts.py` enforces this for job
+  payloads; the rule covers the whole tree, comments and docs included.
 - New code is Apache-2.0 by default; do not pick another license unless the
   author explicitly asks for one.  Declare it as `<license>Apache License
   2.0</license>` in `package.xml` and `license="Apache-2.0"` in

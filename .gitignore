@@ -11,6 +11,10 @@ __pycache__/
 *.pyc
 .venv/
 
+# Personal dispatch config for the gpu-ops tool; .gpu-ops.example is the
+# committed template.
+.gpu-ops
+
 # Logs
 *.log
 MUJOCO_LOG.TXT
@@ -19,6 +23,7 @@ MUJOCO_LOG.TXT
 # copying or symlinking into your personal .claude/skills/).
 .claude/
 .agents/
+CLAUDE.local.md
 
 #notatki i praca lokalna
 notes/

@@ -1,7 +1,7 @@
 # @package _global_
 # stiff_kp80_v1 — keeper v2 of the stiffness ladder + consolidation
 # experiment, FROZEN from the trained run wojtek_stiff_kp80c_20260719_105503
-# (job NNNNNNN, seed 1) so it stays reproducible. What it is: the kp40/kd1.6
+# (seed 1) so it stays reproducible. What it is: the kp40/kd1.6
 # keeper (locomotion_stiff_v1, wojtek_stiff_b_20260717_235321) walked up a
 # stiffness ladder in +400M-step rungs (kp50 -> 60 -> 70 -> 80, each
 # restored from the previous accepted rung), then given +800M consolidation
@@ -29,9 +29,9 @@
 # survives a 1.58x Kt miscalibration uncompensated. Contrast
 # locomotion_stiff_kp90_v1, which needs the alpha-matched deployment
 # contract to reach the same guarantee.
-# Trained on the cluster CLUSTER cluster (training/hpc/stiff_ladder.slurm; the
-# as-run ladder + consolidation scripts are archived under hpc/ in the HF
-# repo below), 4xH100, ++ppo.num_envs=32768 ++ppo.batch_size=1024.
+# Trained with training/jobs/stiff_ladder.sh (the as-run ladder +
+# consolidation scripts are archived under hpc/ in the HF repo below),
+# 4xH100, ++ppo.num_envs=32768 ++ppo.batch_size=1024.
 # DEPLOYMENT MUST MATCH: kp=80 / kd=2.26 / +-9 Nm on the robot
 # (wojtek_real.urdf.xacro + launch max_torque).
 # Artifacts: https://huggingface.co/<HF_ORGANIZATION>/wojtek-stiff-kp80-locomotion

@@ -74,8 +74,8 @@ def data_budget_kwargs(
     num_envs.
 
     If a buffer is too small, warp drops the overflow silently instead of
-    raising an error. The measured numbers behind the defaults are in
-    docs/plans/mjwarp-phase0-report.md §4.
+    raising an error. The defaults come from measured peaks; re-measure with
+    `check-terrain` when the arena or the batch geometry changes.
     """
     if backend != "warp":
         return {}

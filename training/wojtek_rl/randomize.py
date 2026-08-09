@@ -16,6 +16,9 @@ gain_scale bitwise (a weak-motor world also reads as soft); enabled, it draws
 its own per-actuator sample, so weak and soft are no longer the same draw.
 """
 
+# Portions ported from MuJoCo Playground,
+# Copyright 2023 DeepMind Technologies Limited, Apache-2.0.
+
 import jax
 import jax.numpy as jnp
 import mujoco

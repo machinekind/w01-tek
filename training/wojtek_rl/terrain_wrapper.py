@@ -20,6 +20,9 @@ is refused rather than ignored: the teleport IS this wrapper's reset, and
 swallowing the flag would read as supporting both modes.
 """
 
+# Portions ported from MuJoCo Playground,
+# Copyright 2023 DeepMind Technologies Limited, Apache-2.0.
+
 from __future__ import annotations
 
 from collections.abc import Callable

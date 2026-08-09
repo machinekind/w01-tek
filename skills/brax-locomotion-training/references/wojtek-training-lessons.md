@@ -5,7 +5,6 @@ Load only for Wojtek work or when a concrete locomotion-training example helps.
 ## Repository map
 
 - Package `training/wojtek_rl/`, Hydra configs `training/wojtek_rl/conf/`, launcher `training/run.sh`
-- Iteration history: `training/docs/2026-07-06-locomotion-overnight-iterations.md`
 - Some configs and run names still carry pre-rename (`fbb_*`) identifiers; don't propagate them
   into new artifacts.
 

@@ -19,7 +19,7 @@ setup(
     maintainer="Michal Pogoda",
     maintainer_email="michalpogoda@surferseo.com",
     description="RL locomotion policy for wojtek (numpy runtime + ROS node).",
-    license="MIT",
+    license="Apache-2.0",
     entry_points={
         "console_scripts": [
             "policy_node = wojtek_policy.policy_node:main",

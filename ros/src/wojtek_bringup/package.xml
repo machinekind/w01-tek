@@ -10,7 +10,7 @@
     live in wojtek_pc (PC-side).
   </description>
   <maintainer email="kchmielewski707@gmail.com">Jakub Chmielewski</maintainer>
-  <license>MIT</license>
+  <license>Apache License 2.0</license>
 
   <depend>rclpy</depend>
   <depend>sensor_msgs</depend>

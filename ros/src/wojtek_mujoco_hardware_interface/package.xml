@@ -14,7 +14,7 @@
     dependency the sim tooling and training already have.
   </description>
   <maintainer email="kchmielewski707@gmail.com">Jakub Chmielewski</maintainer>
-  <license>MIT</license>
+  <license>Apache License 2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

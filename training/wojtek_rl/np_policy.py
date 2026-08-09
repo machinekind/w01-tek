@@ -41,6 +41,11 @@ def load_policy_runtime(ref: str | Path | None = None, meta: Path | None = None)
         # the export contract read). Temporary escape hatch while the
         # published keeper does not walk -- see wojtek_rl.legacy_policy.
         ref = os.environ.get("WOJTEK_POLICY") or paths.DEFAULT_POLICY
+    if ref is None:
+        raise ValueError(
+            "no policy reference: pass one explicitly, or set WOJTEK_POLICY "
+            "or HF_ORGANIZATION (see .env.example)"
+        )
     as_path = Path(ref).expanduser() if not isinstance(ref, Path) else ref
     if as_path.suffix == ".npz":
         npz, meta_file = as_path, meta

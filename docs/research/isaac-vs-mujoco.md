@@ -78,7 +78,7 @@ Note: **Isaac Gym** (the standalone preview) is deprecated/unsupported; NVIDIA d
 **Isaac Lab** is more batteries-included: per-library `train.py` with `--task --headless --num_envs --checkpoint --video --video_length --video_interval`, genuine **Hydra** overrides, `--distributed` multi-node, and a documented SLURM+Singularity recipe.
 
 Caveats from verification:
-- The SLURM recipe was tested only on ETH Euler / IIT Franklin HPC clusters — **irrelevant to a vast.ai bare-Docker box**, where the plain `docker run --gpus all` path applies.
+- The SLURM recipe was tested only on academic HPC clusters — **irrelevant to a vast.ai bare-Docker box**, where the plain `docker run --gpus all` path applies.
 - Docker image is **~20 GB** (secondary-source estimate; NVIDIA's own docs state no size).
 - A wandb-drops-metrics bug (#5252) exists but is pinned to **Isaac Lab 2.3.2 + skrl**; current release is **3.0 Beta 2 (Feb 2026)**, so treat it as version-stale, not necessarily live.
 

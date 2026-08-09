@@ -4,18 +4,18 @@ one markdown comparison table.
 Run: python3 -m wojtek_rl.grid_report --runs <run1> [<run2> ...] [--out FILE]
 
 Reads runs/<run>/grid/battery_a<alpha>_lag<lag_ms>ms_env<tag>.json for every
-run listed -- the files training/hpc/stiff_grid.slurm writes via battery.py's
+run listed -- the files training/jobs/stiff_grid.sh writes via battery.py's
 --alpha/--lag-tau/--torque-envelope/--out (see wojtek_rl/battery.py's
 apply_kt_miscalibration/make_lagged_rollout_fns/apply_torque_envelope).
 `<tag>` is "none" (flat cap, no --torque-envelope passed) or
 "<OMEGA_B>-<OMEGA_0>". Filenames without the `_env<tag>` segment (grid runs
 predating this axis) are read too, treated as env "none" -- see CELL_RE.
-Applies the stiffness ladder's gates 1-4 (see training/hpc/stiff_ladder.
-slurm's run_gates) to each cell independently -- gate 5 (diminishing
+Applies the stiffness ladder's gates 1-4 (see training/jobs/stiff_ladder.sh's
+run_gates) to each cell independently -- gate 5 (diminishing
 returns vs a previous rung) does not apply to a single eval cell, there is
 no "previous rung" here -- and reports mean track_err_rms over the 4
 battery scenarios plus PASS/FAIL per cell. A missing cell (its battery run
-crashed or was never submitted -- see stiff_grid.slurm's per-cell
+crashed or was never submitted -- see stiff_grid.sh's per-cell
 WARN-and-continue policy) prints as MISSING, not a report crash.
 """
 
@@ -30,8 +30,8 @@ SCENARIOS = ["stand_to_trot_ramp", "turn", "strafe", "walk_to_stop"]
 VEL_ERR_SCENARIOS = ["stand_to_trot_ramp", "turn", "walk_to_stop"]
 
 # Keeper reference numbers, provenance wojtek_stiff_b_20260717_235321
-# (job NNNNNNN, eval_report.json) -- the same values passed to
-# training/hpc/stiff_ladder.slurm as BASELINE_VIBRATION_JSON; this module
+# (eval_report.json) -- the same values passed to
+# training/jobs/stiff_ladder.sh as BASELINE_VIBRATION_JSON; this module
 # applies the ladder's gates 1-4 (see its run_gates) per grid cell.
 KEEPER_VIBRATION = {
     "stand_to_trot_ramp": 0.247,
@@ -47,7 +47,7 @@ SATURATION_LIMIT = 0.05
 # existed (bare battery_a<alpha>_lag<ms>ms.json, no envelope tag at all)
 # still parse -- they get env "none" by construction (see find_cells): a
 # grid run made before --torque-envelope existed only ever probed the
-# flat cap. `<tag>` itself has no underscore (see stiff_grid.slurm's
+# flat cap. `<tag>` itself has no underscore (see stiff_grid.sh's
 # env_tag construction: "none" or "OMEGA_B-OMEGA_0"), so `[^_]+` cannot
 # run past the `.json` this pattern anchors on.
 CELL_RE = re.compile(r"battery_a([0-9.]+)_lag(\d+)ms(?:_env([^_]+))?\.json$")
@@ -177,7 +177,7 @@ def render_markdown(grid: dict, kp_by_run: dict) -> str:
         "vel_err_overall/strafe vy_err < 0.2; vibration <= 1.3x keeper ref "
         "per scenario -- stand_to_trot_ramp 0.247 / turn 0.144 / strafe "
         "0.359 / walk_to_stop 0.123; saturation max < 0.05). Provenance: "
-        "keeper wojtek_stiff_b_20260717_235321, job NNNNNNN. MISSING = the "
+        "keeper wojtek_stiff_b_20260717_235321. MISSING = the "
         "cell's battery run crashed or was never submitted.",
         "",
     ]

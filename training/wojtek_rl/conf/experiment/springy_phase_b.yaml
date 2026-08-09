@@ -11,8 +11,7 @@
 # Anti-splay package: abduction ctrlrange clamped to +-0.44 rad, abduction
 # action_scale halved (0.25 vs 0.5), a 6 Nm torque cap with the torque_limit
 # hinge at 85% of it, weak-skewed motor-strength DR, and a knee ctrl clip
-# under the four-bar singularity. The full design is
-# training/docs/2026-07-12-reward-redesign.md. Phase B is launched with
+# under the four-bar singularity. Phase B is launched with
 # `restore=<phase-A checkpoint>` at train time; this preset does not set
 # restore.
 # v2 (2026-07-17): trains on the corrected 14 kg model (commit 743e0dc; the
@@ -94,7 +93,7 @@ dr:
 # iteration consumes batch_size * num_minibatches * unroll_length steps.
 # The 4-GPU pipeline runs batch_size=1024, so an iteration costs 655k
 # steps — 200M bought only ~305 iterations, and phase A's 100M produced a
-# policy that stood still (job NNNNNNN). 800M at batch 1024 restores the
+# policy that stood still. 800M at batch 1024 restores the
 # ~1200 iterations this budget meant at the default batch of 256.
 ppo:
   num_timesteps: 800000000

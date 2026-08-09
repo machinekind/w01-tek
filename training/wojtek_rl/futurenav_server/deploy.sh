@@ -3,7 +3,7 @@
 #
 #   ./deploy.sh <ssh-host> [remote-dir]
 #
-#   ./deploy.sh user@HOST            # installs into ~/futurenav
+#   ./deploy.sh user@gpu-box            # installs into ~/futurenav
 #   ./deploy.sh gpu-box /opt/futurenav
 #
 # Idempotent: re-running updates server.py and skips completed steps

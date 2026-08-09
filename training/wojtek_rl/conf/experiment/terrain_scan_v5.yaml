@@ -9,7 +9,7 @@
 # Launch notes:
 #   ./training/run.sh build-terrain --arena train --flat-row   # generated,
 #     gitignored; the --flat-row build and terrain.flat_row must agree, and
-#     train.slurm needs FLAT_ROW=1 for its in-job build.
+#     train.sh needs FLAT_ROW=1 for its in-job build.
 #   XLA_PYTHON_CLIENT_PREALLOC=false ./training/run.sh train \
 #     +experiment=terrain_scan_v5
 # PREALLOC=false is mandatory on terrain, not a tuning preference. train.py

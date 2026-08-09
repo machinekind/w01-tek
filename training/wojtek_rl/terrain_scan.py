@@ -40,8 +40,7 @@ gets measured.
 ``--dump-step-stats PATH`` runs the same course but skips the gate: it dumps
 every replayed step's ``rough`` (the terrain_gate's own roughness measure, see
 env.py:1598-1613) and nose-down ``pitch_down`` (degrees) to PATH as an
-``.npz``, generic over ``--run``. This is M1
-(docs/plans/terrain-training/2026-08-05-v44-plan.md section 3): a pre-flight
+``.npz``, generic over ``--run``. This is M1: a pre-flight
 estimate of a keeper's own climb-state distribution, not a bound on what a
 policy trained under a rough-gated reward would occupy -- a trained policy
 can shift which climb states it spends time in. ``--aggregate PATH`` reads

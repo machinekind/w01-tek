@@ -1,8 +1,7 @@
 """Fixed evaluation battery for locomotion policies: one number-table per
 run so iterations are comparable. Run: ./run.sh battery --run runs/<name>
 
-Scenarios (all no-fall expected), matching the four video names in
-docs/2026-07-12-reward-redesign.md:
+Scenarios, all no-fall expected:
   stand_to_trot_ramp — stand 100 steps, ramp vx 0->1.0 over 500 steps, hold
       150 steps; height pinned at 0.125 throughout. 750 steps.
   turn — stand 100 steps; vx=0.4 with wz swept -0.8->+0.8 over 400 steps;
@@ -202,7 +201,7 @@ def battery_scenarios():
     """name -> (cmd_at(i), n_steps). Split out so report.py (and eval.py's
     --scenario) can reuse the exact same battery scenarios. Height is
     pinned at 0.125 in the original four scenarios -- the redesign drops
-    the height command (docs/2026-07-12-reward-redesign.md), but the env
+    the height command, but the env
     still takes a 4-vector [vx, vy, wz, height], so cmd_at keeps sending
     the anchor value. height_step is the exception: it exercises the
     phase-C height command (a fixed-height policy simply gets its anchor

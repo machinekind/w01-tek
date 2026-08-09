@@ -1,7 +1,6 @@
 # @package _global_
 # terrain_blind_v1 — VERIFICATION ONLY. This is the preset the 2026-07-27
-# GPU validation session ran (docs/plans/terrain-training/
-# 2026-07-27-step5-validation-report.md). Do not launch a real terrain run
+# GPU validation session ran. Do not launch a real terrain run
 # from it. The terrain family rule (Marcin, 2026-07-27): terrain policies
 # never start from a flat keeper. The family starts from scratch WITH the
 # IMU (CANdle-hat BMI, PR #75) in the observations; terrain policies may
@@ -105,8 +104,7 @@ task:
       # The post-split floor the env computes from the robot's own collision
       # set: 22 geoms that can pair with the heightfield, 4 contacts each.
       # Confirmed 2026-07-27: scan peak is 12 contacts/env and no instrument
-      # tripped the pool at 88, checks up to 4096 envs included
-      # (docs/plans/terrain-training/2026-07-27-step5-validation-report.md).
+      # tripped the pool at 88, checks up to 4096 envs included.
       naconmax_per_env: 88
       # Sized from the same session: worst measured nefc_max is 228, in
       # forced-fall states on the eval arena; walking scans peak near 97.

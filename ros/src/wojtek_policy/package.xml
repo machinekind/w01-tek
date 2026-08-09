@@ -9,7 +9,7 @@
     out). Backend-agnostic - see wojtek_bringup for real-robot/MuJoCo launch.
   </description>
   <maintainer email="michalpogoda@surferseo.com">Michal Pogoda</maintainer>
-  <license>MIT</license>
+  <license>Apache License 2.0</license>
 
   <depend>rclpy</depend>
   <depend>sensor_msgs</depend>

@@ -18,7 +18,7 @@ setup(
     maintainer="Jakub Chmielewski",
     maintainer_email="kchmielewski707@gmail.com",
     description="Robot-side teleop input (bluetooth Xbox pad -> /cmd_vel) for wojtek.",
-    license="MIT",
+    license="Apache-2.0",
     entry_points={
         "console_scripts": [
             "gamepad_teleop = wojtek_teleop.gamepad_teleop:main",

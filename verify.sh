@@ -85,8 +85,7 @@ t0(){
   absent "no live urdf fbb_*/four_bar_bot xacro tokens (renamed -> wojtek_*)" 'fbb_(real|sim|joint|ros2_control|imu_ros2_control|bmi160_imu_ros2_control)|four_bar_bot_body|four_bar_bot\.urdf\.xacro' . ':(exclude)*.md'
   absent "removed legacy launches not referenced" '(bringup|robot_state_publisher)\.launch\.py' 'ros/src/*/launch/*.py'
   # The PC package grew past "viz" (it carries the simulator), renamed 2026-08-06.
-  # docs/plans/ is a historical record and keeps the old name on purpose.
-  absent "no live 'wojtek_viz' ref (renamed -> wojtek_pc)" 'wojtek_viz' . ':(exclude)*.md' ':(exclude)docs/plans/*'
+  absent "no live 'wojtek_viz' ref (renamed -> wojtek_pc)" 'wojtek_viz' . ':(exclude)*.md'
 
   # Every package.xml parses. colcon does NOT fail on a malformed one -- it
   # silently reads zero dependencies, so an XML slip (a double hyphen inside a
@@ -183,7 +182,7 @@ t1(){
   ok "MJCF scene loads in MuJoCo (CPU)" bash -c "cd training && ./.venv/bin/python -c 'from wojtek_rl import paths; import mujoco; mujoco.MjModel.from_xml_path(str(paths.SCENE_XML))'"
   ok "demo.app imports + argparse (heavy imports deferred)" bash -c "cd training && MUJOCO_GL=cgl ./.venv/bin/python -m demo.app --help"
   # scripts are syntactically valid
-  for s in training/run.sh training/hpc/_common.sh training/hpc/train.slurm ros/build.sh ros/dev.sh verify.sh; do
+  for s in training/run.sh training/jobs/_lib.sh training/jobs/train.sh ros/build.sh ros/dev.sh verify.sh; do
     ok "syntax ok: $s" bash -n "$s"; done
   # Test suites are split: tests/unit is model-free and runs in seconds, so it
   # belongs in every tier-1 pass. tests/integration builds and steps real MJX
@@ -242,7 +241,7 @@ t3(){
   if ! docker info >/dev/null 2>&1; then skip "docker image build" "docker daemon not running"; return; fi
   # The Dockerfile's `RUN colcon build --packages-select <6 pkgs>` IS the build check.
   echo "  (building ros/docker image — runs colcon build of all 6 packages; slow, esp. under emulation)"
-  if docker build -f ros/docker/Dockerfile -t shrek-verify:ros ros >/tmp/verify_docker.$$ 2>&1; then
+  if docker build -f ros/docker/Dockerfile -t wojtek-verify:ros ros >/tmp/verify_docker.$$ 2>&1; then
     pass "colcon build (wojtek_description, md80_hw, bmx160, bmi160, wojtek_policy, wojtek_bringup)"
   else
     fail "ROS colcon build via docker" "$(tail -15 /tmp/verify_docker.$$ 2>/dev/null)"

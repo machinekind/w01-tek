@@ -20,7 +20,7 @@ setup(
     maintainer="Jakub Chmielewski",
     maintainer_email="kchmielewski707@gmail.com",
     description="Robot-side bringup (MD80 + IMU via ros2_control) for wojtek / wojtek_policy.",
-    license="MIT",
+    license="Apache-2.0",
     entry_points={
         "console_scripts": [
             "real_io_node = wojtek_bringup.real_io_node:main",

@@ -77,7 +77,7 @@ if [ "${PROVISION}" = 1 ]; then
     install_args=""
     [ "${ENABLE_ROBOT}" = 1 ] && install_args="--enable-robot"
     ssh "${RPI_HOST}" \
-        "UBUNTU_PRO_TOKEN='${UBUNTU_PRO_TOKEN:-}' ROS_DISTRO='${ROS_DISTRO}' \
+        "UBUNTU_PRO_TOKEN='${UBUNTU_PRO_TOKEN:-}' WOJTEK_AP_PSK='${WOJTEK_AP_PSK:-}' ROS_DISTRO='${ROS_DISTRO}' \
          bash '${REMOTE_WS}/deploy/rpi/install.sh' ${install_args}"
 
     # Kernel/cmdline changes leave /var/run/reboot-required -- reboot + wait so

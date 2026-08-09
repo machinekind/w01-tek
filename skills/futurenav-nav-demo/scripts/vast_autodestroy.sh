@@ -5,7 +5,7 @@
 # laptop suspend cannot stretch the deadline. Reads the API key at fire time, so
 # the key is never copied into this script or its log.
 #
-#   INSTANCE_ID=NNNNNNNN MINUTES=90 ./vast_autodestroy.sh &
+#   INSTANCE_ID=12345678 MINUTES=90 ./vast_autodestroy.sh &
 #
 #   # extend (any later epoch, any time)
 #   echo $(( $(date +%s) + 3600 )) > "$STATE_DIR/vast_deadline_epoch"

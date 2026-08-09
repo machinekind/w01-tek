@@ -1,7 +1,7 @@
 # @package _global_
 # terrain_blind_v4_4a -- v4.2 recipe + flat_pitch posture hinge at w=10
-# (docs/plans/terrain-training/2026-08-05-v44-plan.md, arm A: posture at
-# low price). Diffs vs terrain_blind_v4_2, nothing else:
+# (v4.4 arm A: posture at low price). Diffs vs terrain_blind_v4_2,
+# nothing else:
 #   obs.privileged: phase removed (settled by v4.3: curriculum 6.39 vs 6.28)
 #   reward.terrain_gate.flat_pitch_tol_deg 2.0, flat_pitch_rough_cut 0.15
 #     (M1 resolved 2026-08-05: backward-climb leakage 10.5% at 0.25 tripped

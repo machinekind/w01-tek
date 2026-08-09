@@ -5,7 +5,10 @@
   <version>0.0.0</version>
   <description>TODO: Package description</description>
   <maintainer email="delicat.kuba@gmail.com">rabin</maintainer>
-  <license>TODO: License declaration</license>
+  <!-- The C++ package is Apache-2.0; the Arduino sketches under firmware/
+       link GPL AHRS code and stay GPL - see firmware/LICENSE.md. -->
+  <license>Apache License 2.0</license>
+  <license file="firmware/LICENSE.md">GPL</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

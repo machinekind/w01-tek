@@ -16,7 +16,7 @@
     editing the yaml, never hand-edit them.
   </description>
   <maintainer email="michal.pogoda@bards.ai">Michał Pogoda</maintainer>
-  <license>MIT</license>
+  <license>Apache License 2.0</license>
 
   <depend>python3-yaml</depend>
   <depend>python3-numpy</depend>

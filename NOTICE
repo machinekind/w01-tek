@@ -1,0 +1,28 @@
+Wojtek
+Copyright 2026 the Wojtek authors
+
+This product includes software developed at Google DeepMind as part of
+MuJoCo Playground (https://github.com/google-deepmind/mujoco_playground),
+licensed under the Apache License, Version 2.0. Portions of the training
+environments under training/wojtek_rl/ (the joystick, getup, and jump task
+rewards, the domain randomization, and the training wrappers) are ported
+from MuJoCo Playground's Go1 tasks.
+
+ros/src/wojtek_benchmark/ vendors the tag36h11 family constants and test
+fixtures derived from AprilRobotics/apriltag
+(https://github.com/AprilRobotics/apriltag),
+Copyright (C) 2013-2016, The Regents of The University of Michigan,
+licensed under BSD-2-Clause.
+
+The room simulation scene is built from the "Van Gogh Room" scan
+distributed with the Habitat test scenes, original model by ruslans3d on
+Sketchfab, licensed CC Attribution; see
+training/assets/room/LICENSE.md. The scan itself is downloaded at build
+time and is not part of this repository.
+
+Licensing exception: the firmware directories under
+ros/src/bmi160_serial_hardware_interface/ and
+ros/src/bmx160_serial_hardware_interface/ contain and link GPL-licensed
+AHRS code and are not distributed under this repository's Apache-2.0
+license. The LICENSE.md file in each firmware directory is the
+authoritative statement of what applies there.

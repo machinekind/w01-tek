@@ -228,11 +228,16 @@ def _launch_setup(context, with_rviz, hardware):
 # Which policy every bringup -- robot and simulation -- comes up with. Pinned
 # to a revision on purpose: an unpinned repo id follows whatever main is, so
 # what walks today would silently be a different policy tomorrow. Override for
-# one run with policy:=<repo>@<sha> or a local artifact directory. The repo is
-# PRIVATE, so the RPi needs an HF token in ~/.cache/huggingface for the first
-# fetch of a revision (prefetch: python3 -m wojtek_policy.policy_source <ref>).
-DEFAULT_POLICY = ("<HF_ORGANIZATION>/wojtek-terrain-blind-locomotion-v41"
-                  "@6aa9163750a15cec53ce832b6eefa5717892f5f6")
+# one run with policy:=<repo>@<sha> or a local artifact directory. The org
+# comes from HF_ORGANIZATION in the environment (see .env.example); the repo
+# is PRIVATE, so the RPi needs an HF token in ~/.cache/huggingface for the
+# first fetch of a revision (prefetch: python3 -m wojtek_policy.policy_source
+# <ref>). Without HF_ORGANIZATION the default is empty and every launch needs
+# an explicit policy:=.
+_HF_ORGANIZATION = os.environ.get("HF_ORGANIZATION", "")
+DEFAULT_POLICY = (_HF_ORGANIZATION + "/wojtek-terrain-blind-locomotion-v41"
+                  "@6aa9163750a15cec53ce832b6eefa5717892f5f6"
+                  if _HF_ORGANIZATION else "")
 
 
 def common_launch_description(

@@ -9,7 +9,7 @@ http.server / socketserver / json / re / argparse / html from the standard
 library, so it runs anywhere Python 3.11 runs.
 
 Run:
-    python -m wojtek_rl.dashboard [--log PATH] [--port 8765] [--budget 200000000]
+    python -m wojtek_rl.dashboard --log PATH [--port 8765] [--budget 200000000]
 
 Then open http://127.0.0.1:8765/ in a browser.
 """
@@ -22,10 +22,6 @@ import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-DEFAULT_LOG_PATH = (
-    "LOCAL_PATH
-    "6ec0d1d1-3779-4e20-96f0-df8101febd93/scratchpad/fbb_v1_mirror.log"
-)
 DEFAULT_PORT = 8765
 DEFAULT_BUDGET = 200_000_000
 
@@ -609,7 +605,8 @@ HTML_PAGE = HTML_DOC.encode("utf-8")
 class DashboardHandler(BaseHTTPRequestHandler):
     """Serves the dashboard page and its JSON data endpoint."""
 
-    log_path: Path = Path(DEFAULT_LOG_PATH)
+    # main() sets log_path before the server starts; there is no default.
+    log_path: Path
     budget: int = DEFAULT_BUDGET
     server_version = "FBBDashboard/1.0"
 
@@ -647,7 +644,7 @@ def main() -> None:
         description="Minimal local live dashboard for an wojtek_rl training run."
     )
     parser.add_argument(
-        "--log", default=DEFAULT_LOG_PATH, help="Path to the local mirror log file."
+        "--log", required=True, help="Path to the local mirror log file."
     )
     parser.add_argument(
         "--port", type=int, default=DEFAULT_PORT, help="Port to serve the dashboard on."

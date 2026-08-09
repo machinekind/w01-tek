@@ -1,5 +1,6 @@
 """Repo-relative paths and robot constants shared by every module."""
 
+import os
 from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
@@ -59,9 +60,28 @@ def terrain_paths(kind: str = "train") -> dict[str, Path]:
 
 # Exported NumPy policy runtime (ROS-free), shared with the real robot.
 WOJTEK_POLICY_PKG = REPO_ROOT / "ros/src/wojtek_policy"
+def _hf_organization() -> str:
+    """HF org hosting the keeper policy repos: HF_ORGANIZATION from the
+    environment, else from the repo-root .env (see .env.example)."""
+    org = os.environ.get("HF_ORGANIZATION", "")
+    if org:
+        return org
+    env_file = REPO_ROOT / ".env"
+    if env_file.is_file():
+        for line in env_file.read_text().splitlines():
+            if line.strip().startswith("HF_ORGANIZATION="):
+                return line.split("=", 1)[1].strip().strip("\"'")
+    return ""
+
+
+HF_ORGANIZATION = _hf_organization()
+
 # Default policy reference for sim/demo apps: any form accepted by
 # wojtek_policy.policy_source (HF repo id, local dir, path to policy.npz).
-DEFAULT_POLICY = "<HF_ORGANIZATION>/wojtek-stiff-height-locomotion"
+# None until HF_ORGANIZATION is configured; tools then need an explicit
+# policy reference.
+DEFAULT_POLICY = (f"{HF_ORGANIZATION}/wojtek-stiff-height-locomotion"
+                  if HF_ORGANIZATION else None)
 
 # URDF <-> MuJoCo affine joint map, shared with the ROS nodes (sysid bag
 # reader converts recorded signals with the exact same table).

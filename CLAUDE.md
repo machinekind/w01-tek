@@ -21,9 +21,17 @@ keep the command, seed, and resulting run directory together.
   build`.  Do not hand-edit generated XML.
 - `skills/` contains opt-in local guides.  Claude users must explicitly
   symlink a skill or ask to read its `SKILL.md`; see [skills/README.md](skills/README.md).
-- Use **Wojtek** for new prose and artifact names. Keep `wojtek` only for
-  repository paths and `fbb-*` only where it is a literal historical/current
-  configuration or artifact identifier.
+- Use **Wojtek** everywhere: prose, artifact names, run names, and new paths.
+  `fbb-*` survives only where it is a literal identifier of an existing
+  configuration or published artifact.
+- Remote execution and machine provisioning live in a separate private
+  operations repository; this repository holds only cluster-agnostic job
+  payloads under `training/jobs/`.
+- New code is Apache-2.0 by default; do not pick another license unless the
+  author explicitly asks for one.  Declare it as `<license>Apache License
+  2.0</license>` in `package.xml` and `license="Apache-2.0"` in
+  `setup.py`/`pyproject.toml`.  The only exception is the GPL-licensed IMU
+  firmware directories; see `NOTICE`.
 
 ## Start with the training reference
 
@@ -79,8 +87,9 @@ Rules for agents changing or launching training:
   `++ppo.num_envs`, not the environment field, for a training run.
 - A policy trained with `task.env.action_filter > 0` needs the equivalent
   filter in its deployment control loop.
-- Do not submit HPC/cloud jobs, deploy a policy, or launch/arm the physical
-  robot without explicit user authorization.  Resolve/configure locally first.
+- Remote training jobs and policy deployment stay human-authorized: do not
+  start a remote run, deploy a policy, or launch/arm the physical robot
+  without explicit user authorization.  Resolve/configure locally first.
 
 ## Validation by change type
 
@@ -110,15 +119,6 @@ change is validated.
 For wider repository checks, use `make verify-static` first and
 `make verify-quick` when its prerequisites are available.  A full
 `make verify` includes the slower Docker/ROS gate.
-
-## cluster access
-
-Personal cluster values (`cluster_USER` etc.) live in the gitignored repo-root
-`.env`, which agent sessions are permission-denied from reading — never
-`cat`/`grep` it, and don't conclude the cluster is unreachable when that
-denial hits.  `./cluster.sh <cmd>` runs a command on the login node and the
-`make hpc-*` targets handle rsync/submit/status; both load `.env`
-themselves.
 
 ## Common commands
 

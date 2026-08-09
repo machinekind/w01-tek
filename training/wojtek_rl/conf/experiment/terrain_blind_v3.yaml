@@ -1,6 +1,6 @@
 # @package _global_
 # terrain_blind_v3 -- run two of the terrain family, trained from scratch, per
-# docs/plans/terrain-training/2026-07-28-terrain-blind-v3-plan.md. Blind means
+# the v3 plan. Blind means
 # no exteroception: no height scan, the robot feels the ground through its own
 # joints, and the IMU is in the observations. Everything not listed below is
 # terrain_blind_v2's operating point, unchanged: the frozen obs layout, kp 40 /
@@ -38,7 +38,7 @@
 # Launch notes:
 #   ./training/run.sh build-terrain --arena train --flat-row   # generated,
 #     gitignored; the --flat-row build and terrain.flat_row must agree, and
-#     train.slurm needs FLAT_ROW=1 for its in-job build.
+#     train.sh needs FLAT_ROW=1 for its in-job build.
 #   XLA_PYTHON_CLIENT_PREALLOC=false ./training/run.sh train \
 #     +experiment=terrain_blind_v3
 # PREALLOC=false is mandatory on terrain, not a tuning preference. Warp

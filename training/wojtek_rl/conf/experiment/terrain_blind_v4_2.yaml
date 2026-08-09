@@ -1,6 +1,6 @@
 # @package _global_
 # terrain_blind_v4_2 -- terrain_blind_v4_1's recipe with the v4.2 exposure
-# package (docs/plans/terrain-training/2026-08-03-v42-plan.md):
+# package:
 #   sim.njmax 640 -> 1024 -- the August scans measured constraint-row peaks
 #     647-681 in pile-up states; rows past the cap apply no force silently.
 #     The terrain wrapper now logs the live peak and warns at 90%.
@@ -31,7 +31,7 @@
 #   ./training/run.sh build-terrain --arena train --flat-row \
 #     --pad-radius 0.3 --stair-tread 0.25 0.45 \
 #     --type-caps pyramid_stairs=0.7,inverted_pyramid_stairs=0.7,discrete_obstacles=0.8,random_grid=0.45
-#   (train.slurm: FLAT_ROW=1 and TERRAIN_FLAGS with the same geometry; the
+#   (train.sh: FLAT_ROW=1 and TERRAIN_FLAGS with the same geometry; the
 #   env refuses an arena that disagrees with the preset.)
 #   XLA_PYTHON_CLIENT_PREALLOC=false ./training/run.sh train \
 #     +experiment=terrain_blind_v4_2

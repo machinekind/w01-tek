@@ -1,6 +1,6 @@
 # @package _global_
 # stiff_v1 — the keeper policy of the 2026-07-17 stiffness experiment,
-# FROZEN from the trained run wojtek_stiff_b_20260717_235321 (job NNNNNNN)
+# FROZEN from the trained run wojtek_stiff_b_20260717_235321
 # so it stays reproducible while the stiff_phase_* presets evolve. What it
 # is: the springy clock-free design (no gait clock, no height command, legs
 # as springs) moved to a stiff operating point — PD gains kp 20 -> 40, kd

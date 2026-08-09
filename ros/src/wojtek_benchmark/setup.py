@@ -20,7 +20,7 @@ setup(
     maintainer="Michał Pogoda",
     maintainer_email="michal.pogoda@bards.ai",
     description="AprilTag ground-truth benchmark instrumentation for wojtek.",
-    license="MIT",
+    license="Apache-2.0",
     entry_points={
         "console_scripts": [
             "generate_tags = wojtek_benchmark.generate_tags:main",

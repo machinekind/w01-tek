@@ -3,7 +3,7 @@
 > Research synthesis, 2026-07-13. Goal: Wojtek follows verbal/text instructions
 > ("go to the chair", "find the ball", "turn around"). No speech output, no
 > manipulation. Hardware target: RealSense + Jetson + mic. Training compute:
-> vast.ai RTX; locomotion training stays on the HPC 4×H100 node.
+> vast.ai RTX; locomotion training stays on the 4×H100 node.
 
 ## 0. Where we already are
 

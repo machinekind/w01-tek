@@ -1,0 +1,22 @@
+# Dispatch configuration for the gpu-ops tool: copy to .gpu-ops at this
+# repository's root and fill in the personal values. .gpu-ops is gitignored
+# and never committed. The gpu-ops repository's .env.example explains every
+# key, and any key from there may be overridden here per project.
+#
+# Plain KEY=VALUE lines, no quotes, no trailing comment on a value line.
+# Running a payload needs none of this: these values are read by the
+# dispatcher, never by the scripts in training/jobs/.
+
+# Where this repository keeps its payloads.
+OPS_PAYLOAD_DIR=training/jobs
+# The Python project, added to PYTHONPATH on the compute node.
+OPS_PROJECT_DIR=training
+# The checkout directory name on the remote side, whatever the local clone
+# is called.
+OPS_REPO_NAME=wojtek
+# Training outputs that never leave this machine, on top of the site list.
+OPS_RSYNC_EXTRA=runs/ videos/ outputs/ wandb/ wandb-offline/ *.mp4
+# Empty: the job venv is expected to be provisioned already. The dependency
+# source of truth is training/pyproject.toml; point this at a requirements
+# file only if one is ever committed.
+OPS_REQUIREMENTS=

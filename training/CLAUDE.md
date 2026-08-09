@@ -1,19 +1,33 @@
 # Training project guide
 
 Read the root `CLAUDE.md` first for the resolve/bounded-run/full-run workflow and
-the validation rules. This file adds the HPC-script conventions for
-`training/hpc/`.
+the validation rules. This file adds the payload conventions for
+`training/jobs/`. As everywhere in the repository, new code is Apache-2.0
+(`license = "Apache-2.0"` in `pyproject.toml`) unless the author explicitly
+asks for a different license.
 
-## HPC scripts: parameterized tools, not experiment records
+## Payloads: parameterized tools, not experiment records
 
-Every `training/hpc/*.slurm` script in this repository is a reusable,
-parameterized tool. Experiment-specific values — checkpoints, rung lists,
-gate baselines, run names — enter via `sbatch --export=ALL,VAR=value` and
-must never be hard-coded into a committed script. Each script's header
-documents its required variables, tunables, and a worked submit line.
+Every script in `training/jobs/` is a reusable, parameterized tool. Experiment-
+specific values — checkpoints, rung lists, gate baselines, run names — enter
+through environment variables, and every such variable is declared at the top
+of the script. A committed script never hard-codes an experiment value.
+
+The declarations are plain shell, so they are both the documentation and the
+code that applies them:
+
+```bash
+: "${CKPTS_LIST:?space-separated run names}"    # required
+: "${BACKEND:=auto}"                            # optional
+```
+
+Read the declaration block to see what a script takes. A missing required
+value stops the script before it does any work.
+
+`training/jobs/README.md` covers the conventions in full.
 
 The as-run instance of a completed experiment (with its baked baselines and
-exact submit values) is archived in the resulting keeper's Hugging Face
+exact parameter values) is archived in the resulting keeper's Hugging Face
 model repo under `hpc/`, next to the checkpoint it produced:
 
 - [wojtek-stiff-locomotion](https://huggingface.co/<HF_ORGANIZATION>/wojtek-stiff-locomotion) — kp40 keeper: probes + two-phase scripts
@@ -22,38 +36,20 @@ model repo under `hpc/`, next to the checkpoint it produced:
 - [wojtek-springy-locomotion](https://huggingface.co/<HF_ORGANIZATION>/wojtek-springy-locomotion) / [-v2](https://huggingface.co/<HF_ORGANIZATION>/wojtek-springy-locomotion-v2) — springy two-phase script
 
 When an experiment finishes and its keeper is published, upload the as-run
-scripts (plus the `_common.sh` they sourced) to the keeper's HF repo with
-`hf upload <repo> <dir> hpc`, then delete any one-shot script from Git and
-fold reusable logic into the parameterized tools below.
+scripts to the keeper's HF repo with `hf upload <repo> <dir> hpc`, then delete
+any one-shot script from Git and fold reusable logic into the parameterized
+payloads below.
 
-## The scripts
+## The payloads
 
-All jobs are submitted from the repo root on `ui.cluster.example`; `mkdir -p logs`
-first (SLURM writes `logs/%x-%j.{out,err}`). `_common.sh` provides the
-shared venv/cache/GPU-assert plumbing and the quota-fallback logic for the
-JAX compile cache; every script sources it via `WORKDIR`.
+| Script | Purpose |
+|---|---|
+| `train.sh` | One training run of any `+experiment=` preset, with optional terrain build and wandb setup. |
+| `stiff_ladder.sh` | Gated PD-stiffness ladder: fine-tunes successively stiffer rungs from a start checkpoint and stops on gate rejection or diminishing returns. |
+| `stiff_grid.sh` | Eval-only sim2real robustness grid over existing runs, sweeping Kt miscalibration, actuator lag and torque envelope, then one aggregated report. |
+| `terrain_scan.sh` | Eval-only terrain measurement suite: builds the fixed measurement arena and scores checkpoints on it. |
+| `terrain_sizing.sh` | Bounded terrain training slices at several env counts, reporting peak GPU memory and steps/s per size. |
 
-Personal values live in one repo-root `.env` (gitignored; template in
-`.env.example`): `cluster_USER`/`HPC_NS`/`HPC_REPO` for the `make hpc-*`
-wrappers and `STORE_DIR` for the jobs. Agent sessions are
-permission-denied from reading `.env` — never `cat`/`grep` it. For ad-hoc
-remote commands use `./cluster.sh <cmd>` from the repo root; it loads `.env`
-itself and execs ssh. `make hpc-push` rsyncs `.env` to
-the cluster checkout, where `_common.sh` loads it for any variable not
-already exported — an explicit `sbatch --export` or shell export wins.
-`WORKDIR` needs no configuration: it defaults to the sbatch submit
-directory (jobs are submitted from the repo root). No personal path is
-ever committed — the account is shared and everything lives in per-person
-namespaces.
-
-| Script | Partition | Purpose |
-|---|---|---|
-| `train.slurm` | `PARTITION | Single training run of any `+experiment=` preset. |
-| `stiff_ladder.slurm` | `PARTITION | Gated PD-stiffness ladder: fine-tunes successively stiffer rungs from a keeper checkpoint, stops on gate rejection or diminishing returns. Requires `START_CHECKPOINT`, `RUNGS_LIST`, `BASELINE_MEAN_TRACK_ERR`, `BASELINE_VIBRATION_JSON`. |
-| `stiff_grid.slurm` | `PARTITION (1 GPU, idle) | Eval-only sim2real robustness grid (`--alpha`/`--lag-tau`/`--torque-envelope`) over existing runs; aggregates with `wojtek_rl.grid_report`. Requires `CKPTS_LIST`. CPU-mode eval, but the shared venv's interpreter exists only on GPU nodes. |
-
-cluster specifics (partitions, quotas, debugging) live in the opt-in
-`cluster-hpc` skill; see `skills/README.md`. Per the root `CLAUDE.md`, do not
-submit HPC jobs without explicit user authorization — resolve
-locally first, and keep wandb enabled on every real run (offline mode needs
-no key; sync from the login node).
+Per the root `CLAUDE.md`, do not start a remote training job without explicit
+user authorization — resolve locally first, and keep wandb enabled on every
+real run (offline mode needs no key and can be synced later).

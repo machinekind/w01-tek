@@ -1,6 +1,6 @@
 """Encoder-zero offset domain randomization (Workstream C2).
 
-See docs/plans/2026-07-10-mjwarp-migration.md, Workstream C2, and the HARD
+See the HARD
 INVARIANT there: epsilon must only shift the OBSERVED joint_pos (added) and
 the ctrl WRITTEN to physics (subtracted) -- never joint ref/qpos0/body
 frames, which would silently re-anchor the four-bar closure ~8.5 cm open.

@@ -67,6 +67,6 @@ a client now.
 
 - **Cable in:** `ip -4 addr show eth0` → `10.42.0.2`; `hostapd` inactive.
 - **Cable out:** within a few seconds `hostapd` active, `wlan0` has `10.42.0.2`;
-  connect the PC to `wojtek-link` (psk `REDACTED`) → PC gets a `.10–.50`
+  connect the PC to `wojtek-link` (psk: the `WOJTEK_AP_PSK` value from `.env`) → PC gets a `.10–.50`
   lease; `ros2 topic list` sees the robot.
 - `journalctl -t wojtek-net -f` shows each switch decision.

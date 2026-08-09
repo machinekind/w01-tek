@@ -1,7 +1,6 @@
 # @package _global_
 # terrain_blind_v4_4d -- the package TEMPLATE: posture hinge + flat-located
-# spin dose (docs/plans/terrain-training/2026-08-05-v44-plan.md, section
-# 4.1). NOT a night arm: submitted only as the conditional 08-06 daytime
+# spin dose. NOT a night arm: submitted only as the conditional 08-06 daytime
 # package run, after scales.flat_pitch below is set from the morning A/B
 # verdict (the -10.0 is a placeholder for that edit) and only if C's spin
 # verdict is PASS or PARTIAL. Diffs vs terrain_blind_v4_2, nothing else:

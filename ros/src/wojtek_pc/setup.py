@@ -21,7 +21,7 @@ setup(
     maintainer="Jakub Chmielewski",
     maintainer_email="kchmielewski707@gmail.com",
     description="PC-side tooling for wojtek: MuJoCo sim, RViz/PlotJuggler, teleop, consoles.",
-    license="MIT",
+    license="Apache-2.0",
     entry_points={
         "console_scripts": [
             "mujoco_sim_node = wojtek_pc.mujoco_sim_node:main",

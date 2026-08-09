@@ -105,7 +105,7 @@ def _torque_strip(times, torques, names, torque_cap, width, height=240):
 
     One color per leg (three joints share a hue), dashed lines at the
     +-torque_cap clamp — the deploy-critical limit should be visible in
-    every video (M's format, Discord 2026-07-10).
+    every video (the format agreed on Discord, 2026-07-10).
     """
     import matplotlib
     matplotlib.use("Agg")

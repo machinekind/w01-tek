@@ -1,7 +1,6 @@
 # @package _global_
 # terrain_blind_v4_4c -- v4.2 recipe + flat-located spin dose, no posture
-# term (docs/plans/terrain-training/2026-08-05-v44-plan.md, arm C: isolates
-# the spin dose and its terrain price cleanly).
+# term (v4.4 arm C: isolates the spin dose and its terrain price cleanly).
 # Diffs vs terrain_blind_v4_2, nothing else:
 #   obs.privileged: phase removed (settled by v4.3: curriculum 6.39 vs 6.28)
 #   command.pure_wz_prob 0.25 -> 0.40, pure_wz_sticky true (flat rows only)

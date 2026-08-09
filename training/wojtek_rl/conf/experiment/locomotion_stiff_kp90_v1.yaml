@@ -1,7 +1,7 @@
 # @package _global_
 # stiff_kp90_v1 — keeper v2 (maximum stiffness) of the stiffness ladder +
 # consolidation experiment, FROZEN from the trained run
-# wojtek_stiff_kp90c_20260719_105503 (job NNNNNNN, seed 1) so it stays
+# wojtek_stiff_kp90c_20260719_105503 (seed 1) so it stays
 # reproducible. What it is: the kp40/kd1.6 keeper (locomotion_stiff_v1,
 # wojtek_stiff_b_20260717_235321) walked up the stiffness ladder to kp80
 # (kp50 -> 60 -> 70 -> 80, +400M steps/rung), extended one rung further to
@@ -42,9 +42,9 @@
 # the matched operating point before deployment.
 # ***
 #
-# Trained on the cluster CLUSTER cluster (training/hpc/stiff_ladder.slurm; the
-# as-run ladder + consolidation scripts are archived under hpc/ in the HF
-# repo below), 4xH100, ++ppo.num_envs=32768 ++ppo.batch_size=1024.
+# Trained with training/jobs/stiff_ladder.sh (the as-run ladder +
+# consolidation scripts are archived under hpc/ in the HF repo below),
+# 4xH100, ++ppo.num_envs=32768 ++ppo.batch_size=1024.
 # Artifacts: https://huggingface.co/<HF_ORGANIZATION>/wojtek-stiff-kp90-locomotion
 # Sibling: https://huggingface.co/<HF_ORGANIZATION>/wojtek-stiff-kp80-locomotion
 # Usage: ./run.sh train +experiment=locomotion_stiff_kp90_v1

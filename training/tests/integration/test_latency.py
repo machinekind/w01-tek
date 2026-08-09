@@ -1,6 +1,6 @@
 """Randomized per-substep control latency (Workstream B).
 
-See docs/plans/2026-07-10-mjwarp-migration.md, Workstream B. The golden
+The golden
 regression is the key gate: it proves the disabled default (action_delay=1,
 latency.enable=False) still reproduces pre-refactor trajectories bitwise.
 """

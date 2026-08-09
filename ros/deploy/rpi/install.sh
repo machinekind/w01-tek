@@ -216,7 +216,12 @@ provision_tuning() {
 # ---------------------------------------------------------------- phase 4
 provision_network() {
     say "Phase 4: network (AP failover: eth cable <-> wlan0 AP)"
-    run "sudo install -m600 '${HERE}/hostapd.conf'        /etc/hostapd/hostapd.conf"
+    if [ -z "${WOJTEK_AP_PSK:-}" ]; then
+        echo "!! WOJTEK_AP_PSK not set -- the wlan0 AP needs a passphrase." >&2
+        echo "   Put it in .env (see .env.example) or export it, then re-run." >&2
+        exit 1
+    fi
+    run "sed 's|__WOJTEK_AP_PSK__|${WOJTEK_AP_PSK}|' '${HERE}/hostapd.conf' | sudo install -m600 /dev/stdin /etc/hostapd/hostapd.conf"
     run "sudo install -m644 '${HERE}/dnsmasq-wojtek.conf' /etc/dnsmasq.d/wojtek.conf"
     run "sudo install -m755 '${HERE}/wojtek-net-switch.sh' /usr/local/sbin/wojtek-net-switch.sh"
     run "sudo install -m644 '${HERE}/wojtek-net.service'  /etc/systemd/system/wojtek-net.service"

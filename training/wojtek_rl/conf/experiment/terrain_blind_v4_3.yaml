@@ -1,7 +1,6 @@
 # @package _global_
 # terrain_blind_v4_3 -- terrain_blind_v4_2's recipe with three fixes, all
-# aimed at flat-ground manners (docs/plans/terrain-training/
-# 2026-08-04-v43-plan.md):
+# aimed at flat-ground manners:
 #   reward.terrain_gate.orientation_tol_flat_deg=5 -- v4.2 walks with a
 #     constant ~5 deg nose-down lean everywhere (flat battery: pitch-down
 #     p95 4.7-7.7 deg vs v4.1's 0.2-0.3): the 20 deg orientation cone is
@@ -30,7 +29,7 @@
 #   ./training/run.sh build-terrain --arena train --flat-row \
 #     --pad-radius 0.3 --stair-tread 0.25 0.45 \
 #     --type-caps pyramid_stairs=0.7,inverted_pyramid_stairs=0.7,discrete_obstacles=0.8,random_grid=0.45
-#   (train.slurm: FLAT_ROW=1 and TERRAIN_FLAGS with the same geometry; the
+#   (train.sh: FLAT_ROW=1 and TERRAIN_FLAGS with the same geometry; the
 #   env refuses an arena that disagrees with the preset.)
 #   XLA_PYTHON_CLIENT_PREALLOC=false ./training/run.sh train \
 #     +experiment=terrain_blind_v4_3

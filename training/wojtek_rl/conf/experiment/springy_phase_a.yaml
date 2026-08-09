@@ -8,7 +8,7 @@
 # measured -0.06 freeze cliff, so there is no cliff here to curriculum away
 # from.
 # The difficulty relief exists for the same reason as the penalty
-# curriculum: jobs NNNNNNN/NNNNNNN collapsed into standing with weak-motor
+# curriculum: earlier runs collapsed into standing with weak-motor
 # DR (0.5x), latency, and encoder offsets active from step 0 — risks that
 # make stepping a bad bet before stepping competence exists. spin_posture,
 # the walking reference, trained with none of them. Phase B restores the
@@ -35,7 +35,7 @@ task:
 dr:
   motor_strength: { enable: true, range: [0.9, 1.1] }
 
-# Sized from evidence, not symmetry: at 400M (job NNNNNNN) the policy
+# Sized from evidence, not symmetry: at 400M the policy
 # walked and turned but was still mid-climb (reward 45 and rising) with
 # the ramp's fast end unlearned. Iteration math in springy_phase_b.
 ppo:

@@ -7,6 +7,9 @@ base height during flight while penalizing tilt, lateral drift and the
 impact spikes that would hurt the printed linkage on landing.
 """
 
+# Portions ported from MuJoCo Playground,
+# Copyright 2023 DeepMind Technologies Limited, Apache-2.0.
+
 import jax
 import jax.numpy as jp
 from ml_collections import config_dict
@@ -25,8 +28,7 @@ def default_config() -> config_dict.ConfigDict:
         sim_dt=0.004,
         # Physics backend. auto picks warp on a CUDA host and jax elsewhere.
         # naconmax_per_env scales with the training batch; njmax is per
-        # world. See docs/plans/mjwarp-phase0-report.md section 4.
-        sim=config_dict.create(
+                sim=config_dict.create(
             backend="auto", naconmax_per_env=32, njmax=320, num_envs=1
         ),
         episode_length=250,  # 5 s: stand, jump, land, recover

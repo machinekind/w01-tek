@@ -20,18 +20,23 @@ from pathlib import Path
 
 import numpy as np
 
-KNOWN_KEEPERS = (
-    "<HF_ORGANIZATION>/wojtek-springy-locomotion",
-    "<HF_ORGANIZATION>/wojtek-springy-locomotion-v2",
-    "<HF_ORGANIZATION>/wojtek-stiff-locomotion",
-    "<HF_ORGANIZATION>/wojtek-stiff-kp80-locomotion",
-    "<HF_ORGANIZATION>/wojtek-stiff-kp90-locomotion",
+from wojtek_rl.paths import HF_ORGANIZATION
+
+_KEEPER_NAMES = (
+    "wojtek-springy-locomotion",
+    "wojtek-springy-locomotion-v2",
+    "wojtek-stiff-locomotion",
+    "wojtek-stiff-kp80-locomotion",
+    "wojtek-stiff-kp90-locomotion",
     # stiff_phase_c (live height + rotation/arc). Its published meta is
     # hand-curated on top of the regenerated contract (operator wz cap,
     # 0.125 m fill height -- see the meta's _note); a plain re-migrate
     # --apply would overwrite that curation.
-    "<HF_ORGANIZATION>/wojtek-stiff-locomotion-v2",
+    "wojtek-stiff-locomotion-v2",
 )
+# Empty without HF_ORGANIZATION (see .env.example); --repo still works.
+KNOWN_KEEPERS = tuple(f"{HF_ORGANIZATION}/{n}" for n in _KEEPER_NAMES
+                      ) if HF_ORGANIZATION else ()
 
 
 def migrate(repo_id: str, apply: bool) -> Path:

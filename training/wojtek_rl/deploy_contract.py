@@ -112,6 +112,9 @@ COMMAND_TRAINING_KEYS = {
     # v4.2 tile-aware draw probabilities: reweights which commands terrain
     # rows practice, all inside the trained box.
     "terrain_bias",
+    # v4.4 sticky flat spins: restores a drawn spin after the overwrite
+    # chain on flat rows -- pure sampling emphasis, box untouched.
+    "pure_wz_sticky",
 }
 
 

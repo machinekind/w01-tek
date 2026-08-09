@@ -78,6 +78,7 @@ class _NullCtx:
 def run_courses(
     run_dir: Path,
     seeds: int = 8,
+    seed_base: int = 0,
     only: list[str] | None = None,
     video: bool = False,
     paths_plot: bool = False,
@@ -114,6 +115,7 @@ def run_courses(
         "run": run["run_name"],
         "checkpoint": ckpt.name,
         "seeds": seeds,
+        "seed_base": seed_base,
         "follower": {
             "lookahead_m": LOOKAHEAD_M,
             "yaw_max": YAW_MAX,
@@ -176,17 +178,18 @@ def run_courses(
                 video = False
         with ctx as maybe_view:
             for s in range(seeds):
-                # Video from seed 0 only: one clip per scenario is the point,
-                # not eight of the same course.
+                # Video from the first iteration only: one clip per scenario
+                # is the point, not eight of the same course.
                 view = maybe_view if (video and s == 0) else None
+                seed = seed_base + s
                 if isinstance(course, SpinCourse):
                     rec, info = spin_rollout(
-                        env, reset, step, inf, course, seed=s, view=view,
+                        env, reset, step, inf, course, seed=seed, view=view,
                     )
                     seed_rows.append(spin_seed_result(rec, info, env.dt, course.wz))
                 else:
                     rec, info = course_rollout(
-                        env, reset, step, inf, course, foot_radius, seed=s,
+                        env, reset, step, inf, course, foot_radius, seed=seed,
                         view=view,
                     )
                     seed_rows.append(seed_result(rec, info, env.dt))
@@ -263,6 +266,12 @@ def main():
         help="rollouts per scenario (default 8); median and worst reported",
     )
     ap.add_argument(
+        "--seed-base", type=int, default=0,
+        help="offset added to every rollout seed (default 0); courses run "
+        "CPU-deterministic, so a second base is the only way to get a "
+        "replicate that isn't bit-identical to the first",
+    )
+    ap.add_argument(
         "--only", nargs="+", default=None,
         help="run just these scenarios (names from course_catalogue)",
     )
@@ -319,6 +328,7 @@ def main():
     results = run_courses(
         run_dir,
         seeds=args.seeds,
+        seed_base=args.seed_base,
         only=args.only,
         video=args.video,
         paths_plot=args.paths,

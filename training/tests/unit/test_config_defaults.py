@@ -56,4 +56,27 @@ def test_terrain_gate_defaults():
         "rough_ref": 0.05,
         "landing_soften": 0.5,
         "orientation_tol_flat_deg": 0.0,
+        "flat_pitch_tol_deg": 2.0,
+        "flat_pitch_rough_cut": 0.25,
+        "flat_pitch_row_only": False,
     }
+
+
+# The v4.4 knobs are additive and must be inert by default: scale 0.0 makes
+# flat_pitch a `+ raw*0.0` no-op, sticky False keeps the command stream
+# bit-identical, and a 0.0 flat pin leaves the pinned mask unchanged.
+def test_v44_knobs_default_off():
+    cfg = wojtek_env.default_config()
+    assert cfg.reward.scales.flat_pitch == 0.0
+    assert cfg.command.pure_wz_sticky is False
+    assert cfg.terrain.pinned_flat_frac == 0.0
+
+
+def test_default_config_is_classified_for_export():
+    # Every default_config key must be classified in deploy_contract, or
+    # export_policy dies at build_contract on every run trained with the
+    # new default -- exactly how the v4.4 night lost its first export wave
+    # (pure_wz_sticky, 2026-08-06).
+    from wojtek_rl import deploy_contract
+
+    deploy_contract.check_config_covered(wojtek_env.default_config().to_dict())

@@ -36,6 +36,20 @@ Nothing is sampled. Eight headings, four start offsets, two noise draws of those
 ``--eval-seed`` return the same numbers. A different ``--eval-seed`` redraws the
 rollout's noise on the same course, which is how the score's test-retest spread
 gets measured.
+
+``--dump-step-stats PATH`` runs the same course but skips the gate: it dumps
+every replayed step's ``rough`` (the terrain_gate's own roughness measure, see
+env.py:1598-1613) and nose-down ``pitch_down`` (degrees) to PATH as an
+``.npz``, generic over ``--run``. This is M1
+(docs/plans/terrain-training/2026-08-05-v44-plan.md section 3): a pre-flight
+estimate of a keeper's own climb-state distribution, not a bound on what a
+policy trained under a rough-gated reward would occupy -- a trained policy
+can shift which climb states it spends time in. ``--aggregate PATH`` reads
+that dump back and prints the M1 numbers: per direction (forward/backward,
+by commanded leg sign), how often a state past ``--pitch-gate-deg`` still has
+``rough`` under each ``--cuts`` value (the leakage the pre-registered
+downgrade rule reads), and the counterfactual ``flat_pitch`` cost/step at
+each ``--ws`` x ``--cuts`` pair.
 """
 
 from __future__ import annotations
@@ -144,6 +158,96 @@ def fall_progress(fell, done, running):
     happens after them is not the measurement.
     """
     return fell | (running & done)
+
+
+# -- M1: dump-step-stats aggregation (plan section 3), pure ---------------------
+
+
+def flatten_step_history(rough, pitch_down_deg, direction, running, *, settle_steps):
+    """One (cell, speed) dump's ``(budget, n)`` per-step histories into flat
+    1-D arrays of just the steps that count.
+
+    Two exclusions, both mirroring the gating rollout's own ``live`` mask
+    (see ``_make_runner``'s ``live = was_running & (i >= SETTLE_STEPS)``): a
+    run that has already fallen, finished or timed out stops contributing
+    (``running``), and the settle window at the start of every run is
+    dropped the same way -- the reset pose is a teleport onto the tile, not
+    a state the policy walked into.
+    """
+    step_index = np.arange(rough.shape[0])[:, None]
+    live = np.asarray(running, dtype=bool) & (step_index >= settle_steps)
+    return (
+        np.asarray(rough)[live],
+        np.asarray(pitch_down_deg)[live],
+        np.asarray(direction)[live],
+    )
+
+
+def flat_pitch_cost(pitch_down_deg, rough, *, w, cut, tol_deg=2.0):
+    """Per-step ``flat_pitch`` price, replicated from the reward expression
+    (plan section 1.2): ``w * gate(rough, cut) * max(sin(pitch) -
+    sin(tol), 0)``, with ``gate = clip(1 - rough / cut, 0, 1) ** 2``.
+
+    Pure numpy, so the plan's own pricing table (section 1.3) is a
+    reproducible check rather than an assertion on faith: at ``rough=0``
+    (gate=1), ``tol_deg=2``, a 12 deg transient prices at ~1.73/step (w=10)
+    and ~4.33/step (w=25).
+    """
+    pitch_sin = np.sin(np.radians(np.asarray(pitch_down_deg, dtype=float)))
+    tol_sin = np.sin(np.radians(tol_deg))
+    excess = np.maximum(pitch_sin - tol_sin, 0.0)
+    gate = np.clip(1.0 - np.asarray(rough, dtype=float) / cut, 0.0, 1.0) ** 2
+    return w * gate * excess
+
+
+def m1_report(
+    rough, pitch_down_deg, direction, *,
+    pitch_gate_deg: float = 5.0,
+    cuts=(0.25, 0.15),
+    ws=(10, 25),
+    tol_deg: float = 2.0,
+) -> dict:
+    """The M1 numbers (plan section 3) over an already-flattened step
+    population (see ``flatten_step_history``): per direction (forward is
+    ``direction > 0``, the commanded leg sign, not a terrain type),
+
+    - ``leakage[cut]``: P(rough < cut | pitch_down > pitch_gate_deg), the
+      fraction of steep steps that would still be charged nothing, or
+      little, by a gate closing at ``cut``. ``None`` where no step in that
+      direction ever exceeded ``pitch_gate_deg`` (nothing to condition on).
+    - ``cost_per_step["w{w}_cut{cut}"]``: the counterfactual mean
+      ``flat_pitch`` price per step over the whole replayed population at
+      that direction, had the term been active at scale ``w`` with a gate
+      cut at ``cut``.
+
+    Pure numpy: the dump (``dump_step_stats``) is the only step that touches
+    an env or a checkpoint.
+    """
+    rough = np.asarray(rough, dtype=float)
+    pitch_down_deg = np.asarray(pitch_down_deg, dtype=float)
+    direction = np.asarray(direction, dtype=float)
+
+    report = {}
+    for name, positive in (("forward", True), ("backward", False)):
+        mask = (direction > 0) if positive else (direction < 0)
+        r, p = rough[mask], pitch_down_deg[mask]
+        steep = p > pitch_gate_deg
+        report[name] = {
+            "n_steps": int(mask.sum()),
+            "n_steep": int(steep.sum()),
+            "leakage": {
+                str(cut): (float(np.mean(r[steep] < cut)) if steep.any() else None)
+                for cut in cuts
+            },
+            "cost_per_step": {
+                f"w{w}_cut{cut}": (
+                    float(flat_pitch_cost(p, r, w=w, cut=cut, tol_deg=tol_deg).mean())
+                    if r.size else 0.0
+                )
+                for w in ws for cut in cuts
+            },
+        }
+    return report
 
 
 @dataclass(frozen=True)
@@ -760,6 +864,168 @@ def make_batch_runner(env, inf, n_cells):
     return _make_runner(env, n_cells * runs, batch_reset_keys, act)
 
 
+# -- M1: dump-step-stats rollout (plan section 3) -------------------------------
+
+
+def _state_rough_pitch(env, data):
+    """One (unbatched) state's ``rough`` and nose-down ``pitch_down``
+    (degrees), read-only replicas of quantities env.py's reward computes
+    internally and does not expose.
+
+    ``rough`` is env.py:1598-1613's gate strip plus the four feet, clipped by
+    ``rough_ref`` -- same pieces, same order, same clip. ``pitch_down`` is the
+    plan's flat_pitch term (section 1.2), ``max(gravity[0], 0)``, reported in
+    degrees via ``arcsin`` instead of the raw sin used inside the reward (the
+    two round-trip exactly: ``sin(radians(pitch_down_deg)) ==
+    clip(gravity[0], 0, 1)``, which is what lets a downstream aggregation
+    price it again from the dumped degrees alone).
+    """
+    import jax.numpy as jp
+
+    from wojtek_rl import height_scan
+
+    tg = env._config.reward.terrain_gate
+    strip = height_scan.world_xy(
+        env._gate_strip, data.qpos[0:2], height_scan.yaw_from_quat(env._quat(data))
+    )
+    local = env._terrain.height(
+        jp.concatenate([data.geom_xpos[env._foot_geom_ids][:, :2], strip])
+    )
+    rough = jp.clip((jp.max(local) - jp.min(local)) / tg.rough_ref, 0.0, 1.0)
+    pitch_down_deg = jp.degrees(
+        jp.arcsin(jp.clip(env._gravity_body(data)[0], 0.0, 1.0))
+    )
+    return rough, pitch_down_deg
+
+
+def _make_dump_runner(env, n, reset_keys, act):
+    """``_make_runner``'s reset/step/course bookkeeping, with per-step
+    ``rough`` and ``pitch_down`` histories in place of the gating metrics.
+
+    Kept separate from ``_make_runner`` on purpose: ``--dump-step-stats`` is
+    a diagnostic path, and a bug in it must not have any way to perturb the
+    rollout ``scan`` gates a keeper on. The course mechanics (reset, command,
+    crossing/fall bookkeeping) are copied verbatim from ``_make_runner`` so
+    the two replay the identical course; only what gets recorded differs.
+    """
+    import functools
+
+    import jax
+    import jax.numpy as jp
+
+    reset_one = functools.partial(scan_reset, env)
+
+    def nacon_of(data):
+        value = getattr(data._impl, "nacon", None)
+        if value is None:
+            return jp.zeros((), jp.int32)
+        return jp.max(jp.asarray(value)).astype(jp.int32)
+
+    def nefc_of(data):
+        value = getattr(data._impl, "nefc", None)
+        if value is None or getattr(value, "ndim", 0) == 0:
+            return jp.zeros((), jp.int32)
+        return jp.max(jp.asarray(value)).astype(jp.int32)
+
+    @functools.partial(jax.jit, static_argnames=("budget",))
+    def run(rng, centre, spawn_xy, pad_h, yaw, speed, height, deadline, budget):
+        zeros = jp.zeros(n)
+
+        def command_at(crossings):
+            return jp.stack(
+                [leg_sign(crossings) * speed, zeros, zeros, jp.full(n, height)],
+                axis=-1,
+            )
+
+        state = jax.vmap(reset_one)(
+            reset_keys(rng), spawn_xy, pad_h, yaw,
+            command_at(jp.zeros(n, jp.int32)),
+        )
+
+        def body(carry):
+            (i, state, rng, crossings, fell, rough_hist, pitch_hist,
+             dir_hist, running_hist, nacon, nefc) = carry
+            sign = leg_sign(crossings)
+            command = command_at(crossings)
+            info = dict(state.info)
+            info["command"] = command
+            state = state.replace(info=info)
+            action, rng = act(state.obs, rng)
+            was_running = still_running(i, crossings, fell, deadline)
+            state = jax.vmap(env.step)(state, action)
+            data = state.data
+
+            distance = tile_distance(data.qpos[:, 0:2], centre, xp=jp)
+            crossings = crossing_progress(crossings, distance, was_running, xp=jp)
+            fell = fall_progress(fell, state.done > 0.5, was_running)
+
+            rough_now, pitch_now = jax.vmap(
+                lambda d: _state_rough_pitch(env, d)
+            )(data)
+            rough_hist = rough_hist.at[i].set(rough_now)
+            pitch_hist = pitch_hist.at[i].set(pitch_now)
+            dir_hist = dir_hist.at[i].set(sign)
+            running_hist = running_hist.at[i].set(was_running)
+            return (
+                i + 1, state, rng, crossings, fell,
+                rough_hist, pitch_hist, dir_hist, running_hist,
+                jp.maximum(nacon, nacon_of(data)),
+                jp.maximum(nefc, nefc_of(data)),
+            )
+
+        def cond(carry):
+            i, _, _, crossings, fell, *_ = carry
+            return (i < budget) & jp.any(still_running(i, crossings, fell, deadline))
+
+        init = (
+            jp.zeros((), jp.int32), state, rng,
+            jp.zeros(n, jp.int32), jp.zeros(n, bool),
+            jp.zeros((budget, n)), jp.zeros((budget, n)),
+            jp.zeros((budget, n)), jp.zeros((budget, n), bool),
+            jp.zeros((), jp.int32), jp.zeros((), jp.int32),
+        )
+        (_, state, _, crossings, fell, rough_hist, pitch_hist, dir_hist,
+         running_hist, nacon, nefc) = jax.lax.while_loop(cond, body, init)
+        return {
+            "rough": rough_hist,
+            "pitch_down_deg": pitch_hist,
+            "direction": dir_hist,
+            "running": running_hist,
+            "nacon_max": nacon,
+            "nefc_max": nefc,
+        }
+
+    return run
+
+
+def make_cell_dump_runner(env, inf):
+    """``--dump-step-stats``'s reference path: one dispatch per cell per
+    speed, mirroring ``make_cell_runner``."""
+    import jax
+
+    n = terrain_suite.RUNS_PER_CELL_SPEED
+
+    def reset_keys(rng):
+        return jax.random.split(rng, n)
+
+    def act(obs, rng):
+        rng, sub = jax.random.split(rng)
+        action, _ = inf(obs, sub)
+        return action, rng
+
+    return _make_dump_runner(env, n, reset_keys, act)
+
+
+def make_batch_dump_runner(env, inf, n_cells):
+    """``--dump-step-stats``'s default path: every cell in one dispatch,
+    mirroring ``make_batch_runner``."""
+    import functools
+
+    runs = terrain_suite.RUNS_PER_CELL_SPEED
+    act = functools.partial(batch_policy, inf, n_cells)
+    return _make_dump_runner(env, n_cells * runs, batch_reset_keys, act)
+
+
 def reduce_runs(out) -> CellResult:
     """One cell's 64 run outcomes into its recorded numbers.
 
@@ -868,6 +1134,68 @@ def _rollout_batched(runner, env, cells, speeds, deadlines, budgets, eval_seed):
     return entries, env_steps
 
 
+def _build_scan_env(
+    run_dir: Path,
+    kind: str,
+    group: list,
+    *,
+    backend: str,
+    naconmax_per_env: int,
+    njmax: int | None,
+    per_cell: bool,
+    scan_mode: str = "clean",
+):
+    """Build ``(run, env, ckpt, inf)`` for one arena kind's cell group: the
+    checkpoint, the deterministic-course env overrides, and the contact
+    budget the measurement course always uses.
+
+    Shared by ``scan`` and ``dump_step_stats``: the two have to build the
+    identical env, or M1's numbers would describe a different rollout than
+    the one the gate scores.
+    """
+    from wojtek_rl.battery import load_checkpoint_policy
+
+    if scan_mode not in ("clean", "dark"):
+        raise ValueError(f"scan mode must be clean or dark, got {scan_mode!r}")
+    mode_overrides = {"height_scan": {"dark": True}} if scan_mode == "dark" else {}
+
+    # One dispatch carries the group's cells unless --per-cell asks for the
+    # reference rollout. Warp sizes its contact pool from this number at
+    # make_data, so it has to be the batch the rollout runs.
+    batch_envs = terrain_suite.RUNS_PER_CELL_SPEED * (1 if per_cell else len(group))
+    sim_overrides = {
+        "backend": backend,
+        "num_envs": batch_envs,
+        # Warp allocates its contact pool up front and drops overflow
+        # silently. The recorded nacon_max is what says whether the budget
+        # was enough.
+        "naconmax_per_env": naconmax_per_env,
+    }
+    if njmax is not None:
+        sim_overrides["njmax"] = njmax
+    run, env, ckpt, inf = load_checkpoint_policy(
+        run_dir,
+        flat=False,
+        env_overrides={
+            **mode_overrides,
+            "terrain": {
+                "enable": True,
+                "arena": kind,
+                # The spawn is written into qpos, so jitter and random yaw
+                # would only make the course non-reproducible.
+                "pad_jitter": 0.0,
+                "spawn_yaw": False,
+            },
+            "sim": sim_overrides,
+            # The course drives the command itself; a mid-episode resample
+            # would walk the robot off the tile.
+            "command": {"resample_steps": 10**9},
+        },
+    )
+    check_arena(json.loads(env._terrain.files["spec"].read_text()), kind)
+    return run, env, ckpt, inf
+
+
 def scan(
     run_dir: Path,
     *,
@@ -890,8 +1218,6 @@ def scan(
     scan-observing policy has left when the camera stops delivering. It scores
     the same course, so the two numbers are directly comparable.
     """
-    from wojtek_rl.battery import load_checkpoint_policy
-
     cells = [
         c for c in terrain_suite.ALL_CELLS
         if cell_names is None or c.name in cell_names
@@ -914,46 +1240,13 @@ def scan(
     ]
     if scan_mode not in ("clean", "dark"):
         raise ValueError(f"scan mode must be clean or dark, got {scan_mode!r}")
-    mode_overrides = {"height_scan": {"dark": True}} if scan_mode == "dark" else {}
 
     def build_env(kind: str, group: list):
-        # One dispatch carries the group's cells unless --per-cell asks for
-        # the reference rollout. Warp sizes its contact pool from this
-        # number at make_data, so it has to be the batch the rollout runs.
-        batch_envs = terrain_suite.RUNS_PER_CELL_SPEED * (
-            1 if per_cell else len(group)
+        return _build_scan_env(
+            run_dir, kind, group,
+            backend=backend, naconmax_per_env=naconmax_per_env, njmax=njmax,
+            per_cell=per_cell, scan_mode=scan_mode,
         )
-        sim_overrides = {
-            "backend": backend,
-            "num_envs": batch_envs,
-            # Warp allocates its contact pool up front and drops overflow
-            # silently. The recorded nacon_max is what says whether the
-            # budget was enough.
-            "naconmax_per_env": naconmax_per_env,
-        }
-        if njmax is not None:
-            sim_overrides["njmax"] = njmax
-        run, env, ckpt, inf = load_checkpoint_policy(
-            run_dir,
-            flat=False,
-            env_overrides={
-                **mode_overrides,
-                "terrain": {
-                    "enable": True,
-                    "arena": kind,
-                    # The spawn is written into qpos, so jitter and random
-                    # yaw would only make the course non-reproducible.
-                    "pad_jitter": 0.0,
-                    "spawn_yaw": False,
-                },
-                "sim": sim_overrides,
-                # The course drives the command itself; a mid-episode
-                # resample would walk the robot off the tile.
-                "command": {"resample_steps": 10**9},
-            },
-        )
-        check_arena(json.loads(env._terrain.files["spec"].read_text()), kind)
-        return run, env, ckpt, inf
 
     groups = {k: [c for c in cells if c.arena == k] for k in arena_kinds}
     run, env, ckpt, inf = build_env(arena_kinds[0], groups[arena_kinds[0]])
@@ -1078,6 +1371,206 @@ def scan(
     return result
 
 
+def dump_step_stats(
+    run_dir: Path,
+    out_path: Path,
+    *,
+    backend: str = "auto",
+    naconmax_per_env: int = DEFAULT_NACONMAX_PER_ENV,
+    njmax: int | None = None,
+    cell_names: list[str] | None = None,
+    speeds=terrain_suite.SPEEDS,
+    eval_seed: int = 0,
+    per_cell: bool = False,
+) -> dict:
+    """M1 (plan section 3): replay `run_dir`'s checkpoint on the requested
+    cells and dump per-step `rough` and nose-down `pitch_down` (degrees) to
+    `out_path` as an `.npz`, instead of the pass/fail numbers `scan` computes
+    from the same course.
+
+    Generic over `run_dir`: this is a pre-flight estimator of the KEEPER's
+    own state distribution when replaying the keeper, not something tied to
+    one checkpoint. `rough` and `pitch_down` are recomputed here, read-only,
+    from the same quantities env.py's reward reads at env.py:1598-1613 and
+    the flat_pitch design (plan section 1.2) -- the reward function itself
+    is internal to the env's step and not an importable hook. A policy
+    trained under the flat_pitch penalty can occupy climb states
+    differently than the keeper replayed here, so this dump is an input to
+    the pre-registered downgrade rule (section 3), never a bound on what a
+    trained arm actually pays.
+
+    Dumped arrays, one row per (cell, speed, run, live step): `cell` (name),
+    `speed`, `direction` (+1 forward / -1 backward, the commanded leg sign --
+    see `leg_sign`), `rough`, `pitch_down_deg`. A `meta` JSON blob carries the
+    run, checkpoint, eval seed and settle-step cutoff. Rows outside the
+    course (a run that has fallen, finished, or timed out) and inside the
+    settle window are dropped before writing, per `flatten_step_history`.
+    """
+    import jax
+    import jax.numpy as jp
+
+    cells = [
+        c for c in terrain_suite.ALL_CELLS
+        if cell_names is None or c.name in cell_names
+    ]
+    if cell_names:
+        unknown = set(cell_names) - {c.name for c in terrain_suite.ALL_CELLS}
+        if unknown:
+            raise KeyError(f"unknown cell(s) {sorted(unknown)}")
+    if not cells:
+        raise ValueError("no cells selected")
+
+    arena_kinds = [
+        kind for kind in ("eval", "eval_deep")
+        if any(c.arena == kind for c in cells)
+    ]
+    groups = {k: [c for c in cells if c.arena == k] for k in arena_kinds}
+    runs_per_cell = terrain_suite.RUNS_PER_CELL_SPEED
+
+    run, env, ckpt, inf = _build_scan_env(
+        run_dir, arena_kinds[0], groups[arena_kinds[0]],
+        backend=backend, naconmax_per_env=naconmax_per_env, njmax=njmax,
+        per_cell=per_cell,
+    )
+    if not env._config.reward.terrain_gate.enable:
+        raise ValueError(
+            "--dump-step-stats needs reward.terrain_gate.enable=true: "
+            "rough is that gate's own signal, and there is nothing to "
+            "recompute without it"
+        )
+
+    dt = float(env.dt)
+    budgets = {s: terrain_suite.episode_budget(s, dt) for s in speeds}
+    deadlines = {
+        s: np.asarray(terrain_suite.run_deadlines(s, dt), dtype=np.int32)
+        for s in speeds
+    }
+
+    cell_col, speed_col, rough_col, pitch_col, dir_col = [], [], [], [], []
+    nacon_peak, nefc_peak = 0, 0
+
+    def collect(cell_name, speed, out):
+        nonlocal nacon_peak, nefc_peak
+        rough, pitch, direction = flatten_step_history(
+            out["rough"], out["pitch_down_deg"], out["direction"], out["running"],
+            settle_steps=terrain_suite.SETTLE_STEPS,
+        )
+        n = rough.shape[0]
+        cell_col.append(np.full(n, cell_name))
+        speed_col.append(np.full(n, speed, dtype=np.float32))
+        rough_col.append(rough)
+        pitch_col.append(pitch)
+        dir_col.append(direction)
+        nacon_peak = max(nacon_peak, int(out["nacon_max"]))
+        nefc_peak = max(nefc_peak, int(out["nefc_max"]))
+        print(
+            f"{cell_name:34s} vx {speed:<4} dumped {n} live env-steps "
+            f"(of {int(np.asarray(out['running']).sum())} run-steps)"
+        )
+
+    for i, kind in enumerate(arena_kinds):
+        group = groups[kind]
+        if i > 0:
+            # A second course means a second scene: the checkpoint is the
+            # same, the arena and the batch size are not.
+            _, env, _, inf = _build_scan_env(
+                run_dir, kind, group,
+                backend=backend, naconmax_per_env=naconmax_per_env, njmax=njmax,
+                per_cell=per_cell,
+            )
+        if per_cell:
+            for cell in group:
+                centre, spawn, yaw, pad_h = spawn_table(env, cell)
+                runner = make_cell_dump_runner(env, inf)
+                for speed in speeds:
+                    out = runner(
+                        cell_key(cell, eval_seed), centre, spawn, pad_h, yaw,
+                        float(speed), COMMAND_HEIGHT, deadlines[speed],
+                        budget=budgets[speed],
+                    )
+                    collect(cell.name, speed, jax.tree.map(np.asarray, out))
+        else:
+            tables = [spawn_table(env, c) for c in group]
+            centre, spawn, yaw, pad_h = [np.concatenate(x) for x in zip(*tables)]
+            keys = jp.stack([cell_key(c, eval_seed) for c in group])
+            runner = make_batch_dump_runner(env, inf, len(group))
+            for speed in speeds:
+                out = runner(
+                    keys, centre, spawn, pad_h, yaw, float(speed), COMMAND_HEIGHT,
+                    np.tile(deadlines[speed], len(group)), budget=budgets[speed],
+                )
+                out = {k: np.asarray(v) for k, v in out.items()}
+                for index, cell in enumerate(group):
+                    part = slice(index * runs_per_cell, (index + 1) * runs_per_cell)
+                    sliced = {
+                        k: (v[:, part] if v.ndim == 2 else v) for k, v in out.items()
+                    }
+                    collect(cell.name, speed, sliced)
+
+    n_total = int(sum(a.shape[0] for a in rough_col))
+    capacity = naconmax_per_env * int(env._config.sim.num_envs)
+    contacts = {
+        "nacon_max": nacon_peak,
+        "capacity": capacity,
+        "overflow": bool(env._backend == "warp" and nacon_peak >= capacity),
+        "nefc_max": nefc_peak,
+        "njmax": int(env._config.sim.njmax),
+        "rows_overflow": bool(
+            env._backend == "warp" and nefc_peak >= int(env._config.sim.njmax)
+        ),
+    }
+    if contacts["overflow"]:
+        print(
+            f"WARNING: contact pool overflowed ({nacon_peak} >= {capacity}); "
+            "raise --naconmax-per-env and redump, this data is not valid"
+        )
+    if contacts["rows_overflow"]:
+        print(
+            f"WARNING: constraint rows overflowed ({nefc_peak} >= "
+            f"{contacts['njmax']}); raise --njmax and redump, this data is "
+            "not valid"
+        )
+
+    meta = {
+        "schema": 1,
+        "run": run["run_name"],
+        "checkpoint": ckpt.name,
+        "eval_seed": eval_seed,
+        "settle_steps": terrain_suite.SETTLE_STEPS,
+        "cells": sorted({c.name for c in cells}),
+        "speeds": [float(s) for s in speeds],
+        "n_steps": n_total,
+        "contacts": contacts,
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+    }
+    arrays = {
+        "cell": np.concatenate(cell_col),
+        "speed": np.concatenate(speed_col),
+        "rough": np.concatenate(rough_col),
+        "pitch_down_deg": np.concatenate(pitch_col),
+        "direction": np.concatenate(dir_col),
+        "meta": np.array(json.dumps(meta)),
+    }
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "wb") as fh:
+        np.savez(fh, **arrays)
+    return meta
+
+
+def load_step_dump(path: Path) -> dict:
+    """A `--dump-step-stats` `.npz` back into arrays plus its `meta` dict."""
+    data = np.load(Path(path), allow_pickle=False)
+    return {
+        "meta": json.loads(str(data["meta"])),
+        "cell": data["cell"],
+        "speed": data["speed"],
+        "rough": data["rough"],
+        "pitch_down_deg": data["pitch_down_deg"],
+        "direction": data["direction"],
+    }
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--run", default=None, help="required unless --list-cells")
@@ -1130,6 +1623,44 @@ def main() -> None:
              "scan-observing policy. The critic's grid is unaffected",
     )
     ap.add_argument("--list-cells", action="store_true", help="print the cells and exit")
+    ap.add_argument(
+        "--dump-step-stats", default=None, metavar="PATH",
+        help="M1 mode (plan section 3): replay --cells/--speeds and dump "
+             "per-step rough/pitch_down to PATH (.npz) instead of scoring "
+             "the gate. Needs reward.terrain_gate.enable=true. Respects "
+             "--run/--backend/--naconmax-per-env/--njmax/--eval-seed/"
+             "--per-cell; --out and --baseline are unused in this mode",
+    )
+    ap.add_argument(
+        "--aggregate", default=None, metavar="PATH",
+        help="read a --dump-step-stats PATH and print the M1 report: per "
+             "direction (forward/backward, by commanded leg sign), "
+             "P(rough < cut | pitch_down > --pitch-gate-deg) for each "
+             "--cuts value, and the counterfactual flat_pitch cost/step at "
+             "each --ws x --cuts pair. --out also writes the report as JSON",
+    )
+    ap.add_argument(
+        "--pitch-gate-deg", type=float, default=5.0,
+        help="--aggregate only: the pitch_down threshold (degrees) a step "
+             "must clear to count as a climb state for the leakage "
+             "probability (default 5.0, plan section 3)",
+    )
+    ap.add_argument(
+        "--tol-deg", type=float, default=2.0,
+        help="--aggregate only: flat_pitch_tol_deg used in the counterfactual "
+             "cost (default 2.0, the plan's flat_pitch_tol_deg default)",
+    )
+    ap.add_argument(
+        "--cuts", default="0.25,0.15",
+        help="--aggregate only: comma-separated flat_pitch_rough_cut "
+             "candidates (default 0.25,0.15, the plan's default and its "
+             "pre-registered downgrade)",
+    )
+    ap.add_argument(
+        "--ws", default="10,25",
+        help="--aggregate only: comma-separated flat_pitch scales to price "
+             "(default 10,25, the plan's A/B bracket)",
+    )
     args = ap.parse_args()
 
     if args.list_cells:
@@ -1143,8 +1674,41 @@ def main() -> None:
             print(f"{c.name:34s} row {c.row:2d}  d={c.difficulty:.6f}  "
                   f"{value:5.1f} {unit:3s}  {bar}")
         return
+
+    if args.aggregate:
+        dump = load_step_dump(Path(args.aggregate))
+        report = m1_report(
+            dump["rough"], dump["pitch_down_deg"], dump["direction"],
+            pitch_gate_deg=args.pitch_gate_deg,
+            cuts=tuple(float(c) for c in args.cuts.split(",")),
+            ws=tuple(float(w) for w in args.ws.split(",")),
+            tol_deg=args.tol_deg,
+        )
+        doc = {"source": dump["meta"], "report": report}
+        print(json.dumps(doc, indent=2))
+        if args.out:
+            Path(args.out).write_text(json.dumps(doc, indent=2))
+        return
+
     if not args.run:
         ap.error("--run is required")
+
+    if args.dump_step_stats:
+        meta = dump_step_stats(
+            Path(args.run), Path(args.dump_step_stats),
+            backend=args.backend,
+            naconmax_per_env=args.naconmax_per_env,
+            njmax=args.njmax,
+            cell_names=args.cells.split(",") if args.cells else None,
+            speeds=(
+                tuple(float(s) for s in args.speeds.split(","))
+                if args.speeds else terrain_suite.SPEEDS
+            ),
+            eval_seed=args.eval_seed,
+            per_cell=args.per_cell,
+        )
+        print(f"\n{meta['n_steps']:,} live env-steps -> {args.dump_step_stats}")
+        return
 
     result = scan(
         Path(args.run),

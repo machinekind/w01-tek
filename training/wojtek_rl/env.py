@@ -138,6 +138,11 @@ def default_config() -> config_dict.ConfigDict:
             # produces pure rotation, so policies can't turn on the spot).
             # Ported from PR #19.
             pure_wz_prob=0.0,
+            # On the flat row a pure_wz draw survives the whole overwrite
+            # chain (vy/arc/slow/fast/back/zero would otherwise keep only
+            # ~a third of the spins). No new RNG draws and no chain
+            # reorder: false is bit-identical to today, stream and output.
+            pure_wz_sticky=False,
             # With this prob keep vy, zero vx and wz: dedicated pure-strafe
             # training. Same fix as pure_wz_prob — the uniform box almost
             # never draws pure lateral, so strafing stays undertrained.
@@ -254,6 +259,10 @@ def default_config() -> config_dict.ConfigDict:
             # n_rows) instead of riding the ladder, so every difficulty
             # keeps live coverage whatever the promote/demote equilibrium.
             pinned_frac=0.0,
+            # Extra fraction pinned to the flat row (level 0), on top of
+            # pinned_frac's per-rung slice. Dedicated flat practice
+            # (spins, posture) without waiting on ladder occupancy.
+            pinned_flat_frac=0.0,
             # Consecutive failed episodes before a level drop. 1 is the
             # legacy fall-and-drop; 3 lets an env grind on a hard tile.
             demote_strikes=1,
@@ -502,6 +511,14 @@ def default_config() -> config_dict.ConfigDict:
                 rough_ref=0.05,
                 landing_soften=0.5,
                 orientation_tol_flat_deg=0.0,
+                # flat_pitch (see scales): hinge cone half-angle in degrees,
+                # and the roughness where its flat-ground gate closes fully
+                # (quadratic, 0 from flat_pitch_rough_cut up). row_only
+                # swaps the roughness gate for the flat-row id, so no climb
+                # state is ever charged.
+                flat_pitch_tol_deg=2.0,
+                flat_pitch_rough_cut=0.25,
+                flat_pitch_row_only=False,
             ),
             scales=config_dict.create(
                 tracking_lin_vel=1.5,
@@ -518,6 +535,11 @@ def default_config() -> config_dict.ConfigDict:
                 torque_rate=0.0,
                 action_rate=-0.25,
                 action_accel=-0.1,
+                # Nose-down pitch on flat ground, linear past the
+                # terrain_gate.flat_pitch_tol_deg cone (0 = off; negative =
+                # penalty). Gated by local roughness so climb states pay
+                # nothing; a flat-scene run has the gate open everywhere.
+                flat_pitch=0.0,
                 energy=-2e-3,
                 pose=-0.5,
                 feet_air_time=2.0,
@@ -629,6 +651,11 @@ class WojtekJoystick(WojtekEnv):
             self._orientation_tol_flat = float(
                 np.square(np.sin(np.radians(_flat_deg)))
             )
+        # flat_pitch hinge threshold as the sine of its cone half-angle:
+        # the hinge compares against gravity[0], which IS the pitch sine.
+        self._flat_pitch_tol_sin = float(
+            np.sin(np.radians(_tg.get("flat_pitch_tol_deg", 2.0)))
+        )
         # Kinematic standing family (see real_pose_ref in default_config):
         # gain-invariant by construction — settled on a quasi-rigid copy,
         # so it depends on the geometry only, never on this run's gains.
@@ -763,6 +790,7 @@ class WojtekJoystick(WojtekEnv):
             ]
         )
         # spin-in-place training: keep wz, zero the linear part
+        wz0 = vel[2]
         pure_wz = jax.random.bernoulli(r6, prob("pure_wz_prob"))
         vel = jp.where(pure_wz, vel.at[:2].set(0.0), vel)
         # pure-strafe training: keep vy, zero vx and wz
@@ -814,6 +842,13 @@ class WojtekJoystick(WojtekEnv):
             vel = jp.where(back, jp.array([vx_back, 0.0, 0.0]), vel)
         zero = jax.random.bernoulli(r4, prob("zero_prob"))
         vel = jp.where(zero, jp.zeros(3), vel)
+        # Sticky flat spins: on the flat row (or terrain off, on_flat=None)
+        # a pure_wz draw is restored after every overwrite above, so the
+        # drawn spin survives the chain intact. Static gate, no RNG draws:
+        # false keeps stream and output bit-identical.
+        if c.get("pure_wz_sticky", False):
+            flat = jp.array(True) if on_flat is None else on_flat
+            vel = jp.where(pure_wz & flat, jp.array([0.0, 0.0, wz0]), vel)
         height = jax.random.uniform(r5, minval=c.height[0], maxval=c.height[1])
         return jp.concatenate([vel, height[None]])
 
@@ -1140,6 +1175,15 @@ class WojtekJoystick(WojtekEnv):
             "encoder_offset": epsilon,
         }
         metrics = {f"reward/{k}": jp.zeros(()) for k in self._config.reward.scales}
+        # Posture and command-mix telemetry, written every step; declared on
+        # every run (terrain on or off) so reset/step metrics keys agree.
+        metrics.update(
+            pitch_down_deg_per_step=jp.zeros(()),
+            flat_frac_per_step=jp.zeros(()),
+            flat_pitch_down_deg_per_step=jp.zeros(()),
+            flat_pitch_on_flat_per_step=jp.zeros(()),
+            cmd_spin_per_step=jp.zeros(()),
+        )
         if self._config.no_progress.enable:
             # Optimistic seed: a fresh episode starts at progress ratio 1,
             # so the hazard can only come from measured shortfall, never
@@ -1402,6 +1446,29 @@ class WojtekJoystick(WojtekEnv):
             # slow command cannot hide shortfall elsewhere in the average.
             metrics["no_progress_cut"] = no_progress_cut.astype(jp.float32)
             metrics["progress_ratio_per_step"] = jp.clip(progress_ratio, 0.0, 2.0)
+        # Posture and command-mix telemetry. is_flat reads terrain_level,
+        # which exists only on terrain runs; a terrain-off arena is all flat.
+        gravity = self._gravity_body(data)
+        # nose-down sine; sign per battery.pitch_down_deg (+y rotation test)
+        pitch_down_deg = jp.degrees(jp.arcsin(jp.clip(gravity[0], 0.0, 1.0)))
+        if self._terrain_enabled:
+            is_flat = (
+                self._terrain.flat_row & (info["terrain_level"] == 0)
+            ).astype(jp.float32)
+        else:
+            is_flat = jp.ones(())
+        # The command that drove this step (state.info predates the
+        # resample above).
+        cmd_stepped = state.info["command"]
+        metrics["pitch_down_deg_per_step"] = pitch_down_deg
+        metrics["flat_frac_per_step"] = is_flat
+        metrics["flat_pitch_down_deg_per_step"] = pitch_down_deg * is_flat
+        metrics["flat_pitch_on_flat_per_step"] = is_flat * rewards["flat_pitch"]
+        metrics["cmd_spin_per_step"] = (
+            (jp.abs(cmd_stepped[2]) > 0.0)
+            & (cmd_stepped[0] == 0.0)
+            & (cmd_stepped[1] == 0.0)
+        ).astype(jp.float32)
         # The `_per_step` suffix makes brax report the mean, not the sum.
         if self._terrain_enabled:
             metrics["terrain_level_per_step"] = info["terrain_level"].astype(jp.float32)
@@ -1595,6 +1662,11 @@ class WojtekJoystick(WojtekEnv):
         gate = 1.0
         landing_soften = 1.0
         orientation_tol = self._orientation_tol
+        # flat_pitch gate: with terrain off the whole arena is flat, so the
+        # gate stays open. Terrain on without the terrain gate has no
+        # roughness signal to find flat ground with, so the term reads 0
+        # and only the key survives (parity with scales and metrics).
+        gate_flat = 1.0 if not self._terrain_enabled else 0.0
         if self._terrain_enabled and self._config.reward.terrain_gate.enable:
             tg = self._config.reward.terrain_gate
             strip = height_scan.world_xy(
@@ -1612,6 +1684,21 @@ class WojtekJoystick(WojtekEnv):
             )
             gate = tg.floor + (1.0 - tg.floor) * rough
             landing_soften = 1.0 - tg.landing_soften * rough
+            if tg.get("flat_pitch_row_only", False):
+                gate_flat = (
+                    self._terrain.flat_row & (info["terrain_level"] == 0)
+                ).astype(jp.float32)
+            else:
+                # quadratic hard-closer: fully open on flat ground, zero
+                # from flat_pitch_rough_cut up (riser-straddling states
+                # saturate rough well past the cut and pay nothing)
+                gate_flat = jp.square(
+                    jp.clip(
+                        1.0 - rough / tg.get("flat_pitch_rough_cut", 0.25),
+                        0.0,
+                        1.0,
+                    )
+                )
             if self._orientation_tol_flat is not None:
                 orientation_tol = (
                     self._orientation_tol_flat
@@ -1627,6 +1714,11 @@ class WojtekJoystick(WojtekEnv):
         if self._orientation_tol or self._orientation_tol_flat is not None:
             orientation = jp.maximum(orientation - orientation_tol, 0.0)
 
+        # nose-down sine; sign per battery.pitch_down_deg (+y rotation test)
+        pitch_down = jp.maximum(gravity[0], 0.0)
+        # linear hinge in sin-space past the flat_pitch_tol_deg cone
+        excess = jp.maximum(pitch_down - self._flat_pitch_tol_sin, 0.0)
+
         rewards = {
             "tracking_lin_vel": k_lin,
             "tracking_ang_vel": k_ang,
@@ -1637,6 +1729,8 @@ class WojtekJoystick(WojtekEnv):
             "lin_vel_z": jp.square(linvel[2]),
             "ang_vel_xy": jp.sum(jp.square(gyro[:2])),
             "orientation": orientation,
+            # scales entry carries the sign (negative = penalty)
+            "flat_pitch": gate_flat * excess,
             "torques": jp.sum(jp.square(data.actuator_force)),
             "torque_rate": jp.sum(
                 jp.square(data.actuator_force - info["last_torque"])

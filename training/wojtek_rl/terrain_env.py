@@ -61,6 +61,9 @@ class Arena:
     spawn_grace_sec: float
     pinned_frac: float
     demote_strikes: int
+    # Extra fraction pinned to the flat row (level 0), after pinned_frac's
+    # per-rung slice. Defaulted so pre-v4.4 constructions stay valid.
+    pinned_flat_frac: float = 0.0
 
     def height(self, xy):
         """Terrain surface height under world ``xy`` (``(..., 2)``)."""
@@ -258,6 +261,7 @@ def load(terrain_cfg) -> Arena:
         spawn_grace_sec=float(terrain_cfg.get("spawn_grace_sec", 0.0)),
         pinned_frac=float(terrain_cfg.get("pinned_frac", 0.0)),
         demote_strikes=int(terrain_cfg.get("demote_strikes", 1)),
+        pinned_flat_frac=float(terrain_cfg.get("pinned_flat_frac", 0.0)),
     )
 
 

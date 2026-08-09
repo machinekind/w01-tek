@@ -118,6 +118,7 @@ class TerrainAutoResetWrapper(Wrapper):
         self._grace_steps = int(round(base._terrain.spawn_grace_sec / base.dt))
         self._demote_strikes = base._terrain.demote_strikes
         self._pinned_frac = base._terrain.pinned_frac
+        self._pinned_flat_frac = base._terrain.pinned_flat_frac
         # Constraint-row telemetry, warp only (the jax impl has no live
         # count). The warning threshold leaves headroom: at 90% of the cap
         # the tail of the peak distribution is already being clipped.
@@ -306,14 +307,17 @@ class TerrainAutoResetWrapper(Wrapper):
         steps_lived = info.get(
             "steps", jp.full_like(done, self._episode_length, dtype=jp.int32)
         )
-        # The pinned coverage slice: the first pinned_frac of the batch sits
-        # one env per rung, round-robin, and never rides the ladder. Batch
-        # size is trace-time static, so this costs nothing per step.
+        # The pinned coverage slices: the first pinned_frac of the batch sits
+        # one env per rung, round-robin, and the next pinned_flat_frac sits
+        # on the flat row (level 0); neither rides the ladder. Batch size is
+        # trace-time static, so this costs nothing per step.
         n_envs = done.shape[0]
-        if self._pinned_frac > 0:
+        if self._pinned_frac > 0 or self._pinned_flat_frac > 0:
             idx = jp.arange(n_envs)
-            pinned = idx < int(round(self._pinned_frac * n_envs))
-            pinned_level = idx % self._n_rows
+            n_pin = int(round(self._pinned_frac * n_envs))
+            n_flat = int(round(self._pinned_flat_frac * n_envs))
+            pinned = idx < n_pin + n_flat
+            pinned_level = jp.where(idx < n_pin, idx % self._n_rows, 0)
         else:
             pinned = jp.zeros(n_envs, dtype=bool)
             pinned_level = jp.zeros(n_envs, dtype=jp.int32)

@@ -76,7 +76,7 @@ ros/src/wojtek_benchmark/scripts/generate_tags.py
 `tags/*.pdf` are generated artifacts under the same contract as the
 generated MJCF models: committed, regenerated after every yaml edit, never
 hand-edited.  Generation is byte-deterministic (the PDF writer embeds no
-timestamps or library metadata), so `verify.sh` T0 and this package's tests
+timestamps or library metadata), so this package's tests
 diff the committed sheets against the yaml — a stale regeneration fails the
 static gate rather than drifting silently.
 

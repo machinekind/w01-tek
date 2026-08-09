@@ -8,7 +8,7 @@ Two contracts are enforced here:
    but every ground-truth pose would be silently wrong.
 2. The committed tags/*.pdf match config/apriltags.yaml byte-for-byte, so
    the sheets people print are provably the config that calibration and
-   detection will read.  verify.sh T0 runs the same check repo-wide.
+   detection will read.
 """
 
 from pathlib import Path

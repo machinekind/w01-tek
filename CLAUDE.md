@@ -127,10 +127,6 @@ compile time (6m23s measured cold); it sets a persistent JAX compilation
 cache so repeat runs skip recompilation.  Run it before claiming an env/model
 change is validated.
 
-For wider repository checks, use `make verify-static` first and
-`make verify-quick` when its prerequisites are available.  A full
-`make verify` includes the slower Docker/ROS gate.
-
 ## Common commands
 
 ```bash

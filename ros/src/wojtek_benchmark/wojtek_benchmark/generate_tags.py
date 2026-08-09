@@ -3,7 +3,7 @@
 The PDFs in tags/ are generated artifacts under the same contract as the
 generated MJCF models: committed so a phone or print shop can use them
 without a dev environment, regenerated (never hand-edited) after editing
-the yaml, and diffed against it by verify.sh T0 via --check.
+the yaml, and diffed against it via --check.
 
 The PDF is written by hand rather than through a library so the output is
 byte-deterministic: no timestamps, no library-version metadata, no

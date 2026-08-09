@@ -8,8 +8,8 @@
 #
 # After editing, regenerate the committed printable tags:
 #   ros/src/wojtek_benchmark/scripts/generate_tags.py
-# verify.sh T0 diffs tags/*.pdf against this file, so a stale regeneration
-# fails the static gate.
+# generate_tags.py --check diffs tags/*.pdf against this file, so a stale
+# regeneration fails this package's tests.
 #
 # size_m is the BLACK square's outer edge (the "tag size" apriltag_ros and
 # the apriltag library expect).  The printed sheet is wider: tag36h11 adds a

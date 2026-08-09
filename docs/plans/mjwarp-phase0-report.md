@@ -3,7 +3,7 @@
 **Status:** the GPU spike is complete (RTX 4090, vast.ai, 2026-07-10). The 2-GPU pmap
 smoke remains open. It waits for a cluster node and does not block G0.
 **Date started:** 2026-07-10
-**Companion to:** `docs/plans/2026-07-10-mjwarp-migration.md` (gate **G0**).
+**Companion to:** the 2026-07-10 MJWarp migration plan (gate **G0**; not retained in this tree).
 
 The spike script lived at `training/wojtek_rl/spike_warp.py`. It was temporary by design and was deleted from this branch once Phase 0 closed. Its run logs were never committed (`*.log` is gitignored repo-wide), so the numbers quoted below are the record. `phase0-artifacts/` keeps only the closure baseline script.
 

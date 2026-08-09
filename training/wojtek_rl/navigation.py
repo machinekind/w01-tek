@@ -1,6 +1,6 @@
 """Go-to-point navigation on top of the joystick (velocity-tracking) policy.
 
-Ported verbatim from 3_jaxpot_robotics/jaxpot_robotics/navigation.py -- robot
+Ported verbatim from an earlier prototype's navigation module -- robot
 agnostic, so it works unchanged for Wojtek's [vx, vy, wz] joystick
 command.
 

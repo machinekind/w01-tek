@@ -1,6 +1,6 @@
 """Rebuild the PPO network and load checkpoint params.
 
-Copied from 3_jaxpot_robotics/jaxpot_robotics/envs.py::load_policy, which
+Copied from an earlier prototype's load_policy, which
 exists because brax's own checkpoint.load_policy crashes on this brax
 version (mean_kernel_init_fn serializes as null). Keep the two in sync.
 """

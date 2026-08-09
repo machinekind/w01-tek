@@ -1,6 +1,6 @@
 """Joystick velocity-tracking environment for four_bar_bot.
 
-Skeleton copied from 3_jaxpot_robotics/jaxpot_robotics/race_env.py; rewards
+Skeleton copied from an earlier prototype race environment; rewards
 ported from the mujoco_playground Go1 joystick task. Actor observations use
 only signals the real robot has (IMU + joint encoders + own history).
 """

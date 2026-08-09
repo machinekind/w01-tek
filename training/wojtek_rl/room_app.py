@@ -2,7 +2,7 @@
 
 Plain-MuJoCo counterpart of wojtek_rl.app (which is MJX-only and cannot do the
 room's mesh collisions): mujoco.mj_step drives the exported NumPy policy
-(piesek_ws fbb_policy, the same runtime the real robot runs) at 50 Hz inside
+(wojtek_policy, the same runtime the real robot runs) at 50 Hz inside
 scene_room.xml. The browser gets a chase cam, the onboard ego cam (the VLM's
 view), click-to-walk on a minimap, a mid-level command box ("turn_left 30",
 "forward 1.5", "stop"), and a VLM goal box ("go to the bed") that lets a

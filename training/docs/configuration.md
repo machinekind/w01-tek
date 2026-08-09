@@ -25,7 +25,7 @@ those commands.
 ## Naming
 
 Use **Wojtek** in new prose and new `run_name` values. The repository lives
-at `github.com/machinekind/wojtek`. `fbb-locomotion`, `fbb_*` preset run names, and `policies/fbb_v3`
+at `github.com/machinekind/w01-tek`. `fbb-locomotion`, `fbb_*` preset run names, and `policies/fbb_v3`
 are literal current historical configuration/artifact names; do not rename
 them in documentation without changing the corresponding source
 configuration or artifact.

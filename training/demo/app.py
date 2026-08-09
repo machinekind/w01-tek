@@ -1,6 +1,6 @@
 """Click-to-walk web app: click a point, the trained Wojtek walks to it.
 
-Ported from 3_jaxpot_robotics/jaxpot_robotics/app.py, trimmed to the single
+Ported from an earlier prototype's demo app, trimmed to the single
 WojtekJoystick robot (wojtek_rl isn't in the mujoco_playground registry, so
 there's no ``envs.load_env``/``envs.load_policy`` indirection -- we build the
 env and load the checkpoint directly, mirroring wojtek_rl/eval.py's jit/reset/

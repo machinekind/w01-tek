@@ -15,7 +15,7 @@ uv venv && uv pip install mujoco
 ## Check
 
 ```
-.venv/bin/python quadruped_ros2_original/wojtek_description/mujoco/check_model.py
+.venv/bin/python ros/src/wojtek_description/mujoco/check_model.py
 ```
 
 ## View
@@ -25,7 +25,7 @@ Use the native MuJoCo simulate app (download the macOS dmg from the
 and copy `MuJoCo.app` to `~/Applications`):
 
 ```
-open -a ~/Applications/MuJoCo.app --args "$PWD/quadruped_ros2_original/wojtek_description/mujoco/scene.xml"
+open -a ~/Applications/MuJoCo.app --args "$PWD/ros/src/wojtek_description/mujoco/scene.xml"
 ```
 
 Double-click a body to select it, then Ctrl+right-drag to apply a force or

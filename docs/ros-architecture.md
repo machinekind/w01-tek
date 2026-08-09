@@ -133,7 +133,7 @@ Runtime wytrenowanej polityki RL + node ROS. Działa na RPi i w symulacji.
 * `wojtek_policy/policy_node.py` — node ROS (opis niżej).
 * `wojtek_policy/joint_map.py` — `JointMap`: afiniczne mapowanie konwencji MuJoCo↔URDF (`q_urdf = sign·q_mjc + offset`), wczytywane z `config/joint_map.yaml`.
 * `wojtek_policy/poses.py` — nazwane pozy współdzielone przez real i sim: `FOLDED_KNEE_RAD = 0.425` (poza boot/zerowania), `folded_ctrl()`, oraz `PASSIVE_FROM_KNEE` — wielomiany 8. stopnia dające kąty pasywnych przegubów czworoboku (fourth/fifth) z kąta kolana (dopasowane do domknięcia MJCF, błąd ≤ 7e-5 rad).
-* `config/` — `policy.npz`, `policy_meta.json`, `joint_map.yaml`; `test/test_policy.py`.
+* `config/` — `joint_map.yaml`; `test/test_policy.py`. Wagi polityki nie są wendorowane: `policy_node` ładuje je po referencji (`policy:=`).
 
 **Node: `policy_node`** (nazwa: `wojtek_policy`) — pętla 50 Hz (z `ctrl_dt` w meta): sensory → cele pozycyjne stawów.
 

@@ -6,7 +6,7 @@ Load only for Wojtek work or when a concrete closed-loop quadruped example helps
 
 - Source model `ros/src/wojtek_description/mujoco/wojtek.xml`; generated `wojtek_mjx.xml` and
   scene `scene_mjx.xml` in the same directory
-- Deployment-packaged copy: `ros/src/wojtek_bringup/config/wojtek_mjx.xml`
+
 - Builder `training/wojtek_rl/build_model.py`; tests `training/tests/test_build_model.py`,
   `training/tests/test_keyframe.py`; static/MJX checks `training/wojtek_rl/check_model_mjx.py`
 

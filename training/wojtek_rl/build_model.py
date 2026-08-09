@@ -7,7 +7,7 @@ original files stay untouched. Edits:
     box in two halves
   - the base gets an explicit inertial so the total mass hits a parameter
   - the 12 torque motors become PD position actuators (gain/bias overwrite,
-    the same trick as 3_jaxpot_robotics/jaxpot_robotics/race_scene.py)
+    the same trick as the earlier prototype's race scene)
   - timestep 0.004, Newton solver with few iterations (MJX convention)
 """
 

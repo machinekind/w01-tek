@@ -19,6 +19,11 @@
   <xacro:arg name="kp" default="40.0" />
   <xacro:arg name="kd" default="1.6" />
   <xacro:arg name="max_torque" default="9.0" />
+  <!-- Feed-forward torque head (tau_ff policies): exposes an `effort`
+       command interface per joint on top of `position`. The launch sets it
+       from the loaded policy's contract and widens max_torque to
+       pd.max_torque + tau_ff.scale (the sim clamps the two separately). -->
+  <xacro:arg name="tau_ff" default="false" />
   <!-- CAN link to the MD80s: CANdle HAT over SPI by default (drives flashed
        to 8M). bus:=usb can_baud:=1 falls back to the old USB dongle; only
        works if the drives are flashed back to 1M. -->
@@ -41,7 +46,7 @@
 
   <xacro:wojtek_ros2_control kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)"
     usb_port="$(arg usb_port)" bus="$(arg bus)" can_baud="$(arg can_baud)"
-    dry_run="$(arg dry_run)" />
+    dry_run="$(arg dry_run)" tau_ff="$(arg tau_ff)" />
   <xacro:if value="$(arg use_imu)">
     <xacro:wojtek_imu_i2c_ros2_control bus="$(arg imu_bus)" addr_ag="$(arg imu_addr_ag)"
       addr_mag="$(arg imu_addr_mag)" />

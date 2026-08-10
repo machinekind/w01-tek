@@ -50,6 +50,14 @@ CONSUMED_KEYS = {
     # instead of the legacy static one); consumed via the exported
     # "height_table" field, which the runtime's height_anchor() prefers.
     "real_pose_ref",
+    # Feed-forward torque head: doubles the action (12 targets + 12
+    # torques) and adds a live torque channel the driver must apply on top
+    # of the PD servo -- consumed via the exported "tau_ff" block
+    # (enable + scale; rate_weight is a reward shaping detail). The sim
+    # clamps the servo (max_torque) and the head (scale) SEPARATELY; the
+    # drive-side torque limit must cover max_torque + scale so the sum is
+    # never truncated below the trained envelope.
+    "tau_ff",
 }
 
 # Keys that shape training only: physics stepping, randomization, episode
@@ -257,5 +265,16 @@ def build_contract(env, run: dict, checkpoint: str = "") -> dict:
             "kp": kp,
             "kd": kd,
             "max_torque": float(m.actuator_forcerange[0, 1]),
+        },
+        # Feed-forward torque head. Enabled, action_size is 24 and the
+        # runtime must apply tau_ff = clip(scale * act[12:], +-scale) N*m
+        # on top of the PD servo (MD80 impedance-mode torque_ff), clamped
+        # separately from the servo's max_torque.
+        "tau_ff": {
+            "enable": bool(getattr(env, "_tau_ff_enabled", False)),
+            "scale": float(
+                env._config.tau_ff.scale
+                if getattr(env, "_tau_ff_enabled", False) else 0.0
+            ),
         },
     }

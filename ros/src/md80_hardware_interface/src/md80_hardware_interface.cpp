@@ -17,6 +17,7 @@
 #include "md80_hardware_interface/md80_hardware_interface.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <limits>
 #include <thread>
 #include <vector>
@@ -91,11 +92,34 @@ std::vector<hardware_interface::CommandInterface> MD80HardwareInterface::export_
 {
   std::vector<hardware_interface::CommandInterface> command_interfaces;
   for (size_t i = 0; i < info_.joints.size(); ++i) {
-    if (info_.joints[i].command_interfaces.size() != 1) {
+    const auto & cmd_ifaces = info_.joints[i].command_interfaces;
+    // [position] -> IMPEDANCE (PD on the drive), the default.
+    // [position, effort] -> IMPEDANCE with a feed-forward torque channel:
+    //   the drive runs tau = kp*e - kd*dq + tau_ff, tau_ff from the effort
+    //   command interface (tau_ff policies; wojtek_ros2_control.urdf.xacro
+    //   tau_ff:=true). effort starts at 0.0 (JointInfo default), so the
+    //   channel is inert until a controller writes it.
+    if (cmd_ifaces.size() == 2) {
+      if (cmd_ifaces[0].name != "position" || cmd_ifaces[1].name != "effort") {
+        RCLCPP_ERROR_STREAM(
+          rclcpp::get_logger(get_name()),
+          "Two command interfaces must be [position, effort], got ["
+            << cmd_ifaces[0].name << ", " << cmd_ifaces[1].name << "]!");
+        return {};
+      }
+      command_interfaces.emplace_back(hardware_interface::CommandInterface(
+        info_.joints[i].name, hardware_interface::HW_IF_POSITION, &md80_info_[i].command.position));
+      command_interfaces.emplace_back(hardware_interface::CommandInterface(
+        info_.joints[i].name, hardware_interface::HW_IF_EFFORT, &md80_info_[i].command.effort));
+      md80_info_[i].control_mode = mab::Md80Mode_E::IMPEDANCE;
+      md80_info_[i].has_effort_ff = true;
+      continue;
+    }
+    if (cmd_ifaces.size() != 1) {
       RCLCPP_ERROR_STREAM(rclcpp::get_logger(get_name()), "Too many command interfaced defines!");
       return {};
     }
-    const auto control_mode = info_.joints[i].command_interfaces[0].name;
+    const auto control_mode = cmd_ifaces[0].name;
 
     if (control_mode == "position") {
       command_interfaces.emplace_back(hardware_interface::CommandInterface(
@@ -189,6 +213,14 @@ hardware_interface::return_type MD80HardwareInterface::write(
         // Commands must live in the same frame as the states read() reports
         // (activation-relative): shift back into the drive's raw frame.
         md.setTargetPosition(md80_info_[i].command.position + initial_positions_[i]);
+        if (md80_info_[i].has_effort_ff) {
+          // Feed-forward torque on top of the drive's PD law (frame-free:
+          // a torque needs no activation offset). A non-finite command --
+          // e.g. a controller activated before its first command -- must
+          // never reach the drive; fall back to 0 (pure PD).
+          const double tau = md80_info_[i].command.effort;
+          md.setTargetTorque(std::isfinite(tau) ? tau : 0.0);
+        }
       } else if (control_mode == mab::Md80Mode_E::RAW_TORQUE) {
         md.setTargetTorque(md80_info_[i].command.effort);
       }

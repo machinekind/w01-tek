@@ -27,10 +27,12 @@ from pathlib import Path
 
 import numpy as np
 
-ACTION_SIZE = 12
+# Position targets are always the first 12 outputs; a tau_ff contract
+# (meta["tau_ff"]["enable"]) doubles the action to 24.
+TARGET_SIZE = 12
 
 
-def numpy_policy(params, obs):
+def numpy_policy(params, obs, action_size=TARGET_SIZE):
     """Numpy mirror of the exported network. Keep in sync with the runner."""
     x = (obs - params["norm_mean"]) / params["norm_std"]
     i = 0
@@ -39,7 +41,7 @@ def numpy_policy(params, obs):
         if f"hidden_{i + 1}_kernel" in params:  # SiLU on all but the last
             x = x * np.exp(-np.logaddexp(0.0, -x))
         i += 1
-    loc = x[:ACTION_SIZE]
+    loc = x[:action_size]
     return np.tanh(loc)
 
 
@@ -86,9 +88,14 @@ def validate_deploy_runtime(env, meta, out_dir, inference, key, priv_size):
     fill = np.asarray(meta["command_fill"], np.float32)
     names = env.actor_obs_names
 
+    tff = meta.get("tau_ff") or {}
+    tff_on = bool(tff.get("enable"))
+    tff_scale = float(tff.get("scale", 0.0))
+    action_size = int(meta["action_size"])
+
     rng = np.random.default_rng(0)
-    last_act = np.zeros(ACTION_SIZE, np.float32)
-    filt = np.zeros(ACTION_SIZE, np.float32)
+    last_act = np.zeros(TARGET_SIZE, np.float32)
+    filt = np.zeros(action_size, np.float32)
     worst = 0.0
     for _ in range(32):
         gyro = rng.uniform(-2, 2, 3).astype(np.float32)
@@ -102,6 +109,8 @@ def validate_deploy_runtime(env, meta, out_dir, inference, key, priv_size):
             "gravity": grav,
             "joint_pos": q - home,
             "joint_vel": dq,
+            # The env keeps the obs' last_act at the position half only
+            # (env.py step: info["last_act"] = action[:12] with the head).
             "last_act": last_act,
             "command": np.concatenate([cmd3, fill]),
         }
@@ -111,12 +120,26 @@ def validate_deploy_runtime(env, meta, out_dir, inference, key, priv_size):
             key,
         )
         ref_act = np.asarray(ref_act, np.float32)
-        last_act = ref_act
+        last_act = ref_act[:TARGET_SIZE]
         filt = af * filt + (1.0 - af) * ref_act
-        ref_targets = np.clip(anchor + filt * scale, lo, hi)
+        ref_targets = np.clip(
+            anchor + filt[:TARGET_SIZE] * scale, lo, hi
+        )
 
         got = policy.step(gyro, grav, q, dq, cmd3)
         worst = max(worst, float(np.max(np.abs(ref_targets - got))))
+        if tff_on:
+            ref_tau = np.clip(
+                filt[TARGET_SIZE:] * tff_scale, -tff_scale, tff_scale
+            )
+            # Compare in normalized action units: the raw N*m difference is
+            # the same float32 matmul noise scaled by tau_ff.scale, which
+            # would trip a bound calibrated for radian-scale targets.
+            worst = max(
+                worst,
+                float(np.max(np.abs(ref_tau - policy.last_tau_ff)))
+                / tff_scale,
+            )
     # 1e-4 rad = 0.006 deg on a joint target, three orders below the 0.02 rad
     # encoder noise the policy trained under; float32 matmul reassociation
     # (JAX vs numpy) lands at a few 1e-5 for policies with large weights
@@ -180,8 +203,9 @@ def main() -> None:
         f"to {meta['obs_size']}-D ({meta['obs_layout']}) -- run.json and the "
         "checkpoint disagree"
     )
+    action_size = int(meta["action_size"])
     ppo_network = network_factory(
-        obs_size, ACTION_SIZE,
+        obs_size, action_size,
         preprocess_observations_fn=running_statistics.normalize,
     )
     make_inference_fn = ppo_networks.make_inference_fn(ppo_network)
@@ -210,7 +234,7 @@ def main() -> None:
             {"state": obs, "privileged_state": np.zeros(priv_size, np.float32)},
             key,
         )
-        got = numpy_policy(export, obs)
+        got = numpy_policy(export, obs, action_size)
         worst = max(worst, float(np.max(np.abs(np.asarray(ref) - got))))
     assert worst < 1e-4, f"numpy forward mismatch vs brax: {worst}"
     print(f"validated numpy vs brax inference: max |diff| = {worst:.2e}")

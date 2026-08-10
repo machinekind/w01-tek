@@ -20,6 +20,7 @@ case "${1:-}" in
   video-probe) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.video.probe "$@" ;;  # torque bars + onboard depth inset
   battery) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.battery "$@" ;;
   courses) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.courses "$@" ;;  # path-following benchmark
+  imu-grid) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.imu_grid "$@" ;;  # gyro bias/noise robustness grid
   report) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.report "$@" ;;
   terrain-scan) shift; "$PY" -m wojtek_rl.terrain_scan "$@" ;;  # GPU-sized; --backend jax to cross-check
   export) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.export_policy "$@" ;;

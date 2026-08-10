@@ -868,6 +868,7 @@ using the preset.
 | `video-probe` | `./training/run.sh video-probe --run runs/<name> [--arena {flat,train,eval} --cell NAME --seconds S --fps F --vx V --camera NAME --out FILE --list-cells]`; renders the showcase clip: 960x720 with every overlay on. `--cell` films one measurement cell of the eval arena from the spawn `terrain-scan` uses; `--arena train`/`eval` needs a terrain run. Output lands in `training/videos/<run_name>/` unless `--out` says otherwise. |
 | `battery` | `./training/run.sh battery --run runs/<name> [--out FILE --alpha A --lag-tau T]`; writes the fixed comparison battery. `--alpha`/`--lag-tau` are eval-only plant perturbations, see "Robustness grid (eval-only)" below. |
 | `courses` | `./training/run.sh courses --run runs/<name> [--seeds N --only NAME... --video --video-size WxH --overlay-torque --overlay-camera --paths --out FILE --list]`; writes the path-following course benchmark. `--list` prints the catalogue without loading a run. See "Course benchmark" below. |
+| `imu-grid` | `./training/run.sh imu-grid --runs runs/<name>... [--bias-levels B... --axes x y z --noise-gyro S... --seeds N --stand-sec S --walk-sec S --walk-vx V --out FILE]`; the gyro bias/noise robustness grid. See "IMU robustness grid" below. |
 | `report` | `./training/run.sh report --run runs/<name> [--out-json FILE --out-md FILE]`; writes battery, torque, power, impact proxy, and termination summary. |
 | `export` | `./training/run.sh export --run runs/<name> [--out DIR]`; writes `policy.npz` plus `policy_meta.json`, the schema-2 deployment contract built from the run's env (`wojtek_rl/deploy_contract.py`), and validates the deploy runtime end-to-end against the env before writing. |
 | `app` | `./training/run.sh app [--host HOST --port PORT]`; runs the interactive navigation demo. `WOJTEK_RUN_DIR`, `HOST`, and `PORT` environment variables supply defaults; see [demo README](../demo/README.md). |
@@ -1063,6 +1064,48 @@ gated PASS/FAIL against the stiffness ladder's gates 1-4 -- see
 that stays PASS across every lag and envelope, per alpha-world.
 Filenames without the `_env<tag>` segment (grid runs predating this axis)
 are still read, treated as envelope `none`.
+
+## IMU robustness grid (eval-only)
+
+`wojtek_rl/imu_grid.py` is the sensor-side counterpart of the plant grid
+above, built after the terrain v4.1 policy oscillated while standing on the
+real robot (a ~25 Hz limit cycle -- half the 50 Hz control rate -- driven by
+gyro noise and loop latency) and nothing in the battery or the courses
+perturbed the IMU to detect it. It sweeps a **pinned gyro bias** (a fixed
+per-cell vector written into `info["gyro_bias"]` every step, the same key
+the env's per-episode bias DR draws at reset; the actor's gyro carries it,
+the critic and the physics never see it) and, optionally, absolute white
+gyro-noise scales (each rebuilds the measurement env via `env_overrides`).
+Because the key exists in every env (zeros when the run never trained bias
+DR), the grid runs against any checkpoint of this project unchanged --
+that is the point: measure a policy trained *without* bias DR under the
+bias it will meet on hardware.
+
+Per cell it scores a 10 s stand and a 10 s straight walk over a few seeds:
+`vibration` (the battery's >5 Hz joint-velocity power index), `band_20_25`
+(spectral power fraction in the 20-25 Hz near-Nyquist band where the
+real-robot limit cycle lived), falls, and the walk's `vx_err_rms`. No
+gates -- compare cells against the always-included bias=0 baseline row and
+across runs. Results land in `runs/<run>/imu_grid/imu_grid.json`, plus one
+combined markdown table via `--out`.
+
+```bash
+# Does the un-filtered terrain policy show the standing limit cycle in sim?
+./training/run.sh imu-grid --runs runs/wojtek_terrain_blind_v4_1 \
+  runs/wojtek_terrain_blind_v5 --out runs/imu_grid_report.md
+
+# Probe the stability margin: crank white gyro noise past the trained value
+./training/run.sh imu-grid --runs runs/<name> --noise-gyro 0.4 0.8
+```
+
+The course benchmark can run under the same pinned bias:
+`./training/run.sh courses --run runs/<name> --gyro-bias 0,0.1,0` writes
+`courses_bias.json` (never the frozen `courses.json` -- biased scores are a
+different measurement and must not overwrite the benchmark's). The follower
+constants stay frozen; the bias pin changes only what the actor's gyro
+reads. [`training/jobs/imu_grid.sh`](../jobs/imu_grid.sh) is the payload
+form: `CKPTS_LIST` (required), `BIAS_LEVELS`, `AXES`, `NOISE_GYRO`,
+`SEEDS`, `STAND_SEC`/`WALK_SEC`/`WALK_VX`, `IMU_GRID_OUT`.
 
 ## Job payload configuration
 

@@ -86,8 +86,16 @@ def run_courses(
     video_size: tuple[int, int] = (640, 480),
     overlay_torque: bool = False,
     overlay_camera: bool = False,
+    gyro_bias=None,
 ) -> dict:
-    """Run the course benchmark against `run_dir`'s latest checkpoint."""
+    """Run the course benchmark against `run_dir`'s latest checkpoint.
+
+    `gyro_bias` (fixed 3-vector, rad/s, or None) is pinned into every
+    rollout's info["gyro_bias"] -- the IMU robustness variant of the
+    benchmark (see wojtek_rl.imu_grid).  Scores from a biased pass are NOT
+    comparable to the frozen benchmark's; main() writes them to a separate
+    file for that reason.
+    """
     from wojtek_rl.build_model import FOOT_RADIUS
 
     run, env, ckpt, inf = load_checkpoint_policy(run_dir)
@@ -116,6 +124,9 @@ def run_courses(
         "checkpoint": ckpt.name,
         "seeds": seeds,
         "seed_base": seed_base,
+        # None on the frozen benchmark; a biased pass marks its scores as
+        # a different measurement (they never overwrite courses.json).
+        "gyro_bias": None if gyro_bias is None else np.asarray(gyro_bias).tolist(),
         "follower": {
             "lookahead_m": LOOKAHEAD_M,
             "yaw_max": YAW_MAX,
@@ -185,12 +196,13 @@ def run_courses(
                 if isinstance(course, SpinCourse):
                     rec, info = spin_rollout(
                         env, reset, step, inf, course, seed=seed, view=view,
+                        gyro_bias=gyro_bias,
                     )
                     seed_rows.append(spin_seed_result(rec, info, env.dt, course.wz))
                 else:
                     rec, info = course_rollout(
                         env, reset, step, inf, course, foot_radius, seed=seed,
-                        view=view,
+                        view=view, gyro_bias=gyro_bias,
                     )
                     seed_rows.append(seed_result(rec, info, env.dt))
                 trails.append(rec.get("xy", np.empty((0, 2))))
@@ -298,6 +310,12 @@ def main():
         help="write one overhead commanded-vs-actual PNG per scenario",
     )
     ap.add_argument(
+        "--gyro-bias", default=None, metavar="BX,BY,BZ",
+        help="pin a fixed gyro bias (rad/s) into every rollout -- the IMU "
+        "robustness variant; scores go to courses_bias.json, never to the "
+        "frozen courses.json",
+    )
+    ap.add_argument(
         "--list", action="store_true", help="print the catalogue and exit"
     )
     args = ap.parse_args()
@@ -325,6 +343,14 @@ def main():
     if not args.run:
         raise SystemExit("--run is required (or use --list)")
     run_dir = Path(args.run)
+    gyro_bias = None
+    if args.gyro_bias is not None:
+        parts = [float(v) for v in args.gyro_bias.split(",")]
+        if len(parts) != 3:
+            raise SystemExit("--gyro-bias takes three comma-separated values")
+        import jax.numpy as jp
+
+        gyro_bias = jp.array(parts)
     results = run_courses(
         run_dir,
         seeds=args.seeds,
@@ -335,9 +361,11 @@ def main():
         video_size=args.video_size,
         overlay_torque=args.overlay_torque,
         overlay_camera=args.overlay_camera,
+        gyro_bias=gyro_bias,
     )
     print_table(results)
-    out = Path(args.out) if args.out else run_dir / "courses.json"
+    default_name = "courses.json" if gyro_bias is None else "courses_bias.json"
+    out = Path(args.out) if args.out else run_dir / default_name
     out.parent.mkdir(parents=True, exist_ok=True)
     stamped = dict(results, timestamp=datetime.now().isoformat(timespec="seconds"))
     out.write_text(json.dumps(stamped, indent=2))

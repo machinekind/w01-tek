@@ -90,6 +90,23 @@ def test_sag_v2_preset_fades_yaw():
     assert wojtek_env.default_config().reward.target_sag_wz_fade == 0.0
 
 
+def test_sag_v3_preset_fixes_foot_friction():
+    """v3 = the proven v2b operating point + real friction DR. Without
+    foot_friction the feet's fixed mu=0.9 max-combines over the floor draw
+    and effective friction never goes below 0.9; the enabled switch gives
+    the feet contact priority and the range must reach well under 0.9."""
+    preset = yaml.safe_load(
+        (PRESET_YAML.parent / "flat_tff_sag_v3.yaml").read_text()
+    )
+    ff = preset["dr"]["foot_friction"]
+    assert ff["enable"] is True
+    assert ff["range"][0] < 0.9 - 0.2  # genuinely slippery worlds exist
+    r = preset["task"]["env"]["reward"]
+    # The v2b-proven near-binary yaw gate rides along.
+    assert 0 < r["target_sag_wz_fade"] <= 0.2
+    assert r["scales"]["target_sag"] < 0
+
+
 def test_sag_preset_layers_on_winner_config():
     preset = yaml.safe_load(
         (PRESET_YAML.parent / "flat_tff_sag_v1.yaml").read_text()

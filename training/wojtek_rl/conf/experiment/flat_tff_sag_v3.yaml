@@ -1,0 +1,36 @@
+# @package _global_
+# Iteration 4 of the flat tau_ff family (2026-08-10): the proven v2b
+# operating point with REAL friction randomization. Two changes vs
+# flat_tff_sag_v2:
+# - target_sag_wz_fade 0.1 folded in (the near-binary yaw gate the v2b
+#   run proved: any commanded turn fully exempt from the sag charge --
+#   linear fades and scale cuts all left spins deadlocked; see
+#   runs/wojtek_flat_tff_sag_v2b_s0 and the sag experiment report).
+# - dr.foot_friction {enable, range [0.4, 1.35]} (same fix and range as
+#   the terrain family, w01-tek PR #1): enabled, the foot geoms take
+#   contact priority, so the per-env draw IS the contact friction the
+#   policy walks on. Without it the feet's fixed mu=0.9 max-combines over
+#   the floor draw and effective friction never goes below 0.9 (half the
+#   envs sit at exactly 0.9) -- the flat runs to date never saw a
+#   slippery floor.
+# KNOWN RISK (recorded lesson): mu is unobservable to the actor, so wide
+# low-mu DR can teach blanket caution instead of adaptation. Judge this
+# run against wojtek_flat_tff_sag_v2b_s0 on the FULL courses table: the
+# slippery rows should rise without the spin/slalom/fast rows falling.
+# Usage: ./training/run.sh train +experiment=flat_tff_sag_v3
+defaults:
+  - flat_tff_rnd_v1
+
+task:
+  env:
+    command:
+      pure_slow_prob: 0.15
+    reward:
+      target_sag_wz_fade: 0.1
+      scales:
+        target_sag: -10.0
+
+dr:
+  foot_friction: { enable: true, range: [0.4, 1.35] }
+
+run_name: wojtek_flat_tff_sag_v3

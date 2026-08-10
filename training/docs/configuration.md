@@ -793,6 +793,7 @@ so command-line values can still override it.
 | `flat_tff_rnd_v1` | joystick | Flat locomotion, soft-gain (kp20/kd0.5) + feed-forward-torque-head + RND design, iteration 1. From scratch by construction (24-wide actions, phase-free critic). |
 | `flat_tff_sag_v1` | flat_tff_rnd_v1 | + slow-walk sampler + `target_sag=-10` (gravity compensation via reward). Superseded: breaks pure spins (exploration-time deadlock); use `flat_tff_sag_v2` with `++task.env.reward.target_sag_wz_fade=0.1`. |
 | `flat_tff_sag_v2` | flat_tff_rnd_v1 | + slow-walk sampler + `target_sag=-10` with the yaw fade. The preset's `fade=1.0` still eroded spins by 2B; the proven operating point is the near-binary override `++task.env.reward.target_sag_wz_fade=0.1` (run `wojtek_flat_tff_sag_v2b_s0`). |
+| `flat_tff_sag_v3` | flat_tff_rnd_v1 | The v2b operating point (fade `0.1` folded in) + `dr.foot_friction={enable,range:[0.4,1.35]}` — the flat family's first real friction randomization (feet take contact priority; before this the feet's fixed μ=0.9 max-combined over the floor draw and effective friction never went below 0.9). Judge vs `wojtek_flat_tff_sag_v2b_s0` on the full courses table: slippery rows up, spin/slalom/fast rows not down (μ is unobservable — watch for blanket caution). |
 | `getup` | getup | Safe fall recovery baseline. |
 | `jump` | jump | Commanded jump baseline. |
 | `jump_v3` | jump | Higher torque and deliberate wind-up jump recipe. |

@@ -86,6 +86,24 @@ def policy(tmp_path):
     return make_policy(tmp_path, bias12=np.linspace(-0.4, 0.4, 12))
 
 
+def make_tau_ff_policy(tmp_path, bias24, scale=3.0):
+    """Synthetic tau_ff policy: 24-wide action, output tanh(bias24)."""
+    meta = dict(META)
+    meta.update(action_size=24, tau_ff={"enable": True, "scale": scale})
+    obs_size = meta["obs_size"]
+    bias = np.zeros(48, np.float32)  # loc(24) + std(24)
+    bias[:24] = bias24
+    np.savez(
+        tmp_path / "policy.npz",
+        norm_mean=np.zeros(obs_size, np.float32),
+        norm_std=np.ones(obs_size, np.float32),
+        hidden_0_kernel=np.zeros((obs_size, 48), np.float32),
+        hidden_0_bias=bias,
+    )
+    (tmp_path / "policy_meta.json").write_text(json.dumps(meta))
+    return WojtekPolicy(tmp_path / "policy.npz")
+
+
 # -- contract interpretation --------------------------------------------------
 
 def test_obs_assembly_matches_layout(policy):
@@ -100,6 +118,53 @@ def test_obs_assembly_matches_layout(policy):
     assert np.allclose(obs[24:36], 0.0)  # last_act starts at zero
     # 3-D /cmd_vel command is completed from command_fill
     assert np.allclose(obs[36:40], [0.3, -0.1, 0.2, 0.125], atol=1e-6)
+
+
+def test_tau_ff_head_splits_targets_and_torque(tmp_path):
+    bias24 = np.concatenate([np.linspace(-0.4, 0.4, 12), np.full(12, 0.3)])
+    pol = make_tau_ff_policy(tmp_path, bias24, scale=3.0)
+    assert pol.tau_ff_enabled and pol.tau_ff_scale == 3.0
+    targets = pol.step(
+        np.zeros(3), [0, 0, -1.0], pol.home_ctrl, np.zeros(12), [0.3, 0, 0]
+    )
+    # Targets come from the position half only (legacy formula unchanged).
+    expected = np.clip(
+        pol.anchor_ctrl + np.tanh(bias24[:12]) * pol.action_scale,
+        pol.target_low, pol.target_high,
+    )
+    assert np.allclose(targets, expected, atol=1e-6)
+    # The torque half is scaled and clipped to +-scale N*m.
+    assert np.allclose(pol.last_tau_ff, np.tanh(0.3) * 3.0, atol=1e-6)
+    # The obs' last_act stays the 12-wide position half.
+    assert pol.last_action.shape == (12,)
+    assert np.allclose(pol.last_action, np.tanh(bias24[:12]), atol=1e-6)
+    pol.step(np.zeros(3), [0, 0, -1.0], pol.home_ctrl, np.zeros(12), [0.3, 0, 0])
+    assert np.allclose(pol.last_obs[24:36], np.tanh(bias24[:12]), atol=1e-6)
+
+
+def test_tau_ff_clip_bounds_torque(tmp_path):
+    # tanh saturates near 1; a scale of 0.5 must bound the torque at 0.5.
+    bias24 = np.concatenate([np.zeros(12), np.full(12, 50.0)])
+    pol = make_tau_ff_policy(tmp_path, bias24, scale=0.5)
+    pol.step(np.zeros(3), [0, 0, -1.0], pol.home_ctrl, np.zeros(12), [0, 0, 0])
+    assert np.all(pol.last_tau_ff <= 0.5 + 1e-7)
+    assert np.all(pol.last_tau_ff > 0.49)
+
+
+def test_no_tau_ff_keeps_legacy_behavior(policy):
+    assert policy.tau_ff_enabled is False
+    policy.step(np.zeros(3), [0, 0, -1.0], policy.home_ctrl, np.zeros(12), [0, 0, 0])
+    assert np.allclose(policy.last_tau_ff, 0.0)
+    assert policy.filtered_action.shape == (12,)
+
+
+def test_tau_ff_meta_action_size_mismatch_refused(tmp_path):
+    make_policy(tmp_path)  # writes a 12-action npz + meta
+    meta = dict(META)
+    meta.update(tau_ff={"enable": True, "scale": 3.0})  # action_size still 12
+    (tmp_path / "policy_meta.json").write_text(json.dumps(meta))
+    with pytest.raises(ValueError, match="action_size"):
+        WojtekPolicy(tmp_path / "policy.npz")
 
 
 def test_full_width_command_passes_through(policy):

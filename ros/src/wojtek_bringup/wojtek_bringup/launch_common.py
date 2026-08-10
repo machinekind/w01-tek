@@ -52,8 +52,19 @@ def _launch_setup(context, with_rviz, hardware):
                    for k in ("kp", "kd", "max_torque")},
     )
     pd = loaded.pd
+    # Feed-forward torque head: read straight from the contract, so a
+    # tau_ff policy is (like everything else) a config change, not a launch
+    # flag. The DRIVE torque limit must cover the trained envelope's sum --
+    # the sim clamps the PD servo (max_torque) and the head (scale)
+    # separately, so their peaks can coincide.
+    tff = loaded.meta.get("tau_ff") or {}
+    tau_ff_on = bool(tff.get("enable"))
+    tau_ff_scale = float(tff.get("scale", 0.0))
+    drive_torque = pd["max_torque"] + (tau_ff_scale if tau_ff_on else 0.0)
     print(f">> policy {loaded.run_name} from {loaded.source}; servo settings "
-          f"kp={pd['kp']:g} kd={pd['kd']:g} max_torque={pd['max_torque']:g}")
+          f"kp={pd['kp']:g} kd={pd['kd']:g} max_torque={pd['max_torque']:g}"
+          + (f"; tau_ff head +-{tau_ff_scale:g} N*m -> drive torque limit "
+             f"{drive_torque:g}" if tau_ff_on else ""))
 
     use_imu = LaunchConfiguration("use_imu")
     # The servo contract (gains, torque cap), the IMU switch and the bench flag
@@ -61,7 +72,8 @@ def _launch_setup(context, with_rviz, hardware):
     # differs is what the plugin needs to reach its hardware: a CAN link and an
     # I2C address for the real drives, a physics backend for the simulated one.
     xacro_args = [
-        f" kp:={pd['kp']} kd:={pd['kd']} max_torque:={pd['max_torque']}",
+        f" kp:={pd['kp']} kd:={pd['kd']} max_torque:={drive_torque}",
+        f" tau_ff:={'true' if tau_ff_on else 'false'}",
         " use_imu:=", use_imu,
         " dry_run:=", LaunchConfiguration("dry_run"),
     ]
@@ -118,14 +130,19 @@ def _launch_setup(context, with_rviz, hardware):
             executable="spawner",
             arguments=["joint_state_broadcaster", "imu_sensor_broadcaster",
                        "magnetometer_broadcaster",
-                       "forward_position_controller"],
+                       "forward_position_controller"]
+            # The effort channel exists only when the URDF exported the
+            # interface (tau_ff contract) -- spawning it otherwise would
+            # fail claiming a missing command interface.
+            + (["forward_effort_controller"] if tau_ff_on else []),
             condition=IfCondition(use_imu),
         ),
         Node(
             package="controller_manager",
             executable="spawner",
             arguments=["joint_state_broadcaster",
-                       "forward_position_controller"],
+                       "forward_position_controller"]
+            + (["forward_effort_controller"] if tau_ff_on else []),
             condition=UnlessCondition(use_imu),
         ),
         # RViz/robot_state_publisher use ABSOLUTE joint angles.

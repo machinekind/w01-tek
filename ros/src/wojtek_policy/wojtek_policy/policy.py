@@ -7,8 +7,17 @@ so this runtime is a plain interpreter with no training knowledge:
 
   obs  = concat(obs_layout components)
   filt = action_filter * filt + (1 - action_filter) * tanh_mlp(obs)
-  motor_targets = clip(anchor_ctrl + filt * action_scale,
+  motor_targets = clip(anchor_ctrl + filt[:12] * action_scale,
                        target_low, target_high)
+
+A contract whose "tau_ff" block is enabled doubles the network action to
+24: the second half, times tau_ff.scale (N*m, clipped to +-scale), is a
+feed-forward torque the driver must add on top of the PD servo (MD80
+impedance-mode torque_ff) -- clamped SEPARATELY from the servo's
+max_torque, never as a clamp on the sum. step() still returns the 12
+position targets; the torque half is exposed as `last_tau_ff` after each
+step (zeros when the contract has no head). The obs' last_act stays the
+12-wide position half, exactly as in training.
 
 The one runtime-computed exception is the live standing height: a contract
 whose command box carries a real height range (4th dim, low < high) makes
@@ -109,6 +118,21 @@ class WojtekPolicy:
         self.knee_singularity = float(m["knee_singularity"])
         self.clamp_knee = clamp_knee
 
+        # Feed-forward torque head (schema-2 "tau_ff" block; metas exported
+        # before the field existed have no head).
+        tff = m.get("tau_ff") or {}
+        self.tau_ff_enabled = bool(tff.get("enable"))
+        self.tau_ff_scale = float(tff.get("scale", 0.0))
+        n_targets = len(m["home_ctrl"])
+        self._action_dim = (
+            2 * n_targets if self.tau_ff_enabled else n_targets
+        )
+        if self.tau_ff_enabled and int(m.get("action_size", 0)) != self._action_dim:
+            raise ValueError(
+                f"contract enables tau_ff but action_size is "
+                f"{m.get('action_size')} (expected {self._action_dim})"
+            )
+
         self.layout = [
             (name, int(width))
             for name, width in (e.split(":") for e in m["obs_layout"])
@@ -160,7 +184,8 @@ class WojtekPolicy:
 
     def reset(self):
         self.last_action = np.zeros(12, np.float32)
-        self.filtered_action = np.zeros(12, np.float32)
+        self.filtered_action = np.zeros(self._action_dim, np.float32)
+        self.last_tau_ff = np.zeros(12, np.float32)
         self.last_obs = None
 
     def _mlp(self, obs):
@@ -170,7 +195,7 @@ class WojtekPolicy:
             x = x * np.exp(-np.logaddexp(0.0, -x))  # SiLU
         kernel, bias = self._layers[-1]
         x = x @ kernel + bias
-        return np.tanh(x[: len(self.home_ctrl)])
+        return np.tanh(x[: self._action_dim])
 
     def _assemble_obs(self, gyro, gravity_body, joint_pos, joint_vel, command):
         parts = []
@@ -221,11 +246,20 @@ class WojtekPolicy:
         obs = self._assemble_obs(gyro, gravity_body, joint_pos, joint_vel, command)
         self.last_obs = obs
         action = self._mlp(obs).astype(np.float32)
-        self.last_action = action
+        # The obs contract keeps last_act at the position half; the filter
+        # runs over the full action, exactly as the training env does.
+        self.last_action = action[:12]
         af = self.action_filter
         self.filtered_action = af * self.filtered_action + (1.0 - af) * action
 
-        targets = self.anchor_ctrl + self.filtered_action * self.action_scale
+        filt = self.filtered_action
+        if self.tau_ff_enabled:
+            self.last_tau_ff = np.clip(
+                filt[12:] * self.tau_ff_scale,
+                -self.tau_ff_scale,
+                self.tau_ff_scale,
+            ).astype(np.float32)
+        targets = self.anchor_ctrl + filt[:12] * self.action_scale
         targets = np.clip(targets, self.target_low, self.target_high)
         if self.clamp_knee:
             # Real-robot safety: never command the far branch of the four-bar

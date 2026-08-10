@@ -9,7 +9,13 @@ parameters differ:
                               vx/vy/wz, linear.z > 0 commands the standing
                               height for 4-D-command policies)
   publishes   /wojtek/joint_targets (sensor_msgs/JointState, URDF convention,
-                                  absolute; 12 actuated joints)
+                                  absolute; 12 actuated joints. For a policy
+                                  whose contract enables the tau_ff head the
+                                  message also carries `effort`: the
+                                  feed-forward torque (N*m, URDF sign
+                                  convention) the driver must add ON TOP of
+                                  the PD servo, clamped separately from
+                                  max_torque)
   services    /wojtek/enable (std_srvs/SetBool), /wojtek/reset (std_srvs/Trigger)
 
 The policy itself (wojtek_policy.policy.WojtekPolicy) works in the MuJoCo/training
@@ -110,11 +116,16 @@ class PolicyNode(Node):
         self.create_service(Trigger, "wojtek/reset", self._srv_reset)
         self.create_timer(self.policy.ctrl_dt, self._tick)
         pd = self.policy.meta.get("pd", {})
+        tff = (
+            f", tau_ff head +-{self.policy.tau_ff_scale:g} N*m (driver must "
+            "apply effort on top of the PD servo, separate clamp)"
+            if self.policy.tau_ff_enabled else ""
+        )
         self.get_logger().info(
             f"policy {self.policy.meta['run_name']} from {self._policy_source}, "
             f"{1.0 / self.policy.ctrl_dt:.0f} Hz, enabled={self._enabled}; "
             f"trained against kp={pd.get('kp')} kd={pd.get('kd')} "
-            f"max_torque={pd.get('max_torque')} -- the driver must match"
+            f"max_torque={pd.get('max_torque')} -- the driver must match{tff}"
         )
 
     # -- inputs --------------------------------------------------------------
@@ -270,6 +281,13 @@ class PolicyNode(Node):
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.name = self.joint_names
         msg.position = self.jmap.to_urdf(self.joint_names, targets_mjc).tolist()
+        if self.policy.tau_ff_enabled:
+            # Torques flip sign like velocities between conventions (no
+            # offset). The soft-start beta also gates the feed-forward:
+            # entering RUN blends from "pure PD hold at the measured pose"
+            # into the full policy, torque included.
+            tau_mjc = beta * self.policy.last_tau_ff
+            msg.effort = self.jmap.vel_to_urdf(self.joint_names, tau_mjc).tolist()
         self._pub.publish(msg)
 
 

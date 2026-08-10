@@ -90,6 +90,11 @@ Defined in [`conf/config.yaml`](../wojtek_rl/conf/config.yaml).
 | `smoke` | `false` | Trainer-level tiny CPU-friendly setting; `./training/run.sh smoke` also forces it and disables WandB. |
 | `restore` | `null` | Checkpoint directory to warm start from. Relative paths are relative to `training/`, e.g. `restore=runs/base/checkpoints/000100000000`. |
 | `domain_rand` | `true` | Enables the legacy model randomization and permits explicitly enabled `dr.*` additions. The four expanded `dr.*` switches still default false. Set false only to remove all model DR. |
+| `rnd.enable` | `false` | Random Network Distillation exploration bonus (arXiv 1810.12894). Enabled, training runs the vendored trainer fork [`wojtek_rl/ppo_rnd.py`](../wojtek_rl/ppo_rnd.py) (brax 0.14.2 `ppo/train.py` with fenced insertions): a frozen random target MLP plus a trained predictor over one observation component; the predictor's per-transition MSE — novelty of the reached state — is RMS-normalized, scaled by `rnd.coef` and added to the env reward before GAE. Single reward stream (no separate intrinsic value head). RND state is not checkpointed; a restored run re-learns the predictor. Disabled runs stay on stock `brax` `ppo.train`. |
+| `rnd.coef` | `0.02` | Intrinsic-bonus weight, in units of the RMS-normalized bonus (~1.0 early in training). Weigh it against the flat task's ~0.1–0.3/step extrinsic reward: 0.01–0.05 is gentle exploration pressure; 0.5 would dominate the task. |
+| `rnd.learning_rate` | `1e-4` | Adam step for the predictor (one update per training step, on the rollout batch). |
+| `rnd.out_dim` / `rnd.hidden` | `128` / `[256, 256]` | Embedding width and MLP hidden sizes (target and predictor share the architecture). |
+| `rnd.obs_key` | `privileged_state` | Which observation component feeds RND — the critic's privileged state by default, so novelty is measured in true-state space rather than the actor's noisy view. |
 | `wandb.enable` | `true` | Enable WandB if import/login succeeds; use `wandb.enable=false` for local checks. |
 | `wandb.project` | `fbb-locomotion` | WandB project name. |
 | `ppo` | `{}` | Global PPO overrides. Use `++ppo.<key>=...` because this mapping is intentionally empty in YAML. |
@@ -190,6 +195,10 @@ Default actor observations are `gyro`, `gravity`, `joint_pos`, `joint_vel`,
 | `task.env.encoder.enable` | `false` | Enable per-joint encoder-zero offsets. |
 | `task.env.encoder.range` | `0.02` rad | Uniform encoder offset is in `[-range, range]`. |
 | `task.env.action_filter` | `0.0` | EMA filter strength on actions (`0` disables it). Mirror this filter on the robot if enabled during training. |
+| `task.env.tau_ff.enable` | `false` | Feed-forward torque head (joystick only). The policy action grows from 12 to 24: the first half stays the PD position targets, the second half becomes per-joint feed-forward torque applied on top of the PD servo (`qfrc_applied`), following the same action-delay/latency switching as the targets. Changes the action size, so checkpoints do not transfer across this switch. The actor's `last_act` observation keeps the 12-wide position half only. NOTE the sim clamps the servo (`max_torque`) and the head (`tau_ff.scale`) separately — the deployed driver must clamp the same way, not clamp the sum. |
+| `task.env.tau_ff.scale` | `3.0` N·m | Gain and hard clip on the head: physical `tau_ff = clip(scale * output, ±scale)`. |
+| `task.env.tau_ff.rate_weight` | `1.0` | Weight of the head's half inside `action_rate`, so smoothness pressure on a head whose job is transient force is tunable separately from the position targets'. |
+| `task.env.reward.target_sag_wz_fade` | `0.0` | Fade the `target_sag` charge out with the commanded \|wz\|, reaching zero at this rate (rad/s; 0 = full charge everywhere). A pivot loads the stance joints laterally — commanded twist, not gravity sag — and charging it makes pure spins an exploration-time deadlock (measured 2026-08-09: wz 1.0 → ~0.3 achieved at any scale without the fade; a near-binary `0.1` restored 0.84/−0.89). |
 | `task.env.symmetry.enable` | `false` | Per-env left-right mirrored worlds: observations mirrored on the way out, actions un-mirrored on the way in, physics and rewards in the real frame. A skill learned turning one way then exists turning the other by construction. Training-only; the deployed policy always sees real observations. |
 | `task.env.symmetry.mirror_prob` | `0.5` | Probability that an env is a mirrored one. Sampled at reset, so under the Brax auto-reset wrapper it stays fixed per env for the run, like the latency and encoder draws. |
 | `task.env.terrain.enable` | `false` | Train on the terrain arena. Needs `build-terrain` first. See [Terrain curriculum](#terrain-curriculum). |
@@ -262,7 +271,8 @@ Joystick reward-scale defaults:
 | `high_step` | `0.0` | `stand_still` | `-0.5` |
 | `stand_feet_down` | `0.0` | `termination` | `-1.0` |
 | `torque_limit` | `0.0` | `feet_apex` | `0.0` |
-| `feet_landing` | `0.0` |  |  |
+| `feet_landing` | `0.0` | `tau_ff_swing` | `0.0` |
+| `tau_ff` | `0.0` |  |  |
 
 The zero-default terms are dormant until a preset or override enables them:
 `torque_rate` penalizes step-to-step change in actuator torque (bang-bang
@@ -273,7 +283,12 @@ rewards swing-foot clearance up to `gait.swing_height` while moving,
 touchdown (`high_step` pays duration-averaged clearance, which a skimming
 gait collects too), `feet_landing` penalizes downward foot speed inside
 `glide_height` of the ground, and `torque_limit` is the saturation hinge
-described above.
+described above. `tau_ff_swing` and `tau_ff` price the feed-forward torque
+head (`task.env.tau_ff`) and read zero while it is disabled: `tau_ff_swing`
+charges the head's |torque| on legs whose foot is not in ground contact
+(force control belongs on stance legs), and `tau_ff` is the quadratic
+effort the `torques` term cannot see (`actuator_force` is the PD servo
+only).
 
 Example custom joystick distribution:
 
@@ -775,6 +790,9 @@ so command-line values can still override it.
 
 | Preset | Base task | Purpose |
 |---|---|---|
+| `flat_tff_rnd_v1` | joystick | Flat locomotion, soft-gain (kp20/kd0.5) + feed-forward-torque-head + RND design, iteration 1. From scratch by construction (24-wide actions, phase-free critic). |
+| `flat_tff_sag_v1` | flat_tff_rnd_v1 | + slow-walk sampler + `target_sag=-10` (gravity compensation via reward). Superseded: breaks pure spins (exploration-time deadlock); use `flat_tff_sag_v2` with `++task.env.reward.target_sag_wz_fade=0.1`. |
+| `flat_tff_sag_v2` | flat_tff_rnd_v1 | + slow-walk sampler + `target_sag=-10` with the yaw fade. The preset's `fade=1.0` still eroded spins by 2B; the proven operating point is the near-binary override `++task.env.reward.target_sag_wz_fade=0.1` (run `wojtek_flat_tff_sag_v2b_s0`). |
 | `getup` | getup | Safe fall recovery baseline. |
 | `jump` | jump | Commanded jump baseline. |
 | `jump_v3` | jump | Higher torque and deliberate wind-up jump recipe. |
@@ -832,6 +850,7 @@ than infer them from a historical run name:
 | `locomotion_v6` | `fbb_loco_v6` | v3 fields + `task.env.command.zero_prob=0.25`. |
 | `locomotion_v7` | `fbb_loco_v7` | v6 fields + `task.env.reward.scales.height_tracking=2.5`, `task.env.reward.scales.feet_slip=-0.5`. |
 | `locomotion_v8` | `fbb_loco_v8` | v6 fields + `task.env.reward.scales.height_tracking=2.5`, `task.env.reward.scales.tracking_lin_vel=2.5`, `task.env.reward.scales.feet_slip=-0.35`. |
+| `flat_tff_rnd_v1` | `wojtek_flat_tff_rnd_v1` | 2026-08-08 flat redesign off the `locomotion_stiff_kp90_v1` keeper baseline, from scratch (the action space, critic obs and plant all differ from every checkpoint). Soft plant: `task.env.{pd_kp,pd_kd,max_torque,action_scale}={20.0,0.5,12.0,[0.25,0.25,0.25]}` — HALF the damping of the kp20/kd1.0 reference the stiffness ladder measured against; watch the >5 Hz vibration metric. Feed-forward torque head: `task.env.tau_ff={enable:true,scale:3.0,rate_weight:0.25}` (24-wide actions), priced by `reward.scales.{tau_ff_swing,tau_ff}={-0.5,-1e-3}`. Critic is phase-free (`obs.privileged` minus `phase`): fully clock-free on both heads. Simplified reward set: `feet_apex=5.0` (with `apex_target=0.05`) REPLACES `feet_air_time`+`high_step`; `torques=-6e-4` is the single effort term (`torque_rate`/`torque_limit` zeroed — kp20 cannot reach the 12 Nm cap through the servo, the head has its own ±3 clamp); keeper values elsewhere (`tracking_lin_vel=4.0`, `tracking_ang_vel=1.6`, `orientation=-5.0`, `pose=-1.0` at `pose_leg_weight=0.1`, `feet_slip=-0.35`, `action_rate=-0.25`, `stand_still=-2.5`, `stand_feet_down=-30.0`, `termination=-1.0`, `tracking_sigma=0.1`). Command/push blocks as the kp90 keeper (height frozen at 0.125); latency+encoder on; `dr.{joint_gains,motor_strength}` on. `rnd={enable:true,coef:0.02}` — the stand penalties are what keep novelty-seeking from corrupting stance; do not drop them. `ppo.num_timesteps=2e9` (from-scratch scale); pin it low for the bounded GPU check first. Deployment must match kp20/kd0.5/12 Nm AND add the τ_ff head to the driver loop (separate clamps, not a summed clamp); the schema-2 export path does not carry the head yet — extend it before any robot use. |
 | `run` | `fbb_run_v1` | `task.env.command.{vx,vy,wz}={[-0.8,1.8],[-0.5,0.5],[-1,1]}`, `task.env.gait.{freq,swing_height}={[2,3.5],0.04}`, `task.env.push.vel=0.5`. |
 | `run_v2` | `fbb_run_v2` | `task.env.command.{vx,vy,wz}={[-0.8,1.8],[-0.5,0.5],[-1,1]}`, `task.env.gait.{freq,swing_height}={[1.8,4.5],0.04}`, `task.env.push.vel=0.5`, historical `restore=runs/fbb_run_v1/checkpoints/000206438400`. |
 | `springy_phase_b` | `wojtek_springy_b` | Self-contained joystick preset (no `locomotion` inheritance). `task.env.{action_scale,max_torque,abduction_ctrl_limit,knee_target_max}={[0.25,0.5,0.5],6.0,0.44,3.15}`; `task.env.{latency,encoder}.enable=true`; `task.env.obs.include=[joint_pos,joint_vel,last_act,command]` (drops gyro/gravity/phase from the actor, critic list unchanged); `task.env.command.{vx,vy,wz,height,zero_prob,pure_wz_prob,pure_vy_prob}={[-0.8,1.2],[-0.5,0.5],[-1,1],[0.125,0.125],0.25,0.25,0.2}` (height pinned, not removed); `task.env.push.vel=0.8`; `task.env.gait.{swing_height,air_time_cap}={0.08,0.35}`; `task.env.reward.pose_leg_weight=0.1`; `task.env.reward.scales.{tracking_lin_vel,tracking_ang_vel,height_tracking,lin_vel_z,ang_vel_xy,orientation,torques,torque_rate,torque_limit,action_rate,action_accel,energy,pose,feet_air_time,feet_slip,feet_phase,contact_match,high_step,stand_still,stand_feet_down,termination}={4.0,1.6,0.0,0.0,0.0,-5.0,-6e-4,-0.02,-0.1,-0.25,0.0,0.0,-1.0,4.0,-0.35,0.0,0.0,4.0,-2.5,-30.0,-1.0}`; `dr.motor_strength.enable=true` (`range=[0.5,1.1]`); `ppo.num_timesteps=200000000`. |

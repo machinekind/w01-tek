@@ -31,6 +31,8 @@ def test_limit_cycle_lands_in_the_band():
     m = scenario_metrics(_qvel(cycle), DT)
     assert m["band_20_25"] > 0.95
     assert m["vibration"] > 0.95
+    # The absolute-scale guard: a 0.5 rad/s cycle is real joint motion.
+    assert 0.2 < m["qvel_rms"] < 0.5
 
 
 def test_healthy_stand_stays_out_of_the_band():

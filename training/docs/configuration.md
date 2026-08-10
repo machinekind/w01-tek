@@ -868,7 +868,7 @@ using the preset.
 | `video-probe` | `./training/run.sh video-probe --run runs/<name> [--arena {flat,train,eval} --cell NAME --seconds S --fps F --vx V --camera NAME --out FILE --list-cells]`; renders the showcase clip: 960x720 with every overlay on. `--cell` films one measurement cell of the eval arena from the spawn `terrain-scan` uses; `--arena train`/`eval` needs a terrain run. Output lands in `training/videos/<run_name>/` unless `--out` says otherwise. |
 | `battery` | `./training/run.sh battery --run runs/<name> [--out FILE --alpha A --lag-tau T]`; writes the fixed comparison battery. `--alpha`/`--lag-tau` are eval-only plant perturbations, see "Robustness grid (eval-only)" below. |
 | `courses` | `./training/run.sh courses --run runs/<name> [--seeds N --only NAME... --video --video-size WxH --overlay-torque --overlay-camera --paths --out FILE --list]`; writes the path-following course benchmark. `--list` prints the catalogue without loading a run. See "Course benchmark" below. |
-| `imu-grid` | `./training/run.sh imu-grid --runs runs/<name>... [--bias-levels B... --axes x y z --noise-gyro S... --seeds N --stand-sec S --walk-sec S --walk-vx V --out FILE]`; the gyro bias/noise robustness grid. See "IMU robustness grid" below. |
+| `imu-grid` | `./training/run.sh imu-grid --runs runs/<name>... [--bias-levels B... --axes x y z --noise-gyro S... --latency-substeps D... --lag-tau T --seeds N --stand-sec S --walk-sec S --walk-vx V --out FILE]`; the gyro bias/noise robustness grid, with optional pinned control latency and actuator-torque lag. See "IMU robustness grid" below. |
 | `report` | `./training/run.sh report --run runs/<name> [--out-json FILE --out-md FILE]`; writes battery, torque, power, impact proxy, and termination summary. |
 | `export` | `./training/run.sh export --run runs/<name> [--out DIR]`; writes `policy.npz` plus `policy_meta.json`, the schema-2 deployment contract built from the run's env (`wojtek_rl/deploy_contract.py`), and validates the deploy runtime end-to-end against the env before writing. |
 | `app` | `./training/run.sh app [--host HOST --port PORT]`; runs the interactive navigation demo. `WOJTEK_RUN_DIR`, `HOST`, and `PORT` environment variables supply defaults; see [demo README](../demo/README.md). |
@@ -1081,13 +1081,38 @@ DR), the grid runs against any checkpoint of this project unchanged --
 that is the point: measure a policy trained *without* bias DR under the
 bias it will meet on hardware.
 
+Two more loop-delay axes complete the picture. `--latency-substeps` pins
+the per-episode control-latency draw (`info["ctrl_delay"]`, same pin
+mechanism) to chosen substep counts -- the random draw only lands a seed
+on the worst case ~1/6 of the time, so an unpinned grid mostly measures
+mild latency. `--lag-tau` swaps in the battery's explicit-PD substep loop
+(`make_lagged_rollout_fns`): a first-order lag on the joint torque, the
+plant-bandwidth mechanism the env's ideal actuators cannot show.
+
 Per cell it scores a 10 s stand and a 10 s straight walk over a few seeds:
 `vibration` (the battery's >5 Hz joint-velocity power index), `band_20_25`
 (spectral power fraction in the 20-25 Hz near-Nyquist band where the
-real-robot limit cycle lived), falls, and the walk's `vx_err_rms`. No
-gates -- compare cells against the always-included bias=0 baseline row and
-across runs. Results land in `runs/<run>/imu_grid/imu_grid.json`, plus one
-combined markdown table via `--out`.
+real-robot limit cycle lived), `qvel_rms` (absolute joint-velocity scale
+-- the spectral scores are power FRACTIONS, so a near-motionless stand
+can score high on microscopic buzz; a high ratio only means a real
+oscillation when qvel_rms says the joints actually move), falls, and the
+walk's `vx_err_rms`. No gates -- compare cells against the
+always-included bias=0 baseline row and across runs. Results land in
+`runs/<run>/imu_grid/imu_grid.json`, plus one combined markdown table via
+`--out`.
+
+Measured on `wojtek_terrain_blind_v4_1` (2026-08-11, 30-cell grid on a
+rented box plus local lag/latency probes): the real robot's 25 Hz
+standing limit cycle does NOT reproduce in sim -- stand `qvel_rms` stays
+at 0.013 rad/s (motionless; the ~0.69 vibration ratio is quiet-signal
+noise, which is what `qvel_rms` is in the table to catch) across bias to
+0.2 rad/s, white noise to 4x trained, pinned full-period latency, and
+10 ms torque lag, with zero falls. The missing piece is the closed
+physical loop action -> chassis vibration -> IMU reading -- sim's gyro
+reads clean rigid-body state, so the noise never correlates with the
+policy's own output. Treat the grid as a relative-comparison instrument
+(e.g. filtered vs unfiltered policies), not as a reproduction of that
+hardware failure.
 
 ```bash
 # Does the un-filtered terrain policy show the standing limit cycle in sim?

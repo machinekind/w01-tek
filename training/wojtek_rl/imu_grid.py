@@ -59,6 +59,7 @@ import numpy as np
 from wojtek_rl.battery import (
     band_power_fraction,
     load_checkpoint_policy,
+    make_lagged_rollout_fns,
     vibration_index,
 )
 from wojtek_rl.courses.spec import HEIGHT_CMD
@@ -84,30 +85,44 @@ def grid_cells(bias_levels, axes) -> list:
 
 
 def scenario_metrics(qvel_hist: np.ndarray, dt: float) -> dict:
-    """The two spectral scores for one surviving rollout's qvel history."""
+    """Spectral scores plus absolute scale for one surviving rollout.
+
+    qvel_rms (rad/s over all joints) is the guard battery.py pairs with the
+    vibration ratio: both spectral scores are FRACTIONS of total power, so a
+    near-motionless stand can score high on microscopic buzz. A high ratio
+    only means a real oscillation when qvel_rms says the joints actually
+    move.
+    """
     return {
         "vibration": round(vibration_index(qvel_hist, dt), 4),
         "band_20_25": round(
             band_power_fraction(qvel_hist, dt, *NYQUIST_BAND_HZ), 4
         ),
+        "qvel_rms": round(float(np.sqrt(np.mean(qvel_hist**2))), 4),
     }
 
 
-def _pin(state, cmd, bias):
-    """Pin command and gyro bias into the state for the next step.
+def _pin(state, cmd, bias, latency=None):
+    """Pin command, gyro bias and (optionally) control latency for the
+    next step.
 
     Same in-place-dict mechanism as the course follower's _hold_command
     (values replaced, structure unchanged -- no retrace): the command pin
-    also zeroes steps_since_cmd so the env never resamples over us, and
-    the bias pin overwrites the reset-time draw with the cell's vector.
+    also zeroes steps_since_cmd so the env never resamples over us, the
+    bias pin overwrites the reset-time draw with the cell's vector, and
+    the latency pin overwrites info["ctrl_delay"] -- the per-episode
+    substep-latency draw -- so a cell can measure the WORST-case constant
+    latency instead of a random draw that only ~1/6 of seeds land on.
     """
     state.info["command"] = cmd
     state.info["steps_since_cmd"] = jp.zeros_like(state.info["steps_since_cmd"])
     state.info["gyro_bias"] = bias
+    if latency is not None:
+        state.info["ctrl_delay"] = jp.int32(latency)
 
 
-def _rollout(env, reset, step, inf, cmd, n_steps, bias, seed):
-    """`n_steps` under a fixed command and pinned bias.
+def _rollout(env, reset, step, inf, cmd, n_steps, bias, seed, latency=None):
+    """`n_steps` under a fixed command and pinned bias/latency.
 
     Returns (qvel_hist, vx_hist, fell_at) with the first SETTLE_STEPS
     excluded from the histories; fell_at is a step index or None.
@@ -116,7 +131,7 @@ def _rollout(env, reset, step, inf, cmd, n_steps, bias, seed):
     state = reset(rng)
     qvel_hist, vx_hist = [], []
     for i in range(n_steps):
-        _pin(state, cmd, bias)
+        _pin(state, cmd, bias, latency)
         rng, k = jax.random.split(rng)
         act, _ = inf(state.obs, k)
         state = step(state, act)
@@ -130,8 +145,8 @@ def _rollout(env, reset, step, inf, cmd, n_steps, bias, seed):
 
 
 def _cell(env, reset, step, inf, bias, seeds, seed_base, stand_steps,
-          walk_steps, walk_vx, dt):
-    """One (bias vector) cell: stand and walk scenarios over `seeds`."""
+          walk_steps, walk_vx, dt, latency=None):
+    """One (bias vector, latency) cell: stand and walk over `seeds`."""
     stand_cmd = jp.array([0.0, 0.0, 0.0, HEIGHT_CMD])
     walk_cmd = jp.array([walk_vx, 0.0, 0.0, HEIGHT_CMD])
     bias_jp = jp.asarray(bias)
@@ -143,7 +158,8 @@ def _cell(env, reset, step, inf, bias, seeds, seed_base, stand_steps,
         rows, fell = [], []
         for s in range(seeds):
             qvel, vx, fell_at = _rollout(
-                env, reset, step, inf, cmd, steps, bias_jp, seed_base + s
+                env, reset, step, inf, cmd, steps, bias_jp, seed_base + s,
+                latency,
             )
             if fell_at is not None:
                 fell.append(round(fell_at * dt, 2))
@@ -163,16 +179,18 @@ def _cell(env, reset, step, inf, bias, seeds, seed_base, stand_steps,
     return out
 
 
-def _cell_row(cell: dict, noise, axis: str, bias: float) -> str:
+def _cell_row(cell: dict, noise, axis: str, bias: float, latency=None) -> str:
     def _f(d, key):
         v = d.get(key)
         return f"{v:>7.3f}" if v is not None else "      -"
 
     st, wk = cell["stand"], cell["walk"]
     noise_s = "own" if noise is None else f"{noise:g}"
+    lat_s = "own" if latency is None else str(latency)
     return (
-        f"{noise_s:>5} {axis:>4} {bias:>5.2f}  "
+        f"{noise_s:>5} {lat_s:>4} {axis:>4} {bias:>5.2f}  "
         f"{_f(st, 'vibration_mean')} {_f(st, 'band_20_25_mean')} "
+        f"{_f(st, 'qvel_rms_mean')} "
         f"{st['falls']:>2}/{st['seeds']}  "
         f"{_f(wk, 'vibration_mean')} {_f(wk, 'vx_err_rms_mean')} "
         f"{wk['falls']:>2}/{wk['seeds']}"
@@ -180,36 +198,52 @@ def _cell_row(cell: dict, noise, axis: str, bias: float) -> str:
 
 
 _HEADER = (
-    f"{'noise':>5} {'axis':>4} {'bias':>5}  "
-    f"{'st.vib':>7} {'st.band':>7} {'falls':>5}  "
+    f"{'noise':>5} {'lat':>4} {'axis':>4} {'bias':>5}  "
+    f"{'st.vib':>7} {'st.band':>7} {'st.rms':>7} {'falls':>5}  "
     f"{'wk.vib':>7} {'wk.verr':>7} {'falls':>5}"
 )
 
 
 def run_grid(run_dir: Path, bias_levels, axes, noise_levels, seeds,
-             seed_base, stand_sec, walk_sec, walk_vx) -> dict:
-    """The full grid for one run; writes and returns its imu_grid.json."""
+             seed_base, stand_sec, walk_sec, walk_vx,
+             latency_levels=(None,), lag_tau=0.0) -> dict:
+    """The full grid for one run; writes and returns its imu_grid.json.
+
+    `lag_tau` > 0 swaps in battery's explicit-PD substep loop
+    (make_lagged_rollout_fns): a first-order lag on the joint torque, the
+    plant-bandwidth mechanism the env's ideal actuators cannot show. It is
+    the eval-only knob to combine with the sensor axes here -- the
+    real-robot limit cycle needs BOTH a phase-lagged torque path and gyro
+    noise in the loop.
+    """
     cells = []
-    print(f"\nimu_grid -- {run_dir}")
+    print(f"\nimu_grid -- {run_dir}"
+          + (f" (lag_tau={lag_tau:g}s)" if lag_tau > 0 else ""))
     print(_HEADER)
     for noise in noise_levels:
         overrides = None if noise is None else {"obs_noise": {"gyro": noise}}
         run, env, ckpt, inf = load_checkpoint_policy(
             run_dir, env_overrides=overrides
         )
-        reset, step = jax.jit(env.reset), jax.jit(env.step)
+        if lag_tau > 0:
+            reset_fn, step_fn = make_lagged_rollout_fns(env, lag_tau)
+            reset, step = jax.jit(reset_fn), jax.jit(step_fn)
+        else:
+            reset, step = jax.jit(env.reset), jax.jit(env.step)
         dt = env.dt
         stand_steps = int(round(stand_sec / dt))
         walk_steps = int(round(walk_sec / dt))
-        for axis, bias in grid_cells(bias_levels, axes):
-            cell = _cell(
-                env, reset, step, inf, bias_vector(axis, bias) if bias else
-                np.zeros(3), seeds, seed_base, stand_steps, walk_steps,
-                walk_vx, dt,
-            )
-            entry = {"noise_gyro": noise, "axis": axis, "bias": bias, **cell}
-            cells.append(entry)
-            print(_cell_row(cell, noise, axis, bias), flush=True)
+        for latency in latency_levels:
+            for axis, bias in grid_cells(bias_levels, axes):
+                cell = _cell(
+                    env, reset, step, inf, bias_vector(axis, bias) if bias
+                    else np.zeros(3), seeds, seed_base, stand_steps,
+                    walk_steps, walk_vx, dt, latency,
+                )
+                entry = {"noise_gyro": noise, "latency": latency,
+                         "axis": axis, "bias": bias, **cell}
+                cells.append(entry)
+                print(_cell_row(cell, noise, axis, bias, latency), flush=True)
     results = {
         "run": run["run_name"],
         "checkpoint": ckpt.name,
@@ -218,6 +252,7 @@ def run_grid(run_dir: Path, bias_levels, axes, noise_levels, seeds,
         "stand_sec": stand_sec,
         "walk_sec": walk_sec,
         "walk_vx": walk_vx,
+        "lag_tau": lag_tau,
         "band_hz": list(NYQUIST_BAND_HZ),
         "cells": cells,
     }
@@ -232,9 +267,9 @@ def write_report(out: Path, all_results: list) -> None:
     lines = [
         "# IMU robustness grid",
         "",
-        "| run | noise | axis | bias | stand vib | stand band20-25 | "
-        "stand falls | walk vib | walk vx_err | walk falls |",
-        "|---|---|---|---|---|---|---|---|---|---|",
+        "| run | noise | lat | axis | bias | stand vib | stand band20-25 | "
+        "stand qvel_rms | stand falls | walk vib | walk vx_err | walk falls |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for res in all_results:
         for c in res["cells"]:
@@ -245,9 +280,11 @@ def write_report(out: Path, all_results: list) -> None:
                 return f"{v:.3f}" if v is not None else "-"
 
             noise = "own" if c["noise_gyro"] is None else f"{c['noise_gyro']:g}"
+            lat = "own" if c.get("latency") is None else str(c["latency"])
             lines.append(
-                f"| {res['run']} | {noise} | {c['axis']} | {c['bias']:g} "
+                f"| {res['run']} | {noise} | {lat} | {c['axis']} | {c['bias']:g} "
                 f"| {_m(st, 'vibration_mean')} | {_m(st, 'band_20_25_mean')} "
+                f"| {_m(st, 'qvel_rms_mean')} "
                 f"| {st['falls']}/{st['seeds']} | {_m(wk, 'vibration_mean')} "
                 f"| {_m(wk, 'vx_err_rms_mean')} | {wk['falls']}/{wk['seeds']} |"
             )
@@ -273,6 +310,17 @@ def main():
                     help="absolute white gyro-noise scales to sweep; each "
                     "value rebuilds the env (default: the run's own value "
                     "only)")
+    ap.add_argument("--lag-tau", type=float, default=0.0,
+                    help="first-order actuator-torque lag in seconds "
+                    "(battery's explicit-PD path); 0 = the native ideal "
+                    "actuators. One value per invocation, it recompiles "
+                    "the whole grid")
+    ap.add_argument("--latency-substeps", type=int, nargs="+", default=None,
+                    help="pin the per-episode control-latency draw "
+                    "(info['ctrl_delay']) to these substep counts, one grid "
+                    "axis each; the random draw only lands a seed on the "
+                    "worst case ~1/6 of the time (default: the env's own "
+                    "draw only)")
     ap.add_argument("--seeds", type=int, default=3,
                     help="rollouts per cell and scenario (default 3)")
     ap.add_argument("--seed-base", type=int, default=0)
@@ -287,12 +335,13 @@ def main():
     args = ap.parse_args()
 
     noise_levels = [None] + (args.noise_gyro or [])
+    latency_levels = [None] + (args.latency_substeps or [])
     all_results = []
     for run in args.runs:
         all_results.append(run_grid(
             Path(run), args.bias_levels, args.axes, noise_levels,
             args.seeds, args.seed_base, args.stand_sec, args.walk_sec,
-            args.walk_vx,
+            args.walk_vx, latency_levels, args.lag_tau,
         ))
     if args.out:
         write_report(Path(args.out), all_results)

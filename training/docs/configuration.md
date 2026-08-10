@@ -139,6 +139,7 @@ All three tasks support these paths through their `default_config()`:
 | `task.env.obs_noise.gravity` | `0.05` | Uniform actor gravity-vector noise scale. |
 | `task.env.obs_noise.joint_pos` | `0.01` rad | Uniform actor joint-position noise scale. |
 | `task.env.obs_noise.joint_vel` | `1.5` rad/s | Uniform actor joint-velocity noise scale. |
+| `task.env.obs_noise.gyro_bias` | `0.0` rad/s | Half-width of the per-episode gyro zero-rate offset: drawn `U(±gyro_bias)` at reset, constant through the episode (fixed per env under Brax auto-reset, like the latency and encoder draws), added to the actor's gyro only — the critic reads the clean signal. `0` disables. |
 | `task.env.obs.state` | task-specific | Ordered actor observation names. |
 | `task.env.obs.privileged` | task-specific | Ordered critic-only observation names. |
 | `task.env.obs.include` | `[]` | Whitelist applied to actor observations. The `obs` group sets this; an empty list means use every name in `obs.state`. |
@@ -820,6 +821,7 @@ so command-line values can still override it.
 | `terrain_blind_v4` | joystick | Run three of the terrain family, from scratch: `terrain_blind_v3`'s operating point plus wider tracking kernels, the tracking-gated gait shaping, the no-progress cut, and the far-field tracking blend. |
 | `terrain_blind_v4_1` | joystick | `terrain_blind_v4` plus foot-friction randomization, the roughness gate on the gait shaping, a slow clean-walk command draw, and the clean height scan on the critic. The actor stays on the family's 46-dim blind layout, so checkpoints interchange with `terrain_blind_v4`. |
 | `terrain_blind_v4_1_1` | joystick | `terrain_blind_v4_1` plus `task.env.action_filter=0.5`, the EMA on actions against the standing limit cycle observed on the real robot. The filter value is exported in the schema-2 contract and mirrored by the deployment loop. |
+| `terrain_blind_v4_1_2` | joystick | `terrain_blind_v4_1_1` plus `task.env.obs_noise.gyro_bias=0.05` rad/s, the per-episode zero-rate offset on the actor's gyro that the white gyro noise cannot represent. |
 | `terrain_scan_v5` | joystick | `terrain_blind_v4_1` with the height scan in the actor observation as well (71-dim actor). "Corrupted" refers to the training-time sensor model on the actor's copy only — per-episode noise / drift / blackout regimes plus point dropout (`height_scan.corrupt`) — while the critic keeps the clean grid; it says nothing about which runs are launched. Its checkpoints share nothing with the blind family. |
 
 Read the matching file in [`conf/experiment`](../wojtek_rl/conf/experiment)

@@ -302,10 +302,15 @@ class WojtekEnv(mjx_env.MjxEnv):
         noise = jax.random.uniform(rng, clean.shape, minval=-1.0, maxval=1.0)
         return clean + noise * scales
 
-    def _step_with_latency(self, data, prev, new, d):
+    def _step_with_latency(self, data, prev, new, d, qfrc_prev=None, qfrc_new=None):
         """Run n_substeps physics steps: ctrl is `prev` while the substep
         index is below d, `new` from d onward. d=n_substeps holds `prev` for
         the whole period; d=0 applies `new` immediately.
+
+        `qfrc_prev`/`qfrc_new` (optional, full nv-wide vectors) ride the
+        same switching into data.qfrc_applied — the joystick env's
+        feed-forward torque head uses this so tau_ff sees the same latency
+        as the position targets. None leaves qfrc_applied untouched.
 
         A single `jp.where` handles every d. A per-lane lax.cond would be
         wrong under the training vmap: `d` is batched, so cond runs every
@@ -315,6 +320,10 @@ class WojtekEnv(mjx_env.MjxEnv):
         def _substep(data, i):
             ctrl = jp.where(i < d, prev, new)
             data = data.replace(ctrl=ctrl)
+            if qfrc_prev is not None:
+                data = data.replace(
+                    qfrc_applied=jp.where(i < d, qfrc_prev, qfrc_new)
+                )
             return mjx.step(self._mjx_model, data), None
 
         return jax.lax.scan(_substep, data, jp.arange(self.n_substeps))[0]

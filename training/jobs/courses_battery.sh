@@ -43,6 +43,10 @@ source training/jobs/_lib.sh
 : "${OUT_SUB:=eval/$TAG}"
 # JAX platform for the evals. Empty: whatever devices the machine has.
 : "${EVAL_PLATFORM:=cpu}"
+# Run name whose policy acts on pure-spin and stand command windows:
+# every member is then measured as the seam-test composite (--spin-run,
+# see wojtek_rl.seam). Empty: plain single-policy evals.
+: "${SPIN_RUN:=}"
 
 PLATFORM_ENV=()
 [ -n "$EVAL_PLATFORM" ] && PLATFORM_ENV=(JAX_PLATFORMS="$EVAL_PLATFORM")
@@ -141,6 +145,27 @@ if [ -z "$PRESENT" ]; then
     exit 1
 fi
 
+# The spin donor is load-bearing for every member: without it the whole
+# job would silently measure something else, so a missing donor is a hard
+# error, not a skip. Checked keeper-style: it may predate the export
+# marker.
+SPIN_FLAGS=()
+if [ -n "$SPIN_RUN" ]; then
+    if [ ! -f "$PROJECT/runs/$SPIN_RUN/run.json" ]; then
+        echo "ERROR: SPIN_RUN runs/$SPIN_RUN has no run.json" >&2
+        exit 1
+    fi
+    found=""
+    for d in "$PROJECT/runs/$SPIN_RUN/checkpoints"/[0-9]*; do
+        [ -d "$d" ] && found=1 && break
+    done
+    if [ -z "$found" ]; then
+        echo "ERROR: SPIN_RUN runs/$SPIN_RUN has no checkpoint" >&2
+        exit 1
+    fi
+    SPIN_FLAGS=(--spin-run "runs/$SPIN_RUN")
+fi
+
 # Provenance before the evals: a timeout mid-battery must not lose it.
 for name in $PRESENT; do
     mkdir -p "$PROJECT/runs/$name/$OUT_SUB"
@@ -152,13 +177,15 @@ for name in $PRESENT; do
     echo "== courses tag=$TAG run=$name seeds=$SEEDS seed-base=$SEED_BASE =="
     if ! run_main env ${PLATFORM_ENV[@]+"${PLATFORM_ENV[@]}"} python3 -m wojtek_rl.courses \
         --run "runs/$name" --seeds "$SEEDS" --seed-base "$SEED_BASE" \
-        --out "runs/$name/$OUT_SUB/courses.json"; then
+        --out "runs/$name/$OUT_SUB/courses.json" \
+        ${SPIN_FLAGS[@]+"${SPIN_FLAGS[@]}"}; then
         echo "WARN: courses for $name crashed; continuing"
         FAILED="$FAILED $name:courses"
     fi
     echo "== battery tag=$TAG run=$name =="
     if ! run_main env ${PLATFORM_ENV[@]+"${PLATFORM_ENV[@]}"} python3 -m wojtek_rl.battery \
-        --run "runs/$name" --out "runs/$name/$OUT_SUB/battery.json"; then
+        --run "runs/$name" --out "runs/$name/$OUT_SUB/battery.json" \
+        ${SPIN_FLAGS[@]+"${SPIN_FLAGS[@]}"}; then
         echo "WARN: battery for $name crashed; continuing"
         FAILED="$FAILED $name:battery"
     fi

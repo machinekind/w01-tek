@@ -94,7 +94,14 @@ def default_config() -> config_dict.ConfigDict:
         # this is a real clamp, not a no-op, whenever it is below that bound.
         knee_target_max=0.0,
         obs_noise=config_dict.create(
-            gyro=0.2, gravity=0.05, joint_pos=0.01, joint_vel=1.5
+            gyro=0.2, gravity=0.05, joint_pos=0.01, joint_vel=1.5,
+            # Half-width of the per-episode gyro zero-rate offset, rad/s:
+            # drawn U(+-gyro_bias) at reset and constant through the episode,
+            # added to the actor's gyro only (the critic reads the clean
+            # signal). 0 disables. The white `gyro` noise above cannot
+            # represent it: a real gyro's offset is constant on the episode
+            # timescale, not redrawn every step.
+            gyro_bias=0.0,
         ),
         # Declarative observation spec: ordered lists of catalog names (see
         # WojtekEnv._obs_catalog + this env's command/phase additions).
@@ -1131,6 +1138,16 @@ class WojtekJoystick(WojtekEnv):
             )
         else:
             epsilon = jp.zeros(12)
+        # Per-episode gyro bias, sampled at reset (fixed per env for the
+        # whole training run under auto-reset, like latency/encoder above).
+        # _build_obs adds it to the actor's gyro only. The disabled branch
+        # draws no rng, so the default trajectory is unchanged.
+        gb = self._config.obs_noise.get("gyro_bias", 0.0)
+        if gb:
+            rng, r_gbias = jax.random.split(rng)  # only consumed when enabled
+            gyro_bias = jax.random.uniform(r_gbias, (3,), minval=-gb, maxval=gb)
+        else:
+            gyro_bias = jp.zeros(3)
         # Mirror flag, sampled at reset (fixed per env for the whole run
         # under auto-reset, like latency/encoder above). The disabled
         # branch draws no rng, so the default trajectory is unchanged.
@@ -1175,6 +1192,7 @@ class WojtekJoystick(WojtekEnv):
             "phase": jp.array(0.0),  # master clock; per-leg via _leg_phases
             "ctrl_delay": jp.int32(d),
             "encoder_offset": epsilon,
+            "gyro_bias": gyro_bias,
         }
         metrics = {f"reward/{k}": jp.zeros(()) for k in self._config.reward.scales}
         # Posture and command-mix telemetry, written every step; declared on

@@ -364,17 +364,24 @@ class WojtekEnv(mjx_env.MjxEnv):
         """
         catalog = self._obs_catalog(data, info)
 
-        def gather(names):
-            missing = [n for n in names if n not in catalog]
+        def gather(names, source=catalog):
+            missing = [n for n in names if n not in source]
             if missing:
                 raise KeyError(
                     f"unknown obs component(s) {missing}; available: "
-                    f"{sorted(catalog)}"
+                    f"{sorted(source)}"
                 )
-            return jp.concatenate([catalog[n] for n in names])
+            return jp.concatenate([source[n] for n in names])
 
         state_names = self.actor_obs_names
-        state = gather(state_names)
+        # Per-episode gyro bias (info["gyro_bias"], drawn by envs that train
+        # it): the actor's copy of the gyro carries the episode's draw; the
+        # privileged gather below reads the clean catalog.
+        actor_catalog = catalog
+        bias = info.get("gyro_bias")
+        if bias is not None and "gyro" in catalog:
+            actor_catalog = {**catalog, "gyro": catalog["gyro"] + bias}
+        state = gather(state_names, actor_catalog)
         if rng is not None:
             noise = self._config.obs_noise
             scales = jp.concatenate(

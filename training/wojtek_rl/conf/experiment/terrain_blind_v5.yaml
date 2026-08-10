@@ -1,0 +1,108 @@
+# @package _global_
+# terrain_blind_v5 -- the terrain family rebased onto the flat tau_ff SOTA
+# operating point (flat_tff_rnd_v1: soft kp20/kd0.5 plant, 24-wide action
+# with the +-3 Nm feed-forward head, clock-free critic, RND, simplified
+# reward set). One intent: move that operating point onto terrain. It is a
+# NEW line, not a continuation -- action space, plant and reward set all
+# differ from terrain_blind_v4_x, so checkpoints share nothing with it.
+# On top of the flat base this adds, from the terrain family:
+#   - the IMU back in the actor (gyro+gravity; blind terrain needs it) and
+#     the clean height scan on the critic only,
+#   - terrain arena + curriculum, base-contact fall, measured warp contact
+#     budgets (naconmax/njmax from the v4_1 plant),
+#   - terrain command box (wz +-1.5) and the slow/backward/arc draws,
+#   - reward.terrain_gate on the lift shaping, orientation_tol 20 deg,
+#     the no-progress cut, foot-friction DR,
+#   - symmetry augmentation (the head mirrors like the joints it drives),
+#   - action_filter 0.5, the fix for the 25 Hz standing limit cycle seen
+#     on the real robot; the filter value enters the schema-2 contract at
+#     export and the deployment loop applies the same EMA.
+# The per-episode gyro-bias DR lands separately in terrain_blind_v5_1.
+# DECISIONS HELD OPEN (revisit after run one):
+#   - action_filter smooths the FULL 24-dim action, torque head included
+#     (~5.5 Hz bandwidth on a head whose job is transient stance force).
+#     If the head looks blunted, splitting the filter to the position half
+#     is a contract+runtime change to coordinate with PR #2.
+#   - height stays frozen at 0.125 (the tff base's choice); the terrain
+#     family's live height range [0.10, 0.16] is deliberately NOT restored.
+#   - target_sag stays off: its stance charge judges q against the applied
+#     target, and terrain conformance IS deviation from the target.
+# Launch notes:
+#   ./training/run.sh build-terrain --arena train --flat-row   # generated,
+#     gitignored; the --flat-row build and terrain.flat_row must agree, and
+#     train.sh needs FLAT_ROW=1 for its in-job build.
+#   XLA_PYTHON_CLIENT_PREALLOC=false ./training/run.sh train \
+#     +experiment=terrain_blind_v5
+# PREALLOC=false is mandatory on terrain. train.py pins
+# ppo.num_resets_per_eval=0 whenever terrain is on.
+defaults:
+  - flat_tff_rnd_v1
+
+task:
+  env:
+    action_filter: 0.5
+    symmetry:
+      enable: true
+      mirror_prob: 0.5
+    no_progress:
+      enable: true
+      grace_sec: 2.0
+      ema_sec: 1.0
+      risk_below: 0.5
+      p_max: 0.02
+    obs:
+      # The flat tff actor plus the IMU; still clock-free on both heads.
+      # A new frozen layout -- incompatible with every earlier family.
+      include:
+        - gyro
+        - gravity
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+      privileged:
+        - gyro
+        - gravity
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+        - linvel
+        - foot_contact
+        - height_scan_clean
+    height_scan:
+      enable: true
+    command:
+      wz: [-1.5, 1.5]
+      arc_prob: 0.2
+      arc_vx: [0.3, 0.8]
+      pure_slow_prob: 0.1
+      slow_vx: [0.15, 0.35]
+      pure_back_prob: 0.2
+      back_vx: [-0.8, -0.2]
+    reward:
+      orientation_tol_deg: 20.0
+      terrain_gate:
+        enable: true
+        floor: 0.15
+        rough_ref: 0.05
+        landing_soften: 0.5
+    terrain:
+      enable: true
+      arena: train
+      flat_row: true
+    fall:
+      on_base_contact: true
+    sim:
+      # The v4_1 plant's measured warp budgets (29 heightfield-colliding
+      # geoms x 4 contacts; worst measured nefc 228 with margin).
+      naconmax_per_env: 116
+      njmax: 640
+
+dr:
+  foot_friction: { enable: true, range: [0.4, 1.35] }
+
+ppo:
+  log_training_metrics: true
+
+run_name: wojtek_terrain_blind_v5

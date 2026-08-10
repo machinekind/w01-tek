@@ -184,6 +184,43 @@ def test_flat_pitch_row_only_gate_follows_the_row_id(arena, gated_reset):
     assert float(_rewards(env, pitched, info)["flat_pitch"]) == 0.0
 
 
+def test_flat_pitch_spin_exempt_frees_pure_spin_windows(arena, gated_reset):
+    """flat_pitch_spin_exempt (v4.5): a pure-spin command window pays no
+    flat_pitch on the flat row; walk, arc and stand windows keep the full
+    hinge."""
+    cfg = _terrain_cfg()
+    cfg.terrain.spawn_level = 0
+    cfg.reward.terrain_gate.enable = True
+    cfg.reward.terrain_gate.flat_pitch_spin_exempt = True
+    cfg.reward.scales.flat_pitch = -10.0
+    env = wojtek_env.WojtekJoystick(cfg)
+    pitched = _pitched_data(env, gated_reset, 10.0)
+    hinge = _sin(10.0) - _sin(2.0)
+
+    def priced(command):
+        info = dict(gated_reset.info)
+        info["command"] = jp.array(command)
+        return float(_rewards(env, pitched, info)["flat_pitch"])
+
+    assert priced([0.0, 0.0, 1.0, 0.125]) == 0.0  # pure spin
+    assert priced([0.4, 0.0, 0.0, 0.125]) == pytest.approx(hinge, abs=1e-6)
+    assert priced([0.3, 0.0, 1.0, 0.125]) == pytest.approx(hinge, abs=1e-6)
+    assert priced([0.0, 0.0, 0.0, 0.125]) == pytest.approx(hinge, abs=1e-6)
+
+
+def test_flat_pitch_spin_exempt_default_off_keeps_spins_priced(
+    gated_env, gated_reset
+):
+    """Without the key (default False) a pure-spin window pays the hinge
+    exactly as before v4.5."""
+    pitched = _pitched_data(gated_env, gated_reset, 10.0)
+    info = dict(gated_reset.info)
+    info["command"] = jp.array([0.0, 0.0, 1.0, 0.125])
+    assert float(_rewards(gated_env, pitched, info)["flat_pitch"]) == (
+        pytest.approx(_sin(10.0) - _sin(2.0), abs=1e-6)
+    )
+
+
 def test_flat_pitch_reads_zero_when_terrain_gate_is_off(arena, gated_reset):
     """Terrain on with terrain_gate off: no roughness signal exists, so
     the term is a constant 0 and only the key survives (parity with

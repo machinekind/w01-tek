@@ -179,7 +179,8 @@ def _cell(env, reset, step, inf, bias, seeds, seed_base, stand_steps,
     return out
 
 
-def _cell_row(cell: dict, noise, axis: str, bias: float, latency=None) -> str:
+def _cell_row(cell: dict, noise, axis: str, bias: float, latency=None,
+              vib=None) -> str:
     def _f(d, key):
         v = d.get(key)
         return f"{v:>7.3f}" if v is not None else "      -"
@@ -187,8 +188,9 @@ def _cell_row(cell: dict, noise, axis: str, bias: float, latency=None) -> str:
     st, wk = cell["stand"], cell["walk"]
     noise_s = "own" if noise is None else f"{noise:g}"
     lat_s = "own" if latency is None else str(latency)
+    vib_s = "off" if vib is None else f"{vib:g}"
     return (
-        f"{noise_s:>5} {lat_s:>4} {axis:>4} {bias:>5.2f}  "
+        f"{noise_s:>5} {vib_s:>5} {lat_s:>4} {axis:>4} {bias:>5.2f}  "
         f"{_f(st, 'vibration_mean')} {_f(st, 'band_20_25_mean')} "
         f"{_f(st, 'qvel_rms_mean')} "
         f"{st['falls']:>2}/{st['seeds']}  "
@@ -198,7 +200,7 @@ def _cell_row(cell: dict, noise, axis: str, bias: float, latency=None) -> str:
 
 
 _HEADER = (
-    f"{'noise':>5} {'lat':>4} {'axis':>4} {'bias':>5}  "
+    f"{'noise':>5} {'vib':>5} {'lat':>4} {'axis':>4} {'bias':>5}  "
     f"{'st.vib':>7} {'st.band':>7} {'st.rms':>7} {'falls':>5}  "
     f"{'wk.vib':>7} {'wk.verr':>7} {'falls':>5}"
 )
@@ -210,20 +212,25 @@ def run_grid(run_dir: Path, bias_levels, axes, noise_levels, seeds,
     """The full grid for one run; writes and returns its imu_grid.json.
 
     `lag_tau` > 0 swaps in battery's explicit-PD substep loop
-    (make_lagged_rollout_fns): a first-order lag on the joint torque, the
-    plant-bandwidth mechanism the env's ideal actuators cannot show. It is
-    the eval-only knob to combine with the sensor axes here -- the
-    real-robot limit cycle needs BOTH a phase-lagged torque path and gyro
-    noise in the loop.
+    (make_lagged_rollout_fns). The joint torque then follows its target
+    with a first-order delay, the way a real drive does. The env's own
+    actuators apply torque instantly and cannot show that delay.
     """
     cells = []
     print(f"\nimu_grid -- {run_dir}"
           + (f" (lag_tau={lag_tau:g}s)" if lag_tau > 0 else ""))
     print(_HEADER)
-    for noise in noise_levels:
-        overrides = None if noise is None else {"obs_noise": {"gyro": noise}}
+    for noise, vib in noise_levels:
+        overrides = {}
+        if noise is not None:
+            overrides.setdefault("obs_noise", {})["gyro"] = noise
+        if vib is not None:
+            # The resonator updates inside env.step, so its gain has to
+            # enter through the env config. Pinning an info value, the way
+            # bias and latency enter, cannot switch it on.
+            overrides.setdefault("obs_noise", {})["gyro_vib"] = vib
         run, env, ckpt, inf = load_checkpoint_policy(
-            run_dir, env_overrides=overrides
+            run_dir, env_overrides=overrides or None
         )
         if lag_tau > 0:
             reset_fn, step_fn = make_lagged_rollout_fns(env, lag_tau)
@@ -240,10 +247,12 @@ def run_grid(run_dir: Path, bias_levels, axes, noise_levels, seeds,
                     else np.zeros(3), seeds, seed_base, stand_steps,
                     walk_steps, walk_vx, dt, latency,
                 )
-                entry = {"noise_gyro": noise, "latency": latency,
-                         "axis": axis, "bias": bias, **cell}
+                entry = {"noise_gyro": noise, "vib_gain": vib,
+                         "latency": latency, "axis": axis, "bias": bias,
+                         **cell}
                 cells.append(entry)
-                print(_cell_row(cell, noise, axis, bias, latency), flush=True)
+                print(_cell_row(cell, noise, axis, bias, latency, vib),
+                      flush=True)
     results = {
         "run": run["run_name"],
         "checkpoint": ckpt.name,
@@ -267,9 +276,9 @@ def write_report(out: Path, all_results: list) -> None:
     lines = [
         "# IMU robustness grid",
         "",
-        "| run | noise | lat | axis | bias | stand vib | stand band20-25 | "
+        "| run | noise | vib | lat | axis | bias | stand vib | stand band20-25 | "
         "stand qvel_rms | stand falls | walk vib | walk vx_err | walk falls |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for res in all_results:
         for c in res["cells"]:
@@ -280,9 +289,10 @@ def write_report(out: Path, all_results: list) -> None:
                 return f"{v:.3f}" if v is not None else "-"
 
             noise = "own" if c["noise_gyro"] is None else f"{c['noise_gyro']:g}"
+            vib = "off" if c.get("vib_gain") is None else f"{c['vib_gain']:g}"
             lat = "own" if c.get("latency") is None else str(c["latency"])
             lines.append(
-                f"| {res['run']} | {noise} | {lat} | {c['axis']} | {c['bias']:g} "
+                f"| {res['run']} | {noise} | {vib} | {lat} | {c['axis']} | {c['bias']:g} "
                 f"| {_m(st, 'vibration_mean')} | {_m(st, 'band_20_25_mean')} "
                 f"| {_m(st, 'qvel_rms_mean')} "
                 f"| {st['falls']}/{st['seeds']} | {_m(wk, 'vibration_mean')} "
@@ -310,6 +320,13 @@ def main():
                     help="absolute white gyro-noise scales to sweep; each "
                     "value rebuilds the env (default: the run's own value "
                     "only)")
+    ap.add_argument("--vib-gain", type=float, nargs="+", default=None,
+                    help="gains for the gyro-vib feedback corruption "
+                    "(obs_noise.gyro_vib): the policy's own torque jitter "
+                    "comes back into its gyro through a resonator at half "
+                    "the control rate. Each value rebuilds the env. Sweep "
+                    "it to find the gain where standing goes unstable "
+                    "(default: off)")
     ap.add_argument("--lag-tau", type=float, default=0.0,
                     help="first-order actuator-torque lag in seconds "
                     "(battery's explicit-PD path); 0 = the native ideal "
@@ -334,7 +351,11 @@ def main():
                     help="combined markdown report path (optional)")
     args = ap.parse_args()
 
-    noise_levels = [None] + (args.noise_gyro or [])
+    # One env build per (noise, vib) pair: baseline first, then each single
+    # perturbation on its own so a cell isolates one mechanism.
+    noise_levels = [(None, None)]
+    noise_levels += [(n, None) for n in (args.noise_gyro or [])]
+    noise_levels += [(None, v) for v in (args.vib_gain or [])]
     latency_levels = [None] + (args.latency_substeps or [])
     all_results = []
     for run in args.runs:

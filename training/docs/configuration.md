@@ -134,6 +134,9 @@ All three tasks support these paths through their `default_config()`:
 | `task.env.obs_noise.gravity` | `0.05` | Uniform actor gravity-vector noise scale. |
 | `task.env.obs_noise.joint_pos` | `0.01` rad | Uniform actor joint-position noise scale. |
 | `task.env.obs_noise.joint_vel` | `1.5` rad/s | Uniform actor joint-velocity noise scale. |
+| `task.env.obs_noise.gyro_bias` | `0.0` rad/s (off) | Half-width of the per-episode gyro zero-rate offset: drawn U(±bound) at reset, constant through the episode, added to the actor's gyro only. The white `gyro` noise cannot represent it. |
+| `task.env.obs_noise.gyro_vib` | `0.0` (off) | Gain of the gyro-vib feedback corruption. Each control step, the change in joint torque drives a resonator tuned to half the control rate, and the resonator's state is added to the gyro reading the actor sees (`base.gyro_vib_step`, mixing `base.VIB_MIX`). This stands in for the frame vibration a real IMU picks up from the policy's own action jitter. Also the `imu-grid --vib-gain` axis. |
+| `task.env.obs_noise.gyro_vib_decay` | `0.9` | How sharply the resonator rings. A drive at the resonant frequency is amplified by 1/(1−decay), about tenfold at 0.9. |
 | `task.env.obs.state` | task-specific | Ordered actor observation names. |
 | `task.env.obs.privileged` | task-specific | Ordered critic-only observation names. |
 | `task.env.obs.include` | `[]` | Whitelist applied to actor observations. The `obs` group sets this; an empty list means use every name in `obs.state`. |
@@ -868,7 +871,7 @@ using the preset.
 | `video-probe` | `./training/run.sh video-probe --run runs/<name> [--arena {flat,train,eval} --cell NAME --seconds S --fps F --vx V --camera NAME --out FILE --list-cells]`; renders the showcase clip: 960x720 with every overlay on. `--cell` films one measurement cell of the eval arena from the spawn `terrain-scan` uses; `--arena train`/`eval` needs a terrain run. Output lands in `training/videos/<run_name>/` unless `--out` says otherwise. |
 | `battery` | `./training/run.sh battery --run runs/<name> [--out FILE --alpha A --lag-tau T]`; writes the fixed comparison battery. `--alpha`/`--lag-tau` are eval-only plant perturbations, see "Robustness grid (eval-only)" below. |
 | `courses` | `./training/run.sh courses --run runs/<name> [--seeds N --only NAME... --video --video-size WxH --overlay-torque --overlay-camera --paths --out FILE --list]`; writes the path-following course benchmark. `--list` prints the catalogue without loading a run. See "Course benchmark" below. |
-| `imu-grid` | `./training/run.sh imu-grid --runs runs/<name>... [--bias-levels B... --axes x y z --noise-gyro S... --latency-substeps D... --lag-tau T --seeds N --stand-sec S --walk-sec S --walk-vx V --out FILE]`; the gyro bias/noise robustness grid, with optional pinned control latency and actuator-torque lag. See "IMU robustness grid" below. |
+| `imu-grid` | `./training/run.sh imu-grid --runs runs/<name>... [--bias-levels B... --axes x y z --noise-gyro S... --vib-gain G... --latency-substeps D... --lag-tau T --seeds N --stand-sec S --walk-sec S --walk-vx V --out FILE]`; the gyro bias/noise robustness grid, with the action-correlated gyro-vib loop, pinned control latency and actuator-torque lag. See "IMU robustness grid" below. |
 | `report` | `./training/run.sh report --run runs/<name> [--out-json FILE --out-md FILE]`; writes battery, torque, power, impact proxy, and termination summary. |
 | `export` | `./training/run.sh export --run runs/<name> [--out DIR]`; writes `policy.npz` plus `policy_meta.json`, the schema-2 deployment contract built from the run's env (`wojtek_rl/deploy_contract.py`), and validates the deploy runtime end-to-end against the env before writing. |
 | `app` | `./training/run.sh app [--host HOST --port PORT]`; runs the interactive navigation demo. `WOJTEK_RUN_DIR`, `HOST`, and `PORT` environment variables supply defaults; see [demo README](../demo/README.md). |
@@ -1081,6 +1084,21 @@ DR), the grid runs against any checkpoint of this project unchanged --
 that is the point: measure a policy trained *without* bias DR under the
 bias it will meet on hardware.
 
+The `--vib-gain` axis closes the loop that made the robot oscillate. On
+the machine, the policy's action jitter shakes the frame, and the IMU
+sits on that frame, so the policy sees its own jitter and reacts to it.
+The sim carries none of that, which is why white noise and bias probes
+leave the policy standing still. `task.env.obs_noise.gyro_vib` (default
+0, off for every preset) models the loop as a sensor effect: each
+control step, the change in joint torque drives a resonator tuned to
+half the control rate, and the resonator's state is added to the gyro
+reading the actor sees (`base.gyro_vib_step`, mixing `base.VIB_MIX`).
+The critic and the physics see nothing. Because it lives in the env
+config, a future run can also train against it. The grid sweeps the
+gain to find where a policy's stand goes unstable; that critical gain
+is the policy's stability margin, and the margin is what to compare
+across policies.
+
 Two more loop-delay axes complete the picture. `--latency-substeps` pins
 the per-episode control-latency draw (`info["ctrl_delay"]`, same pin
 mechanism) to chosen substep counts -- the random draw only lands a seed
@@ -1101,18 +1119,21 @@ always-included bias=0 baseline row and across runs. Results land in
 `runs/<run>/imu_grid/imu_grid.json`, plus one combined markdown table via
 `--out`.
 
-Measured on `wojtek_terrain_blind_v4_1` (2026-08-11, 30-cell grid on a
-rented box plus local lag/latency probes): the real robot's 25 Hz
-standing limit cycle does NOT reproduce in sim -- stand `qvel_rms` stays
-at 0.013 rad/s (motionless; the ~0.69 vibration ratio is quiet-signal
-noise, which is what `qvel_rms` is in the table to catch) across bias to
-0.2 rad/s, white noise to 4x trained, pinned full-period latency, and
-10 ms torque lag, with zero falls. The missing piece is the closed
-physical loop action -> chassis vibration -> IMU reading -- sim's gyro
-reads clean rigid-body state, so the noise never correlates with the
-policy's own output. Treat the grid as a relative-comparison instrument
-(e.g. filtered vs unfiltered policies), not as a reproduction of that
-hardware failure.
+Measured on `wojtek_terrain_blind_v4_1` (2026-08-11): the EXOGENOUS axes
+do not reproduce the real robot's 25 Hz standing limit cycle -- stand
+`qvel_rms` stays at 0.013 rad/s (motionless; the ~0.69 vibration ratio
+there is quiet-signal noise, which is what `qvel_rms` is in the table to
+catch) across bias to 0.2 rad/s, white noise to 4x trained, pinned
+full-period latency, and 10 ms torque lag, with zero falls. The
+CORRELATED axis does reproduce it: sweeping `--vib-gain` over
+{0.03, 0.1, 0.3, 1.0}, the stand snaps from motionless (`qvel_rms`
+0.012-0.014 through gain 0.1) to a violent Nyquist-band oscillation at
+gain 0.3 -- `qvel_rms` 3.04 rad/s with 68% of power in 20-25 Hz, 96% at
+gain 1.0 -- the hardware failure's exact signature. The critical gain
+between 0.1 and 0.3 is the policy's stability margin against the
+action->vibration->IMU loop; compare that margin across policies (e.g.
+`action_filter` on vs off) rather than reading any single cell as
+pass/fail.
 
 ```bash
 # Does the un-filtered terrain policy show the standing limit cycle in sim?

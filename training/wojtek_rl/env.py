@@ -17,7 +17,12 @@ from mujoco_playground._src import mjx_env
 
 from wojtek_rl import height_scan, paths
 from wojtek_rl import terrain_env
-from wojtek_rl.base import ABDUCTION_ACTUATORS, KNEE_ACTUATORS, WojtekEnv
+from wojtek_rl.base import (
+    ABDUCTION_ACTUATORS,
+    KNEE_ACTUATORS,
+    WojtekEnv,
+    gyro_vib_step,
+)
 
 # 3 gyro + 3 gravity + 12 qpos + 12 qvel + 12 last_act + 4 cmd + 8 phase
 OBS_SIZE = 54
@@ -102,6 +107,22 @@ def default_config() -> config_dict.ConfigDict:
             # represent it: a real gyro's offset is constant on the episode
             # timescale, not redrawn every step.
             gyro_bias=0.0,
+            # Feedback corruption of the actor's gyro, off by default. The
+            # real robot oscillated while standing because of a loop this
+            # sim does not carry on its own: the policy jitters its
+            # actions, the motors jitter their torque, the frame vibrates,
+            # and the IMU sits on that frame, so the policy sees the
+            # vibration and reacts to it. This models the loop as a sensor
+            # effect. Each control step, the change in joint torque drives
+            # a resonator tuned to half the control rate (25 Hz at 50 Hz),
+            # and the resonator's state is added to the gyro reading the
+            # actor sees. The critic and the physics see nothing.
+            # `gyro_vib` is the gain; 0 disables. `gyro_vib_decay` sets how
+            # sharply the resonator rings: at 0.9, a drive at the resonant
+            # frequency is amplified about tenfold. The recurrence lives in
+            # base.gyro_vib_step.
+            gyro_vib=0.0,
+            gyro_vib_decay=0.9,
         ),
         # Declarative observation spec: ordered lists of catalog names (see
         # WojtekEnv._obs_catalog + this env's command/phase additions).
@@ -1193,6 +1214,11 @@ class WojtekJoystick(WojtekEnv):
             "ctrl_delay": jp.int32(d),
             "encoder_offset": epsilon,
             "gyro_bias": gyro_bias,
+            # State of the gyro-vib resonator (obs_noise.gyro_vib). Always
+            # present so the info structure never changes shape. It stays
+            # zero unless the gain is set, and adding zero to the gyro
+            # changes nothing.
+            "gyro_vib": jp.zeros(3),
         }
         metrics = {f"reward/{k}": jp.zeros(()) for k in self._config.reward.scales}
         # Posture and command-mix telemetry, written every step; declared on
@@ -1365,6 +1391,18 @@ class WojtekJoystick(WojtekEnv):
         info["last_contact"] = contact
         info["last_last_act"] = info["last_act"]
         info["last_act"] = action
+        # Advance the gyro-vib resonator on this step's torque change.
+        # This has to run before last_torque is overwritten below, or the
+        # change would always read as zero. With the gain unset the whole
+        # branch is skipped at trace time.
+        gv = self._config.obs_noise.get("gyro_vib", 0.0)
+        if gv:
+            info["gyro_vib"] = gyro_vib_step(
+                info["gyro_vib"],
+                data.actuator_force - info["last_torque"],
+                gv,
+                self._config.obs_noise.get("gyro_vib_decay", 0.9),
+            )
         info["last_torque"] = data.actuator_force
         info["motor_targets"] = motor_targets
         # For the curriculum wrapper: where the base is, and how far the

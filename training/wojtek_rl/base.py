@@ -21,6 +21,35 @@ from mujoco_playground._src import mjx_env
 from wojtek_rl import paths, terrain_env
 from wojtek_rl.build_model import BASE_BOX_NAMES, FOOT_RADIUS
 
+# How the 12 joint-torque changes reach the 3 gyro axes in the gyro-vib
+# sensor model (obs_noise.gyro_vib). Row x sums the legs with alternating
+# signs, so a left/right torque imbalance shakes the roll reading. Row y
+# does the same for rear versus front and pitch. Row z alternates signs
+# inside each leg. How vibration travels through a real frame to the IMU is
+# unknown and differs per machine; this matrix only has to be fixed, reach
+# all three axes, and be the same for every policy measured. Rows have unit
+# length so the gain means the same thing on every axis.
+VIB_MIX = np.stack([
+    np.repeat([1.0, -1.0, 1.0, -1.0], 3),
+    np.repeat([1.0, 1.0, -1.0, -1.0], 3),
+    np.tile([1.0, -1.0, 1.0], 4),
+]) / np.sqrt(12.0)
+
+
+def gyro_vib_step(vib, tau_rate, gain, decay, mix=None):
+    """Advance the gyro-vib resonator by one control step.
+
+    ``x_t = -decay * x_{t-1} + gain * (mix @ tau_rate)``. The negative
+    coefficient makes the state ring at half the control rate, which is
+    25 Hz at 50 Hz -- the frequency of the standing oscillation seen on
+    the real robot. A drive at that frequency is amplified by
+    1/(1-decay); a constant drive is damped by 1/(1+decay). Kept a pure
+    function so the recurrence can be tested without an env.
+    """
+    m = VIB_MIX if mix is None else mix
+    return -decay * vib + gain * (m @ tau_rate)
+
+
 # Actuator indices of the knee cranks (third joints), paths.LEGS order.
 KNEE_ACTUATORS = (2, 5, 8, 11)
 # Actuator indices of the abduction joints (first joints), paths.LEGS order.
@@ -374,13 +403,19 @@ class WojtekEnv(mjx_env.MjxEnv):
             return jp.concatenate([source[n] for n in names])
 
         state_names = self.actor_obs_names
-        # Per-episode gyro bias (info["gyro_bias"], drawn by envs that train
-        # it): the actor's copy of the gyro carries the episode's draw; the
-        # privileged gather below reads the clean catalog.
+        # The actor's gyro can carry two corruptions: the per-episode bias
+        # draw (info["gyro_bias"]) and the vibration-resonator state
+        # (info["gyro_vib"], see gyro_vib_step). Only the actor's copy is
+        # touched. The critic reads the clean catalog below.
         actor_catalog = catalog
-        bias = info.get("gyro_bias")
-        if bias is not None and "gyro" in catalog:
-            actor_catalog = {**catalog, "gyro": catalog["gyro"] + bias}
+        corrupt = jp.zeros(3)
+        present = False
+        for key in ("gyro_bias", "gyro_vib"):
+            term = info.get(key)
+            if term is not None:
+                corrupt, present = corrupt + term, True
+        if present and "gyro" in catalog:
+            actor_catalog = {**catalog, "gyro": catalog["gyro"] + corrupt}
         state = gather(state_names, actor_catalog)
         if rng is not None:
             noise = self._config.obs_noise

@@ -369,6 +369,21 @@ class WojtekEnv(mjx_env.MjxEnv):
         return {
             "gyro": self._gyro(data),
             "gravity": self._gravity_body(data),
+            # The foot geoms' sliding-friction coefficients, read from the
+            # LIVE model. Under brax domain randomization the playground
+            # wrapper rebinds self._mjx_model to the per-env randomized
+            # model inside every vmapped reset/step, so with
+            # dr.foot_friction enabled this IS the env's own mu draw (and,
+            # since that DR gives feet contact priority, the contact
+            # friction the robot actually walks on). PRIVILEGED-ONLY in
+            # spirit: no physical sensor measures mu, so a policy whose
+            # ACTOR observes it (a mu-teacher) can never deploy — the ROS
+            # runtime refuses the component. Without foot_friction DR it
+            # degenerates to the model constant (0.9), observed variance
+            # zero.
+            "foot_friction": self._mjx_model.geom_friction[
+                self._foot_geom_ids, 0
+            ],
             "joint_pos": data.qpos[self._qadr] - self._home_ctrl,
             "joint_vel": data.qvel[self._vadr],
             "last_act": info["last_act"],

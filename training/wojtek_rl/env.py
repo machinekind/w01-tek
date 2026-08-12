@@ -634,6 +634,9 @@ def default_config() -> config_dict.ConfigDict:
                 # nothing; a flat-scene run has the gate open everywhere.
                 flat_pitch=0.0,
                 energy=-2e-3,
+                # Positive, exp-shaped, command-normalized energy reward
+                # (see energy_cmd in the reward dict). 0 = off.
+                energy_cmd=0.0,
                 pose=-0.5,
                 feet_air_time=2.0,
                 feet_slip=-0.25,
@@ -692,6 +695,12 @@ def default_config() -> config_dict.ConfigDict:
             # -10, vs 0.83 uncharged). The factor is
             # clip(1 - |cmd_wz|/fade, 0, 1) on the whole term.
             target_sag_wz_fade=0.0,
+            # energy_cmd normalizers: motor watts per unit of commanded
+            # speed at which the exp argument reads 1.0. Calibrated from
+            # the v4 keeper (walk 0.5 = 16 W -> lin 32; a non-jumping
+            # step-turn budgeted ~30 W at 1 rad/s -> ang 30).
+            energy_cmd_sigma_lin=32.0,
+            energy_cmd_sigma_ang=30.0,
             # Same fade for the feet_landing charge (rad/s; 0 = no fade).
             # Pivoting has the hardest touchdowns, so a landing penalty
             # makes spins the most expensive skill a fine-tune can shed:
@@ -701,6 +710,12 @@ def default_config() -> config_dict.ConfigDict:
             # sag experiment already proved only a near-binary fade (0.1)
             # protects spins; linear fades and scale cuts do not.
             feet_landing_wz_fade=0.0,
+            # Bottom of the feet_landing fade: the charge fraction a
+            # commanded spin still pays (0 = fully exempt, the v4
+            # behavior; 1 = no exemption). The middle ground between
+            # "spins stay loud" (v4, td_p90 0.87 in a spin) and "spins
+            # erode" (v2b, achieved wz 0.96 -> 0.05 at full charge).
+            feet_landing_wz_floor=0.0,
         ),
     )
 
@@ -1995,6 +2010,32 @@ class WojtekJoystick(WojtekEnv):
             "action_rate": action_rate,
             "action_accel": action_accel,
             "energy": jp.sum(jp.abs(qvel) * jp.abs(data.actuator_force)),
+            # Command-normalized energy reward (arXiv 2403.20001): motor
+            # power per unit of COMMANDED motion, exp-shaped, so a spin is
+            # not charged for existing (big command = big denominator) —
+            # only for being wasteful. The paper reports that without this
+            # term the policy bounces at every speed; measured here
+            # 2026-08-12: the jump-turn burns 64 W vs 16 W walking. Total
+            # torque includes the tau_ff head — free stance force would
+            # otherwise not count as energy. Gated by BOTH tracking
+            # kernels: ignoring the command is always the cheapest gait,
+            # and ungated at scale 2.5 the income beat tracking_ang_vel
+            # and the policy stood still under spin commands (measured:
+            # achieved wz 0.00, 1.2 W, near-full energy income). Gated,
+            # efficiency only pays where the command is being served.
+            "energy_cmd": jp.exp(
+                -jp.sum(jp.abs(qvel * (data.actuator_force + tau_ff)))
+                / (
+                    self._config.reward.energy_cmd_sigma_lin
+                    * jp.linalg.norm(cmd[:2])
+                    + self._config.reward.energy_cmd_sigma_ang
+                    * jp.abs(cmd[2])
+                    + 1e-6
+                )
+            )
+            * k_lin
+            * k_ang
+            * moving,
             "pose": jp.sum(pose_w * jp.square(data.qpos[self._qadr] - anchor)),
             "feet_air_time": jp.sum(
                 (
@@ -2045,14 +2086,20 @@ class WojtekJoystick(WojtekEnv):
             * moving
             * landing_soften
             # Commanded-|wz| fade (see reward.feet_landing_wz_fade): same
-            # construction as the target_sag fade below.
+            # construction as the target_sag fade below, except the fade
+            # bottoms out at feet_landing_wz_floor instead of 0 — a spin
+            # pays that fraction of the charge rather than nothing (floor
+            # 0 reproduces the pure fade bit-exactly).
             * (
-                jp.clip(
-                    1.0
-                    - jp.abs(cmd[2])
-                    / self._config.reward.get("feet_landing_wz_fade", 0.0),
-                    0.0,
-                    1.0,
+                jp.maximum(
+                    jp.clip(
+                        1.0
+                        - jp.abs(cmd[2])
+                        / self._config.reward.get("feet_landing_wz_fade", 0.0),
+                        0.0,
+                        1.0,
+                    ),
+                    self._config.reward.get("feet_landing_wz_floor", 0.0),
                 )
                 if self._config.reward.get("feet_landing_wz_fade", 0.0)
                 else 1.0

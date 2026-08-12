@@ -71,6 +71,9 @@ def train(
     # RND >>>
     rnd_config: Mapping[str, Any],
     # <<< RND
+    # LCP >>> observation-gradient penalty coefficient (0 = off)
+    lcp_coefficient: float = 0.0,
+    # <<< LCP
     max_devices_per_host: Optional[int] = None,
     # high-level control flow
     wrap_env: bool = True,
@@ -278,6 +281,44 @@ def train(
       clipping_epsilon_value=clipping_epsilon_value,
       use_distributional_critic=use_distributional_critic,
   )
+
+  # LCP >>> Lipschitz-constrained policy via observation-gradient penalty
+  # (arXiv 2410.11825): total = ppo_loss + lcp_coefficient *
+  # E[||grad_obs log pi(a|s)||^2]. Replaces smoothness reward tuning with
+  # a differentiable constraint on the policy itself; the paper's
+  # recommended coefficient is ~0.002. Zero keeps the stock loss
+  # (bit-exact: the wrapper is not even installed).
+  if lcp_coefficient > 0.0:
+    _base_loss_fn = loss_fn
+    _policy_apply = ppo_network.policy_network.apply
+    _action_dist = ppo_network.parametric_action_distribution
+
+    def loss_fn(params, normalizer_params, data, rng):  # noqa: F811
+      loss, metrics = _base_loss_fn(params, normalizer_params, data, rng)
+      raw_action = data.extras['policy_extras']['raw_action']
+
+      def _logp(obs, raw):
+        logits = _policy_apply(normalizer_params, params.policy, obs)
+        return jnp.sum(_action_dist.log_prob(logits, raw))
+
+      _grad = jax.grad(_logp)
+
+      def _sq_norm(obs, raw):
+        g = _grad(obs, raw)
+        return sum(
+            jnp.sum(jnp.square(leaf))
+            for leaf in jax.tree_util.tree_leaves(g)
+        )
+
+      def _flat2(x):
+        return x.reshape((-1,) + x.shape[2:])
+
+      obs_flat = jax.tree_util.tree_map(_flat2, data.observation)
+      raw_flat = _flat2(raw_action)
+      gp = jnp.mean(jax.vmap(_sq_norm)(obs_flat, raw_flat))
+      metrics['lcp_gp'] = gp
+      return loss + lcp_coefficient * gp, metrics
+  # <<< LCP
 
   loss_and_pgrad_fn = gradients.loss_and_pgrad(
       loss_fn, pmap_axis_name=_PMAP_AXIS_NAME, has_aux=True

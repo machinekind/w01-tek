@@ -1,0 +1,23 @@
+# @package _global_
+# QUIET WALKING, iteration 4 (2026-08-12): v2b's phase-B recipe (keeper
+# restore + feet_landing -15) with the spin exemption. v2b proved the
+# curriculum keeps every linear skill stepping while quieting touchdowns
+# 3-6x (slow td_p90 0.151 m/s vs the keeper's 0.871), but 1B steps of the
+# un-faded charge eroded spinning 0.96 -> 0.05 achieved wz: pivots have
+# the hardest touchdowns, so they were the most expensive skill to keep.
+# feet_landing_wz_fade 0.1 exempts commanded turning near-binarily — the
+# construction the sag experiment proved (linear fades and scale cuts left
+# spins dead). Spins stay loud by design; every other command gets the
+# quiet gait.
+# Usage:
+#   ./training/run.sh train +experiment=flat_quiet_v4 \
+#     restore=runs/wojtek_flat_tff_sag_v3_s1b/checkpoints/<final>
+defaults:
+  - flat_quiet_v2
+
+task:
+  env:
+    reward:
+      feet_landing_wz_fade: 0.1
+
+run_name: wojtek_flat_quiet_v4

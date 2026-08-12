@@ -169,6 +169,12 @@ def default_config() -> config_dict.ConfigDict:
         # the critic. Changing either changes obs sizes, so checkpoints
         # don't transfer across obs configs.
         obs=config_dict.create(
+            # Steps of proprio history behind the proprio_history component
+            # (joint_pos+joint_vel+last_act per step, newest last). 0 = the
+            # component does not exist and no buffer is kept — bit-exact
+            # legacy behavior. Robot-available by construction (the deploy
+            # runtime can rebuild it from its own observation stream).
+            history_len=0,
             include=(),  # obs presets whitelist actor sensors; () = all
             state=(
                 "gyro",
@@ -637,6 +643,12 @@ def default_config() -> config_dict.ConfigDict:
                 # Positive, exp-shaped, command-normalized energy reward
                 # (see energy_cmd in the reward dict). 0 = off.
                 energy_cmd=0.0,
+                # Positive, exp-shaped, command-normalized SLIP reward (the
+                # energy_cmd construction applied to contact-foot slip):
+                # what makes friction adaptation worth learning — RMA's
+                # reward prices foot slip, and the mu-teacher probe showed
+                # an unpriced mu input goes unused. 0 = off.
+                slip_cmd=0.0,
                 pose=-0.5,
                 feet_air_time=2.0,
                 feet_slip=-0.25,
@@ -701,6 +713,13 @@ def default_config() -> config_dict.ConfigDict:
             # step-turn budgeted ~30 W at 1 rad/s -> ang 30).
             energy_cmd_sigma_lin=32.0,
             energy_cmd_sigma_ang=30.0,
+            # slip_cmd normalizers: (m/s)^2 of summed contact-foot slip at
+            # which the exp argument reads 1.0, per unit of commanded speed.
+            # Speed-scaling is the recorded fix for the flat feet_slip
+            # collapse (-1.0 froze the policy into fast lines): slow careful
+            # motion pays proportionally less.
+            slip_cmd_sigma_lin=0.8,
+            slip_cmd_sigma_ang=0.5,
             # Same fade for the feet_landing charge (rad/s; 0 = no fade).
             # Pivoting has the hardest touchdowns, so a landing penalty
             # makes spins the most expensive skill a fine-tune can shed:
@@ -727,6 +746,9 @@ class WojtekJoystick(WojtekEnv):
         # first: action_size and the symmetry maps below depend on it.
         _tff = self._config.get("tau_ff", None)
         self._tau_ff_enabled = bool(_tff is not None and _tff.enable)
+        # Proprio-history buffer length (see obs.history_len). Static at
+        # trace time; 0 keeps the info tree and obs catalog unchanged.
+        self._history_len = int(self._config.obs.get("history_len", 0))
         # latency.min/max_substeps and n_substeps are static Python ints at
         # this point (config, not traced arrays), so plain Python checks are
         # safe here and run once outside jit.
@@ -1359,6 +1381,11 @@ class WojtekJoystick(WojtekEnv):
                 self._config.obs_noise.get("gyro_vib", 0.0)
             ),
         }
+        if self._history_len:
+            # Newest frame last; zeros read as "at home, at rest" which is
+            # what reset poses approximate. 36 = joint_pos + joint_vel +
+            # last_act.
+            info["proprio_hist"] = jp.zeros(self._history_len * 36)
         if self._tau_ff_enabled:
             # Raw (unit) torque half of the last action, for the rate
             # penalty; and the last PHYSICAL tau_ff, for the delay paths.
@@ -1730,6 +1757,8 @@ class WojtekJoystick(WojtekEnv):
         # epsilon). Zero when disabled.
         catalog["joint_pos"] = catalog["joint_pos"] + info["encoder_offset"]
         catalog["command"] = info["command"]
+        if self._history_len:
+            catalog["proprio_history"] = info["proprio_hist"]
         leg_phase = self._leg_phases(info)
         catalog["phase"] = jp.concatenate([jp.cos(leg_phase), jp.sin(leg_phase)])
         if self._scan_enabled:
@@ -1747,6 +1776,21 @@ class WojtekJoystick(WojtekEnv):
         return catalog
 
     def _get_obs(self, data, info, rng=None):
+        if self._history_len:
+            # Push the CURRENT step's actor-visible proprio (encoder offset
+            # included, like the joint_pos component) before the obs is
+            # built, so the newest frame in the history is this step's.
+            # Deployment mirror: the runtime appends what it just observed.
+            frame = jp.concatenate([
+                data.qpos[self._qadr]
+                - self._home_ctrl
+                + info["encoder_offset"],
+                data.qvel[self._vadr],
+                info["last_act"],
+            ])
+            info["proprio_hist"] = jp.concatenate(
+                [info["proprio_hist"][frame.shape[0]:], frame]
+            )
         obs = self._build_obs(data, info, rng)
         if self._config.symmetry.enable:
             m = info["mirror"]
@@ -2029,6 +2073,23 @@ class WojtekJoystick(WojtekEnv):
                     self._config.reward.energy_cmd_sigma_lin
                     * jp.linalg.norm(cmd[:2])
                     + self._config.reward.energy_cmd_sigma_ang
+                    * jp.abs(cmd[2])
+                    + 1e-6
+                )
+            )
+            * k_lin
+            * k_ang
+            * moving,
+            # Slip per unit of commanded motion, same construction and the
+            # same gates as energy_cmd (see the scales entry): efficiency-
+            # style income for keeping stance feet planted, priced fairly
+            # across speeds so slow careful gaits are not over-charged.
+            "slip_cmd": jp.exp(
+                -slip
+                / (
+                    self._config.reward.get("slip_cmd_sigma_lin", 0.8)
+                    * jp.linalg.norm(cmd[:2])
+                    + self._config.reward.get("slip_cmd_sigma_ang", 0.5)
                     * jp.abs(cmd[2])
                     + 1e-6
                 )

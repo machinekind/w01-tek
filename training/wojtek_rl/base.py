@@ -178,6 +178,20 @@ class WojtekEnv(mjx_env.MjxEnv):
         self._base_geom_half = jp.array(
             m.geom_size[self._base_geom_ids][:, :3]
         )
+        # Nominal (un-randomized) values behind the env_factors component:
+        # the per-env DR draw divided by these reads as a scale around 1.
+        # Zeros are replaced by 1 so unused slots divide harmlessly.
+        self._root_body_id = int(m.body("root").id)
+
+        def _nz(x):
+            x = np.asarray(x, dtype=np.float64)
+            return np.where(x == 0.0, 1.0, x)
+
+        self._envf_gain0 = jp.array(_nz(m.actuator_gainprm[:, 0]))
+        self._envf_kd0 = jp.array(_nz(m.actuator_biasprm[:, 2]))
+        self._envf_force0 = jp.array(_nz(m.actuator_forcerange[:, 1]))
+        self._envf_mass0 = float(_nz(m.body_mass[self._root_body_id]))
+        self._envf_ipos0 = jp.array(m.body_ipos[self._root_body_id])
         self._sensor_adr = {
             name: m.sensor(name).adr[0]
             for name in ("orientation", "angular-velocity", "linear-acceleration")
@@ -384,6 +398,27 @@ class WojtekEnv(mjx_env.MjxEnv):
             "foot_friction": self._mjx_model.geom_friction[
                 self._foot_geom_ids, 0
             ],
+            # The RMA-style privileged environment-factor vector (arXiv
+            # 2107.04034 uses mass/CoM + motor strength + friction; this is
+            # the wojtek equivalent, 44 dims): every quantity the DR wrapper
+            # rebinds per env, normalized by the nominal model so each slot
+            # reads as a scale around 1 (offsets for CoM). Same rebinding
+            # caveat as foot_friction above: without DR this is constant.
+            # PRIVILEGED: critic (or a teacher actor) only — no sensor
+            # measures these; the deploy runtime refuses the component.
+            "env_factors": jp.concatenate([
+                self._mjx_model.geom_friction[self._foot_geom_ids, 0],
+                self._mjx_model.actuator_gainprm[:, 0] / self._envf_gain0,
+                self._mjx_model.actuator_biasprm[:, 2] / self._envf_kd0,
+                self._mjx_model.actuator_forcerange[:, 1]
+                / self._envf_force0,
+                jp.atleast_1d(
+                    self._mjx_model.body_mass[self._root_body_id]
+                    / self._envf_mass0
+                ),
+                self._mjx_model.body_ipos[self._root_body_id]
+                - self._envf_ipos0,
+            ]),
             "joint_pos": data.qpos[self._qadr] - self._home_ctrl,
             "joint_vel": data.qvel[self._vadr],
             "last_act": info["last_act"],

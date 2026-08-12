@@ -654,6 +654,15 @@ def default_config() -> config_dict.ConfigDict:
             # -10, vs 0.83 uncharged). The factor is
             # clip(1 - |cmd_wz|/fade, 0, 1) on the whole term.
             target_sag_wz_fade=0.0,
+            # Same fade for the feet_landing charge (rad/s; 0 = no fade).
+            # Pivoting has the hardest touchdowns, so a landing penalty
+            # makes spins the most expensive skill a fine-tune can shed:
+            # measured 2026-08-12, keeper restore at feet_landing -15 kept
+            # every linear skill stepping (slow td_p90 0.15 m/s, 6x quieter
+            # than the keeper) but achieved wz collapsed 0.96 -> 0.05. The
+            # sag experiment already proved only a near-binary fade (0.1)
+            # protects spins; linear fades and scale cuts do not.
+            feet_landing_wz_fade=0.0,
         ),
     )
 
@@ -1949,7 +1958,20 @@ class WojtekJoystick(WojtekEnv):
                 )
             )
             * moving
-            * landing_soften,
+            * landing_soften
+            # Commanded-|wz| fade (see reward.feet_landing_wz_fade): same
+            # construction as the target_sag fade below.
+            * (
+                jp.clip(
+                    1.0
+                    - jp.abs(cmd[2])
+                    / self._config.reward.get("feet_landing_wz_fade", 0.0),
+                    0.0,
+                    1.0,
+                )
+                if self._config.reward.get("feet_landing_wz_fade", 0.0)
+                else 1.0
+            ),
             "feet_phase": jp.exp(-phase_err / self._config.reward.phase_sigma)
             * moving,
             "high_step": high_step * moving * shape_gate * gate,

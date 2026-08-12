@@ -649,6 +649,14 @@ def default_config() -> config_dict.ConfigDict:
                 # reward prices foot slip, and the mu-teacher probe showed
                 # an unpriced mu input goes unused. 0 = off.
                 slip_cmd=0.0,
+                # Finite-difference BASE acceleration penalty (Sony
+                # 2502.10983 prices base angular acceleration; QuietWalk
+                # 2604.23702 identifies foot-ground force as the driver of
+                # structural vibration): squared vertical accel of the base
+                # plus base_accel_ang_weight x squared roll/pitch angular
+                # accel. The direct instrument behind the az_p99 and
+                # vibration metrics. 0 = off.
+                base_accel=0.0,
                 pose=-0.5,
                 feet_air_time=2.0,
                 feet_slip=-0.25,
@@ -720,6 +728,14 @@ def default_config() -> config_dict.ConfigDict:
             # motion pays proportionally less.
             slip_cmd_sigma_lin=0.8,
             slip_cmd_sigma_ang=0.5,
+            # Relative weight of the base ANGULAR acceleration inside the
+            # base_accel penalty (rad/s^2 spikes run ~5x the m/s^2 ones;
+            # 0.02 puts the two families on comparable footing).
+            base_accel_ang_weight=0.02,
+            # wz fade+floor for the base_accel charge (the feet_landing
+            # construction; fade 0 = full charge everywhere).
+            base_accel_wz_fade=0.0,
+            base_accel_wz_floor=0.0,
             # Same fade for the feet_landing charge (rad/s; 0 = no fade).
             # Pivoting has the hardest touchdowns, so a landing penalty
             # makes spins the most expensive skill a fine-tune can shed:
@@ -1361,6 +1377,8 @@ class WojtekJoystick(WojtekEnv):
             "swing_apex": jp.zeros(4),
             "last_contact": jp.zeros(4, dtype=bool),
             "last_torque": jp.zeros(12),
+            "last_base_vz": jp.zeros(()),
+            "last_gyro_xy": jp.zeros(2),
             "motor_targets": anchor,
             "step_count": jp.array(0),
             "phase": jp.array(0.0),  # master clock; per-leg via _leg_phases
@@ -1608,6 +1626,8 @@ class WojtekJoystick(WojtekEnv):
             self._config.obs_noise.get("gyro_vib_decay", 0.9),
         )
         info["last_torque"] = data.actuator_force
+        info["last_base_vz"] = data.qvel[2]
+        info["last_gyro_xy"] = self._gyro(data)[:2]
         info["motor_targets"] = motor_targets
         # For the curriculum wrapper: where the base is, and how far the
         # commands asked to go so far. The resample below has not run yet,
@@ -2097,6 +2117,37 @@ class WojtekJoystick(WojtekEnv):
             * k_lin
             * k_ang
             * moving,
+            # Base shock: how hard THIS step jerked the body (see the
+            # scales entry). Finite differences against the previous
+            # step's values carried in info; both terms are per-step
+            # accelerations in SI units.
+            "base_accel": (
+                jp.square((data.qvel[2] - info["last_base_vz"]) / self.dt)
+                + self._config.reward.get("base_accel_ang_weight", 0.02)
+                * jp.sum(
+                    jp.square((gyro[:2] - info["last_gyro_xy"]) / self.dt)
+                )
+            )
+            # Commanded-|wz| fade with a floor, the feet_landing
+            # construction: a pivot generates lateral accelerations by
+            # physics, and charging them fully sells spin rate (measured:
+            # dose -0.02 -> wz 0.75/0.69, -0.032 -> 0.74/0.59). The floor
+            # is the fraction a spin still pays; fade 0 disables (full
+            # charge everywhere, bit-exact with the pre-fade term).
+            * (
+                jp.maximum(
+                    jp.clip(
+                        1.0
+                        - jp.abs(cmd[2])
+                        / self._config.reward.get("base_accel_wz_fade", 0.0),
+                        0.0,
+                        1.0,
+                    ),
+                    self._config.reward.get("base_accel_wz_floor", 0.0),
+                )
+                if self._config.reward.get("base_accel_wz_fade", 0.0)
+                else 1.0
+            ),
             "pose": jp.sum(pose_w * jp.square(data.qpos[self._qadr] - anchor)),
             "feet_air_time": jp.sum(
                 (

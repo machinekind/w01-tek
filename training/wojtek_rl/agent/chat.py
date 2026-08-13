@@ -15,6 +15,7 @@ with stale frames the model would happily re-describe.
 from __future__ import annotations
 
 import json
+import re
 
 from loguru import logger
 
@@ -25,6 +26,16 @@ from wojtek_rl.vlm_nav import _safe_err
 
 MAX_TOOL_STEPS = 4
 KEEP_EXCHANGES = 3
+
+# Movement imperatives (PL + EN) that must end in a navigate call.  Search
+# verbs (znajdź/poszukaj) are deliberately absent -- they belong to `search`
+# and the model calls that one reliably.
+NAV_HINT_RE = re.compile(
+    r"\b(idź|pójdź|podejdź|chodź|zaprowadź|obejdź|okrąż|omiń|skręć|zawróć|"
+    r"cofnij|wróć|biegnij|ruszaj|jedź|stań (przy|obok|koło)|zbliż się|"
+    r"oddal się|go to|walk (to|around)|come (here|back)|head to)\b",
+    re.IGNORECASE,
+)
 
 PERSONA = """\
 You are Wojtek, a small four-legged robot dog. You are a genuinely happy,
@@ -237,6 +248,7 @@ class WojtekAgent:
         llm_calls: list[dict] = []
         last_call: tuple[str, str] | None = None
         say: str | None = None
+        said_fallback = False
         for _ in range(self.max_tool_steps + 1):
             messages = (
                 [{"role": "system", "content": self._system_voice if voice else self._system}]
@@ -277,8 +289,9 @@ class WojtekAgent:
             entry["thought"] = reply.thought
             if reply.tool is None:
                 say = reply.say or ""
-                entry["kind"] = "say"
+                entry["kind"] = "fallback_say" if reply.fallback else "say"
                 entry["say"] = say
+                said_fallback = reply.fallback
                 break
             entry["kind"] = "tool"
             entry["tool"] = reply.tool
@@ -328,6 +341,23 @@ class WojtekAgent:
             # last concrete fact instead of silence.
             tail = steps[-1]["result"] if steps else "I got a bit tangled up"
             say = f"Woof -- here is what I found so far: {tail}"
+        # Nav guard: a movement instruction that produced words but no action
+        # is a dropped command, not an answer.  Measured live: after a
+        # contract collapse the model narrates ("Wchodzi w kierunku...")
+        # instead of calling navigate.  The instruction goes to the navigator
+        # VERBATIM, same rule as tools.keep_full_instruction.
+        if not steps and "navigate" in self.tools and NAV_HINT_RE.search(text):
+            try:
+                result = await self.tools["navigate"].fn({"instruction": text})
+                steps.append(
+                    {"tool": "navigate", "args": {"instruction": text}, "result": result.text}
+                )
+                llm_calls.append({"kind": "nav_guard", "args": {"instruction": text}})
+                self._trace("chat.nav_guard", instruction=text, result=result.text)
+                if said_fallback:
+                    say = "Jasne, już się ruszam!"
+            except Exception as e:
+                logger.warning(f"nav guard navigate failed: {_safe_err(e)}")
         # Only the plain question/answer pair survives into the next turn.
         # Only a spoken line leaves English; a typed answer stays as written.
         said_in_english = None
@@ -336,9 +366,14 @@ class WojtekAgent:
             say = await self._translate(say)
         self._trace("chat.say", say=say, source=said_in_english,
                     llm_calls=len(llm_calls), tools=[s["tool"] for s in steps])
-        self._history.append(user_message(text))
-        self._history.append({"role": "assistant", "content": [text_content(say)]})
-        del self._history[: -2 * self.keep_exchanges]
+        # Quarantine: a fallback (non-JSON) line never enters the rolling
+        # history -- one narration in history teaches the model to drop the
+        # JSON contract on every later action turn (observed 2026-08-13:
+        # navigate stopped firing for the rest of the session).
+        if not said_fallback:
+            self._history.append(user_message(text))
+            self._history.append({"role": "assistant", "content": [text_content(say)]})
+            del self._history[: -2 * self.keep_exchanges]
         return {
             "ok": True,
             "say": say,

@@ -292,3 +292,42 @@ def test_speaker_survives_a_broken_engine():
 
     asyncio.run(scenario())  # must not raise
     assert frames == []
+
+
+# ---- RemoteTts (tts_server.py client) ---------------------------------------
+
+class _FakeResp:
+    def __init__(self, content):
+        self.content = content
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return {"ok": True}
+
+
+def test_remote_tts_decodes_wav(monkeypatch):
+    from wojtek_rl.agent import tts as tts_mod
+    from wojtek_rl.agent.tts_server import pcm_to_wav_bytes
+
+    pcm = np.full(2400, 1234, np.int16)
+    wav = pcm_to_wav_bytes(pcm)
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", lambda url, json=None, timeout=None: _FakeResp(wav))
+    engine = tts_mod.RemoteTts("http://box:8120")
+    out = engine.synthesize("cześć")
+    assert np.array_equal(out, pcm)
+    assert engine.rate == 24000
+
+
+def test_build_engine_remote_falls_silent_when_unreachable(monkeypatch):
+    from wojtek_rl.agent import tts as tts_mod
+
+    import httpx
+    def boom(url, timeout=None):
+        raise httpx.ConnectError("down")
+    monkeypatch.setattr(httpx, "get", boom)
+    engine = tts_mod.build_engine("remote")
+    assert isinstance(engine, tts_mod.SilentTts)

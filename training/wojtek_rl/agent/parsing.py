@@ -20,12 +20,20 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class AgentReply:
-    """One parsed agent turn: either a tool call or a final answer."""
+    """One parsed agent turn: either a tool call or a final answer.
+
+    `fallback` marks a reply that carried no JSON at all and was accepted as
+    plain speech.  Callers must treat those as second-class: measured live
+    (2026-08-13), letting one plain-text narration into the rolling history
+    teaches the model to drop the contract on every later action turn --
+    navigate stopped firing for the rest of the session.
+    """
 
     thought: str
     tool: str | None = None
     args: dict = field(default_factory=dict)
     say: str | None = None
+    fallback: bool = False
 
 
 def strip_think(text: str) -> str:
@@ -119,4 +127,4 @@ def parse_agent_reply(text: str, tool_names: tuple[str, ...] = ()) -> AgentReply
     # answer: speaking it would read braces and field names to the user.
     if text.lstrip().startswith("{") or '"thought"' in text:
         raise ValueError(f"malformed JSON reply with no usable field: {text[:160]!r}")
-    return AgentReply(thought="", say=text)
+    return AgentReply(thought="", say=text, fallback=True)

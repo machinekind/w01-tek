@@ -151,7 +151,7 @@ cd ${STACK_DIR}
 ./venv/bin/pip install -q --upgrade pip
 # chatterbox-tts, NOT the chatterbox-streaming fork: the fork is English-only
 # (no mtl_tts module — verified live 2026-08-13); Polish needs multilingual.
-./venv/bin/pip install -q faster-whisper websockets httpx chatterbox-tts
+./venv/bin/pip install -q faster-whisper websockets httpx chatterbox-tts fastapi 'uvicorn[standard]'
 ./venv/bin/python - <<'PYEOF'
 import torch
 assert torch.cuda.is_available(), "torch cannot see the GPU -- do NOT serve"
@@ -241,12 +241,32 @@ fi
 EOF
   ;;
 
+tts-http)
+  # Chatterbox+clone as HTTP for the ROOM DEMO (TTS_ENGINE=remote on the
+  # laptop).  Reuses this stack's venv and refs; independent of the ROS nodes.
+  need_ssh
+  rcp "$REPO/training/wojtek_rl/agent/tts_server.py" "${STACK_DIR}/"
+  rsh "bash -s" <<EOF
+set -euo pipefail
+cd ${STACK_DIR}
+if ! curl -sf localhost:8120/health >/dev/null 2>&1; then
+  setsid nohup env TTS_REF_WAV="\$PWD/refs/ref.wav" TTS_LANGUAGE=pl \\
+    ./venv/bin/python tts_server.py --port 8120 >> tts_http.log 2>&1 < /dev/null &
+  sleep 8
+  pgrep -f tts_server.py >/dev/null && echo "tts http up on :8120" || { tail -10 tts_http.log; exit 1; }
+else
+  echo "tts http already up"
+fi
+EOF
+  ;;
+
 tunnel)
   need_ssh
   echo ">> ws://localhost:${WS_PORT} for mic.html; :${VLLM_PORT} for vLLM debugging. Keep open."
   ${VAST_SSH} -N \
     -L "${WS_PORT}:localhost:${WS_PORT}" \
-    -L "${VLLM_PORT}:localhost:${VLLM_PORT}"
+    -L "${VLLM_PORT}:localhost:${VLLM_PORT}" \
+    -L "8120:localhost:8120"
   ;;
 
 status)

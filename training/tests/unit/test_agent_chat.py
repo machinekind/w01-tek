@@ -462,3 +462,71 @@ def test_system_prompt_mentions_every_tool():
     for name in tools:
         assert name in prompt
     assert "Wojtek" in prompt and "dog" in prompt
+
+
+# ---- contract-collapse guards (live finding 2026-08-13) ---------------------
+# One plain-text narration accepted into history taught the model to drop the
+# JSON contract on every later action turn; navigate never fired again.
+
+def make_agent_with_navigate(replies, record=None):
+    record = record if record is not None else []
+
+    async def navigate(args):
+        record.append(("navigate", args))
+        return ToolResult(text="navigation started")
+
+    tools = make_tools(record)
+    tools["navigate"] = Tool("navigate", "navigate {}", "walk", navigate)
+    llm = FakeLLM(replies)
+    return WojtekAgent(llm, tools, max_tool_steps=3, keep_exchanges=2), llm, record
+
+
+def test_fallback_reply_never_enters_history():
+    agent, llm, record = make_agent_with_navigate(
+        ["Wchodzi w kierunku drzwi, aby sprawdzić, czy są otwarte.",
+         '{"thought": "chat", "say": "Hau!"}']
+    )
+    out = ask(agent, "co teraz robisz?")
+    assert out["ok"]
+    # Second, well-formed turn must not see the narration in its context.
+    ask(agent, "a teraz?")
+    flat = str(llm.calls[1])
+    assert "Wchodzi w kierunku drzwi" not in flat
+
+
+def test_nav_guard_forces_navigate_on_narrated_instruction():
+    agent, llm, record = make_agent_with_navigate(
+        ["Wchodzi w kierunku łóżka, by sprawdzić, czy jest tam coś ciekawego."]
+    )
+    out = ask(agent, "Podejdź do łóżka.")
+    assert record == [("navigate", {"instruction": "Podejdź do łóżka."})]
+    assert out["steps"] and out["steps"][0]["tool"] == "navigate"
+    # Fallback narration is not spoken; a deterministic ack is.
+    assert out["say"] == "Jasne, już się ruszam!"
+
+
+def test_nav_guard_fires_even_on_wellformed_say_without_tool():
+    agent, llm, record = make_agent_with_navigate(
+        ['{"thought": "ok", "say": "Już idę do drzwi!"}']
+    )
+    out = ask(agent, "Zmiana planów! Idź teraz do drzwi.")
+    assert record == [("navigate", {"instruction": "Zmiana planów! Idź teraz do drzwi."})]
+    # Model's own (contract-obeying) say is kept.
+    assert out["say"] == "Już idę do drzwi!"
+
+
+def test_nav_guard_leaves_chat_alone():
+    agent, llm, record = make_agent_with_navigate(
+        ['{"thought": "chat", "say": "Świetnie się mam!"}']
+    )
+    out = ask(agent, "Cześć, jak się masz?")
+    assert record == [] and out["steps"] == []
+
+
+def test_nav_guard_skips_when_model_already_navigated():
+    agent, llm, record = make_agent_with_navigate(
+        ['{"thought": "go", "tool": "navigate", "args": {"instruction": "Idź do drzwi."}}',
+         '{"thought": "done", "say": "Ruszam!"}']
+    )
+    out = ask(agent, "Idź do drzwi.")
+    assert len(record) == 1  # exactly one navigate, no double-fire

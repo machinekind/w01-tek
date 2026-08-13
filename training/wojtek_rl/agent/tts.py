@@ -20,6 +20,7 @@ rest is still being synthesised.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import shutil
 import subprocess
@@ -188,6 +189,35 @@ class SilentTts:
         return np.zeros(0, np.int16)
 
 
+class RemoteTts:
+    """Speech from tts_server.py on a GPU box (Chatterbox multilingual with a
+    cloned voice) -- same one-method shape as PiperTts, so the demo swaps
+    voices with TTS_ENGINE=remote TTS_URL=http://127.0.0.1:8120.
+
+    Blocking by design: Speaker already synthesises off the event loop.  The
+    server owns the voice reference; the client just sends text.
+    """
+
+    def __init__(self, url: str, timeout_s: float = 60.0):
+        self.url = url.rstrip("/")
+        self.timeout_s = timeout_s
+        self.rate = SAMPLE_RATE  # server resamples to the browser rate
+
+    def synthesize(self, text: str) -> np.ndarray:
+        import httpx
+
+        r = httpx.post(
+            f"{self.url}/synthesize", json={"text": text}, timeout=self.timeout_s
+        )
+        r.raise_for_status()
+        return wav_bytes_to_pcm(r.content)
+
+    def health(self) -> dict:
+        import httpx
+
+        return httpx.get(f"{self.url}/health", timeout=5.0).json()
+
+
 class Speaker:
     """Synthesise a reply and push PCM frames to the browser.
 
@@ -253,10 +283,19 @@ class Speaker:
 
 
 def build_engine(kind: str = "piper", voice: str = DEFAULT_VOICE) -> TtsEngine:
-    """`kind`: piper | none. Unknown kinds fall back to silence with a warning
-    rather than taking the demo down."""
+    """`kind`: piper | remote | none. `remote` reads TTS_URL. Unknown kinds
+    fall back to silence with a warning rather than taking the demo down."""
     if kind == "none":
         return SilentTts()
+    if kind == "remote":
+        url = os.environ.get("TTS_URL", "http://127.0.0.1:8120")
+        engine = RemoteTts(url)
+        try:
+            engine.health()
+        except Exception as e:
+            logger.warning(f"remote TTS at {url} unreachable ({e}); running silent")
+            return SilentTts()
+        return engine
     if kind != "piper":
         logger.warning(f"unknown TTS engine {kind!r}; running silent")
         return SilentTts()

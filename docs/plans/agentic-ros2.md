@@ -187,6 +187,12 @@ SCENE=castle ./training/run.sh room ...
 ```
 
 `objects.json` is hand-annotated (mesh-band scatter, see the file comment).
+**"flat"** is the regular-home scene: ReplicaCAD baked stage sc0_00 (CC-BY
+4.0, public HF download, no agreement) — modern apartment with sofa, TV,
+kitchen strip, bookshelves, stairs.  Use the `stages_uncompressed` GLBs;
+the compressed ones carry KTX2 textures trimesh cannot decode.  More
+CC-BY interiors (Hallwyl museum rooms, Sketchfab apartment scans) need a
+logged-in download — see the scene LICENSE.md files for the pattern.
 **R2R/RxR scenes are Matterport3D houses** — meshes require the signed MP3D
 Terms of Use (non-commercial research; email form, human approval), and
 HM3D likewise.  Once granted, MP3D ships per-house GLBs that go through the

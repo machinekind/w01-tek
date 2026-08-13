@@ -294,8 +294,22 @@ class PolicyNode(Node):
 def main():
     rclpy.init()
     node = PolicyNode()
+    # EventsExecutor: the default executor rebuilds its wait set around
+    # every dispatch, which on the Pi 3's A53 costs more than the policy
+    # inference itself -- the 50 Hz tick measured 31 Hz with cycles spent
+    # idle-but-late. The events executor dispatches from a queue without
+    # that rebuild. Falls back where rclpy doesn't ship it.
     try:
-        rclpy.spin(node)
+        from rclpy.experimental import EventsExecutor
+        executor = EventsExecutor()
+        executor.add_node(node)
+    except ImportError:
+        executor = None
+    try:
+        if executor is not None:
+            executor.spin()
+        else:
+            rclpy.spin(node)
     except KeyboardInterrupt:
         pass
 

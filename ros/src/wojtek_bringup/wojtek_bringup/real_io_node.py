@@ -307,8 +307,21 @@ class RealIoNode(Node):
 def main():
     rclpy.init()
     node = RealIoNode()
+    # EventsExecutor, same reason as policy_node: this node relays every
+    # joint_states sample into wojtek/joint_states_abs on the policy's
+    # freshness path, and the default executor's per-dispatch wait-set
+    # rebuild was most of its CPU on the Pi 3. Fallback where absent.
     try:
-        rclpy.spin(node)
+        from rclpy.experimental import EventsExecutor
+        executor = EventsExecutor()
+        executor.add_node(node)
+    except ImportError:
+        executor = None
+    try:
+        if executor is not None:
+            executor.spin()
+        else:
+            rclpy.spin(node)
     except KeyboardInterrupt:
         pass
 

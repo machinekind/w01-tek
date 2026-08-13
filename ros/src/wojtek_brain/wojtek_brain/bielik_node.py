@@ -49,7 +49,7 @@ class BielikNode(Node):
     def __init__(self):
         super().__init__("wojtek_bielik")
         self.declare_parameter("url", "http://127.0.0.1:8091")
-        self.declare_parameter("model", "speakleash/Bielik-4.5B-v3.0-Instruct")
+        self.declare_parameter("model", "speakleash/Bielik-4.5B-v3.0-Instruct-FP8-Dynamic")
         self.declare_parameter("temperature", 0.7)
         self.declare_parameter("max_tokens", 200)
 

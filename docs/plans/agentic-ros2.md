@@ -172,10 +172,15 @@ the intent-vector boundary.
 - One ≥48 GB card (or 2×24): Qwen3-VL-4B-FP8 ~8 GB + KV, FutureNav ~10 GB
   (grows with VGGT cache), whisper large-v3 ~4 GB, Bielik-4.5B-v3 ~5–6 GB
   (FP8) — Bielik-11B wants the second card. pyannote + TTS ~4 GB.
-- Provisioning extends `scripts/vast_stack.sh` (cluster-agnostic, env-driven;
-  keep the cu124 pin, `ninja`, `VLLM_USE_FLASHINFER_SAMPLER=0` lessons).
-  ROS 2 Jazzy on the box via the official binary or a `ros:jazzy` base image;
-  all nodes on localhost DDS (`ROS_LOCALHOST_ONLY=1`).
+- Provisioning: `scripts/vast_voice_stack.sh` (talk-only stack; companion
+  to `vast_stack.sh`, ports do not collide so both fit one box).  Image
+  must be **`nvidia/cuda:12.6.3-cudnn-devel-ubuntu24.04`** — ROS 2 Jazzy
+  exists only for Noble, and faster-whisper needs the cudnn variant.  The
+  node venv uses `--system-site-packages` so it sees apt rclpy, and colcon
+  builds with that venv active so installed node scripts get venv shebangs.
+  Bielik default: `speakleash/Bielik-4.5B-v3.0-Instruct-FP8-Dynamic`
+  (~5 GB, Ada+; bf16 repo on Ampere).  Talk-only fits a 24 GB card; the
+  full W3 stack (+ Qwen + FutureNav) returns to the ≥48 GB sizing above.
 - Machine-specific scripts stay in the private operations repository — this
   repo never names private hosts (see root `CLAUDE.md`).
 

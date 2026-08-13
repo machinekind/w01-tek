@@ -170,6 +170,32 @@ Phase 2 (hardware parity, post-demo): the locomotion layer moves to
 robot topology; the AI graph above does not change — that is the point of
 the intent-vector boundary.
 
+## Scenes
+
+The demo scenes were dark and sparse ("room" = Van Gogh's Arles bedroom,
+"apartment").  **"castle"** (Skokloster castle hall from the same Habitat
+test-scenes zip — bright 18×21 m baroque gallery: checkered floor, table
+with chairs, fireplace, horse paintings) is the pretty default now; no new
+licensing, rebuilt with:
+
+```bash
+./training/run.sh room-assets --zip-member skokloster-castle.glb \
+    --name castle --max-extent 40 --skip-collision --up z
+./training/run.sh build-room --name castle
+python -m wojtek_eval.gridmap --name castle      # occupancy for SCAN/search
+SCENE=castle ./training/run.sh room ...
+```
+
+`objects.json` is hand-annotated (mesh-band scatter, see the file comment).
+**R2R/RxR scenes are Matterport3D houses** — meshes require the signed MP3D
+Terms of Use (non-commercial research; email form, human approval), and
+HM3D likewise.  Once granted, MP3D ships per-house GLBs that go through the
+same `room-assets` pipeline (single floor, or z-cropped), and running in
+them matches FutureNav's training distribution — better nav, not just
+better looks.  Someone with signing authority has to request access; the
+meshes stay out of this public repository either way (only `objects.json`
+annotations are committed, same as "apartment").
+
 ## Deployment (vast.ai)
 
 - One ≥48 GB card (or 2×24): Qwen3-VL-4B-FP8 ~8 GB + KV, FutureNav ~10 GB

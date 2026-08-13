@@ -6,3 +6,6 @@ faster-whisper>=1.0
 torch                    # silero VAD, the default backend
 # Optional: pyannote backend (heavier; HF token needed at first download).
 # pyannote.audio>=3.1
+# TTS engines — install the one(s) the launch selects:
+# chatterbox-streaming   # Chatterbox multilingual + generate_stream (fork of chatterbox-tts)
+# phonemizer tokenizers einops torchaudio soundfile   # F5 fork pipeline (+ espeak-ng system package)

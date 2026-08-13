@@ -1,6 +1,6 @@
 from setuptools import setup
 
-package_name = "wojtek_voice"
+package_name = "wojtek_brain"
 
 setup(
     name=package_name,
@@ -14,14 +14,12 @@ setup(
     zip_safe=True,
     maintainer="Maciej Gruszczynski",
     maintainer_email="maciejgruszczynski@surferseo.com",
-    description="Voice pipeline nodes: audio bridge, VAD, ASR.",
+    description="Brain nodes: intent router and Bielik conversational node.",
     license="Apache-2.0",
     entry_points={
         "console_scripts": [
-            "audio_bridge = wojtek_voice.audio_bridge_node:main",
-            "vad = wojtek_voice.vad_node:main",
-            "asr = wojtek_voice.asr_node:main",
-            "tts = wojtek_voice.tts_node:main",
+            "router = wojtek_brain.router_node:main",
+            "bielik = wojtek_brain.bielik_node:main",
         ],
     },
 )

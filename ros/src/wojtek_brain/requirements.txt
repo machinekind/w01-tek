@@ -1,0 +1,7 @@
+# Model/runtime deps not resolvable through rosdep; install into the
+# deployment venv.  The LLMs themselves are served by vLLM in separate
+# processes — these nodes are HTTP clients.
+httpx
+# Optional: encoder-based router (the rule router needs nothing).
+# transformers
+# torch

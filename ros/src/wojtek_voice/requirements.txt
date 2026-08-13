@@ -3,7 +3,6 @@
 numpy
 websockets>=12
 faster-whisper>=1.0
-# Optional VAD backends: energy needs nothing; silero needs torch;
-# pyannote additionally needs a HF token at first download.
-# torch
+torch                    # silero VAD, the default backend
+# Optional: pyannote backend (heavier; HF token needed at first download).
 # pyannote.audio>=3.1

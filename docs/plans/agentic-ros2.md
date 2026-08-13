@@ -126,24 +126,33 @@ cancels in-flight generation for the interrupted utterance_id.
 
 ## Speech stack
 
-- **ASR**: faster-whisper **large-v3** (FLEURS PL 4.74; 0.36 s measured on an
-  RTX 5880). Keep #131's hallucination guards (`no_speech_prob > 0.6`,
-  `avg_logprob < -1.0` drop rules).
-- **VAD + turn detection**: **pyannote** (segmentation model streamed) per
-  the team decision; it also gives turn-taking signals the energy gate
-  can't. Risk: heavier than silero — the #131 `VoiceSegmenter` keeps its
-  `vad=` hook, so silero remains a drop-in fallback if pyannote adds
-  latency.
-- **TTS**: dual engine (Decision 3). Neither streams natively → sentence
-  pipelining: `bielik` flushes on punctuation, `tts` synthesizes per
-  sentence (F5 RTF ~0.12 GPU → ~0.4 s for a short sentence; Chatterbox has a
-  streaming fork if first-chunk latency disappoints).
+- **ASR**: faster-whisper, model configurable (`model` parameter).
+  **Benchmark large-v2 against large-v3 on our own Polish recordings in W1**
+  — v3 scores better on FLEURS (PL 4.74; 0.36 s measured on an RTX 5880)
+  but is known to hallucinate more on silence/noise, and v2 sometimes wins
+  in practice. The #131 guards (`no_speech_prob > 0.6`,
+  `avg_logprob < -1.0` drop rules) stay either way.
+- **VAD: silero by default** (decided 2026-08-13 on license/latency/memory/
+  accuracy: MIT, ~2 MB model, <1 ms per frame on CPU, streaming-native
+  512-sample windows, VAD accuracy on par with heavier models). pyannote
+  segmentation-3.0 stays a config-selectable backend (MIT weights but
+  HF-gated, needs ~1.6 s context ring + torch/pyannote.audio stack, tens of
+  ms per window) — worth revisiting only if the stage room defeats silero
+  or we want model-based turn-taking; turn-end today is the segmenter's
+  silence timeout. The energy gate remains the zero-dependency fallback.
+- **TTS**: dual engine (Decision 3). Neither streams natively → two-level
+  streaming: sentence pipelining always (`bielik` flushes on punctuation,
+  `tts` synthesizes per sentence; F5 RTF ~0.12 GPU → ~0.4 s for a short
+  sentence), plus **intra-sentence streaming for Chatterbox via the
+  `chatterbox-streaming` fork — or our own chunked decode if the fork
+  fights the vLLM-port/finetune combo**. Decide by measurement in W2;
+  first-chunk latency is the metric.
 - **Voice**: cloning prep pipeline exists (`f5_prep.py` scratchpad: whisper
   timestamps → best 3–8 s window → loudnorm; denoise refs for Chatterbox).
-  **Głuś/Walaszek voices are private-tinkering only** — a cloned character
-  voice on a public stage is a personality-rights exposure and F5's PL
-  checkpoint is CC-BY-NC. Ship a neutral cloned-from-licensed or stock
-  Polish voice as the stage default; character voices stay a config flag.
+  **Głuś is the development default for now; it will be replaced before the
+  stage** — a cloned character voice in public is a personality-rights
+  exposure and F5's PL checkpoint is CC-BY-NC. The stage voice must be
+  chosen and cloned (or stock) by end of W3 so rehearsals use the real one.
 
 ## Simulator strategy
 

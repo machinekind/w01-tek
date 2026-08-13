@@ -12,10 +12,12 @@ The websocket wire protocol is the #131 room_app mic path, so the existing
 browser worklet connects unchanged.  `wojtek_voice/transport.py` is lifted
 from `training/wojtek_rl/agent/voice.py` — keep segmentation fixes in sync.
 
-VAD backends (`backend` parameter): `energy` (default, no deps), `silero`
-(torch), `pyannote` (team choice for noisy rooms; needs `pyannote.audio` and
-a HF token on first download).  ASR is faster-whisper `large-v3` with the
-hallucination guards from #131.
+VAD backends (`backend` parameter): `silero` (default — MIT, ~2 MB, <1 ms
+per frame), `pyannote` (optional, for noisy rooms / model-based turn-taking;
+needs `pyannote.audio` and a HF token on first download), `energy`
+(zero-dependency fallback).  ASR is faster-whisper with the hallucination
+guards from #131; `model` parameter picks the checkpoint — benchmark
+`large-v2` vs `large-v3` on Polish before trusting the default.
 
 Model deps are not rosdep-resolvable — `pip install -r requirements.txt`
 into the deployment venv (the provisioning payload does this).

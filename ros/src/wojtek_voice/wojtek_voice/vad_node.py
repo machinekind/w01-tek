@@ -24,7 +24,7 @@ from .vad_backends import make_vad
 class VadNode(Node):
     def __init__(self):
         super().__init__("wojtek_vad")
-        self.declare_parameter("backend", "energy")
+        self.declare_parameter("backend", "silero")
         self.declare_parameter("threshold", 0.5)
         self.declare_parameter("silence_end_s", 0.7)
         self.declare_parameter("max_utterance_s", 20.0)

@@ -1,0 +1,13 @@
+# Core-partition daemon for the Pi 3 (see wojtek-affinity.sh for the why).
+# Installed and enabled by deploy/rpi/install.sh phase 3 on Pi 3 boards only.
+[Unit]
+Description=Wojtek core partition (ros2_control on 3, policy+real_io on 2)
+
+[Service]
+User=rpi
+ExecStart=/usr/local/sbin/wojtek-affinity.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

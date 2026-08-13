@@ -122,8 +122,36 @@ git -C "${CANDLE_DIR}" fetch --quiet origin || true
 git -C "${CANDLE_DIR}" checkout --quiet "${CANDLE_COMMIT}"
 
 source "/opt/ros/${ROS_DISTRO}/setup.bash"
-rosdep install --from-paths src -y -i --rosdistro "${ROS_DISTRO}" || true
-colcon build --symlink-install \
+# --skip-keys wojtek_pc: the PC-side package is deliberately excluded from
+# the robot rsync, so its key cannot resolve -- and an unresolvable key makes
+# rosdep abort BEFORE installing anything else (seen on a fresh card: the
+# whole dependency set, e.g. imu_filter_madgwick, silently missing).
+rosdep install --from-paths src -y -i --rosdistro "${ROS_DISTRO}" \
+    --skip-keys wojtek_pc || true
+
+# Low-memory boards (Pi 3: 1 GB): the default colcon executor builds packages
+# in parallel and make fans out per core, which OOM-kills gcc/ld long before
+# the workspace finishes. Detect the small board and (a) back the build with a
+# swapfile so single link steps can spike past physical RAM, (b) build one
+# package at a time with one make job.
+MEM_MB="$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)"
+COLCON_EXTRA=""
+if [ "${MEM_MB}" -lt 2048 ]; then
+    echo "   low-mem board (${MEM_MB} MB): sequential build, -j1, ensuring swap"
+    if ! swapon --show --noheadings 2>/dev/null | grep -q .; then
+        sudo fallocate -l 2G /swapfile 2>/dev/null \
+            || sudo dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
+        sudo chmod 600 /swapfile
+        sudo mkswap /swapfile
+        sudo swapon /swapfile
+        grep -q '^/swapfile' /etc/fstab \
+            || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
+    fi
+    export MAKEFLAGS="-j1"
+    COLCON_EXTRA="--executor sequential --parallel-workers 1"
+fi
+
+colcon build --symlink-install ${COLCON_EXTRA} \
     --packages-up-to wojtek_bringup \
     --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 

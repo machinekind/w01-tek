@@ -149,7 +149,9 @@ cd ${STACK_DIR}
 # but assert CUDA below anyway).
 [ -d venv ] || python3 -m venv --system-site-packages venv
 ./venv/bin/pip install -q --upgrade pip
-./venv/bin/pip install -q faster-whisper websockets httpx chatterbox-streaming
+# chatterbox-tts, NOT the chatterbox-streaming fork: the fork is English-only
+# (no mtl_tts module — verified live 2026-08-13); Polish needs multilingual.
+./venv/bin/pip install -q faster-whisper websockets httpx chatterbox-tts
 ./venv/bin/python - <<'PYEOF'
 import torch
 assert torch.cuda.is_available(), "torch cannot see the GPU -- do NOT serve"
@@ -157,7 +159,7 @@ print("cuda ok:", torch.cuda.get_device_name(0))
 PYEOF
 # Build with the venv python active so the installed node scripts get venv
 # shebangs -- that is how the heavy deps become importable inside rclpy nodes.
-source /opt/ros/${ROS_DISTRO}/setup.bash
+set +u; source /opt/ros/${ROS_DISTRO}/setup.bash; set -u
 source venv/bin/activate
 cd ws && colcon build --symlink-install \
   --packages-select wojtek_agent_msgs wojtek_voice wojtek_brain wojtek_agent_bringup
@@ -215,8 +217,14 @@ cd ${STACK_DIR}
 if pgrep -f "voice_stack.launch" >/dev/null 2>&1; then
   echo "voice stack already up"
 else
+  set +u
   source /opt/ros/${ROS_DISTRO}/setup.bash
   source ws/install/setup.bash
+  set -u
+  # colcon normalizes installed-script shebangs to the system python, which
+  # cannot see the venv's model deps -- put the venv's site-packages on
+  # PYTHONPATH instead (same CPython 3.12, so wheels are compatible).
+  export PYTHONPATH="\$PWD/venv/lib/python3.12/site-packages:\${PYTHONPATH:-}"
   REF_WAV=""; REF_TEXT=""
   [ -f refs/ref.wav ] && REF_WAV="\$PWD/refs/ref.wav"
   [ -f refs/ref.txt ] && REF_TEXT="\$(cat refs/ref.txt)"

@@ -7,5 +7,8 @@ torch                    # silero VAD, the default backend
 # Optional: pyannote backend (heavier; HF token needed at first download).
 # pyannote.audio>=3.1
 # TTS engines — install the one(s) the launch selects:
-# chatterbox-streaming   # Chatterbox multilingual + generate_stream (fork of chatterbox-tts)
+# chatterbox-tts         # multilingual (mtl_tts) — REQUIRED for Polish; the
+#                        # chatterbox-streaming fork is ENGLISH-ONLY (verified
+#                        # 2026-08-13), so intra-sentence streaming for Polish
+#                        # means porting the fork's decoder to mtl ourselves
 # phonemizer tokenizers einops torchaudio soundfile   # F5 fork pipeline (+ espeak-ng system package)

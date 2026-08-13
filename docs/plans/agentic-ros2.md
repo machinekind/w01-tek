@@ -143,10 +143,13 @@ cancels in-flight generation for the interrupted utterance_id.
 - **TTS**: dual engine (Decision 3). Neither streams natively → two-level
   streaming: sentence pipelining always (`bielik` flushes on punctuation,
   `tts` synthesizes per sentence; F5 RTF ~0.12 GPU → ~0.4 s for a short
-  sentence), plus **intra-sentence streaming for Chatterbox via the
-  `chatterbox-streaming` fork — or our own chunked decode if the fork
-  fights the vLLM-port/finetune combo**. Decide by measurement in W2;
-  first-chunk latency is the metric.
+  sentence), plus intra-sentence streaming for Chatterbox.  **Measured
+  2026-08-13: the `chatterbox-streaming` fork is English-only (no
+  `mtl_tts`), so Polish intra-sentence streaming means porting the fork's
+  chunked decode onto the multilingual model ourselves.**  Sentence
+  pipelining alone measured fine on an RTX 6000 Ada (~2 s per short
+  sentence at ~50 tok/s T3 sampling); revisit only if stage latency
+  demands it.
 - **Voice**: cloning prep pipeline exists (`f5_prep.py` scratchpad: whisper
   timestamps → best 3–8 s window → loudnorm; denoise refs for Chatterbox).
   **Głuś is the development default for now; it will be replaced before the

@@ -37,7 +37,7 @@ class AudioBridgeNode(Node):
         super().__init__("wojtek_audio_bridge")
         self.declare_parameter("port", 8765)
         self.loop = loop
-        self.clients: set = set()
+        self._ws_clients: set = set()
         self.mic_on = False
         self._seq = 0
 
@@ -76,14 +76,14 @@ class AudioBridgeNode(Node):
             )
 
     def _broadcast(self, payload):
-        for ws in list(self.clients):
+        for ws in list(self._ws_clients):
             asyncio.ensure_future(self._send(ws, payload))
 
     async def _send(self, ws, payload):
         try:
             await ws.send(payload)
         except Exception:
-            self.clients.discard(ws)
+            self._ws_clients.discard(ws)
 
     # -- websocket thread (event loop) -> publishers ----------------------
     def publish_mic(self, raw: bytes):
@@ -99,7 +99,7 @@ class AudioBridgeNode(Node):
         self.pub_mic.publish(msg)
 
     async def handler(self, ws):
-        self.clients.add(ws)
+        self._ws_clients.add(ws)
         self.get_logger().info("browser connected")
         try:
             async for message in ws:
@@ -108,7 +108,7 @@ class AudioBridgeNode(Node):
                 else:
                     self.control(message)
         finally:
-            self.clients.discard(ws)
+            self._ws_clients.discard(ws)
             self.get_logger().info("browser disconnected")
 
     def control(self, message: str):

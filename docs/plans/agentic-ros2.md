@@ -196,6 +196,30 @@ better looks.  Someone with signing authority has to request access; the
 meshes stay out of this public repository either way (only `objects.json`
 annotations are committed, same as "apartment").
 
+## Commercial-fork audit (endgame: fork + monetize)
+
+The CODE is Apache-2.0 throughout — forking and monetizing it is exactly
+what the license permits.  Every constraint lives in assets and weights:
+
+| component | license | commercial fork |
+|---|---|---|
+| whisper, chatterbox-tts, silero VAD, pyannote weights | MIT | fine |
+| Bielik v3, Qwen3-VL | Apache-2.0 | fine |
+| Piper `pl_PL-mc_speech` voice | CC0 (dataset) | fine |
+| castle / van-gogh / apartment scenes | CC-BY (Sketchfab scans) | fine, keep attribution |
+| MP3D / HM3D scenes (R2R/RxR houses) | signed ToS, non-commercial research | **dev/eval only — never in a product, never on a promo stage, never trained into shipped weights** |
+| F5 Gregniuki PL checkpoint | CC-BY-NC | **out of any commercial build** |
+| Głuś / Walaszek cloned voices | personality rights | **dev only; stage voice replaced (decided)** |
+| FutureNav weights | **unverified** | check before it becomes load-bearing commercially; it is itself trained on MP3D-family data |
+
+Working rules that keep the fork clean: research-restricted scenes are
+runtime assets on dev machines only (this repo never carries meshes —
+existing rule); public-facing footage (stage, marketing clips) uses only
+the CC-BY scenes; none of OUR trained artifacts (router, fine-tunes,
+cloned voices we ship) may be trained on ToS-restricted data.  A real
+counsel pass is due before actual monetization — this table is an
+engineering audit, not legal advice.
+
 ## Deployment (vast.ai)
 
 - One ≥48 GB card (or 2×24): Qwen3-VL-4B-FP8 ~8 GB + KV, FutureNav ~10 GB

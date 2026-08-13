@@ -15,8 +15,6 @@ Output is resampled to 24 kHz (the browser worklet rate), so RemoteTts
 never needs to know the model's native rate.
 """
 
-from __future__ import annotations
-
 import argparse
 import io
 import os
@@ -61,6 +59,16 @@ def build_app(ref_wav: str, language: str, device: str):
 
     def model():
         if state["model"] is None:
+            # resemble-perth's implicit watermarker resolves to None when its
+            # optional deps are broken (observed on a fresh vast box) and
+            # chatterbox then crashes constructing it.  The demo does not
+            # need watermarked audio -- fall back to the dummy.
+            import perth
+
+            if getattr(perth, "PerthImplicitWatermarker", None) is None:
+                from perth.dummy_watermarker import DummyWatermarker
+
+                perth.PerthImplicitWatermarker = DummyWatermarker
             from chatterbox.mtl_tts import ChatterboxMultilingualTTS
 
             state["model"] = ChatterboxMultilingualTTS.from_pretrained(device=device)

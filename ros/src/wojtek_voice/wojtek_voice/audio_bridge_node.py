@@ -27,7 +27,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import Empty
 
-from wojtek_agent_msgs.msg import AudioChunk
+from wojtek_agent_msgs.msg import AudioChunk, Sentence, Transcript
 
 from .transport import SAMPLE_RATE
 
@@ -48,6 +48,10 @@ class AudioBridgeNode(Node):
         self.create_subscription(
             Empty, "/wojtek/audio/speech_started", self.on_speech_started, 10
         )
+        # Mirrored to the browser for visibility only — the pipeline's
+        # consumers read the topics, not the websocket.
+        self.create_subscription(Transcript, "/wojtek/asr/final", self.on_final, 10)
+        self.create_subscription(Sentence, "/wojtek/say", self.on_say, 10)
 
     # -- executor thread -> event loop ------------------------------------
     def on_tts(self, msg: AudioChunk):
@@ -58,6 +62,18 @@ class AudioBridgeNode(Node):
         self.loop.call_soon_threadsafe(
             self._broadcast, json.dumps({"type": "flush"})
         )
+
+    def on_final(self, msg: Transcript):
+        self.loop.call_soon_threadsafe(
+            self._broadcast, json.dumps({"type": "transcript", "text": msg.text})
+        )
+
+    def on_say(self, msg: Sentence):
+        if msg.text:
+            self.loop.call_soon_threadsafe(
+                self._broadcast,
+                json.dumps({"type": "say", "text": msg.text, "source": msg.source}),
+            )
 
     def _broadcast(self, payload):
         for ws in list(self.clients):

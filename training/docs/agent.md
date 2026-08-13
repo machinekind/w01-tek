@@ -266,28 +266,14 @@ One vLLM server can serve both the chat agent and the search observer:
 vllm serve Qwen/Qwen3-VL-4B-Instruct-FP8 --port 8000
 ```
 
-The house GPU box for this is **diplodok** over tailscale
-(`diplodok.tail45a5e.ts.net`, login `greg`, RTX 4090 Mobile 16 GB — Ada, so
-FP8 runs natively):
+Any Ampere-or-newer card runs the FP8 checkpoint natively; a 16 GB card is
+enough for the 4B model alone (~8 GB resident). The provisioning script for
+the shared house GPU box lives in the private operations repository (this
+repository stays free of private-machine identity); `scripts/vast_stack.sh`
+is the cluster-agnostic equivalent for a rented box.
 
-```bash
-scripts/diplodok_llm.sh check     # GPU, driver sanity, ports, cached weights
-scripts/diplodok_llm.sh install   # uv venv + vLLM under ~/wojtek_vllm
-scripts/diplodok_llm.sh serve     # detached vLLM on port 8090
-eval "$(scripts/diplodok_llm.sh env)"   # AGENT_URL + AGENT_MODEL
-```
+Two vLLM traps worth knowing regardless of the host:
 
-Port **8090** is ours; 8000/8001/8080 belong to another user on the same box
-— never bind those.
-
-Three things the script already handles, listed here so nobody re-debugs them:
-
-- **Driver shim.** diplodok's installed nvidia userspace runs ahead of the
-  loaded kernel module, so a plain CUDA process fails with `cuInit 804`. The
-  box keeps matching libraries in `~/nvidia-580.159`, and
-  `source ~/nvidia-580.159/env.sh` fixes it **per shell** (inherited by
-  anything launched afterwards). Every remote command sources it; `check`
-  reports whether CUDA actually came up.
 - **`ninja` is required.** vLLM's compile path shells out to it, but it is not
   a vLLM dependency, and it must be on `PATH` — not merely installed in the
   venv. Without it the server dies with `FileNotFoundError: 'ninja'` seconds
@@ -297,11 +283,9 @@ Three things the script already handles, listed here so nobody re-debugs them:
   has `BlockAdjacentDifference::FlagHeads`; the build fails and engine init
   dies. vLLM's native sampler is fine at our request rate.
 
-Measured on diplodok with `Qwen3-VL-4B-Instruct-FP8` (16 GB card, ~8 GB
-resident): 0.9 s for a text-only chat turn, 1.4-1.7 s when a camera frame is
-attached, so a look-then-answer exchange lands around 2 s. The 16 GB is
-shared with whatever else runs there — `check` lists the current GPU tenants
-and `serve` asks for 80 % of VRAM.
+Measured with `Qwen3-VL-4B-Instruct-FP8` on a 16 GB RTX 4090 Mobile (Ada,
+~8 GB resident): 0.9 s for a text-only chat turn, 1.4-1.7 s when a camera
+frame is attached, so a look-then-answer exchange lands around 2 s.
 
 Point the demo at it (both knobs also exist as `--agent-url/--agent-model`):
 

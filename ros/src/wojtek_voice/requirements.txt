@@ -1,0 +1,9 @@
+# Model/runtime deps not resolvable through rosdep; install into the
+# deployment venv (the provisioning payload does this).
+numpy
+websockets>=12
+faster-whisper>=1.0
+# Optional VAD backends: energy needs nothing; silero needs torch;
+# pyannote additionally needs a HF token at first download.
+# torch
+# pyannote.audio>=3.1

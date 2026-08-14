@@ -10,6 +10,7 @@ whose output tanh(bias) is known in closed form for any observation.
 
 import json
 import sys
+import types
 from pathlib import Path
 
 import numpy as np
@@ -24,10 +25,12 @@ from wojtek_policy.policy import (  # noqa: E402
     gravity_from_quat,
     height_anchor,
 )
+from wojtek_policy import policy_source  # noqa: E402
 from wojtek_policy.policy_source import (  # noqa: E402
     load_meta,
     load_policy,
     pd_settings,
+    policy_store,
     resolve_policy,
 )
 
@@ -351,6 +354,121 @@ def test_resolve_rejects_non_reference():
         resolve_policy("no-slash-and-no-such-dir")
     with pytest.raises(ValueError):
         resolve_policy("/nonexistent/dir/policy.npz")
+
+
+# -- policy store -------------------------------------------------------------
+#
+# The robot resolves Hugging Face references offline, from the store that
+# deploy.sh rsyncs to it. These tests stand in for that machine: a store on
+# disk and nothing that can download.
+
+SHA = "a" * 40
+
+
+def store_snapshot(store, repo_id, commit):
+    """A materialized snapshot, the way a prefetch on the PC leaves it."""
+    snapshot = store / repo_id / commit
+    snapshot.mkdir(parents=True)
+    make_policy(snapshot)
+    return snapshot
+
+
+def offline(*args, **kwargs):
+    raise policy_source._HFUnavailable("offline")
+
+
+def test_pinned_commit_resolves_from_store_without_fetching(tmp_path, monkeypatch):
+    # A commit never moves, so a stored snapshot ends it -- no network at all.
+    monkeypatch.setenv("WOJTEK_POLICY_STORE", str(tmp_path))
+    snapshot = store_snapshot(tmp_path, "org/name", SHA)
+
+    def no_network(*args, **kwargs):
+        raise AssertionError("network attempted")
+
+    monkeypatch.setattr(policy_source, "_fetch_into_store", no_network)
+    r = resolve_policy(f"org/name@{SHA}")
+    assert r.npz == snapshot / "policy.npz"
+    assert r.meta == snapshot / "policy_meta.json"
+    assert r.source == f"hf:org/name@{SHA}"
+    assert load_policy(f"org/name@{SHA}").directory == snapshot
+
+
+def test_branch_offline_falls_back_to_recorded_ref(tmp_path, monkeypatch):
+    # A branch is fetched when possible; offline, the refs file says which
+    # commit it pointed at last time, and that snapshot answers.
+    monkeypatch.setenv("WOJTEK_POLICY_STORE", str(tmp_path))
+    store_snapshot(tmp_path, "org/name", SHA)
+    refs = tmp_path / "org" / "name" / "refs"
+    refs.mkdir(parents=True)
+    (refs / "main").write_text(SHA + "\n")
+    (refs / "somebranch").write_text(SHA + "\n")
+    monkeypatch.setattr(policy_source, "_fetch_into_store", offline)
+    assert resolve_policy("org/name").source == f"hf:org/name@{SHA}"
+    assert resolve_policy("org/name@somebranch").source == f"hf:org/name@{SHA}"
+
+
+def test_missing_from_store_offline_says_how_to_prefetch(tmp_path, monkeypatch):
+    monkeypatch.setenv("WOJTEK_POLICY_STORE", str(tmp_path))
+    store_snapshot(tmp_path, "org/name", SHA)
+    monkeypatch.setattr(policy_source, "_fetch_into_store", offline)
+    with pytest.raises(RuntimeError, match="prefetch"):
+        resolve_policy("org/name@" + "b" * 40)   # a commit nobody fetched
+    with pytest.raises(RuntimeError, match="prefetch"):
+        resolve_policy("org/name@unrecorded")    # a branch with no refs file
+
+
+class _NeverRaised(Exception):
+    """Stands in for LocalEntryNotFoundError when the stub always succeeds."""
+
+
+def test_fetch_materializes_real_files_and_records_the_branch(
+        tmp_path, monkeypatch):
+    # A prefetch on the PC: huggingface_hub's download cache hands back
+    # symlinks into its blob directory, and the store must end up with real
+    # files (they get rsynced to the robot and read by hand) plus a refs
+    # entry saying where the branch pointed.
+    commit = "c" * 40
+    cache = tmp_path / "hf-cache"
+    (cache / "blobs").mkdir(parents=True)
+    (cache / "snapshots" / commit).mkdir(parents=True)
+
+    def fake_download(repo_id, fname, revision=None):
+        blob = cache / "blobs" / f"blob-{fname}"
+        blob.write_text(f"payload of {fname}")
+        link = cache / "snapshots" / commit / fname
+        if not link.is_symlink():
+            link.symlink_to(blob)
+        return str(link)
+
+    monkeypatch.setitem(
+        sys.modules, "huggingface_hub",
+        types.SimpleNamespace(hf_hub_download=fake_download))
+    monkeypatch.setitem(
+        sys.modules, "huggingface_hub.errors",
+        types.SimpleNamespace(LocalEntryNotFoundError=_NeverRaised))
+
+    store = tmp_path / "store"
+    r = policy_source._fetch_into_store(store, "org/name", "somebranch")
+    snapshot = store / "org" / "name" / commit
+    assert r.npz == snapshot / "policy.npz"
+    assert r.source == f"hf:org/name@{commit}"
+    for fname in ("policy.npz", "policy_meta.json"):
+        assert (snapshot / fname).is_file()
+        assert not (snapshot / fname).is_symlink()
+        assert (snapshot / fname).read_text() == f"payload of {fname}"
+    refs = store / "org" / "name" / "refs"
+    assert (refs / "somebranch").read_text().strip() == commit
+
+    # A pinned commit IS its own name: nothing to record.
+    policy_source._fetch_into_store(store, "org/name", commit)
+    assert not (refs / commit).exists()
+
+
+def test_policy_store_default_is_beside_the_workspace_src(monkeypatch):
+    # No env var: the store sits next to the src/ this file was found in --
+    # ros/policies in a checkout, wojtek_ws/policies on the robot.
+    monkeypatch.delenv("WOJTEK_POLICY_STORE", raising=False)
+    assert policy_store() == PKG.parents[1] / "policies"
 
 
 # -- shared helpers -----------------------------------------------------------

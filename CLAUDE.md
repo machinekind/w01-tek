@@ -146,5 +146,8 @@ Policy artifacts are never vendored into `ros/` either: `export` writes a
 self-contained `policy.npz` + `policy_meta.json` (the schema-2 deployment
 contract), keepers publish that pair to their Hugging Face repo, and the
 ROS stack loads a policy by reference -- `policy:=<org/name[@rev] | dir>`
-on the launch files.  Changing the deployed policy is a config change, not
-a code change.
+on the launch files.  A Hugging Face reference is resolved from the
+gitignored policy store (`ros/policies/`): fetch it on the operator PC
+(`python3 -m wojtek_policy.policy_source <ref>`), and `ros/deploy.sh` syncs
+the store to the RPi, which has no internet and never downloads anything.
+Changing the deployed policy is a config change, not a code change.

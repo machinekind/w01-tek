@@ -5,27 +5,54 @@ A reference is either
   - a Hugging Face model repo id, e.g.
         <HF_ORGANIZATION>/wojtek-springy-locomotion
         <HF_ORGANIZATION>/wojtek-stiff-kp80-locomotion@<commit-or-branch>
-    downloaded with huggingface_hub (only the two policy files, never the
-    checkpoint) into its standard cache, so after one online resolve the
-    robot keeps working with no network. Private repos need a token
-    (HF_TOKEN or `hf auth login`).
+    resolved against the POLICY STORE: a plain directory of downloaded
+    snapshots, one per commit, laid out as
+
+        <store>/<org>/<name>/<commit>/policy.npz + policy_meta.json
+        <store>/<org>/<name>/refs/<branch-or-tag>   # the commit it pointed
+                                                    # at when last fetched
+
+    The store is WOJTEK_POLICY_STORE, or `policies/` next to the workspace's
+    `src/` (ros/policies in a checkout), or ~/.wojtek/policies.
+
+The robot never talks to Hugging Face -- it has no internet, and
+huggingface_hub is not even installed on it. Downloading happens on the
+operator PC, which has the network and the token for the private repos:
+
+    python3 -m wojtek_policy.policy_source <ref>     # fills the store
+    ./deploy.sh                                      # rsyncs it to the robot
+
+so on the robot every reference is answered from the store, offline. A ref
+that is not there yet fails with that same instruction instead of a network
+error. Only the two policy files are ever fetched, never the checkpoint.
 
 Pin real-robot launches to a commit (`@<sha>`): the resolved revision is
-part of what ran on the robot, and a moving branch is not a record.
+part of what ran on the robot, and a moving branch is not a record. A commit
+is also the one reference that needs no network at all once stored, since a
+commit never moves; a branch is re-fetched when Hugging Face is reachable.
 
-Prefetch on a machine that has network and a token:
-    python3 -m wojtek_policy.policy_source <ref>
-
-No ROS imports here; huggingface_hub is imported only when an HF ref is
-actually used, so local-directory workflows need nothing extra installed.
+No ROS imports here; huggingface_hub is imported only when something has to
+be downloaded, so store and local-directory workflows need nothing extra
+installed.
 """
 
 import json
+import os
+import re
+import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 FILES = ("policy.npz", "policy_meta.json")
+
+
+class _HFUnavailable(Exception):
+    """Nothing can be downloaded from here: no huggingface_hub, or no network.
+
+    Not an error by itself -- it is the signal to answer from the store.
+    A refused or unauthorized repo is a different thing and propagates.
+    """
 
 
 @dataclass
@@ -34,6 +61,25 @@ class ResolvedPolicy:
     meta: Path
     # Human-readable provenance for logs: "local:<dir>" or "hf:<repo>@<commit>".
     source: str
+
+
+def policy_store() -> Path:
+    """Where downloaded policy snapshots live on this machine.
+
+    WOJTEK_POLICY_STORE wins when set (the container sets it). Otherwise it
+    sits beside the workspace's `src/`, found by walking up from this file:
+    ros/policies in a checkout, ~/wojtek_ws/policies on the robot. That works
+    because every build here is --symlink-install, so this file resolves back
+    into the source tree rather than into install/. The home directory is the
+    last resort, for a copy installed some other way.
+    """
+    env = os.environ.get("WOJTEK_POLICY_STORE", "").strip()
+    if env:
+        return Path(env).expanduser()
+    for parent in Path(__file__).resolve().parents:
+        if parent.name == "src":
+            return parent.parent / "policies"
+    return Path.home() / ".wojtek" / "policies"
 
 
 def resolve_policy(ref: str) -> ResolvedPolicy:
@@ -61,40 +107,116 @@ def resolve_policy(ref: str) -> ResolvedPolicy:
     return _resolve_hf(ref)
 
 
-def _resolve_hf(ref: str) -> ResolvedPolicy:
-    from huggingface_hub import hf_hub_download
+def _is_commit(revision: str) -> bool:
+    """A full commit sha, as opposed to a branch or tag name."""
+    return re.fullmatch(r"[0-9a-fA-F]{40}", revision) is not None
+
+
+def _from_store(store: Path, repo_id: str, commit: str) -> ResolvedPolicy | None:
+    """The stored snapshot for a commit, or None if it isn't there (whole)."""
+    snapshot = store / repo_id / commit
+    if not all((snapshot / f).is_file() for f in FILES):
+        return None
+    return ResolvedPolicy(
+        snapshot / FILES[0], snapshot / FILES[1], f"hf:{repo_id}@{commit}"
+    )
+
+
+def _fetch_into_store(store: Path, repo_id: str, revision: str) -> ResolvedPolicy:
+    """Download the two policy files and materialize them in the store.
+
+    Raises _HFUnavailable when downloading is not possible here at all.
+    """
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError as e:
+        # The robot deliberately doesn't have it -- see the module docstring.
+        raise _HFUnavailable("huggingface_hub is not installed") from e
 
     try:  # moved between modules across huggingface_hub versions
         from huggingface_hub.errors import LocalEntryNotFoundError
     except ImportError:
         from huggingface_hub.utils import LocalEntryNotFoundError
 
-    repo_id, _, revision = ref.partition("@")
-    revision = revision or None
     paths = {}
     for fname in FILES:
         try:
-            paths[fname] = hf_hub_download(repo_id, fname, revision=revision)
+            paths[fname] = Path(
+                hf_hub_download(repo_id, fname, revision=revision)
+            )
         except LocalEntryNotFoundError as e:
-            # Offline (or HF unreachable) and nothing cached: say how to fix
-            # rather than surfacing a bare network error.
-            raise RuntimeError(
-                f"cannot reach Hugging Face and {ref!r} is not in the local "
-                "cache -- prefetch on a networked machine with a token: "
-                f"python3 -m wojtek_policy.policy_source {ref}"
+            # Offline (or HF unreachable) and nothing in the download cache.
+            # Everything else -- a missing repo, a bad or absent token -- is a
+            # real answer from HF and must not be mistaken for being offline.
+            raise _HFUnavailable(
+                f"cannot reach Hugging Face for {repo_id}@{revision}"
             ) from e
-    npz = Path(paths[FILES[0]])
-    # Cache layout: .../snapshots/<commit>/<file>; the dir name is the
+
+    # Download cache layout: .../snapshots/<commit>/<file>; the dir name is the
     # resolved commit, which makes branch refs auditable in the logs.
-    commit = npz.parent.name
-    return ResolvedPolicy(npz, Path(paths[FILES[1]]), f"hf:{repo_id}@{commit}")
+    commit = paths[FILES[0]].parent.name
+    snapshot = store / repo_id / commit
+    snapshot.mkdir(parents=True, exist_ok=True)
+    for fname in FILES:
+        # copyfile, not a link: in the download cache these are symlinks into
+        # a blob directory, and the store must hold real files -- it gets
+        # rsynced to the robot and read by hand.
+        shutil.copyfile(paths[fname], snapshot / fname)
+    if revision != commit:
+        # Remember where the branch/tag pointed, so an offline machine can
+        # still answer that name. A branch with a "/" just nests.
+        recorded = store / repo_id / "refs" / revision
+        recorded.parent.mkdir(parents=True, exist_ok=True)
+        recorded.write_text(commit + "\n")
+    return ResolvedPolicy(
+        snapshot / FILES[0], snapshot / FILES[1], f"hf:{repo_id}@{commit}"
+    )
+
+
+def _not_in_store(ref: str, store: Path) -> RuntimeError:
+    return RuntimeError(
+        f"{ref!r} is not in the policy store ({store}) and Hugging Face is "
+        "not reachable from here -- prefetch on the operator PC: "
+        f"python3 -m wojtek_policy.policy_source {ref}; then ./deploy.sh "
+        "syncs the store to the robot"
+    )
+
+
+def _resolve_hf(ref: str) -> ResolvedPolicy:
+    repo_id, _, revision = ref.partition("@")
+    store = policy_store()
+
+    if _is_commit(revision):
+        # A commit never moves, so a stored snapshot is the right answer for
+        # good and there is nothing to check over the network.
+        stored = _from_store(store, repo_id, revision)
+        if stored is not None:
+            return stored
+        try:
+            return _fetch_into_store(store, repo_id, revision)
+        except _HFUnavailable as e:
+            raise _not_in_store(ref, store) from e
+
+    # A branch or tag moves, so ask Hugging Face first when we can -- that is
+    # what keeps a desk workflow following the branch. No revision means the
+    # default branch.
+    revision = revision or "main"
+    try:
+        return _fetch_into_store(store, repo_id, revision)
+    except _HFUnavailable as e:
+        recorded = store / repo_id / "refs" / revision
+        if recorded.is_file():
+            stored = _from_store(store, repo_id, recorded.read_text().strip())
+            if stored is not None:
+                return stored
+        raise _not_in_store(ref, store) from e
 
 
 def load_meta(ref: str) -> tuple[dict, str]:
     """(policy_meta dict, provenance) for a reference, without the weights.
 
     For launch files that need contract fields (e.g. the pd block) before
-    any node starts; the npz is downloaded alongside but not parsed.
+    any node starts; the npz is resolved alongside but not parsed.
     """
     resolved = resolve_policy(ref)
     return json.loads(resolved.meta.read_text()), resolved.source
@@ -120,9 +242,10 @@ class LoadedPolicy:
 
     `directory` is what a node should get as its `policy` parameter: the
     resolved snapshot dir, where policy.npz and policy_meta.json sit together
-    (in the HF cache too), so the node reads the same files without resolving
-    the reference a second time. `source` is the provenance to pass through
-    for logs so it stays readable ("hf:org/name@commit", not the cache path).
+    (in the policy store too), so the node reads the same files without
+    resolving the reference a second time. `source` is the provenance to pass
+    through for logs so it stays readable ("hf:org/name@commit", not the
+    store path).
     """
     npz: Path
     meta_path: Path
@@ -165,6 +288,7 @@ def main(argv=None) -> int:
         return 2
     resolved = resolve_policy(args[0])
     print(f"resolved {args[0]} -> {resolved.source}")
+    print(f"  store: {policy_store()}")
     print(f"  {resolved.npz}")
     print(f"  {resolved.meta}")
     return 0

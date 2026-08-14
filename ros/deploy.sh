@@ -104,6 +104,17 @@ rsync -az --delete \
     --exclude 'wojtek_pc/' \
     "${HERE}/src/" "${RPI_HOST}:${REMOTE_WS}/src/"
 
+# The policy store: downloaded policy snapshots, prefetched on this PC (python3
+# -m wojtek_policy.policy_source <ref>). The RPi has no internet, so this rsync
+# IS how policies get there. Skipped when there is no store here, so a fresh
+# clone doesn't --delete a working robot's policies away.
+if [ -d "${HERE}/policies" ]; then
+    echo ">> rsync policies -> ${RPI_HOST}:${REMOTE_WS}/policies"
+    rsync -az --delete "${HERE}/policies/" "${RPI_HOST}:${REMOTE_WS}/policies/"
+else
+    echo ">> no ${HERE}/policies here -- leaving the robot's policy store alone"
+fi
+
 echo ">> remote: ensure candle @ ${CANDLE_COMMIT}, rosdep, colcon build, restart"
 ssh "${RPI_HOST}" \
     REMOTE_WS="${REMOTE_WS}" ROS_DISTRO="${ROS_DISTRO}" \

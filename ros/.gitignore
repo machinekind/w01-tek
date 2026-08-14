@@ -33,5 +33,9 @@ deploy/rpi/cache/
 /src/wojtek_description/mujoco/terrain_*_spec.json
 /src/wojtek_description/mujoco/terrain_*_lookup.npz
 
+# The policy store: policy snapshots downloaded from Hugging Face, rsynced to
+# the robot by deploy.sh. Never committed -- this repo is public, those are not.
+/policies/
+
 .policies/
 

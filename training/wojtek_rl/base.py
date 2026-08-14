@@ -142,6 +142,20 @@ class WojtekEnv(mjx_env.MjxEnv):
         self._base_geom_half = jp.array(
             m.geom_size[self._base_geom_ids][:, :3]
         )
+        # Nominal (un-randomized) values behind the env_factors component:
+        # the per-env DR draw divided by these reads as a scale around 1.
+        # Zeros are replaced by 1 so unused slots divide harmlessly.
+        self._root_body_id = int(m.body("root").id)
+
+        def _nz(x):
+            x = np.asarray(x, dtype=np.float64)
+            return np.where(x == 0.0, 1.0, x)
+
+        self._envf_gain0 = jp.array(_nz(m.actuator_gainprm[:, 0]))
+        self._envf_kd0 = jp.array(_nz(m.actuator_biasprm[:, 2]))
+        self._envf_force0 = jp.array(_nz(m.actuator_forcerange[:, 1]))
+        self._envf_mass0 = float(_nz(m.body_mass[self._root_body_id]))
+        self._envf_ipos0 = jp.array(m.body_ipos[self._root_body_id])
         self._sensor_adr = {
             name: m.sensor(name).adr[0]
             for name in ("orientation", "angular-velocity", "linear-acceleration")
@@ -302,10 +316,15 @@ class WojtekEnv(mjx_env.MjxEnv):
         noise = jax.random.uniform(rng, clean.shape, minval=-1.0, maxval=1.0)
         return clean + noise * scales
 
-    def _step_with_latency(self, data, prev, new, d):
+    def _step_with_latency(self, data, prev, new, d, qfrc_prev=None, qfrc_new=None):
         """Run n_substeps physics steps: ctrl is `prev` while the substep
         index is below d, `new` from d onward. d=n_substeps holds `prev` for
         the whole period; d=0 applies `new` immediately.
+
+        `qfrc_prev`/`qfrc_new` (optional, full nv-wide vectors) ride the
+        same switching into data.qfrc_applied — the joystick env's
+        feed-forward torque head uses this so tau_ff sees the same latency
+        as the position targets. None leaves qfrc_applied untouched.
 
         A single `jp.where` handles every d. A per-lane lax.cond would be
         wrong under the training vmap: `d` is batched, so cond runs every
@@ -315,6 +334,10 @@ class WojtekEnv(mjx_env.MjxEnv):
         def _substep(data, i):
             ctrl = jp.where(i < d, prev, new)
             data = data.replace(ctrl=ctrl)
+            if qfrc_prev is not None:
+                data = data.replace(
+                    qfrc_applied=jp.where(i < d, qfrc_prev, qfrc_new)
+                )
             return mjx.step(self._mjx_model, data), None
 
         return jax.lax.scan(_substep, data, jp.arange(self.n_substeps))[0]
@@ -324,6 +347,42 @@ class WojtekEnv(mjx_env.MjxEnv):
         return {
             "gyro": self._gyro(data),
             "gravity": self._gravity_body(data),
+            # The foot geoms' sliding-friction coefficients, read from the
+            # LIVE model. Under brax domain randomization the playground
+            # wrapper rebinds self._mjx_model to the per-env randomized
+            # model inside every vmapped reset/step, so with
+            # dr.foot_friction enabled this IS the env's own mu draw (and,
+            # since that DR gives feet contact priority, the contact
+            # friction the robot actually walks on). PRIVILEGED-ONLY in
+            # spirit: no physical sensor measures mu, so a policy whose
+            # ACTOR observes it (a mu-teacher) can never deploy — the ROS
+            # runtime refuses the component. Without foot_friction DR it
+            # degenerates to the model constant (0.9), observed variance
+            # zero.
+            "foot_friction": self._mjx_model.geom_friction[
+                self._foot_geom_ids, 0
+            ],
+            # The RMA-style privileged environment-factor vector (arXiv
+            # 2107.04034 uses mass/CoM + motor strength + friction; this is
+            # the wojtek equivalent, 44 dims): every quantity the DR wrapper
+            # rebinds per env, normalized by the nominal model so each slot
+            # reads as a scale around 1 (offsets for CoM). Same rebinding
+            # caveat as foot_friction above: without DR this is constant.
+            # PRIVILEGED: critic (or a teacher actor) only — no sensor
+            # measures these; the deploy runtime refuses the component.
+            "env_factors": jp.concatenate([
+                self._mjx_model.geom_friction[self._foot_geom_ids, 0],
+                self._mjx_model.actuator_gainprm[:, 0] / self._envf_gain0,
+                self._mjx_model.actuator_biasprm[:, 2] / self._envf_kd0,
+                self._mjx_model.actuator_forcerange[:, 1]
+                / self._envf_force0,
+                jp.atleast_1d(
+                    self._mjx_model.body_mass[self._root_body_id]
+                    / self._envf_mass0
+                ),
+                self._mjx_model.body_ipos[self._root_body_id]
+                - self._envf_ipos0,
+            ]),
             "joint_pos": data.qpos[self._qadr] - self._home_ctrl,
             "joint_vel": data.qvel[self._vadr],
             "last_act": info["last_act"],

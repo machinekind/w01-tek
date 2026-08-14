@@ -26,6 +26,12 @@ The boot_pose parameter names the reference pose (the robot's position 0):
               skips the partial message)
               /forward_position_controller/commands (Float64MultiArray,
               boot-relative positions, actuator order -> MD80 IMPEDANCE mode)
+              /forward_effort_controller/commands (Float64MultiArray, N*m,
+              actuator order -> MD80 impedance-mode feed-forward torque.
+              Published only when the incoming target carries an effort
+              field (tau_ff policies); torque is frame-offset-free, so no
+              boot shift applies. The launch spawns that controller only
+              for tau_ff policies -- without it the publication is inert.)
   services    /wojtek/arm      (std_srvs/SetBool)  -- gate actually sending commands
               /wojtek/stand_up (std_srvs/Trigger)  -- slow ramp current -> home
               /wojtek/lie_down (std_srvs/Trigger)  -- slow ramp current -> folded
@@ -117,6 +123,9 @@ class RealIoNode(Node):
         self._pub_cmd = self.create_publisher(
             Float64MultiArray, "forward_position_controller/commands", 10
         )
+        self._pub_effort = self.create_publisher(
+            Float64MultiArray, "forward_effort_controller/commands", 10
+        )
         self.create_service(SetBool, "wojtek/arm", self._srv_arm)
         self.create_service(
             Trigger, "wojtek/stand_up", lambda req, res: self._srv_ramp(
@@ -173,28 +182,45 @@ class RealIoNode(Node):
         except KeyError as e:
             self.get_logger().warning(f"target missing joint {e}")
             return
+        effort = None
+        if len(msg.effort) == len(msg.name):
+            # tau_ff policies: feed-forward torque riding the same message.
+            effort = np.array([msg.effort[idx[n]] for n in self.joint_names])
         if not self._armed:
             return
-        self._send_cmd(target_abs - self._offset_urdf)  # boot-relative
+        self._send_cmd(target_abs - self._offset_urdf, effort)  # boot-relative
 
-    def _send_cmd(self, cmd_rel):
+    def _send_cmd(self, cmd_rel, effort=None):
         # Last line of defense: a non-finite target must never reach the
         # drives (tau = kp*(NaN - q) ...). Upstream guards exist in
-        # policy_node, but this topic is open to anyone.
-        if not np.all(np.isfinite(cmd_rel)):
+        # policy_node, but this topic is open to anyone. A bad effort drops
+        # the WHOLE command -- position without its feed-forward would
+        # sag-jerk on a tau_ff policy.
+        finite = np.all(np.isfinite(cmd_rel)) and (
+            effort is None or np.all(np.isfinite(effort))
+        )
+        if not finite:
             self.get_logger().error(
                 "non-finite motor command -- dropping", throttle_duration_sec=1.0
             )
             return
         if self.get_parameter("dry_run").value:
+            eff = (
+                f" effort {np.array2string(effort, precision=2)}"
+                if effort is not None else ""
+            )
             self.get_logger().info(
-                f"dry_run cmd: {np.array2string(cmd_rel, precision=3)}",
+                f"dry_run cmd: {np.array2string(cmd_rel, precision=3)}{eff}",
                 throttle_duration_sec=1.0,
             )
             return
         out = Float64MultiArray()
         out.data = cmd_rel.tolist()
         self._pub_cmd.publish(out)
+        if effort is not None:
+            tau = Float64MultiArray()
+            tau.data = effort.tolist()
+            self._pub_effort.publish(tau)
 
     def _srv_ramp(self, res, target_urdf, name):
         if self._armed:
@@ -281,8 +307,21 @@ class RealIoNode(Node):
 def main():
     rclpy.init()
     node = RealIoNode()
+    # EventsExecutor, same reason as policy_node: this node relays every
+    # joint_states sample into wojtek/joint_states_abs on the policy's
+    # freshness path, and the default executor's per-dispatch wait-set
+    # rebuild was most of its CPU on the Pi 3. Fallback where absent.
     try:
-        rclpy.spin(node)
+        from rclpy.experimental import EventsExecutor
+        executor = EventsExecutor()
+        executor.add_node(node)
+    except ImportError:
+        executor = None
+    try:
+        if executor is not None:
+            executor.spin()
+        else:
+            rclpy.spin(node)
     except KeyboardInterrupt:
         pass
 

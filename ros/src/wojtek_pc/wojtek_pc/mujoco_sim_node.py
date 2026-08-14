@@ -177,6 +177,13 @@ class MujocoSimNode(Node):
             [self.model.joint(n).qposadr[0] for n in self.pub_joints]
         )
         self._vadr = np.array([self.model.joint(n).dofadr[0] for n in self.pub_joints])
+        # Actuated-joint dof addresses, actuator order: where the tau_ff
+        # feed-forward torque (joint_targets.effort) is applied as
+        # qfrc_applied -- the same mechanism the training env uses.
+        self._act_vadr = np.array([
+            self.model.jnt_dofadr[self.model.actuator_trnid[i, 0]]
+            for i in range(self.model.nu)
+        ])
         # Actuator torque -> /joint_states effort: actuator index per
         # published joint (-1 for the passive four-bar joints, reported as
         # zero effort). Torques flip sign like velocities (URDF convention).
@@ -291,6 +298,17 @@ class MujocoSimNode(Node):
             self.get_logger().warning(f"target message missing joint {e}")
             return
         self.data.ctrl[:] = self.jmap.to_mjc(self.actuators, q_urdf)
+        # tau_ff policies ride a feed-forward torque on the same message
+        # (URDF sign convention, like velocities); applied on top of the PD
+        # actuators exactly as in training (qfrc_applied). Cleared when the
+        # message carries no effort, so switching policies cannot leave a
+        # stale torque behind.
+        self.data.qfrc_applied[self._act_vadr] = 0.0
+        if len(msg.effort) == len(msg.name):
+            tau_urdf = np.array([msg.effort[idx[n]] for n in self.actuators])
+            self.data.qfrc_applied[self._act_vadr] = self.jmap.vel_to_mjc(
+                self.actuators, tau_urdf
+            )
 
     def _tick(self):
         # Step physics up to wall-clock time (bounded, so a stall cannot

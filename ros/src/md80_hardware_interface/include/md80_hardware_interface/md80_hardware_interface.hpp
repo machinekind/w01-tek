@@ -57,6 +57,9 @@ struct MD80Info
   JointInfo command;
   int can_id;
   mab::Md80Mode_E control_mode;
+  // IMPEDANCE with a [position, effort] interface pair: write() forwards
+  // command.effort as the drive's feed-forward torque (tau_ff policies).
+  bool has_effort_ff = false;
   float max_torque;
   PID q_pid;
   PID dq_pid;

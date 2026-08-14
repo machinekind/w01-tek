@@ -192,8 +192,16 @@ class GamepadTeleop(Node):
                 return
             if resp.success:
                 self._armed = target
-            level = self.get_logger().info if resp.success else self.get_logger().error
-            level(f"arm({target}): {resp.message}")
+            # Two distinct call sites on purpose: rclpy caches the severity
+            # per call site, so routing success and failure through ONE
+            # logger call raises "Logger severity cannot be changed between
+            # calls" on the first refusal after a success -- which killed
+            # this node the first time real_io refused to re-arm
+            # (2026-08-10, robot out of the home-pose arming envelope).
+            if resp.success:
+                self.get_logger().info(f"arm({target}): {resp.message}")
+            else:
+                self.get_logger().error(f"arm({target}): {resp.message}")
         fut.add_done_callback(done)
 
     def _call_trigger(self, client, name):
@@ -210,8 +218,11 @@ class GamepadTeleop(Node):
             except Exception as e:  # noqa: BLE001 -- surface any RPC failure
                 self.get_logger().error(f"{name} call failed: {e}")
                 return
-            level = self.get_logger().info if resp.success else self.get_logger().error
-            level(f"{name}: {resp.message}")
+            # Distinct call sites; see the arm callback above.
+            if resp.success:
+                self.get_logger().info(f"{name}: {resp.message}")
+            else:
+                self.get_logger().error(f"{name}: {resp.message}")
         fut.add_done_callback(done)
 
     # ---- drive tick ------------------------------------------------------------

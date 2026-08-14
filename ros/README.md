@@ -165,7 +165,11 @@ cable with `nmcli con up wojtek-eth`. (Details: the "PC side" table in
 **Routine redeploy** (after editing code):
 ```bash
 ./deploy.sh                    # rsync src + colcon build on the Pi (fast)
+./deploy.sh --policy <ref>     # ... and run this policy instead of the pin
 ```
+`--policy` takes a Hugging Face reference (`org/name[@revision]`). It fetches
+that policy, syncs it, and leaves the robot running it. A plain `./deploy.sh`
+puts the pinned default back.
 
 ## Run the robot
 

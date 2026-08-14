@@ -21,6 +21,10 @@ services:
         hard: 102400
     volumes:
       - ../src:/ros2_ws/src
+      # The policy store, the same ros/policies the host checkout uses. A
+      # policy fetched in the container is fetched for the host too, and
+      # deploy.sh rsyncs the same store to the RPi.
+      - ../policies:/ros2_ws/policies
       # Per-run rosbags. This container is the PC dev environment, where
       # viz.launch.py bag:=true records the whole run (all RPi topics, over
       # DDS). The launch default bag_dir is ~/wojtek_bags == /root/wojtek_bags
@@ -37,11 +41,10 @@ services:
       # config/keys it doesn't own ("Bad owner or permissions ..."). The
       # entrypoint copies it into a root-owned /root/.ssh at container start.
       - ${HOME}/.ssh:/host-ssh:ro
-      # Host Hugging Face cache (token + downloaded policy artifacts).
-      # policy_node loads policies by reference (policy:=org/name@rev); the
-      # keeper repos are private, so the container reuses the host's login
-      # and cache instead of needing its own token. Prefetch on the host:
-      # python3 -m wojtek_policy.policy_source <ref>.
+      # The host's Hugging Face cache carries the login token and the
+      # download cache that fills the policy store. The keeper repos are
+      # private, and the container reuses the host's login. Fetch a policy
+      # with python3 -m wojtek_policy.policy_source <ref>.
       - ${HOME}/.cache/huggingface:/root/.cache/huggingface
       # Host SSH agent socket. The RPi key (id_ed25519) is passphrase-protected,
       # so mounting ~/.ssh alone is NOT enough: without the agent, ssh inside the
@@ -87,6 +90,10 @@ services:
       - DISPLAY=${DISPLAY}
       # Point ssh at the forwarded host agent socket (mounted above).
       - SSH_AUTH_SOCK=/ssh-agent
+      # Name the store location explicitly. The automatic derivation walks
+      # a symlink-installed src tree, and a build inside the container may
+      # not have one.
+      - WOJTEK_POLICY_STORE=/ros2_ws/policies
     # No command: override here on purpose - the image's CMD (sleep infinity)
     # just keeps this standing as a dev environment. Use ../dev.sh to start
     # this and get a shell in one step; edit src/ on the host as normal,

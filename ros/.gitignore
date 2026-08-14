@@ -33,5 +33,10 @@ deploy/rpi/cache/
 /src/wojtek_description/mujoco/terrain_*_spec.json
 /src/wojtek_description/mujoco/terrain_*_lookup.npz
 
+# The policy store and the deploy-written override file. This repo is
+# public and the policy repos are private, so neither may be committed.
+/policies/
+/policy_override
+
 .policies/
 

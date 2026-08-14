@@ -39,7 +39,7 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
-from wojtek_policy.policy_source import load_policy
+from wojtek_policy.policy_source import active_policy, load_policy
 
 
 def _launch_setup(context, with_rviz, hardware):
@@ -225,19 +225,7 @@ def _launch_setup(context, with_rviz, hardware):
     return nodes
 
 
-# Which policy every bringup -- robot and simulation -- comes up with. Pinned
-# to a revision on purpose: an unpinned repo id follows whatever main is, so
-# what walks today would silently be a different policy tomorrow. Override for
-# one run with policy:=<repo>@<sha> or a local artifact directory. The org
-# comes from HF_ORGANIZATION in the environment (see .env.example); the repo
-# is PRIVATE, so the RPi needs an HF token in ~/.cache/huggingface for the
-# first fetch of a revision (prefetch: python3 -m wojtek_policy.policy_source
-# <ref>). Without HF_ORGANIZATION the default is empty and every launch needs
-# an explicit policy:=.
-_HF_ORGANIZATION = os.environ.get("HF_ORGANIZATION", "")
-DEFAULT_POLICY = (_HF_ORGANIZATION + "/wojtek-terrain-blind-locomotion-v41"
-                  "@6aa9163750a15cec53ce832b6eefa5717892f5f6"
-                  if _HF_ORGANIZATION else "")
+DEFAULT_POLICY = active_policy()
 
 
 def common_launch_description(
@@ -261,12 +249,12 @@ def common_launch_description(
         raise ValueError(f"hardware must be 'real' or 'sim', got {hardware!r}")
     default_bag_dir = os.path.join(os.path.expanduser("~"), "wojtek_bags")
     args = [
-        # Which policy runs: a Hugging Face repo id (org/name[@revision]) or a
-        # local directory with policy.npz + policy_meta.json. For a durable
-        # real-robot run pin a commit: policy:=<repo>@<sha>. First use of a new
-        # revision needs network + an HF token on the RPi (prefetch:
-        # python3 -m wojtek_policy.policy_source <ref>); afterwards it loads
-        # from the local HF cache.
+        # Which policy runs: a Hugging Face repo id (org/name[@revision]) or
+        # a local directory with policy.npz + policy_meta.json. Pin a commit
+        # for a durable real-robot run: policy:=<repo>@<sha>. A Hugging Face
+        # reference is answered from the policy store. deploy.sh keeps the
+        # default there, and deploy.sh --policy <ref> ships and activates
+        # any other reference. The robot needs no network.
         DeclareLaunchArgument("policy", default_value=policy_default),
         # Explicit overrides of the policy contract's servo settings (empty =
         # from the contract). E.g. max_torque:=2 for cautious first tests.

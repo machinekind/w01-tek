@@ -12,12 +12,17 @@
 #   ./deploy.sh --provision     # fresh RPi: full provision (install.sh) THEN build
 #   ./deploy.sh --provision --enable-robot   # ... and make it start at boot
 #   ./deploy.sh --no-restart    # skip the wojtek-robot.service restart
+#   ./deploy.sh --policy <ref>  # run this one policy instead of the pin
 #
 # Boot autostart is DECLARATIVE: --enable-robot is the state you want, and
 # provisioning makes the RPi match it. Provisioning WITHOUT the flag disables
 # boot autostart, including on a robot where it was enabled before -- that is
 # the point, so the flag alone decides and nobody has to remember what the
 # previous run left behind.
+#
+# Which policy runs works the same way. --policy <ref> fetches that reference,
+# syncs it, and leaves the robot running it. A plain ./deploy.sh puts the
+# pinned default back.
 #   RPI_HOST=rpi@10.42.0.2 ./deploy.sh
 #
 # Provisioning needs the Ubuntu Pro token for the RT kernel -- put it in .env
@@ -42,16 +47,23 @@ CANDLE_COMMIT="7c201d744baa107ee408e3e01694efd1a764a174"
 RESTART=1
 PROVISION=0
 ENABLE_ROBOT=0
+POLICY=""
 
-for a in "$@"; do case "$a" in
+while [ $# -gt 0 ]; do case "$1" in
     --provision)  PROVISION=1 ;;
     --no-restart) RESTART=0 ;;
     # Passed through to install.sh: turn ON boot autostart. Only meaningful
     # together with --provision.
     --enable-robot) ENABLE_ROBOT=1 ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
-    *) echo "unknown arg: $a" >&2; exit 2 ;;
-esac; done
+    --policy)
+        if [ $# -lt 2 ]; then
+            echo "--policy needs a reference (org/name[@revision])" >&2
+            exit 2
+        fi
+        POLICY="$2"; shift ;;
+    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+    *) echo "unknown arg: $1" >&2; exit 2 ;;
+esac; shift; done
 
 wait_for_ssh() {
     echo ">> waiting for ${RPI_HOST} to come back ..."
@@ -103,6 +115,59 @@ rsync -az --delete \
     --exclude 'md80_hardware_interface/3rd_party/candle/' \
     --exclude 'wojtek_pc/' \
     "${HERE}/src/" "${RPI_HOST}:${REMOTE_WS}/src/"
+
+# Which policy runs is a launch parameter, and the launch files default to
+# the pin in wojtek_policy/policy_source.py. This PC resolves the pin into
+# the store, so the robot never downloads anything and no one runs a
+# prefetch by hand. A resolve failure stops the deploy (set -e) on purpose,
+# because a robot without the default policy in its store would crash-loop.
+# huggingface_hub is needed only for a pin that is not in the store yet. A
+# stored pin resolves offline with the standard library.
+if [ -n "${HF_ORGANIZATION:-}" ]; then
+    echo ">> resolve the default policy into the store"
+    PYTHONPATH="${HERE}/src/wojtek_policy" python3 -m wojtek_policy.policy_source --default
+else
+    echo ">> HF_ORGANIZATION unset -- no default policy to resolve"
+    echo "   (set it in .env; without it every launch needs an explicit policy:=)"
+fi
+
+# A --policy reference has to reach the store the same way, and a failure to
+# resolve it stops the deploy for the same reason.
+if [ -n "${POLICY}" ]; then
+    # A local directory exists only on this PC and never reaches the robot,
+    # so the override takes a Hugging Face reference only.
+    if [ -d "${POLICY}" ]; then
+        echo "--policy takes a Hugging Face reference (org/name[@revision]);" >&2
+        echo "a local directory stays on this PC and the robot could not read it" >&2
+        exit 2
+    fi
+    echo ">> resolve ${POLICY} into the store"
+    PYTHONPATH="${HERE}/src/wojtek_policy" python3 -m wojtek_policy.policy_source "${POLICY}"
+fi
+
+# The policy store holds the snapshots this PC has resolved. The RPi has no
+# internet, so policies reach it only through this rsync. A fresh clone has
+# no store, and syncing then would --delete a working robot's policies, so
+# an absent store skips the sync instead.
+if [ -d "${HERE}/policies" ]; then
+    echo ">> rsync policies -> ${RPI_HOST}:${REMOTE_WS}/policies"
+    rsync -az --delete "${HERE}/policies/" "${RPI_HOST}:${REMOTE_WS}/policies/"
+else
+    echo ">> no ${HERE}/policies here -- leaving the robot's policy store alone"
+fi
+
+# The override file names the policy every bringup on the robot comes up
+# with, and it sits beside the store. This is declarative, like
+# --enable-robot. The flag alone decides, and a plain ./deploy.sh puts the
+# robot back on the pin. The file is written before the build below, whose
+# service restart reads it.
+if [ -n "${POLICY}" ]; then
+    echo ">> policy override: ${POLICY}"
+    printf '%s\n' "${POLICY}" | ssh "${RPI_HOST}" "cat > '${REMOTE_WS}/policy_override'"
+else
+    ssh "${RPI_HOST}" "rm -f '${REMOTE_WS}/policy_override'"
+    echo ">> no policy override -- the robot runs the pinned default"
+fi
 
 echo ">> remote: ensure candle @ ${CANDLE_COMMIT}, rosdep, colcon build, restart"
 ssh "${RPI_HOST}" \

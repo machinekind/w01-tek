@@ -395,16 +395,21 @@ def test_pinned_commit_resolves_from_store_without_fetching(tmp_path, monkeypatc
     assert load_policy(f"org/name@{SHA}").directory == snapshot
 
 
-def test_branch_offline_falls_back_to_recorded_ref(tmp_path, monkeypatch):
-    # A branch is fetched when possible. Offline, the refs file gives the
-    # commit it pointed at last time, and that snapshot answers.
+def test_branch_resolves_from_the_record_without_fetching(tmp_path, monkeypatch):
+    # A branch is pinned at its first fetch. The refs file records the
+    # commit, that snapshot answers every later resolve, and no fetch is
+    # attempted.
     monkeypatch.setenv("WOJTEK_POLICY_STORE", str(tmp_path))
     store_snapshot(tmp_path, "org/name", SHA)
     refs = tmp_path / "org" / "name" / "refs"
     refs.mkdir(parents=True)
     (refs / "main").write_text(SHA + "\n")
     (refs / "somebranch").write_text(SHA + "\n")
-    monkeypatch.setattr(policy_source, "_fetch_into_store", offline)
+
+    def no_network(*args, **kwargs):
+        raise AssertionError("network attempted")
+
+    monkeypatch.setattr(policy_source, "_fetch_into_store", no_network)
     assert resolve_policy("org/name").source == f"hf:org/name@{SHA}"
     assert resolve_policy("org/name@somebranch").source == f"hf:org/name@{SHA}"
 

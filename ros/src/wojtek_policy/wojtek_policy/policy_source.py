@@ -31,10 +31,12 @@ deploy.sh runs `--default` before syncing, so the default policy needs no
 manual step. `./deploy.sh --policy <ref>` does the same for a one-off policy
 and leaves the robot running it.
 
-Pin real-robot launches to a commit (`@<sha>`). The resolved revision is
-part of what ran on the robot, and a branch does not record it. A stored
-commit also resolves with no network, because a commit never moves. The
-resolver re-fetches a branch whenever Hugging Face is reachable.
+Every reference resolves once. A commit is immutable, and a branch or tag
+is pinned to its commit at the first fetch (the refs file above), so a
+stored reference never changes and needs no network. To move a branch
+reference, delete its refs file and resolve again, or name a commit.
+`@<sha>` is still the best form for a real-robot run, because there the
+reference itself is the record.
 
 No ROS imports here. huggingface_hub is imported only when a download
 happens, so store and local-directory workflows need nothing extra
@@ -254,18 +256,19 @@ def _resolve_hf(ref: str) -> ResolvedPolicy:
         except _HFUnavailable as e:
             raise _not_in_store(ref, store) from e
 
-    # A branch or tag moves, so ask Hugging Face first when possible. That
-    # is how a desk workflow keeps following the branch. No revision means
-    # the default branch.
+    # A branch or tag resolves once. The first fetch records its commit in
+    # refs/<name>, and from then on the record answers, so a deployed
+    # reference never moves behind anyone's back. Delete the refs file, or
+    # name a commit, to move it. No revision means the default branch.
     revision = revision or "main"
+    recorded = store / repo_id / "refs" / revision
+    if recorded.is_file():
+        stored = _from_store(store, repo_id, recorded.read_text().strip())
+        if stored is not None:
+            return stored
     try:
         return _fetch_into_store(store, repo_id, revision)
     except _HFUnavailable as e:
-        recorded = store / repo_id / "refs" / revision
-        if recorded.is_file():
-            stored = _from_store(store, repo_id, recorded.read_text().strip())
-            if stored is not None:
-                return stored
         raise _not_in_store(ref, store) from e
 
 

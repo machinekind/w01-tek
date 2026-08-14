@@ -236,8 +236,8 @@ def _launch_setup(context, with_rviz, hardware):
 # Without HF_ORGANIZATION the default is empty and every launch needs an
 # explicit policy:=.
 _HF_ORGANIZATION = os.environ.get("HF_ORGANIZATION", "")
-DEFAULT_POLICY = (_HF_ORGANIZATION + "/wojtek-terrain-blind-locomotion-v41"
-                  "@6aa9163750a15cec53ce832b6eefa5717892f5f6"
+DEFAULT_POLICY = (_HF_ORGANIZATION + "/wojtek-quiet-locomotion"
+                  "@553795b13001cc1f519a4abc0235f275095129f8"
                   if _HF_ORGANIZATION else "")
 
 

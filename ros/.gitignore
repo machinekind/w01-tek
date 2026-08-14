@@ -35,8 +35,10 @@ deploy/rpi/cache/
 
 # The policy store. deploy.sh fills it from Hugging Face and rsyncs it to
 # the robot. It stays out of git because this repo is public and the policy
-# repos are private.
+# repos are private. The override file lives on the robot, but a hand-made
+# local one would carry the private org name, so it is ignored too.
 /policies/
+/policy_override
 
 .policies/
 

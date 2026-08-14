@@ -28,7 +28,8 @@ reference fails with the instruction above instead of a network error. Only
 the two policy files are ever fetched, never the checkpoint.
 
 deploy.sh runs `--default` before syncing, so the default policy needs no
-manual step. Run the `<ref>` form for a one-off policy.
+manual step. `./deploy.sh --policy <ref>` does the same for a one-off policy
+and leaves the robot running it.
 
 Pin real-robot launches to a commit (`@<sha>`). The resolved revision is
 part of what ran on the robot, and a branch does not record it. A stored
@@ -107,6 +108,31 @@ def default_policy() -> str:
     """
     org = os.environ.get("HF_ORGANIZATION", "").strip()
     return f"{org}/{_DEFAULT_REPO}" if org else ""
+
+
+def policy_override_file() -> Path:
+    """The file naming a one-off policy for this machine, if it has one.
+
+    It sits beside the policy store, so ~/wojtek_ws/policy_override on the
+    robot. One reference on one line is all it holds.
+    """
+    return policy_store().parent / "policy_override"
+
+
+def active_policy() -> str:
+    """The reference a bringup comes up with when no policy:= is given.
+
+    That is the override file's reference when the file is there and says
+    something, and the pin otherwise. The file is deployment state on the
+    robot. `./deploy.sh --policy <ref>` writes it and a plain `./deploy.sh`
+    removes it. The PC never has one, so launches from here run the pin.
+    """
+    path = policy_override_file()
+    if path.is_file():
+        ref = path.read_text().strip()
+        if ref:
+            return ref
+    return default_policy()
 
 
 def resolve_policy(ref: str) -> ResolvedPolicy:

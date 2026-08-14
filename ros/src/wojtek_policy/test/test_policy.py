@@ -27,6 +27,7 @@ from wojtek_policy.policy import (  # noqa: E402
 )
 from wojtek_policy import policy_source  # noqa: E402
 from wojtek_policy.policy_source import (  # noqa: E402
+    active_policy,
     default_policy,
     load_meta,
     load_policy,
@@ -506,6 +507,32 @@ def test_default_cli_resolves_from_the_store(tmp_path, monkeypatch):
 def test_default_cli_without_an_organization_fails(monkeypatch):
     monkeypatch.delenv("HF_ORGANIZATION", raising=False)
     assert policy_source.main(["--default"]) == 2
+
+
+def test_active_policy_prefers_the_override_file(tmp_path, monkeypatch):
+    # This is a robot that deploy.sh --policy has visited. The override file
+    # sits beside the store and it wins over the pin.
+    monkeypatch.setenv("HF_ORGANIZATION", "org")
+    monkeypatch.setenv("WOJTEK_POLICY_STORE", str(tmp_path / "policies"))
+    assert policy_source.policy_override_file() == tmp_path / "policy_override"
+    (tmp_path / "policy_override").write_text(f"org/other@{SHA}\n")
+    assert active_policy() == f"org/other@{SHA}"
+
+
+def test_active_policy_without_an_override_is_the_pin(tmp_path, monkeypatch):
+    # Every machine that never got --policy, the operator PC included.
+    monkeypatch.setenv("HF_ORGANIZATION", "org")
+    monkeypatch.setenv("WOJTEK_POLICY_STORE", str(tmp_path / "policies"))
+    assert active_policy() == default_policy()
+
+
+def test_active_policy_ignores_an_empty_override(tmp_path, monkeypatch):
+    # A blank file names no policy, so the pin still runs.
+    monkeypatch.setenv("HF_ORGANIZATION", "org")
+    monkeypatch.setenv("WOJTEK_POLICY_STORE", str(tmp_path / "policies"))
+    for text in ("", "\n", "   \n"):
+        (tmp_path / "policy_override").write_text(text)
+        assert active_policy() == default_policy()
 
 
 # -- shared helpers -----------------------------------------------------------

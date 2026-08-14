@@ -39,7 +39,7 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
-from wojtek_policy.policy_source import default_policy, load_policy
+from wojtek_policy.policy_source import active_policy, load_policy
 
 
 def _launch_setup(context, with_rviz, hardware):
@@ -227,9 +227,11 @@ def _launch_setup(context, with_rviz, hardware):
 
 # The policy every bringup, robot and simulation, comes up with. The pin and
 # its reasoning live in policy_source.default_policy, and deploy.sh resolves
-# it into the policy store before syncing. Override one run with
-# policy:=<repo>@<sha> or a local artifact directory.
-DEFAULT_POLICY = default_policy()
+# it into the policy store before syncing. deploy.sh --policy writes a
+# policy_override file beside that store, and the file wins on the machine
+# that has it. Override one run with policy:=<repo>@<sha> or a local
+# artifact directory.
+DEFAULT_POLICY = active_policy()
 
 
 def common_launch_description(

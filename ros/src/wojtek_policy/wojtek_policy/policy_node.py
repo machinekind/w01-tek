@@ -16,11 +16,16 @@ parameters differ:
                                   convention) the driver must add ON TOP of
                                   the PD servo, clamped separately from
                                   max_torque)
+              /wojtek/policy_timing (wojtek_telemetry/PolicyTiming; how long
+                                  the policy step took and how far apart the
+                                  ticks actually landed)
   services    /wojtek/enable (std_srvs/SetBool), /wojtek/reset (std_srvs/Trigger)
 
 The policy itself (wojtek_policy.policy.WojtekPolicy) works in the MuJoCo/training
 convention; this node converts on both edges using joint_map.yaml.
 """
+
+import time
 
 import numpy as np
 import rclpy
@@ -29,6 +34,7 @@ from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from sensor_msgs.msg import Imu, JointState
 from std_srvs.srv import SetBool, Trigger
+from wojtek_telemetry.msg import PolicyTiming
 
 from wojtek_policy import poses
 from wojtek_policy.joint_map import JointMap
@@ -112,6 +118,13 @@ class PolicyNode(Node):
         self.create_subscription(Imu, "imu_sensor_broadcaster/imu", self._on_imu, 10)
         self.create_subscription(Twist, "cmd_vel", self._on_cmd, 10)
         self._pub = self.create_publisher(JointState, "wojtek/joint_targets", 10)
+        # Per-tick timing, so a run can be watched live and read back from
+        # the bag afterwards. Two floats and one publisher made here, so the
+        # control tick pays almost nothing for it.
+        self._timing_pub = self.create_publisher(
+            PolicyTiming, "wojtek/policy_timing", 10
+        )
+        self._last_tick_t = None
         self.create_service(SetBool, "wojtek/enable", self._srv_enable)
         self.create_service(Trigger, "wojtek/reset", self._srv_reset)
         self.create_timer(self.policy.ctrl_dt, self._tick)
@@ -222,6 +235,15 @@ class PolicyNode(Node):
         return (self.get_clock().now() - stamp).nanoseconds < timeout * 1e9
 
     def _tick(self):
+        # Taken at the top of every tick, including the ones that hold, so
+        # the period is what the timer really did rather than what the busy
+        # path did.
+        tick_t = time.perf_counter()
+        period_ms = (
+            0.0 if self._last_tick_t is None
+            else (tick_t - self._last_tick_t) * 1e3
+        )
+        self._last_tick_t = tick_t
         if not self._enabled:
             self._was_running = False
             return
@@ -267,7 +289,9 @@ class PolicyNode(Node):
             self._gravity_base if self._gravity_base is not None
             else np.array([0.0, 0.0, -1.0])
         )
+        step_t = time.perf_counter()
         targets_mjc = self.policy.step(gyro, gravity, q_mjc, dq_mjc, self._cmd)
+        inference_ms = (time.perf_counter() - step_t) * 1e3
 
         # Soft start: blend from the measured pose to the policy output.
         soft = self.get_parameter("soft_start_s").value
@@ -289,6 +313,14 @@ class PolicyNode(Node):
             tau_mjc = beta * self.policy.last_tau_ff
             msg.effort = self.jmap.vel_to_urdf(self.joint_names, tau_mjc).tolist()
         self._pub.publish(msg)
+
+        # Same stamp as the targets it describes, so the two line up in a
+        # plot and in the bag.
+        timing = PolicyTiming()
+        timing.header.stamp = msg.header.stamp
+        timing.inference_ms = inference_ms
+        timing.period_ms = period_ms
+        self._timing_pub.publish(timing)
 
 
 def main():

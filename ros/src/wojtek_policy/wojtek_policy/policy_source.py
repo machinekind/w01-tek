@@ -13,7 +13,7 @@ A reference is either
                                                     # at when last fetched
 
     The store is WOJTEK_POLICY_STORE, or `policies/` next to the workspace's
-    `src/` (ros/policies in a checkout), or ~/.wojtek/policies.
+    `src/` (ros/policies in a checkout).
 
 The robot has no internet and no huggingface_hub, so it never downloads.
 Downloading happens on the operator PC, which has the network and the token
@@ -75,8 +75,7 @@ def policy_store() -> Path:
     sits beside the workspace's `src/`, found by walking up from this file:
     ros/policies in a checkout, ~/wojtek_ws/policies on the robot. That works
     because every build here is --symlink-install, so this file resolves back
-    into the source tree rather than into install/. The home directory is the
-    last resort, for a copy installed some other way.
+    into the source tree rather than into install/.
     """
     env = os.environ.get("WOJTEK_POLICY_STORE", "").strip()
     if env:
@@ -84,7 +83,10 @@ def policy_store() -> Path:
     for parent in Path(__file__).resolve().parents:
         if parent.name == "src":
             return parent.parent / "policies"
-    return Path.home() / ".wojtek" / "policies"
+    raise RuntimeError(
+        "cannot locate the policy store: this package is not under a src/ "
+        "tree, so set WOJTEK_POLICY_STORE"
+    )
 
 
 # The pinned default policy. A bringup runs it when no policy:= is given and

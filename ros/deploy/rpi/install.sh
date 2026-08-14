@@ -79,10 +79,6 @@ provision_packages() {
     # verify the /dev/input device afterwards.
     local pad="bluez joystick evtest"
     run "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ${ros_pkgs} ${tools} ${ap} ${pad}"
-    # The RPi has no internet and never downloads a policy, so
-    # huggingface_hub is not installed. Policies arrive already fetched, in
-    # the policy store that deploy.sh rsyncs over (see
-    # wojtek_policy/policy_source.py).
 
     # joy_node reads the pad's /dev/input/event* (root:input 0660) -- without
     # the input group it opens nothing and /joy just stays silent (seen on

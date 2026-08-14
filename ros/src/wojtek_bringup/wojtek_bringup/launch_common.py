@@ -225,10 +225,6 @@ def _launch_setup(context, with_rviz, hardware):
     return nodes
 
 
-# The policy every bringup, robot and simulation, comes up with.
-# active_policy prefers the override file that deploy.sh --policy leaves on
-# the robot and falls back to the pinned default. For one run, pass
-# policy:=<repo>@<sha> or a local artifact directory.
 DEFAULT_POLICY = active_policy()
 
 

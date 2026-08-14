@@ -121,7 +121,7 @@ rsync -az --delete \
 # the store, so the robot never downloads anything and no one runs a
 # prefetch by hand. A resolve failure stops the deploy (set -e) on purpose,
 # because a robot without the default policy in its store would crash-loop.
-# huggingface_hub is needed only for a pin that is not in the store yet; a
+# huggingface_hub is needed only for a pin that is not in the store yet. A
 # stored pin resolves offline with the standard library.
 if [ -n "${HF_ORGANIZATION:-}" ]; then
     echo ">> resolve the default policy into the store"

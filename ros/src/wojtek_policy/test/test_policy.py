@@ -473,6 +473,16 @@ def test_policy_store_default_is_beside_the_workspace_src(monkeypatch):
     assert policy_store() == PKG.parents[1] / "policies"
 
 
+def test_policy_store_needs_a_src_tree_or_the_env_var(monkeypatch):
+    # A machine with neither has no sensible store, so the resolver names
+    # the knob to set instead of inventing a directory.
+    monkeypatch.delenv("WOJTEK_POLICY_STORE", raising=False)
+    monkeypatch.setattr(policy_source, "__file__",
+                        "/opt/elsewhere/policy_source.py")
+    with pytest.raises(RuntimeError, match="WOJTEK_POLICY_STORE"):
+        policy_store()
+
+
 # -- the default policy -------------------------------------------------------
 
 def test_default_policy_needs_an_organization(monkeypatch):

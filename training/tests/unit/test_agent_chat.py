@@ -647,3 +647,21 @@ def test_translate_prompt_carries_the_question():
     translate_call = llm.calls[-1][-1]["content"][0]["text"]
     assert "co widzisz przed sobą?" in translate_call
     assert "I see a big window." in translate_call
+
+
+def test_navigate_bounces_questions_back():
+    tools, goals, checked = nav_tools_with_visibility(
+        "Co teraz robisz? Jaki masz cel?", visible=False)
+    out = asyncio.run(tools["navigate"].fn(
+        {"instruction": "Co teraz robisz? Jaki masz cel?"}))
+    assert goals.set == [] and checked == []
+    assert "QUESTION" in out.text
+
+
+def test_search_bounces_questions_back():
+    from wojtek_rl.agent.tools import build_tools
+
+    goals = RecordingGoals()
+    tools = build_tools(NavSim(), goals, None, turn_context={"user_text": "x"})
+    out = asyncio.run(tools["search"].fn({"object": "gdzie jest rower?"}))
+    assert goals.set == [] and "QUESTION" in out.text

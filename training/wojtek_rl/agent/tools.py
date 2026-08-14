@@ -49,6 +49,20 @@ _NAV_PREFIX_RE = re.compile(
 )
 
 
+_QUESTION_RE = re.compile(
+    r"^(co|kto|gdzie|jak|czy|kiedy|dlaczego|ile|what|where|how|why|who|which)\b",
+    re.IGNORECASE,
+)
+
+
+def looks_like_question(text: str) -> bool:
+    """A question routed into navigate/search becomes a goal named after
+    the question (observed live: search for 'Co teraz robisz?...').  Bounce
+    it back to the model instead."""
+    t = text.strip()
+    return t.endswith("?") or bool(_QUESTION_RE.match(t))
+
+
 def nav_target_phrase(instruction: str) -> str:
     """'Idź do lodówki.' -> 'lodówki': the object phrase a search can use."""
     target = _NAV_PREFIX_RE.sub("", instruction).strip(" .!?")
@@ -149,6 +163,12 @@ def build_tools(
         spoken = str(turn_context.get("user_text", "") or "").strip()
         if not instruction or keep_full_instruction(instruction, spoken):
             instruction = spoken or instruction
+        if looks_like_question(instruction):
+            return ToolResult(
+                text="that looks like a QUESTION, not a movement instruction -- "
+                "answer it with 'say' (use `status` for questions about the "
+                "current goal or progress)"
+            )
         if visibility_check is not None:
             try:
                 visible = await visibility_check(instruction)
@@ -176,6 +196,11 @@ def build_tools(
 
     async def search(args: dict) -> ToolResult:
         target = str(args.get("object", args.get("target", "")) or "").strip()
+        if looks_like_question(target):
+            return ToolResult(
+                text="that looks like a QUESTION, not an object to find -- "
+                "answer it with 'say' (use `status` for goal questions)"
+            )
         ack = goals.set_goal(target, kind="search")
         if not ack.get("ok"):
             return ToolResult(text=f"search NOT started: {ack.get('error')}")

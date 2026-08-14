@@ -1,7 +1,8 @@
 """Shared launch body for every bringup: the real robot and the simulation.
 
-One node set (ros2_control + real_io_node + policy_node + rsp + bag), one set
-of parameters, one arming procedure. The launch files differ only in:
+One node set (ros2_control + real_io_node + policy_node + rsp + sysinfo_node
++ bag, and a Foxglove bridge on the robot), one set of parameters, one arming
+procedure. The launch files differ only in:
 
   hardware      "real" = MD80 over CAN + the I2C IMU; "sim" = the same graph
                 with the hardware plugin swapped for a simulated one, from
@@ -19,7 +20,10 @@ them import wojtek_policy.policy_source makes this sibling module importable.
 import datetime
 import os
 
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import (
+    PackageNotFoundError,
+    get_package_share_directory,
+)
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
@@ -40,6 +44,18 @@ from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 from wojtek_policy.policy_source import active_policy, load_policy
+
+
+def _cpu_prefix(context, arg):
+    """A taskset prefix from a comma list of cores, or nothing when empty.
+
+    The RPi service starts this whole tree under `taskset -c 2,3` and every
+    child inherits that mask. Anything that is not the control loop has to be
+    moved back to the other cores by hand, which is what this does. The bag
+    recorder and the perception pipeline get the same treatment.
+    """
+    cpus = LaunchConfiguration(arg).perform(context)
+    return [f"taskset -c {cpus}"] if cpus else None
 
 
 def _launch_setup(context, with_rviz, hardware):
@@ -204,7 +220,40 @@ def _launch_setup(context, with_rviz, hardware):
                 ("joint_states", "wojtek/joint_states_abs"),
             ],
         ),
+        # How the computer itself is doing: CPU, memory, SoC temperature,
+        # throttling, free space and wifi traffic on /wojtek/sysinfo. Always
+        # on, because the point is to have it in every bag next to the
+        # control data. It measures free space where the bag actually goes,
+        # so it takes bag_dir rather than its own default.
+        Node(
+            package="wojtek_telemetry",
+            executable="sysinfo_node",
+            output="screen",
+            parameters=[{"disk_path": LaunchConfiguration("bag_dir")}],
+            prefix=_cpu_prefix(context, "sysinfo_cpus"),
+        ),
     ]
+
+    # A websocket bridge on the robot itself, so watching a run in Foxglove
+    # needs nothing running on the PC. The bridge is a separate apt package;
+    # when it is missing, say so and bring the rest up anyway rather than
+    # take the control stack down with the launch.
+    if LaunchConfiguration("foxglove").perform(context).lower() in ("true", "1"):
+        try:
+            get_package_share_directory("foxglove_bridge")
+        except PackageNotFoundError:
+            print(">> foxglove_bridge is not installed -- no live Foxglove "
+                  "link (apt install ros-$ROS_DISTRO-foxglove-bridge)")
+        else:
+            nodes.append(
+                Node(
+                    package="foxglove_bridge",
+                    executable="foxglove_bridge",
+                    parameters=[{"port": 8765}],
+                    prefix=_cpu_prefix(context, "foxglove_cpus"),
+                    output="screen",
+                )
+            )
 
     if with_rviz:
         nodes.append(
@@ -299,6 +348,20 @@ def common_launch_description(
         # empty = inherit. The RPi service pins it to 0,1 to keep the
         # recorder's disk I/O off the control loop's isolated RT cores.
         DeclareLaunchArgument("bag_cpus", default_value=""),
+        # Cores for the system-info node. It samples a handful of counters a
+        # few times a second, but it must still stay off the isolated RT
+        # cores, so unlike bag_cpus this defaults to 0,1 rather than to
+        # inheriting the tree's mask. Empty = inherit.
+        DeclareLaunchArgument("sysinfo_cpus", default_value="0,1"),
+        # foxglove_bridge on port 8765, so the native Foxglove app connects
+        # to the robot directly. On by default on the robot: that is the
+        # live view of a normal run. Off for a simulation, where the session
+        # already starts a bridge from viz.launch.py and two of them would
+        # fight over the port.
+        DeclareLaunchArgument(
+            "foxglove", default_value="true" if hardware == "real" else "false",
+        ),
+        DeclareLaunchArgument("foxglove_cpus", default_value="0,1"),
     ]
     if hardware == "real":
         args += [

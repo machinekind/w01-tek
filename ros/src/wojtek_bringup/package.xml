@@ -54,6 +54,14 @@
   <exec_depend>ros2bag</exec_depend>
   <exec_depend>rosbag2_transport</exec_depend>
   <exec_depend>rosbag2_storage_default_plugins</exec_depend>
+  <!-- sysinfo_node runs in every bringup (launch_common.py). It also arrives
+       through wojtek_policy, which uses the messages, but this launch starts
+       the node itself, so say so here. -->
+  <exec_depend>wojtek_telemetry</exec_depend>
+  <!-- foxglove:=true, the default on the robot, starts the bridge on port
+       8765 so a Foxglove session watches the robot with no PC in the loop.
+       A build without the package still launches; the bridge is skipped. -->
+  <exec_depend>foxglove_bridge</exec_depend>
 
   <test_depend>python3-pytest</test_depend>
 

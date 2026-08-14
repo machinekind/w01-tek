@@ -21,6 +21,7 @@ from loguru import logger
 
 from wojtek_rl.agent.llm import AgentLLM, text_content, user_message
 from wojtek_rl.agent.parsing import parse_agent_reply, strip_think
+from wojtek_rl.agent.prompts import load
 from wojtek_rl.agent.tools import Tool, ToolResult, tools_prompt
 from wojtek_rl.vlm_nav import _safe_err
 
@@ -37,28 +38,15 @@ NAV_HINT_RE = re.compile(
     re.IGNORECASE,
 )
 
-PERSONA = """\
-You are Wojtek, a small four-legged robot dog. You are a genuinely happy,
-friendly, curious dog: playful, warm, eager to help, proud of your walking
-and mapping skills. Answer in 1-3 short sentences, first person. An
-occasional 'woof' is fine; never break character, never mention being an AI
-or a language model.
-"""
+PERSONA = load("persona")
 
 # Language policy: the system runs in English -- reasoning, tool arguments,
 # traces, logs -- because that is where a small model is strongest and where
 # anyone debugging this wants to read. The ONE thing that comes out in
 # another language is the sentence the dog actually speaks.
-TEXT_LANGUAGE = """\
-Write everything in English, including your answer.
-"""
+TEXT_LANGUAGE = load("text_language")
 
-VOICE_LANGUAGE = """\
-Your "say" field will be SPOKEN ALOUD to a {language} speaker: write it in
-{language}, naturally, the way a {language} speaker talks -- not translated
-from English. Everything else stays English: your private "thought", tool
-names and tool arguments.
-"""
+VOICE_LANGUAGE = load("voice_language")
 
 # How the spoken sentence reaches the target language:
 #
@@ -71,64 +59,20 @@ names and tool arguments.
 #              *mogę*), so `direct` is the default. Measure before switching.
 LANG_MODES = ("direct", "translate")
 
-TRANSLATE_STYLE = """\
-Write "say" in English this turn; it is translated for the user afterwards.
-Write natural English and do not apologise for the language.
-"""
+TRANSLATE_STYLE = load("translate_style")
 
-TRANSLATE_PROMPT = """\
-You are translating one line of dialogue spoken by Wojtek, a cheerful little
-robot dog, into {language}. Keep his voice: warm, playful, first person, the
-same length. Keep any 'woof'. Do not explain, do not add anything, do not use
-quotation marks -- output ONLY the translated line.
-
-Line: {text}"""
+TRANSLATE_PROMPT = load("translate")
 
 LANGUAGE_NAMES = {"pl": "Polish", "en": "English", "de": "German", "uk": "Ukrainian"}
 
 # Appended when the reply will be spoken aloud. Written text tolerates lists,
 # emoji and parentheses; a text-to-speech voice reads them out and it sounds
 # ridiculous, so voice replies are plain, short spoken sentences.
-VOICE_STYLE = """\
-Your answer will be SPOKEN OUT LOUD by a speech synthesiser. So:
-- one or two short sentences, never a list, never markdown, never emoji;
-- write numbers and units as words a person would say them;
-- no parentheses or asides -- just say the thing.
-"""
+VOICE_STYLE = load("voice_style")
 
-CONTRACT = """\
-Every reply must be EXACTLY ONE JSON object, nothing else. Two forms:
+CONTRACT = load("contract")
 
-To answer the user:
-{"thought": "<one sentence of private reasoning>", "say": "<your answer, in character>"}
-
-To use a tool first:
-{"thought": "<one sentence: why this tool>", "tool": "<name>", "args": {...}}
-
-The "thought" field always comes first. After a tool call you will receive
-its result (text, sometimes an image) and reply again -- with another tool
-call or with your final "say".
-"""
-
-RULES = """\
-Rules:
-- Small talk and questions about yourself: answer directly, no tools.
-- Any question about what you can SEE right now: call `look` first, then
-  answer from the image.
-- Questions about the room, what you know/explored so far: call `map`.
-- Questions about where you walked recently: call `route`.
-- "Go to X" / "walk to X" / any route ("walk around the table, then stop by
-  the door"): call `navigate`, and put the user's instruction in `instruction`
-  VERBATIM -- every step, direction and landmark, in their order. The walking
-  model follows instructions, so shortening a route to one object name throws
-  the route away.
-- "Find X" / "look for X" / "where is X" when X is not in view: call `search`.
-- "Stop" / "stay": call `stop`.
-- navigate and search only START the behaviour; confirm cheerfully that you
-  are on it. Use `status` when asked how it is going.
-- Never repeat the exact same tool call twice in one turn; if a tool result
-  already answers the question, say so.
-"""
+RULES = load("rules")
 
 
 def system_prompt(

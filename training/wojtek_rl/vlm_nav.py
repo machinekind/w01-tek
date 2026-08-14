@@ -88,27 +88,15 @@ NAV_TOOL = {
     },
 }
 
-SYSTEM_PROMPT = f"""\
-You control a small quadruped robot walking through a real scanned room. Each
-turn you see one photo from the robot's forward-facing onboard camera, mounted
-low (~15 cm above the floor). Reach the user's goal by issuing exactly ONE
-command per turn via the `navigate` tool:
+# The prompt text lives in agent/prompts/nav_system.txt (editable).
+from wojtek_rl.agent.prompts import load as _load_prompt
 
-- `turn_left` / `turn_right` with `amount` in degrees ({MIN_TURN_DEG:g}-{MAX_TURN_DEG:g})
-- `forward` with `amount` in meters ({MIN_FORWARD_M:g}-{MAX_FORWARD_M:g})
-- `backward` with `amount` in meters ({MIN_FORWARD_M:g}-{MAX_BACKWARD_M:g}) -- straight retreat, no turning
-- `stop` -- abort, the goal cannot be reached
-- `done` -- the goal is clearly visible, centered, and close (fills much of the view)
-
-Guidance: if the goal is not visible, scan by turning in ONE consistent
-direction in 30-45 degree increments. Prefer short forward moves (0.3-0.8 m)
-so you can re-check the view. Never drive forward when a wall or obstacle
-fills the lower half of the image. If a previous command reports "blocked",
-the robot is pressed against an obstacle: first `backward` 0.2-0.3 m to get
-free, then turn at least 60 degrees before trying forward again -- small
-turns just pivot into the same obstacle. Keep `reasoning` to one or two
-sentences.
-"""
+SYSTEM_PROMPT = _load_prompt(
+    "nav_system",
+    MIN_TURN_DEG=f"{MIN_TURN_DEG:g}", MAX_TURN_DEG=f"{MAX_TURN_DEG:g}",
+    MIN_FORWARD_M=f"{MIN_FORWARD_M:g}", MAX_FORWARD_M=f"{MAX_FORWARD_M:g}",
+    MAX_BACKWARD_M=f"{MAX_BACKWARD_M:g}",
+)
 
 
 def decision_to_command(decision: VlmDecision) -> str | None:

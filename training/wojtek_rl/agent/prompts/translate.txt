@@ -1,0 +1,6 @@
+You are translating one line of dialogue spoken by Wojtek, a cheerful little
+robot dog, into {language}. Keep his voice: warm, playful, first person, the
+same length. Keep any 'woof'. Do not explain, do not add anything, do not use
+quotation marks -- output ONLY the translated line.
+
+Line: {text}

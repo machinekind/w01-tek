@@ -183,11 +183,30 @@ class RoomSim:
             self._vlm_frame_cam = self.vlm_cam
         self.vlm_renderer = mujoco.Renderer(self.model, height=VLM_FRAME_PX, width=VLM_FRAME_PX)
         occ = paths.scene_dir(_scene_name) / "occupancy.npz"
+        self._spawn_xy = None
+        spawn_env = os.environ.get("WOJTEK_SPAWN")
+        if spawn_env:
+            sx, sy = (float(v) for v in spawn_env.split(","))
+            self._spawn_xy = (sx, sy)
         if occ.exists():
             from wojtek_eval.gridmap import GridMap
 
             g = GridMap.load(occ)
             res, origin, shape = g.res, g.origin, g.occ.shape
+            # The home keyframe spawns at the world origin, but a scanned
+            # scene's origin can sit INSIDE furniture (the castle hall has its
+            # table cluster there); a spawn inside inflated occupancy makes
+            # the planner reject every command -- the robot answers but never
+            # moves (live finding 2026-08-14).  Move to the nearest free cell
+            # unless WOJTEK_SPAWN chose a spot.
+            if self._spawn_xy is None and not g.is_free(0.0, 0.0):
+                snapped = g._snap_free(0.0, 0.0, max_r=4.0)
+                if snapped is not None:
+                    self._spawn_xy = g.cell_to_world(*snapped)
+                    logger.info(
+                        f"scene origin is occupied; spawning at "
+                        f"({self._spawn_xy[0]:.2f}, {self._spawn_xy[1]:.2f})"
+                    )
         else:
             half = _world_half()
             res = RESOLUTION
@@ -200,6 +219,9 @@ class RoomSim:
         self.resets += 1
         mujoco = self._mujoco
         mujoco.mj_resetDataKeyframe(self.model, self.data, self.model.key("home").id)
+        if getattr(self, "_spawn_xy", None) is not None:
+            self.data.qpos[0] = self._spawn_xy[0]
+            self.data.qpos[1] = self._spawn_xy[1]
         mujoco.mj_forward(self.model, self.data)
         # The home keyframe was settled on the flat training plane; the room's
         # scanned floor hulls sit a couple of cm higher. Settle onto them

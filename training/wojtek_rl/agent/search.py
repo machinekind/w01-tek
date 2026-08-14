@@ -57,19 +57,13 @@ EVENTS_MAX = 200          # debug event ring: commands, observations, states
 
 
 def score_view_prompt(target: str) -> str:
-    """The observer call's instruction. `description` comes FIRST in the
-    contract -- a small VLM that must open with a verdict stops looking at
-    the image (see parsing.py); making it describe first is the fix."""
-    return (
-        f"You are the eyes of a small robot dog searching for: {target}.\n"
-        "Look at the camera image and respond with ONLY one JSON object:\n"
-        '{"description": "<one sentence: what is in view>", '
-        '"target_visible": true|false, '
-        '"score": <0-10: how promising is walking in this direction to find the target>, '
-        '"bbox_2d": [x1, y1, x2, y2] or null}\n'
-        "bbox_2d: the target's bounding box in 0-1000 normalized image "
-        "coordinates, only when target_visible is true."
-    )
+    """The observer call's instruction — text in prompts/search_observer.txt.
+    `description` comes FIRST in the contract -- a small VLM that must open
+    with a verdict stops looking at the image (see parsing.py)."""
+    from wojtek_rl.agent.prompts import load
+
+    return load("search_observer", target=target)
+
 
 
 @dataclass(frozen=True)

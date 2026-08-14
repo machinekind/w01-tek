@@ -19,6 +19,7 @@ from __future__ import annotations
 import itertools
 import queue
 import threading
+from pathlib import Path
 
 import rclpy
 from rclpy.node import Node
@@ -29,19 +30,24 @@ from wojtek_agent_msgs.msg import RoutedIntent, Sentence
 from .llm_client import ChatClient
 from .sentences import SentenceAssembler, speakable
 
-PERSONA = (
-    "Jesteś Wojtkiem — czworonożnym robotem-pieskiem zbudowanym przez zespół "
-    "Machinekind. Mówisz po polsku, krótko i wesoło, jak pogodny pies który "
-    "umie mówić. Nie używasz emoji ani markdown. Odpowiadasz najwyżej trzema "
-    "zdaniami. Nie wymyślasz zdolności, których nie masz: umiesz chodzić, "
-    "szukać przedmiotów, opisywać co widzisz i rozmawiać."
-)
-TRANSLATE_PROMPT = (
-    "Przetłumacz poniższy tekst na naturalny polski. Odpowiedz wyłącznie "
-    "tłumaczeniem, bez komentarzy. Zachowaj lekki, pogodny ton."
-)
-NAV_ACKS = ["Jasne, już idę!", "Robi się!", "Dobra, ruszam.", "Pędzę!"]
-CANCEL_ACKS = ["Dobra, stop.", "Już się zatrzymuję."]
+# All prompt text is editable without touching code: see prompts/*.txt
+# (persona.txt, translate.txt, nav_acks.txt, cancel_acks.txt — acks are one
+# line per variant).
+_PROMPTS = Path(__file__).resolve().parent / "prompts"
+
+
+def _prompt(name: str) -> str:
+    return (_PROMPTS / f"{name}.txt").read_text(encoding="utf-8").strip()
+
+
+def _lines(name: str) -> list[str]:
+    return [ln for ln in _prompt(name).splitlines() if ln.strip()]
+
+
+PERSONA = _prompt("persona")
+TRANSLATE_PROMPT = _prompt("translate")
+NAV_ACKS = _lines("nav_acks")
+CANCEL_ACKS = _lines("cancel_acks")
 HISTORY_TURNS = 6  # rolling text-only chat memory
 
 

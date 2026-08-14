@@ -1,0 +1,225 @@
+{
+  "configById": {
+    "Plot!soctemp": {
+      "title": "SoC temperature (C)",
+      "paths": [
+        {
+          "value": "/wojtek/sysinfo.soc_temp_c",
+          "enabled": true,
+          "timestampMethod": "receiveTime"
+        }
+      ],
+      "xAxisVal": "timestamp",
+      "isSynced": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "followingViewWidth": 60
+    },
+    "StateTransitions!throttle": {
+      "title": "Throttling",
+      "paths": [
+        {
+          "value": "/wojtek/sysinfo.undervoltage_now",
+          "timestampMethod": "receiveTime"
+        },
+        {
+          "value": "/wojtek/sysinfo.undervoltage_ever",
+          "timestampMethod": "receiveTime"
+        },
+        {
+          "value": "/wojtek/sysinfo.throttled_now",
+          "timestampMethod": "receiveTime"
+        },
+        {
+          "value": "/wojtek/sysinfo.throttled_ever",
+          "timestampMethod": "receiveTime"
+        },
+        {
+          "value": "/wojtek/sysinfo.freq_capped_now",
+          "timestampMethod": "receiveTime"
+        },
+        {
+          "value": "/wojtek/sysinfo.freq_capped_ever",
+          "timestampMethod": "receiveTime"
+        }
+      ],
+      "isSynced": true
+    },
+    "Plot!cpu": {
+      "title": "CPU per core (%) and load",
+      "paths": [
+        {
+          "value": "/wojtek/sysinfo.cpu_percent[:]",
+          "enabled": true,
+          "timestampMethod": "receiveTime"
+        },
+        {
+          "value": "/wojtek/sysinfo.load1",
+          "enabled": true,
+          "timestampMethod": "receiveTime"
+        }
+      ],
+      "xAxisVal": "timestamp",
+      "isSynced": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "followingViewWidth": 60
+    },
+    "Plot!timing": {
+      "title": "Policy tick (ms)",
+      "paths": [
+        {
+          "value": "/wojtek/policy_timing.inference_ms",
+          "enabled": true,
+          "timestampMethod": "receiveTime"
+        },
+        {
+          "value": "/wojtek/policy_timing.period_ms",
+          "enabled": true,
+          "timestampMethod": "receiveTime"
+        }
+      ],
+      "xAxisVal": "timestamp",
+      "isSynced": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "followingViewWidth": 60
+    },
+    "Plot!cmdvel": {
+      "title": "Drive command",
+      "paths": [
+        {
+          "value": "/cmd_vel.linear.x",
+          "enabled": true,
+          "timestampMethod": "receiveTime"
+        },
+        {
+          "value": "/cmd_vel.linear.y",
+          "enabled": true,
+          "timestampMethod": "receiveTime"
+        },
+        {
+          "value": "/cmd_vel.angular.z",
+          "enabled": true,
+          "timestampMethod": "receiveTime"
+        }
+      ],
+      "xAxisVal": "timestamp",
+      "isSynced": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "followingViewWidth": 60
+    },
+    "Plot!joints": {
+      "title": "Measured joint angles (rad)",
+      "paths": [
+        {
+          "value": "/wojtek/joint_states_abs.position[:]",
+          "enabled": true,
+          "timestampMethod": "receiveTime"
+        }
+      ],
+      "xAxisVal": "timestamp",
+      "isSynced": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "followingViewWidth": 60
+    },
+    "Plot!imu": {
+      "title": "IMU",
+      "paths": [
+        {
+          "value": "/imu_sensor_broadcaster/imu.angular_velocity.x",
+          "enabled": true,
+          "timestampMethod": "receiveTime"
+        },
+        {
+          "value": "/imu_sensor_broadcaster/imu.angular_velocity.y",
+          "enabled": true,
+          "timestampMethod": "receiveTime"
+        },
+        {
+          "value": "/imu_sensor_broadcaster/imu.angular_velocity.z",
+          "enabled": true,
+          "timestampMethod": "receiveTime"
+        },
+        {
+          "value": "/imu_sensor_broadcaster/imu.linear_acceleration.x",
+          "enabled": true,
+          "timestampMethod": "receiveTime"
+        },
+        {
+          "value": "/imu_sensor_broadcaster/imu.linear_acceleration.y",
+          "enabled": true,
+          "timestampMethod": "receiveTime"
+        },
+        {
+          "value": "/imu_sensor_broadcaster/imu.linear_acceleration.z",
+          "enabled": true,
+          "timestampMethod": "receiveTime"
+        }
+      ],
+      "xAxisVal": "timestamp",
+      "isSynced": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "followingViewWidth": 60
+    },
+    "machinekind.wojtek-console-panel.Wojtek console!console": {
+      "url": "http://localhost:8080"
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": {
+    "speed": 1
+  },
+  "layout": {
+    "direction": "row",
+    "splitPercentage": 45,
+    "first": {
+      "direction": "column",
+      "splitPercentage": 34,
+      "first": "Plot!soctemp",
+      "second": {
+        "direction": "column",
+        "splitPercentage": 40,
+        "first": "StateTransitions!throttle",
+        "second": "Plot!cpu"
+      }
+    },
+    "second": {
+      "direction": "column",
+      "splitPercentage": 50,
+      "first": {
+        "direction": "column",
+        "splitPercentage": 50,
+        "first": "Plot!timing",
+        "second": "Plot!cmdvel"
+      },
+      "second": {
+        "direction": "column",
+        "splitPercentage": 40,
+        "first": "Plot!joints",
+        "second": {
+          "direction": "column",
+          "splitPercentage": 50,
+          "first": "Plot!imu",
+          "second": "machinekind.wojtek-console-panel.Wojtek console!console"
+        }
+      }
+    }
+  }
+}

@@ -213,7 +213,7 @@ def _launch_setup(context, with_rviz, hardware):
                     "clamp_knee": True,
                     "watchdog_timeout_s": 0.2,
                     # Same switch as the sysinfo node above, so one argument
-                    # turns the whole correlate-a-run picture on.
+                    # turns both topics on together.
                     "publish_timing": ParameterValue(
                         LaunchConfiguration("telemetry"), value_type=bool
                     ),

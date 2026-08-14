@@ -227,7 +227,7 @@ afterwards.
 `telemetry:=true` publishes the two topics. `foxglove:=true` opens a bridge on
 port 8765, so the native Foxglove app connects to the robot with nothing
 running on the PC. A manual `robot.launch.py` run has all of this off, the
-same way it does not record: ask for what you want with `telemetry:=true
+same way it does not record. Ask for what you want with `telemetry:=true
 foxglove:=true bag:=true`. The RPi service passes all three, so a
 service-driven run is watchable live and readable back afterwards. Import
 [`foxglove/layouts/robot-dashboard.json`](foxglove/layouts/README.md) to see

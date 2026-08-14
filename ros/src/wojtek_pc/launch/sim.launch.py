@@ -48,7 +48,7 @@ the off-switch for weak machines). It needs a physics-backed plant, so it is
 inert with hw:=mock. camera_depth_hz/camera_color_hz tune the render rates.
 
 telemetry:=true adds /wojtek/sysinfo and /wojtek/policy_timing, the same
-opt-in the robot service uses. Off by default here too. The Foxglove bridge
+opt-in the robot service uses. It is off by default here too. The Foxglove bridge
 stays with viz.launch.py in a simulation, so leave foxglove:= alone unless
 nothing else holds port 8765.
 """

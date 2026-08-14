@@ -23,7 +23,7 @@ service-driven run leaves a lossless on-robot bag -- the black box of a
 real run, now that PC viz also records on demand only. Bags go to
 bag_dir/run_<timestamp> (bag_dir defaults to ~/wojtek_bags).
 
-Telemetry note: same shape as recording. A manual run publishes no
+Telemetry is opt-in, like recording. A manual run publishes no
 /wojtek/sysinfo and no /wojtek/policy_timing, and starts no Foxglove
 bridge. Ask for them with telemetry:=true foxglove:=true. The systemd
 service passes both, so a service-driven run can be watched live on port

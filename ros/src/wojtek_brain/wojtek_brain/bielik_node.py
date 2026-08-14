@@ -30,10 +30,11 @@ from wojtek_agent_msgs.msg import RoutedIntent, Sentence
 from .llm_client import ChatClient
 from .sentences import SentenceAssembler, speakable
 
-# All prompt text is editable without touching code: see prompts/*.txt
-# (persona.txt, translate.txt, nav_acks.txt, cancel_acks.txt — acks are one
-# line per variant).
-_PROMPTS = Path(__file__).resolve().parent / "prompts"
+# All prompt text is editable without touching code: prompts/bielik/*.txt
+# (persona, translate, nav_acks, cancel_acks — acks one line per variant).
+# Everything in there lands on Bielik and stays POLISH; the English Qwen
+# prompts live in training/wojtek_rl/agent/prompts/qwen/.
+_PROMPTS = Path(__file__).resolve().parent / "prompts" / "bielik"
 
 
 def _prompt(name: str) -> str:

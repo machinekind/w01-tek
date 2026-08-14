@@ -6,7 +6,7 @@ setup(
     name=package_name,
     version="0.1.0",
     packages=[package_name],
-    package_data={package_name: ["prompts/*.txt"]},
+    package_data={package_name: ["prompts/bielik/*.txt"]},
     include_package_data=True,
     data_files=[
         ("share/ament_index/resource_index/packages", [f"resource/{package_name}"]),

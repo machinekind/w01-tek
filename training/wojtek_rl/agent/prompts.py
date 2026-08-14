@@ -1,4 +1,8 @@
-"""Editable prompt store: every LLM/VLM prompt lives in prompts/*.txt.
+"""Editable prompt store: every Qwen-facing prompt lives in prompts/qwen/*.txt.
+
+These all land on the Qwen3-VL agent and MUST stay in English (the model
+reasons/tools best in English; only the spoken sentence leaves English).
+The Polish Bielik prompts live in ros/src/wojtek_brain/.../prompts/bielik/.
 
 Edit the .txt files to change what the models are told — no code change,
 just restart the app.  Placeholders like {target} or {language} are plain
@@ -22,7 +26,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
+PROMPTS_DIR = Path(__file__).resolve().parent / "prompts" / "qwen"
 
 
 def load(name: str, **tokens: object) -> str:

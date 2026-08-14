@@ -5,8 +5,8 @@ A reference is either
   - a Hugging Face model repo id, e.g.
         <HF_ORGANIZATION>/wojtek-springy-locomotion
         <HF_ORGANIZATION>/wojtek-stiff-kp80-locomotion@<commit-or-branch>
-    resolved against the POLICY STORE: a plain directory of downloaded
-    snapshots, one per commit, laid out as
+    resolved against the policy store, a plain directory of downloaded
+    snapshots, one per commit:
 
         <store>/<org>/<name>/<commit>/policy.npz + policy_meta.json
         <store>/<org>/<name>/refs/<branch-or-tag>   # the commit it pointed
@@ -15,27 +15,25 @@ A reference is either
     The store is WOJTEK_POLICY_STORE, or `policies/` next to the workspace's
     `src/` (ros/policies in a checkout), or ~/.wojtek/policies.
 
-The robot never talks to Hugging Face -- it has no internet, and
-huggingface_hub is not even installed on it. Downloading happens on the
-operator PC, which has the network and the token for the private repos:
+The robot has no internet and no huggingface_hub, so it never downloads.
+Downloading happens on the operator PC, which has the network and the token
+for the private repos:
 
     python3 -m wojtek_policy.policy_source --default  # the pin below
     python3 -m wojtek_policy.policy_source <ref>      # any other reference
     ./deploy.sh                                       # syncs it to the robot
 
-so on the robot every reference is answered from the store, offline. A ref
-that is not there yet fails with that same instruction instead of a network
-error. Only the two policy files are ever fetched, never the checkpoint.
+On the robot every reference is answered from the store, offline. A missing
+reference fails with the instruction above instead of a network error. Only
+the two policy files are ever fetched, never the checkpoint.
 
-Nobody has to run this by hand for the normal flow: deploy.sh runs
-`--default` itself before syncing the store, so the policy the launch files
-come up with is in place. The bare-<ref> form is for a one-off policy that
-is not the default.
+deploy.sh runs `--default` before syncing, so the default policy needs no
+manual step. Run the `<ref>` form for a one-off policy.
 
-Pin real-robot launches to a commit (`@<sha>`): the resolved revision is
-part of what ran on the robot, and a moving branch is not a record. A commit
-is also the one reference that needs no network at all once stored, since a
-commit never moves; a branch is re-fetched when Hugging Face is reachable.
+Pin real-robot launches to a commit (`@<sha>`). The resolved revision is
+part of what ran on the robot, and a branch does not record it. A stored
+commit also resolves with no network, because a commit never moves; the
+resolver re-fetches a branch whenever Hugging Face is reachable.
 
 No ROS imports here; huggingface_hub is imported only when something has to
 be downloaded, so store and local-directory workflows need nothing extra
@@ -54,10 +52,10 @@ FILES = ("policy.npz", "policy_meta.json")
 
 
 class _HFUnavailable(Exception):
-    """Nothing can be downloaded from here: no huggingface_hub, or no network.
+    """This machine cannot download, for lack of huggingface_hub or network.
 
-    Not an error by itself -- it is the signal to answer from the store.
-    A refused or unauthorized repo is a different thing and propagates.
+    The resolver catches this and answers from the store. Auth and
+    permission errors are real answers from Hugging Face and propagate.
     """
 
 
@@ -88,13 +86,13 @@ def policy_store() -> Path:
     return Path.home() / ".wojtek" / "policies"
 
 
-# Which policy every bringup -- robot and simulation -- comes up with when no
-# policy:= is given. Pinned to a commit on purpose: an unpinned repo id follows
-# whatever main is, so what walks today would silently be a different policy
-# tomorrow; a commit is also the one reference the robot can answer from the
-# store with no network. It lives here rather than in the launch files because
-# host-side tooling (deploy.sh) has to resolve it too, and this module is
-# stdlib-only.
+# The policy every bringup, robot and simulation, comes up with when no
+# policy:= is given. The pin is a commit on purpose. An unpinned repo id
+# follows main, so tomorrow's launch could silently run a different policy,
+# and only a pinned commit resolves from the store with no network. The pin
+# lives in this module rather than in the launch files because deploy.sh has
+# to resolve it too, and this module imports nothing beyond the standard
+# library.
 _DEFAULT_REPO = ("wojtek-quiet-locomotion"
                  "@553795b13001cc1f519a4abc0235f275095129f8")
 
@@ -142,7 +140,7 @@ def _is_commit(revision: str) -> bool:
 
 
 def _from_store(store: Path, repo_id: str, commit: str) -> ResolvedPolicy | None:
-    """The stored snapshot for a commit, or None if it isn't there (whole)."""
+    """The stored snapshot for a commit. None when either file is missing."""
     snapshot = store / repo_id / commit
     if not all((snapshot / f).is_file() for f in FILES):
         return None
@@ -159,7 +157,8 @@ def _fetch_into_store(store: Path, repo_id: str, revision: str) -> ResolvedPolic
     try:
         from huggingface_hub import hf_hub_download
     except ImportError as e:
-        # The robot deliberately doesn't have it -- see the module docstring.
+        # The robot has no huggingface_hub on purpose; see the module
+        # docstring.
         raise _HFUnavailable("huggingface_hub is not installed") from e
 
     try:  # moved between modules across huggingface_hub versions
@@ -174,22 +173,23 @@ def _fetch_into_store(store: Path, repo_id: str, revision: str) -> ResolvedPolic
                 hf_hub_download(repo_id, fname, revision=revision)
             )
         except LocalEntryNotFoundError as e:
-            # Offline (or HF unreachable) and nothing in the download cache.
-            # Everything else -- a missing repo, a bad or absent token -- is a
-            # real answer from HF and must not be mistaken for being offline.
+            # Hugging Face is unreachable and the download cache has
+            # nothing. A missing repo or a bad token is a real answer and
+            # propagates.
             raise _HFUnavailable(
                 f"cannot reach Hugging Face for {repo_id}@{revision}"
             ) from e
 
-    # Download cache layout: .../snapshots/<commit>/<file>; the dir name is the
-    # resolved commit, which makes branch refs auditable in the logs.
+    # The download cache stores files under snapshots/<commit>/, so the
+    # parent dir name is the resolved commit. That makes a branch reference
+    # auditable in the logs.
     commit = paths[FILES[0]].parent.name
     snapshot = store / repo_id / commit
     snapshot.mkdir(parents=True, exist_ok=True)
     for fname in FILES:
-        # copyfile, not a link: in the download cache these are symlinks into
-        # a blob directory, and the store must hold real files -- it gets
-        # rsynced to the robot and read by hand.
+        # The download cache hands back symlinks into a blob directory. The
+        # store gets rsynced to the robot and read by hand, so it must hold
+        # real files. copyfile follows the symlink.
         shutil.copyfile(paths[fname], snapshot / fname)
     if revision != commit:
         # Remember where the branch/tag pointed, so an offline machine can
@@ -216,8 +216,8 @@ def _resolve_hf(ref: str) -> ResolvedPolicy:
     store = policy_store()
 
     if _is_commit(revision):
-        # A commit never moves, so a stored snapshot is the right answer for
-        # good and there is nothing to check over the network.
+        # A commit never moves, so a stored snapshot is the final answer and
+        # nothing needs checking over the network.
         stored = _from_store(store, repo_id, revision)
         if stored is not None:
             return stored
@@ -226,9 +226,9 @@ def _resolve_hf(ref: str) -> ResolvedPolicy:
         except _HFUnavailable as e:
             raise _not_in_store(ref, store) from e
 
-    # A branch or tag moves, so ask Hugging Face first when we can -- that is
-    # what keeps a desk workflow following the branch. No revision means the
-    # default branch.
+    # A branch or tag moves, so ask Hugging Face first when possible. That
+    # is how a desk workflow keeps following the branch. No revision means
+    # the default branch.
     revision = revision or "main"
     try:
         return _fetch_into_store(store, repo_id, revision)
@@ -312,7 +312,7 @@ def load_policy(ref: str, overrides=None) -> LoadedPolicy:
 
 def main(argv=None) -> int:
     args = argv if argv is not None else sys.argv[1:]
-    # One reference, or --default; nothing else is a usage this understands.
+    # The CLI takes exactly one argument, a reference or --default.
     if len(args) != 1 or (args[0].startswith("-") and args[0] != "--default"):
         print(__doc__)
         return 2

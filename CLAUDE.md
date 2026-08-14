@@ -148,8 +148,8 @@ contract), keepers publish that pair to their Hugging Face repo, and the
 ROS stack loads a policy by reference -- `policy:=<org/name[@rev] | dir>`
 on the launch files.  A Hugging Face reference is resolved from the
 gitignored policy store (`ros/policies/`).  `ros/deploy.sh` resolves the
-launch default (the pin in `wojtek_policy/policy_source.py`) into the store
-itself and syncs the store to the RPi, which has no internet and never
-downloads anything; `python3 -m wojtek_policy.policy_source <ref>` by hand
-is only for a one-off policy that is not the default.
+pinned default (see `wojtek_policy/policy_source.py`) into the store and
+syncs the store to the RPi, which has no internet.  Fetch a non-default
+reference once with `python3 -m wojtek_policy.policy_source <ref>` before
+deploying it.
 Changing the deployed policy is a config change, not a code change.

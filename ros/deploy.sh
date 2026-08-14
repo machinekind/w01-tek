@@ -104,13 +104,13 @@ rsync -az --delete \
     --exclude 'wojtek_pc/' \
     "${HERE}/src/" "${RPI_HOST}:${REMOTE_WS}/src/"
 
-# Which policy runs is a launch parameter, and the launch files default to the
-# pin in wojtek_policy/policy_source.py. Resolving it is this PC's job, so the
-# robot never has to download anything -- and nobody has to remember a prefetch
-# command. Under `set -e` a failure stops the deploy here, on purpose: syncing
-# without the default policy in the store would leave the robot service
-# crash-looping on a policy it cannot resolve. huggingface_hub is only needed
-# for a NEW pin; one already in the store resolves offline with stdlib alone.
+# Which policy runs is a launch parameter, and the launch files default to
+# the pin in wojtek_policy/policy_source.py. This PC resolves the pin into
+# the store, so the robot never downloads anything and no one runs a
+# prefetch by hand. A resolve failure stops the deploy (set -e) on purpose,
+# because a robot without the default policy in its store would crash-loop.
+# huggingface_hub is needed only for a pin that is not in the store yet; a
+# stored pin resolves offline with the standard library.
 if [ -n "${HF_ORGANIZATION:-}" ]; then
     echo ">> resolve the default policy into the store"
     PYTHONPATH="${HERE}/src/wojtek_policy" python3 -m wojtek_policy.policy_source --default
@@ -119,9 +119,10 @@ else
     echo "   (set it in .env; without it every launch needs an explicit policy:=)"
 fi
 
-# The policy store: the policy snapshots this PC has resolved. The RPi has no
-# internet, so this rsync IS how policies get there. Skipped when there is no
-# store here, so a fresh clone doesn't --delete a working robot's policies away.
+# The policy store holds the snapshots this PC has resolved. The RPi has no
+# internet, so policies reach it only through this rsync. A fresh clone has
+# no store, and syncing then would --delete a working robot's policies, so
+# an absent store skips the sync instead.
 if [ -d "${HERE}/policies" ]; then
     echo ">> rsync policies -> ${RPI_HOST}:${REMOTE_WS}/policies"
     rsync -az --delete "${HERE}/policies/" "${RPI_HOST}:${REMOTE_WS}/policies/"

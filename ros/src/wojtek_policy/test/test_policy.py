@@ -360,8 +360,8 @@ def test_resolve_rejects_non_reference():
 # -- policy store -------------------------------------------------------------
 #
 # The robot resolves Hugging Face references offline, from the store that
-# deploy.sh rsyncs to it. These tests stand in for that machine: a store on
-# disk and nothing that can download.
+# deploy.sh rsyncs to it. These tests stand in for that machine, with a
+# store on disk and no way to download.
 
 SHA = "a" * 40
 
@@ -379,7 +379,7 @@ def offline(*args, **kwargs):
 
 
 def test_pinned_commit_resolves_from_store_without_fetching(tmp_path, monkeypatch):
-    # A commit never moves, so a stored snapshot ends it -- no network at all.
+    # A commit never moves, so a stored snapshot answers with no network.
     monkeypatch.setenv("WOJTEK_POLICY_STORE", str(tmp_path))
     snapshot = store_snapshot(tmp_path, "org/name", SHA)
 
@@ -395,7 +395,7 @@ def test_pinned_commit_resolves_from_store_without_fetching(tmp_path, monkeypatc
 
 
 def test_branch_offline_falls_back_to_recorded_ref(tmp_path, monkeypatch):
-    # A branch is fetched when possible; offline, the refs file says which
+    # A branch is fetched when possible. Offline, the refs file gives the
     # commit it pointed at last time, and that snapshot answers.
     monkeypatch.setenv("WOJTEK_POLICY_STORE", str(tmp_path))
     store_snapshot(tmp_path, "org/name", SHA)
@@ -424,10 +424,10 @@ class _NeverRaised(Exception):
 
 def test_fetch_materializes_real_files_and_records_the_branch(
         tmp_path, monkeypatch):
-    # A prefetch on the PC: huggingface_hub's download cache hands back
-    # symlinks into its blob directory, and the store must end up with real
-    # files (they get rsynced to the robot and read by hand) plus a refs
-    # entry saying where the branch pointed.
+    # This is a fetch on the PC. The download cache hands back symlinks into
+    # its blob directory. The store must end up with real files, because
+    # they get rsynced to the robot, and with a refs entry recording where
+    # the branch pointed.
     commit = "c" * 40
     cache = tmp_path / "hf-cache"
     (cache / "blobs").mkdir(parents=True)
@@ -460,7 +460,7 @@ def test_fetch_materializes_real_files_and_records_the_branch(
     refs = store / "org" / "name" / "refs"
     assert (refs / "somebranch").read_text().strip() == commit
 
-    # A pinned commit IS its own name: nothing to record.
+    # A pinned commit is its own name, so nothing is recorded.
     policy_source._fetch_into_store(store, "org/name", commit)
     assert not (refs / commit).exists()
 
@@ -482,15 +482,15 @@ def test_default_policy_needs_an_organization(monkeypatch):
 
 
 def test_default_policy_is_pinned_to_a_commit():
-    # A branch here would defeat the whole point: the robot is offline and can
-    # only answer a reference whose commit is already in its store.
+    # The robot is offline and can only answer a commit that is already in
+    # its store, so the shipped pin must be a commit.
     _, _, revision = policy_source._DEFAULT_REPO.partition("@")
     assert policy_source._is_commit(revision)
 
 
 def test_default_cli_resolves_from_the_store(tmp_path, monkeypatch):
-    # What deploy.sh runs, on a machine that cannot download: the pinned
-    # default is already in the store, so it resolves and says so.
+    # What deploy.sh runs, on a machine that cannot download. The pinned
+    # default is already in the store, so the resolve succeeds.
     monkeypatch.setenv("HF_ORGANIZATION", "org")
     monkeypatch.setenv("WOJTEK_POLICY_STORE", str(tmp_path))
     repo, _, commit = default_policy().partition("@")

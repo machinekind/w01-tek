@@ -225,10 +225,10 @@ def _launch_setup(context, with_rviz, hardware):
     return nodes
 
 
-# Which policy every bringup -- robot and simulation -- comes up with. The pin
-# and the reasoning behind it live in policy_source.default_policy, which
-# deploy.sh resolves into the policy store before it syncs. Override for one
-# run with policy:=<repo>@<sha> or a local artifact directory.
+# The policy every bringup, robot and simulation, comes up with. The pin and
+# its reasoning live in policy_source.default_policy, and deploy.sh resolves
+# it into the policy store before syncing. Override one run with
+# policy:=<repo>@<sha> or a local artifact directory.
 DEFAULT_POLICY = default_policy()
 
 
@@ -253,12 +253,13 @@ def common_launch_description(
         raise ValueError(f"hardware must be 'real' or 'sim', got {hardware!r}")
     default_bag_dir = os.path.join(os.path.expanduser("~"), "wojtek_bags")
     args = [
-        # Which policy runs: a Hugging Face repo id (org/name[@revision]) or a
-        # local directory with policy.npz + policy_meta.json. For a durable
-        # real-robot run pin a commit: policy:=<repo>@<sha>. An HF reference is
-        # answered from the policy store, so fetch the revision on the operator
-        # PC first (python3 -m wojtek_policy.policy_source <ref>) and let
-        # ./deploy.sh sync the store over; the robot needs no network.
+        # Which policy runs: a Hugging Face repo id (org/name[@revision]) or
+        # a local directory with policy.npz + policy_meta.json. Pin a commit
+        # for a durable real-robot run: policy:=<repo>@<sha>. A Hugging Face
+        # reference is answered from the policy store, and deploy.sh puts
+        # the default there. For any other reference, fetch once on the
+        # operator PC (python3 -m wojtek_policy.policy_source <ref>) and
+        # deploy again. The robot needs no network.
         DeclareLaunchArgument("policy", default_value=policy_default),
         # Explicit overrides of the policy contract's servo settings (empty =
         # from the contract). E.g. max_torque:=2 for cautious first tests.

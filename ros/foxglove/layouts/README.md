@@ -20,11 +20,17 @@ The console tile points at `http://localhost:8080`, which is right for a
 simulation. Watching the real robot from a PC, open the tile's settings and
 change the URL to `http://<robot>:8080`.
 
-The robot runs its own bridge on port 8765 while the stack is up, so connect
-Foxglove to the robot directly. In a simulation session the bridge runs in the
-dev container instead, on `ws://localhost:8765`.
+## What the run has to publish
 
 The system panels read `/wojtek/sysinfo` and `/wojtek/policy_timing`, both
-from `wojtek_telemetry`. A recording covers all topics, so the same layout
-works on a bag. The systemd service and `real.launch.py` record by default.
-A manual `robot.launch.py` run needs `bag:=true`.
+from `wojtek_telemetry`. A run publishes them only with `telemetry:=true`,
+and it opens the bridge on port 8765 only with `foxglove:=true`. The RPi
+service passes both, so a service-driven run is ready to watch. A manual
+`robot.launch.py` run needs them on the command line.
+
+Connect Foxglove to the robot directly. A simulation session gets its bridge
+from `viz.launch.py` in the dev container instead, on `ws://localhost:8765`.
+
+A recording covers all topics, so the same layout works on a bag afterwards.
+The service and `real.launch.py` record by default. A manual
+`robot.launch.py` run needs `bag:=true`.

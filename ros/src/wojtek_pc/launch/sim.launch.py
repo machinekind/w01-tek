@@ -7,6 +7,7 @@ virtual camera, RViz, the operator console and optionally a gamepad.
     ros2 launch wojtek_pc sim.launch.py [hw:=mock|mujoco] [rviz:=false]
                                        [boot_pose:=folded] [camera:=false]
                                        [console:=web|qt|none] [gamepad:=true]
+                                       [telemetry:=true]
 
 This is `robot.launch.py` with the hardware plugin swapped -- same
 controller_manager at 400 Hz, same broadcasters, same real_io_node, same
@@ -45,6 +46,11 @@ silent after its single stop Twist, so it never fights the other teleops.
 camera:=false turns off the D435-compatible virtual camera (on by default;
 the off-switch for weak machines). It needs a physics-backed plant, so it is
 inert with hw:=mock. camera_depth_hz/camera_color_hz tune the render rates.
+
+telemetry:=true adds /wojtek/sysinfo and /wojtek/policy_timing, the same
+opt-in the robot service uses. Off by default here too. The Foxglove bridge
+stays with viz.launch.py in a simulation, so leave foxglove:= alone unless
+nothing else holds port 8765.
 """
 
 import os

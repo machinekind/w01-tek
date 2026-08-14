@@ -57,7 +57,12 @@ Environment=CYCLONEDDS_URI=file:///etc/cyclonedds-rpi.xml
 # robot: a pad paired with the RPi drives with no PC in the loop and survives
 # the cable/ssh dropping. With no pad connected the teleop stays silent on
 # /cmd_vel (it publishes only after the first Joy message).
-ExecStart=/usr/bin/taskset -c 2,3 /bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/rpi/wojtek_ws/install/setup.bash && exec ros2 launch wojtek_bringup robot.launch.py gamepad:=true bag:=true bag_cpus:=0,1'
+# telemetry:=true adds /wojtek/sysinfo and /wojtek/policy_timing, so the bag
+# of a real run carries the state of the computer and the cost of each control
+# tick next to the control data. foxglove:=true opens the bridge on port 8765,
+# which is how the same run is watched live from a PC. Both stay on the
+# non-isolated cores (sysinfo_cpus and foxglove_cpus default to 0,1).
+ExecStart=/usr/bin/taskset -c 2,3 /bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/rpi/wojtek_ws/install/setup.bash && exec ros2 launch wojtek_bringup robot.launch.py gamepad:=true bag:=true bag_cpus:=0,1 telemetry:=true foxglove:=true'
 Restart=on-failure
 RestartSec=2
 

@@ -39,7 +39,7 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
-from wojtek_policy.policy_source import load_policy
+from wojtek_policy.policy_source import default_policy, load_policy
 
 
 def _launch_setup(context, with_rviz, hardware):
@@ -225,20 +225,11 @@ def _launch_setup(context, with_rviz, hardware):
     return nodes
 
 
-# Which policy every bringup -- robot and simulation -- comes up with. Pinned
-# to a revision on purpose: an unpinned repo id follows whatever main is, so
-# what walks today would silently be a different policy tomorrow. Override for
-# one run with policy:=<repo>@<sha> or a local artifact directory. The org
-# comes from HF_ORGANIZATION in the environment (see .env.example). The repo
-# is PRIVATE, but only the operator PC ever talks to Hugging Face: it fetches
-# the revision into the policy store (python3 -m wojtek_policy.policy_source
-# <ref>) and ./deploy.sh syncs that store to the RPi, which resolves from it.
-# Without HF_ORGANIZATION the default is empty and every launch needs an
-# explicit policy:=.
-_HF_ORGANIZATION = os.environ.get("HF_ORGANIZATION", "")
-DEFAULT_POLICY = (_HF_ORGANIZATION + "/wojtek-quiet-locomotion"
-                  "@553795b13001cc1f519a4abc0235f275095129f8"
-                  if _HF_ORGANIZATION else "")
+# Which policy every bringup -- robot and simulation -- comes up with. The pin
+# and the reasoning behind it live in policy_source.default_policy, which
+# deploy.sh resolves into the policy store before it syncs. Override for one
+# run with policy:=<repo>@<sha> or a local artifact directory.
+DEFAULT_POLICY = default_policy()
 
 
 def common_launch_description(

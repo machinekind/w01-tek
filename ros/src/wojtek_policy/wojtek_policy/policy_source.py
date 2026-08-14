@@ -19,12 +19,18 @@ The robot never talks to Hugging Face -- it has no internet, and
 huggingface_hub is not even installed on it. Downloading happens on the
 operator PC, which has the network and the token for the private repos:
 
-    python3 -m wojtek_policy.policy_source <ref>     # fills the store
-    ./deploy.sh                                      # rsyncs it to the robot
+    python3 -m wojtek_policy.policy_source --default  # the pin below
+    python3 -m wojtek_policy.policy_source <ref>      # any other reference
+    ./deploy.sh                                       # syncs it to the robot
 
 so on the robot every reference is answered from the store, offline. A ref
 that is not there yet fails with that same instruction instead of a network
 error. Only the two policy files are ever fetched, never the checkpoint.
+
+Nobody has to run this by hand for the normal flow: deploy.sh runs
+`--default` itself before syncing the store, so the policy the launch files
+come up with is in place. The bare-<ref> form is for a one-off policy that
+is not the default.
 
 Pin real-robot launches to a commit (`@<sha>`): the resolved revision is
 part of what ran on the robot, and a moving branch is not a record. A commit
@@ -80,6 +86,29 @@ def policy_store() -> Path:
         if parent.name == "src":
             return parent.parent / "policies"
     return Path.home() / ".wojtek" / "policies"
+
+
+# Which policy every bringup -- robot and simulation -- comes up with when no
+# policy:= is given. Pinned to a commit on purpose: an unpinned repo id follows
+# whatever main is, so what walks today would silently be a different policy
+# tomorrow; a commit is also the one reference the robot can answer from the
+# store with no network. It lives here rather than in the launch files because
+# host-side tooling (deploy.sh) has to resolve it too, and this module is
+# stdlib-only.
+_DEFAULT_REPO = ("wojtek-quiet-locomotion"
+                 "@553795b13001cc1f519a4abc0235f275095129f8")
+
+
+def default_policy() -> str:
+    """The pinned default reference, or "" when there is no organization.
+
+    The org comes from HF_ORGANIZATION in the environment (see .env.example),
+    because the keeper repos are private and this repository is public.
+    Without it there is no default and every launch needs an explicit
+    policy:=.
+    """
+    org = os.environ.get("HF_ORGANIZATION", "").strip()
+    return f"{org}/{_DEFAULT_REPO}" if org else ""
 
 
 def resolve_policy(ref: str) -> ResolvedPolicy:
@@ -283,11 +312,21 @@ def load_policy(ref: str, overrides=None) -> LoadedPolicy:
 
 def main(argv=None) -> int:
     args = argv if argv is not None else sys.argv[1:]
-    if len(args) != 1:
+    # One reference, or --default; nothing else is a usage this understands.
+    if len(args) != 1 or (args[0].startswith("-") and args[0] != "--default"):
         print(__doc__)
         return 2
-    resolved = resolve_policy(args[0])
-    print(f"resolved {args[0]} -> {resolved.source}")
+    ref = args[0]
+    if ref == "--default":
+        ref = default_policy()
+        if not ref:
+            print(
+                "no default policy: HF_ORGANIZATION is not set -- put it in "
+                ".env (see .env.example), or name a reference instead"
+            )
+            return 2
+    resolved = resolve_policy(ref)
+    print(f"resolved {ref} -> {resolved.source}")
     print(f"  store: {policy_store()}")
     print(f"  {resolved.npz}")
     print(f"  {resolved.meta}")

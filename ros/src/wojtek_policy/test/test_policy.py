@@ -27,6 +27,7 @@ from wojtek_policy.policy import (  # noqa: E402
 )
 from wojtek_policy import policy_source  # noqa: E402
 from wojtek_policy.policy_source import (  # noqa: E402
+    default_policy,
     load_meta,
     load_policy,
     pd_settings,
@@ -469,6 +470,42 @@ def test_policy_store_default_is_beside_the_workspace_src(monkeypatch):
     # ros/policies in a checkout, wojtek_ws/policies on the robot.
     monkeypatch.delenv("WOJTEK_POLICY_STORE", raising=False)
     assert policy_store() == PKG.parents[1] / "policies"
+
+
+# -- the default policy -------------------------------------------------------
+
+def test_default_policy_needs_an_organization(monkeypatch):
+    monkeypatch.delenv("HF_ORGANIZATION", raising=False)
+    assert default_policy() == ""
+    monkeypatch.setenv("HF_ORGANIZATION", "org")
+    assert default_policy() == "org/" + policy_source._DEFAULT_REPO
+
+
+def test_default_policy_is_pinned_to_a_commit():
+    # A branch here would defeat the whole point: the robot is offline and can
+    # only answer a reference whose commit is already in its store.
+    _, _, revision = policy_source._DEFAULT_REPO.partition("@")
+    assert policy_source._is_commit(revision)
+
+
+def test_default_cli_resolves_from_the_store(tmp_path, monkeypatch):
+    # What deploy.sh runs, on a machine that cannot download: the pinned
+    # default is already in the store, so it resolves and says so.
+    monkeypatch.setenv("HF_ORGANIZATION", "org")
+    monkeypatch.setenv("WOJTEK_POLICY_STORE", str(tmp_path))
+    repo, _, commit = default_policy().partition("@")
+    store_snapshot(tmp_path, repo, commit)
+
+    def no_network(*args, **kwargs):
+        raise AssertionError("network attempted")
+
+    monkeypatch.setattr(policy_source, "_fetch_into_store", no_network)
+    assert policy_source.main(["--default"]) == 0
+
+
+def test_default_cli_without_an_organization_fails(monkeypatch):
+    monkeypatch.delenv("HF_ORGANIZATION", raising=False)
+    assert policy_source.main(["--default"]) == 2
 
 
 # -- shared helpers -----------------------------------------------------------

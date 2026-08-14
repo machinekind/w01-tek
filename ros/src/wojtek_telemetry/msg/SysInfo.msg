@@ -23,6 +23,8 @@ bool throttled_now
 bool throttled_ever
 bool freq_capped_now
 bool freq_capped_ever
+bool soft_temp_limit_now
+bool soft_temp_limit_ever
 
 uint64 mem_used_bytes
 uint64 mem_total_bytes

@@ -30,9 +30,11 @@ from wojtek_telemetry.msg import SysInfo
 _UNDERVOLTAGE_NOW = 1 << 0
 _FREQ_CAPPED_NOW = 1 << 1
 _THROTTLED_NOW = 1 << 2
+_SOFT_TEMP_LIMIT_NOW = 1 << 3
 _UNDERVOLTAGE_EVER = 1 << 16
 _FREQ_CAPPED_EVER = 1 << 17
 _THROTTLED_EVER = 1 << 18
+_SOFT_TEMP_LIMIT_EVER = 1 << 19
 
 _THERMAL_ZONE = "/sys/class/thermal/thermal_zone0/temp"
 # The Pi firmware exposes the same word vcgencmd prints, as hex text.
@@ -76,8 +78,12 @@ def _sysfs_throttled():
 
 
 def _pick_throttle_reader():
-    """The first throttle source that answers on this host, or None."""
-    for read in (_vcgencmd_throttled, _sysfs_throttled):
+    """The first throttle source that answers on this host, or None.
+
+    Both sources carry the same word. sysfs comes first because reading a
+    file costs nothing, while vcgencmd is a process launch every tick.
+    """
+    for read in (_sysfs_throttled, _vcgencmd_throttled):
         if read() is not None:
             return read
     return None
@@ -99,7 +105,7 @@ class SysInfoNode(Node):
         self._iface = self.get_parameter("net_iface").value
 
         # Which throttle source works here, decided once. Asking again every
-        # tick would launch a process that fails, five times a second.
+        # tick would probe a missing file five times a second.
         self._read_throttled = _pick_throttle_reader()
         if self._read_throttled is None:
             self.get_logger().info(
@@ -143,6 +149,8 @@ class SysInfoNode(Node):
         msg.throttled_ever = bool(word & _THROTTLED_EVER)
         msg.freq_capped_now = bool(word & _FREQ_CAPPED_NOW)
         msg.freq_capped_ever = bool(word & _FREQ_CAPPED_EVER)
+        msg.soft_temp_limit_now = bool(word & _SOFT_TEMP_LIMIT_NOW)
+        msg.soft_temp_limit_ever = bool(word & _SOFT_TEMP_LIMIT_EVER)
 
         mem = psutil.virtual_memory()
         msg.mem_used_bytes = int(mem.used)
@@ -181,8 +189,8 @@ class SysInfoNode(Node):
         """Free space on the filesystem that holds disk_path.
 
         The bag directory does not exist until the first recording, so walk
-        up to a parent that does. That parent sits on the same filesystem,
-        which is the thing being measured.
+        up to a parent that does. The parent is on the same filesystem, so
+        the number is the same.
         """
         path = self._disk_path
         while path:

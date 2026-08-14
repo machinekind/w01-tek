@@ -18,7 +18,7 @@ parameters differ:
                                   max_torque)
               /wojtek/policy_timing (wojtek_telemetry/PolicyTiming; how long
                                   the policy step took and how far apart the
-                                  ticks actually landed)
+                                  ticks landed)
   services    /wojtek/enable (std_srvs/SetBool), /wojtek/reset (std_srvs/Trigger)
 
 The policy itself (wojtek_policy.policy.WojtekPolicy) works in the MuJoCo/training
@@ -119,12 +119,12 @@ class PolicyNode(Node):
         self.create_subscription(Twist, "cmd_vel", self._on_cmd, 10)
         self._pub = self.create_publisher(JointState, "wojtek/joint_targets", 10)
         # Per-tick timing, so a run can be watched live and read back from
-        # the bag afterwards. The publisher is made once here and the
-        # message is two floats, so the control tick barely pays for it.
+        # the bag afterwards.
         self._timing_pub = self.create_publisher(
             PolicyTiming, "wojtek/policy_timing", 10
         )
         self._last_tick_t = None
+        self._timing_failed = False
         self.create_service(SetBool, "wojtek/enable", self._srv_enable)
         self.create_service(Trigger, "wojtek/reset", self._srv_reset)
         self.create_timer(self.policy.ctrl_dt, self._tick)
@@ -236,8 +236,8 @@ class PolicyNode(Node):
 
     def _tick(self):
         # Taken at the top of every tick, including the ones that hold. That
-        # way the period says what the timer really did, even over a stretch
-        # where no targets went out.
+        # way the period says what the timer did, even over a stretch where
+        # no targets went out.
         tick_t = time.perf_counter()
         period_ms = (
             0.0 if self._last_tick_t is None
@@ -315,12 +315,21 @@ class PolicyNode(Node):
         self._pub.publish(msg)
 
         # Same stamp as the targets it describes, so the two line up in a
-        # plot and in the bag.
-        timing = PolicyTiming()
-        timing.header.stamp = msg.header.stamp
-        timing.inference_ms = inference_ms
-        timing.period_ms = period_ms
-        self._timing_pub.publish(timing)
+        # plot and in the bag. Telemetry must never stop the control loop,
+        # so a failed publish is logged once and then ignored.
+        try:
+            timing = PolicyTiming()
+            timing.header.stamp = msg.header.stamp
+            timing.inference_ms = inference_ms
+            timing.period_ms = period_ms
+            self._timing_pub.publish(timing)
+        except Exception as err:
+            if not self._timing_failed:
+                self._timing_failed = True
+                self.get_logger().error(
+                    f"cannot publish policy timing: {err}. The control loop "
+                    f"keeps running and this is not reported again."
+                )
 
 
 def main():

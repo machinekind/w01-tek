@@ -43,6 +43,14 @@
         {
           "value": "/wojtek/sysinfo.freq_capped_ever",
           "timestampMethod": "receiveTime"
+        },
+        {
+          "value": "/wojtek/sysinfo.soft_temp_limit_now",
+          "timestampMethod": "receiveTime"
+        },
+        {
+          "value": "/wojtek/sysinfo.soft_temp_limit_ever",
+          "timestampMethod": "receiveTime"
         }
       ],
       "isSynced": true

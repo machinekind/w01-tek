@@ -1,0 +1,86 @@
+# @package _global_
+# terrain_blind_v5_1 -- terrain_blind_v5 plus
+#   task.env.obs_noise.gyro_bias=0.05 rad/s, the per-episode zero-rate
+#   offset on the actor's gyro that the white gyro noise cannot represent
+#   (a real gyro's offset is constant on the episode timescale).
+# Launch notes:
+#   ./training/run.sh build-terrain --arena train --flat-row   # generated,
+#     gitignored; the --flat-row build and terrain.flat_row must agree, and
+#     train.sh needs FLAT_ROW=1 for its in-job build.
+#   XLA_PYTHON_CLIENT_PREALLOC=false ./training/run.sh train \
+#     +experiment=terrain_blind_v5_1
+# PREALLOC=false is mandatory on terrain. train.py pins
+# ppo.num_resets_per_eval=0 whenever terrain is on.
+defaults:
+  - flat_tff_rnd_v1
+
+task:
+  env:
+    action_filter: 0.5
+    obs_noise:
+      gyro_bias: 0.05
+    symmetry:
+      enable: true
+      mirror_prob: 0.5
+    no_progress:
+      enable: true
+      grace_sec: 2.0
+      ema_sec: 1.0
+      risk_below: 0.5
+      p_max: 0.02
+    obs:
+      # The flat tff actor plus the IMU; still clock-free on both heads.
+      # A new frozen layout -- incompatible with every earlier family.
+      include:
+        - gyro
+        - gravity
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+      privileged:
+        - gyro
+        - gravity
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+        - linvel
+        - foot_contact
+        - height_scan_clean
+    height_scan:
+      enable: true
+    command:
+      wz: [-1.5, 1.5]
+      arc_prob: 0.2
+      arc_vx: [0.3, 0.8]
+      pure_slow_prob: 0.1
+      slow_vx: [0.15, 0.35]
+      pure_back_prob: 0.2
+      back_vx: [-0.8, -0.2]
+    reward:
+      orientation_tol_deg: 20.0
+      terrain_gate:
+        enable: true
+        floor: 0.15
+        rough_ref: 0.05
+        landing_soften: 0.5
+    terrain:
+      enable: true
+      arena: train
+      flat_row: true
+    fall:
+      on_base_contact: true
+    sim:
+      # The v4_1 plant's measured warp budgets (29 heightfield-colliding
+      # geoms x 4 contacts; worst measured nefc 228 with margin).
+      naconmax_per_env: 116
+      njmax: 640
+
+dr:
+  foot_friction: { enable: true, range: [0.4, 1.35] }
+
+ppo:
+  log_training_metrics: true
+
+run_name: wojtek_terrain_blind_v5_1

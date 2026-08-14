@@ -16,10 +16,15 @@ empty. See [`../wojtek-console-panel`](../wojtek-console-panel/README.md).
 The extension's panel is addressed by name in the layout, so if the tile still
 says the panel is unknown, delete it and add **Wojtek console** by hand.
 
+The console tile points at `http://localhost:8080`, which is right for a
+simulation. Watching the real robot from a PC, open the tile's settings and
+change the URL to `http://<robot>:8080`.
+
 The robot runs its own bridge on port 8765 while the stack is up, so connect
 Foxglove to the robot directly. In a simulation session the bridge runs in the
 dev container instead, on `ws://localhost:8765`.
 
 The system panels read `/wojtek/sysinfo` and `/wojtek/policy_timing`, both
-from `wojtek_telemetry`. Every run records all topics, so the same layout
-works on a recorded bag.
+from `wojtek_telemetry`. A recording covers all topics, so the same layout
+works on a bag. The systemd service and `real.launch.py` record by default.
+A manual `robot.launch.py` run needs `bag:=true`.

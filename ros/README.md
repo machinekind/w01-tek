@@ -224,10 +224,12 @@ Two topics say how the run is going. `/wojtek/sysinfo` is the state of the
 computer: CPU per core, memory, SoC temperature, the Raspberry Pi throttle
 flags, free space where the bag is written, and wifi traffic.
 `/wojtek/policy_timing` is per control tick: how long the policy step took and
-how far apart the ticks actually landed. Both are recorded with everything
-else, so a stutter can be matched against a hot or throttled Pi afterwards.
-Import [`foxglove/layouts/robot-dashboard.json`](foxglove/layouts/README.md)
-to see them plotted.
+how far apart the ticks landed. A run that records lands both in the bag with
+everything else, so a stutter can be matched against a hot or throttled Pi
+afterwards. The RPi service and `real.launch.py` record by default; a manual
+`robot.launch.py` run needs `bag:=true`. Import
+[`foxglove/layouts/robot-dashboard.json`](foxglove/layouts/README.md) to see
+them plotted.
 
 ## Layout
 

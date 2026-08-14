@@ -50,9 +50,9 @@ def _cpu_prefix(context, arg):
     """A taskset prefix from a comma list of cores, or nothing when empty.
 
     The RPi service starts this whole tree under `taskset -c 2,3` and every
-    child inherits that mask. Anything that is not the control loop has to be
-    moved back to the other cores by hand, which is what this does. The bag
-    recorder and the perception pipeline get the same treatment.
+    child inherits that mask. This moves anything that is not the control
+    loop back to the other cores. The bag recorder and the perception
+    pipeline get the same treatment.
     """
     cpus = LaunchConfiguration(arg).perform(context)
     return [f"taskset -c {cpus}"] if cpus else None
@@ -223,8 +223,8 @@ def _launch_setup(context, with_rviz, hardware):
         # How the computer itself is doing: CPU, memory, SoC temperature,
         # throttling, free space and wifi traffic on /wojtek/sysinfo. Always
         # on, because the point is to have it in every bag next to the
-        # control data. It reports free space where the bag goes, so it
-        # takes bag_dir.
+        # control data. It reports free space on the disk the bag goes to,
+        # so it takes bag_dir.
         Node(
             package="wojtek_telemetry",
             executable="sysinfo_node",
@@ -235,9 +235,8 @@ def _launch_setup(context, with_rviz, hardware):
     ]
 
     # A websocket bridge on the robot itself, so watching a run in Foxglove
-    # needs nothing running on the PC. The bridge is a separate apt package;
-    # when it is missing, say so and bring the rest up anyway rather than
-    # take the control stack down with the launch.
+    # needs nothing running on the PC. The bridge is a separate apt package.
+    # When it is missing, log a line and bring the rest up anyway.
     if LaunchConfiguration("foxglove").perform(context).lower() in ("true", "1"):
         try:
             get_package_share_directory("foxglove_bridge")

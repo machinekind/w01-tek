@@ -25,7 +25,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Empty
 
-from wojtek_agent_msgs.msg import RoutedIntent, Sentence
+from wojtek_agent_msgs.msg import RoutedIntent, Sentence, Transcript
 
 from .llm_client import ChatClient
 from .sentences import SentenceAssembler, speakable
@@ -72,6 +72,10 @@ class BielikNode(Node):
         self.create_subscription(
             Empty, "/wojtek/audio/speech_started", self.on_barge_in, 10
         )
+        # Last heard question: context for translations, so the Polish
+        # rendering actually answers what was asked.
+        self._last_heard = ""
+        self.create_subscription(Transcript, "/wojtek/asr/final", self.on_heard, 10)
 
         self.history: list[dict] = []
         self._acks = itertools.cycle(NAV_ACKS)
@@ -91,6 +95,9 @@ class BielikNode(Node):
             self._speak_now(msg.utterance_id, next(self._cancel_acks))
         # visual: the VLM agent answers; its sentences arrive on /wojtek/say_en.
         # system: v1 ignores (volume/reset live elsewhere).
+
+    def on_heard(self, msg: Transcript):
+        self._last_heard = msg.text
 
     def on_english(self, msg: Sentence):
         self._q.put(("translate", msg.utterance_id, msg.text))
@@ -129,9 +136,12 @@ class BielikNode(Node):
             self.history.append({"role": "assistant", "content": reply})
 
     def _generate_translation(self, uid: str, english: str):
+        user = english
+        if self._last_heard:
+            user = f"Pytanie użytkownika: {self._last_heard}\n\nTekst: {english}"
         messages = [
             {"role": "system", "content": TRANSLATE_PROMPT},
-            {"role": "user", "content": english},
+            {"role": "user", "content": user},
         ]
         self._stream_out(uid, messages, source="qwen", temperature=0.3)
 

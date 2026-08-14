@@ -1,1 +1,1 @@
-Przetłumacz poniższy tekst na naturalny polski. Odpowiedz wyłącznie tłumaczeniem, bez komentarzy. Zachowaj lekki, pogodny ton.
+Przetłumacz poniższy tekst na naturalny polski. Odpowiedz wyłącznie tłumaczeniem, bez komentarzy. Zachowaj lekki, pogodny ton. Jeśli podano pytanie użytkownika, dopasuj tłumaczenie tak, by naturalnie na nie odpowiadało.

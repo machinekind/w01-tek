@@ -145,6 +145,9 @@ class RoomSim:
         # online map: the robot's history didn't un-happen because it fell.
         self.sim_time = 0.0
         self.pose_history = PoseHistory()
+        # Planner footprint cylinders on the chase cam: debug aid, off by
+        # default (a UI toggle turns them on).
+        self.show_overlay = False
         self.reset()
         logger.success("room sim ready")
 
@@ -353,7 +356,8 @@ class RoomSim:
         from PIL import Image
 
         self.chase_renderer.update_scene(self.data, **scene_kw)
-        self._overlay_footprint(self.chase_renderer)
+        if self.show_overlay:
+            self._overlay_footprint(self.chase_renderer)
         frame = self.chase_renderer.render()
         buf = io.BytesIO()
         Image.fromarray(frame).save(buf, format="JPEG", quality=82)
@@ -676,7 +680,25 @@ def get_agent():
         # user text each turn, so `navigate` can forward the instruction as
         # spoken instead of whatever noun phrase the model distilled.
         turn_context: dict = {}
-        tools = build_tools(sim, get_goals(), sim.pose_history, turn_context=turn_context)
+        from wojtek_rl.agent.search import make_score_view
+
+        score_view = make_score_view(get_agent_llm())
+
+        async def visibility_check(target: str):
+            """Is `target` in the CURRENT camera view?  Drives the
+            navigate-vs-search decision: walking toward something not in
+            view is a guess, so navigate redirects to search."""
+            try:
+                frame = sim.ego_jpeg(hud=False)
+            except TypeError:
+                frame = sim.ego_jpeg()
+            vs = await score_view(target, frame)
+            return vs.visible
+
+        tools = build_tools(
+            sim, get_goals(), sim.pose_history, turn_context=turn_context,
+            visibility_check=visibility_check,
+        )
         _agent = WojtekAgent(
             get_agent_llm(), tools, trace=get_trace(), turn_context=turn_context,
             lang_mode=_lang_mode, reply_language=_asr_language,
@@ -1157,6 +1179,10 @@ async def ws(sock: WebSocket):
                         await acks.put({"type": "voice_state", "on": on})
                     elif t == "shush":  # user hit stop while the dog talks
                         speaker.cancel()
+                    elif t == "overlay":
+                        get_sim().show_overlay = bool(msg.get("on"))
+                        await acks.put({"type": "overlay_state",
+                                        "on": get_sim().show_overlay})
                 except (ValueError, KeyError, TypeError) as e:
                     # Malformed client message must not kill the reader.
                     logger.warning(f"bad ws message {raw!r}: {e}")

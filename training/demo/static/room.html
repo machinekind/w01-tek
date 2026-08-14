@@ -221,6 +221,7 @@
           <a id="tracelink" class="dbg-inline" href="/api/trace?limit=500" target="_blank"
              title="full session trace (also on disk as JSONL)">trace ↗</a>
           <button id="chatdbg" title="show raw model I/O, tool calls, state machine">debug</button>
+          <button id="overlaybtn" title="show the planner's collision cylinders on the chase cam">cylinders</button>
           <button id="chatreset" title="forget the conversation">forget</button>
         </span>
       </h2>
@@ -547,6 +548,13 @@ $("chatdbg").onclick = () => {
   const on = document.body.classList.toggle("showdbg");
   $("chatdbg").classList.toggle("on", on);
   if (on) $("goaldbg").open = true;
+};
+// Planner footprint cylinders: debug aid, OFF by default (server-side too).
+let overlayOn = false;
+$("overlaybtn").onclick = () => {
+  overlayOn = !overlayOn;
+  $("overlaybtn").classList.toggle("on", overlayOn);
+  ws.send(JSON.stringify({type: "overlay", on: overlayOn}));
 };
 
 // ---- goal submission -------------------------------------------------------

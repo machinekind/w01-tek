@@ -571,3 +571,79 @@ def test_stop_guard_leaves_chat_alone():
     )
     out = ask(agent, "Jak się masz?")
     assert record == [] and out["steps"] == []
+
+
+# ---- visibility-gated navigate (user call, 2026-08-14) ----------------------
+# Walking toward an object that is not in the current view is a guess:
+# navigate redirects to search when the visibility check says "not visible".
+
+def nav_tools_with_visibility(user_text, visible):
+    from wojtek_rl.agent.tools import build_tools
+
+    goals = RecordingGoals()
+    checked = []
+
+    async def check(target):
+        checked.append(target)
+        return visible
+
+    tools = build_tools(NavSim(), goals, None,
+                        turn_context={"user_text": user_text},
+                        visibility_check=check)
+    return tools, goals, checked
+
+
+def test_navigate_redirects_to_search_when_target_unseen():
+    tools, goals, checked = nav_tools_with_visibility("Idź do lodówki.", visible=False)
+    out = asyncio.run(tools["navigate"].fn({"instruction": "Idź do lodówki."}))
+    assert checked == ["Idź do lodówki."]
+    assert goals.set == [("search", "lodówki")]
+    assert "SEARCH" in out.text
+
+
+def test_navigate_proceeds_when_target_visible():
+    tools, goals, _ = nav_tools_with_visibility("Idź do okna.", visible=True)
+    asyncio.run(tools["navigate"].fn({"instruction": "Idź do okna."}))
+    assert goals.set == [("navigate", "Idź do okna.")]
+
+
+def test_navigate_proceeds_when_check_unavailable():
+    tools, goals, _ = nav_tools_with_visibility("go to the bed", visible=None)
+    asyncio.run(tools["navigate"].fn({"instruction": "go to the bed"}))
+    assert goals.set == [("navigate", "go to the bed")]
+
+
+def test_navigate_survives_broken_visibility_check():
+    from wojtek_rl.agent.tools import build_tools
+
+    goals = RecordingGoals()
+
+    async def boom(target):
+        raise RuntimeError("observer died")
+
+    tools = build_tools(NavSim(), goals, None,
+                        turn_context={"user_text": "go to the bed"},
+                        visibility_check=boom)
+    asyncio.run(tools["navigate"].fn({"instruction": "go to the bed"}))
+    assert goals.set == [("navigate", "go to the bed")]
+
+
+def test_nav_target_phrase_strips_imperative():
+    from wojtek_rl.agent.tools import nav_target_phrase
+
+    assert nav_target_phrase("Idź do lodówki.") == "lodówki"
+    assert nav_target_phrase("Zmiana planów! Idź teraz do kominka.") == "kominka"
+    assert nav_target_phrase("go to the window") == "the window"
+    assert nav_target_phrase("kominek") == "kominek"
+
+
+def test_translate_prompt_carries_the_question():
+    from wojtek_rl.agent.chat import WojtekAgent
+
+    llm = FakeLLM(['{"thought": "", "say": "I see a big window."}', "Widzę duże okno."])
+    agent = WojtekAgent(llm, make_tools([]), lang_mode="translate")
+    out = ask(agent, "co widzisz przed sobą?", voice=True)
+    assert out["say"] == "Widzę duże okno."
+    translate_call = llm.calls[-1][-1]["content"][0]["text"]
+    assert "co widzisz przed sobą?" in translate_call
+    assert "I see a big window." in translate_call

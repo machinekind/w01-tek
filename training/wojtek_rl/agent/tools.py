@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import io
+import re
 from dataclasses import dataclass, field
 
 from wojtek_rl.agent.spatial import PoseHistory, frontier_clusters, map_summary
@@ -38,6 +39,20 @@ def _map_jpeg_b64(sim) -> str:
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=85)
     return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+_NAV_PREFIX_RE = re.compile(
+    r"^(zmiana planów[!.,]?\s*)?(idź|pójdź|podejdź|chodź|jedź|biegnij|ruszaj|"
+    r"zbliż się|go|walk|head)\s*(teraz\s+)?(do|w stronę|w kierunku|"
+    r"przy|to|towards?)?\s*",
+    re.IGNORECASE,
+)
+
+
+def nav_target_phrase(instruction: str) -> str:
+    """'Idź do lodówki.' -> 'lodówki': the object phrase a search can use."""
+    target = _NAV_PREFIX_RE.sub("", instruction).strip(" .!?")
+    return target or instruction
 
 
 def keep_full_instruction(instruction: str, user_text: str) -> bool:
@@ -73,10 +88,17 @@ def _switch_note(goals, new_kind: str, new_goal: str) -> str:
 
 
 def build_tools(
-    sim, goals, pose_history: PoseHistory, turn_context: dict | None = None
+    sim, goals, pose_history: PoseHistory, turn_context: dict | None = None,
+    visibility_check=None,
 ) -> dict[str, Tool]:
     """turn_context carries this turn's raw user text (set by WojtekAgent), so
-    navigate/search can fall back to the instruction as spoken."""
+    navigate/search can fall back to the instruction as spoken.
+
+    `visibility_check` is an optional async callable(target_text) -> bool|None
+    scoring the CURRENT camera view.  When it returns False, navigate
+    redirects to search: walking toward an object that is not in view is a
+    guess, searching is the honest behaviour (user call, 2026-08-14).  True
+    navigates; None (unavailable/error) keeps the old behaviour."""
     turn_context = turn_context if turn_context is not None else {}
     def _camera_frame() -> str:
         """Bare camera view. Deliberately hud-free: describing an inset the
@@ -127,6 +149,22 @@ def build_tools(
         spoken = str(turn_context.get("user_text", "") or "").strip()
         if not instruction or keep_full_instruction(instruction, spoken):
             instruction = spoken or instruction
+        if visibility_check is not None:
+            try:
+                visible = await visibility_check(instruction)
+            except Exception:
+                visible = None  # a broken check must not block navigation
+            if visible is False:
+                target = nav_target_phrase(instruction)
+                ack = goals.set_goal(target, kind="search")
+                if not ack.get("ok"):
+                    return ToolResult(text=f"search NOT started: {ack.get('error')}")
+                return ToolResult(
+                    text=_switch_note(goals, "search", target)
+                    + f"{target!r} is NOT in the current view, so a SEARCH was "
+                    "started instead of walking blind; tell the user you are "
+                    "looking for it (runs in the background)"
+                )
         ack = goals.set_goal(instruction, kind="navigate")
         if not ack.get("ok"):
             return ToolResult(text=f"navigation NOT started: {ack.get('error')}")

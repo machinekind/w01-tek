@@ -166,7 +166,10 @@ class WojtekAgent:
         saying something is better than saying nothing.
         """
         language = LANGUAGE_NAMES.get(self.reply_language, self.reply_language)
-        prompt = TRANSLATE_PROMPT.format(language=language, text=text)
+        prompt = TRANSLATE_PROMPT.format(
+            language=language, text=text,
+            question=str(self.turn_context.get("user_text", "") or "-"),
+        )
         try:
             out = await self.llm.chat([user_message(prompt)], max_tokens=200)
         except Exception as e:

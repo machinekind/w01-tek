@@ -530,3 +530,44 @@ def test_nav_guard_skips_when_model_already_navigated():
     )
     out = ask(agent, "Idź do drzwi.")
     assert len(record) == 1  # exactly one navigate, no double-fire
+
+
+def make_agent_with_stop(replies, record=None):
+    record = record if record is not None else []
+
+    async def stop(args):
+        record.append(("stop", args))
+        return ToolResult(text="stopped: goal cancelled, robot standing")
+
+    tools = make_tools(record)
+    tools["stop"] = Tool("stop", "stop {}", "halt", stop)
+    llm = FakeLLM(replies)
+    return WojtekAgent(llm, tools, max_tool_steps=3, keep_exchanges=2), llm, record
+
+
+def test_stop_guard_forces_stop_on_narrated_stop():
+    # Live 2026-08-14: "zatrzymaj się" got a fallback narration and the goal
+    # kept walking.  The guard must call stop regardless of what was said.
+    agent, llm, record = make_agent_with_stop(
+        ["Zatrzymałem się przy kominku, gotowy na coś nowego."]
+    )
+    out = ask(agent, "Tak, zatrzymaj się.")
+    assert record == [("stop", {})]
+    assert out["say"] == "Już się zatrzymuję!"
+
+
+def test_stop_guard_skips_when_model_already_stopped():
+    agent, llm, record = make_agent_with_stop(
+        ['{"thought": "halt", "tool": "stop", "args": {}}',
+         '{"thought": "done", "say": "Stoję!"}']
+    )
+    ask(agent, "Stop!")
+    assert len(record) == 1
+
+
+def test_stop_guard_leaves_chat_alone():
+    agent, llm, record = make_agent_with_stop(
+        ['{"thought": "chat", "say": "Hau, wszystko gra!"}']
+    )
+    out = ask(agent, "Jak się masz?")
+    assert record == [] and out["steps"] == []

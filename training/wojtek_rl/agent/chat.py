@@ -30,11 +30,18 @@ KEEP_EXCHANGES = 3
 
 # Movement imperatives (PL + EN) that must end in a navigate call.  Search
 # verbs (znajdź/poszukaj) are deliberately absent -- they belong to `search`
-# and the model calls that one reliably.
+# and the model calls that one reliably.  STOP_HINT_RE is the same guard for
+# stop: a stop heard during a live goal that only produced words left the
+# robot walking (live 2026-08-14).
 NAV_HINT_RE = re.compile(
     r"\b(idź|pójdź|podejdź|chodź|zaprowadź|obejdź|okrąż|omiń|skręć|zawróć|"
     r"cofnij|wróć|biegnij|ruszaj|jedź|stań (przy|obok|koło)|zbliż się|"
     r"oddal się|go to|walk (to|around)|come (here|back)|head to)\b",
+    re.IGNORECASE,
+)
+STOP_HINT_RE = re.compile(
+    r"\b(stop|stój|przestań|zatrzymaj|dosyć|wystarczy|nie idź|zostań|"
+    r"stand still|halt)\b",
     re.IGNORECASE,
 )
 
@@ -290,6 +297,16 @@ class WojtekAgent:
         # contract collapse the model narrates ("Wchodzi w kierunku...")
         # instead of calling navigate.  The instruction goes to the navigator
         # VERBATIM, same rule as tools.keep_full_instruction.
+        if not steps and "stop" in self.tools and STOP_HINT_RE.search(text):
+            try:
+                result = await self.tools["stop"].fn({})
+                steps.append({"tool": "stop", "args": {}, "result": result.text})
+                llm_calls.append({"kind": "stop_guard"})
+                self._trace("chat.stop_guard", result=result.text)
+                if said_fallback:
+                    say = "Już się zatrzymuję!"
+            except Exception as e:
+                logger.warning(f"stop guard failed: {_safe_err(e)}")
         if not steps and "navigate" in self.tools and NAV_HINT_RE.search(text):
             try:
                 result = await self.tools["navigate"].fn({"instruction": text})

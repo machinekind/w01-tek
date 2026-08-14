@@ -225,12 +225,10 @@ def _launch_setup(context, with_rviz, hardware):
     return nodes
 
 
-# The policy every bringup, robot and simulation, comes up with. The pin and
-# its reasoning live in policy_source.default_policy, and deploy.sh resolves
-# it into the policy store before syncing. deploy.sh --policy writes a
-# policy_override file beside that store, and the file wins on the machine
-# that has it. Override one run with policy:=<repo>@<sha> or a local
-# artifact directory.
+# The policy every bringup, robot and simulation, comes up with.
+# active_policy prefers the override file that deploy.sh --policy leaves on
+# the robot and falls back to the pinned default. For one run, pass
+# policy:=<repo>@<sha> or a local artifact directory.
 DEFAULT_POLICY = active_policy()
 
 
@@ -258,10 +256,9 @@ def common_launch_description(
         # Which policy runs: a Hugging Face repo id (org/name[@revision]) or
         # a local directory with policy.npz + policy_meta.json. Pin a commit
         # for a durable real-robot run: policy:=<repo>@<sha>. A Hugging Face
-        # reference is answered from the policy store, and deploy.sh puts
-        # the default there. For any other reference, fetch once on the
-        # operator PC (python3 -m wojtek_policy.policy_source <ref>) and
-        # deploy again. The robot needs no network.
+        # reference is answered from the policy store. deploy.sh keeps the
+        # default there, and deploy.sh --policy <ref> ships and activates
+        # any other reference. The robot needs no network.
         DeclareLaunchArgument("policy", default_value=policy_default),
         # Explicit overrides of the policy contract's servo settings (empty =
         # from the contract). E.g. max_torque:=2 for cautious first tests.

@@ -49,16 +49,12 @@ PROVISION=0
 ENABLE_ROBOT=0
 POLICY=""
 
-# --policy takes a value, so this walks the arguments one at a time and
-# shifts the extra one itself.
 while [ $# -gt 0 ]; do case "$1" in
     --provision)  PROVISION=1 ;;
     --no-restart) RESTART=0 ;;
     # Passed through to install.sh: turn ON boot autostart. Only meaningful
     # together with --provision.
     --enable-robot) ENABLE_ROBOT=1 ;;
-    # One-off policy for the robot, as a Hugging Face reference or a local
-    # directory. See the header.
     --policy)
         if [ $# -lt 2 ]; then
             echo "--policy needs a reference (org/name[@revision])" >&2
@@ -161,10 +157,10 @@ else
 fi
 
 # The override file names the policy every bringup on the robot comes up
-# with, and it sits beside the store. This is declarative exactly like
-# --enable-robot. The flag alone decides, so a plain ./deploy.sh clears the
-# override and the robot is back on the pin. It is written before the build
-# below, because the service restart there is what reads it.
+# with, and it sits beside the store. This is declarative, like
+# --enable-robot. The flag alone decides, and a plain ./deploy.sh puts the
+# robot back on the pin. The file is written before the build below, whose
+# service restart reads it.
 if [ -n "${POLICY}" ]; then
     echo ">> policy override: ${POLICY}"
     printf '%s\n' "${POLICY}" | ssh "${RPI_HOST}" "cat > '${REMOTE_WS}/policy_override'"

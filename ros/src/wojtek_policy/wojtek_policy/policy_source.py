@@ -33,11 +33,11 @@ and leaves the robot running it.
 
 Pin real-robot launches to a commit (`@<sha>`). The resolved revision is
 part of what ran on the robot, and a branch does not record it. A stored
-commit also resolves with no network, because a commit never moves; the
+commit also resolves with no network, because a commit never moves. The
 resolver re-fetches a branch whenever Hugging Face is reachable.
 
-No ROS imports here; huggingface_hub is imported only when something has to
-be downloaded, so store and local-directory workflows need nothing extra
+No ROS imports here. huggingface_hub is imported only when a download
+happens, so store and local-directory workflows need nothing extra
 installed.
 """
 
@@ -87,8 +87,8 @@ def policy_store() -> Path:
     return Path.home() / ".wojtek" / "policies"
 
 
-# The policy every bringup, robot and simulation, comes up with when no
-# policy:= is given. The pin is a commit on purpose. An unpinned repo id
+# The pinned default policy. A bringup runs it when no policy:= is given and
+# no override file is present. The pin is a commit on purpose. An unpinned repo id
 # follows main, so tomorrow's launch could silently run a different policy,
 # and only a pinned commit resolves from the store with no network. The pin
 # lives in this module rather than in the launch files because deploy.sh has
@@ -114,7 +114,7 @@ def policy_override_file() -> Path:
     """The file naming a one-off policy for this machine, if it has one.
 
     It sits beside the policy store, so ~/wojtek_ws/policy_override on the
-    robot. One reference on one line is all it holds.
+    robot. It holds one reference on one line.
     """
     return policy_store().parent / "policy_override"
 
@@ -122,10 +122,10 @@ def policy_override_file() -> Path:
 def active_policy() -> str:
     """The reference a bringup comes up with when no policy:= is given.
 
-    That is the override file's reference when the file is there and says
-    something, and the pin otherwise. The file is deployment state on the
-    robot. `./deploy.sh --policy <ref>` writes it and a plain `./deploy.sh`
-    removes it. The PC never has one, so launches from here run the pin.
+    The override file wins when it exists and is non-empty. Otherwise the
+    pin answers. The file is deployment state on the robot, written by
+    `./deploy.sh --policy <ref>` and removed by a plain `./deploy.sh`. The
+    PC never has one, so PC launches run the pin.
     """
     path = policy_override_file()
     if path.is_file():
@@ -215,7 +215,7 @@ def _fetch_into_store(store: Path, repo_id: str, revision: str) -> ResolvedPolic
     for fname in FILES:
         # The download cache hands back symlinks into a blob directory. The
         # store gets rsynced to the robot and read by hand, so it must hold
-        # real files. copyfile follows the symlink.
+        # real files.
         shutil.copyfile(paths[fname], snapshot / fname)
     if revision != commit:
         # Remember where the branch/tag pointed, so an offline machine can
@@ -338,7 +338,6 @@ def load_policy(ref: str, overrides=None) -> LoadedPolicy:
 
 def main(argv=None) -> int:
     args = argv if argv is not None else sys.argv[1:]
-    # The CLI takes exactly one argument, a reference or --default.
     if len(args) != 1 or (args[0].startswith("-") and args[0] != "--default"):
         print(__doc__)
         return 2

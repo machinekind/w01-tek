@@ -467,8 +467,8 @@ def test_fetch_materializes_real_files_and_records_the_branch(
 
 
 def test_policy_store_default_is_beside_the_workspace_src(monkeypatch):
-    # No env var: the store sits next to the src/ this file was found in --
-    # ros/policies in a checkout, wojtek_ws/policies on the robot.
+    # Without the env var the store sits beside the src/ tree this file is
+    # in, so ros/policies in a checkout and wojtek_ws/policies on the robot.
     monkeypatch.delenv("WOJTEK_POLICY_STORE", raising=False)
     assert policy_store() == PKG.parents[1] / "policies"
 

@@ -223,8 +223,8 @@ def _launch_setup(context, with_rviz, hardware):
         # How the computer itself is doing: CPU, memory, SoC temperature,
         # throttling, free space and wifi traffic on /wojtek/sysinfo. Always
         # on, because the point is to have it in every bag next to the
-        # control data. It measures free space where the bag actually goes,
-        # so it takes bag_dir rather than its own default.
+        # control data. It reports free space where the bag goes, so it
+        # takes bag_dir.
         Node(
             package="wojtek_telemetry",
             executable="sysinfo_node",
@@ -348,16 +348,15 @@ def common_launch_description(
         # empty = inherit. The RPi service pins it to 0,1 to keep the
         # recorder's disk I/O off the control loop's isolated RT cores.
         DeclareLaunchArgument("bag_cpus", default_value=""),
-        # Cores for the system-info node. It samples a handful of counters a
-        # few times a second, but it must still stay off the isolated RT
-        # cores, so unlike bag_cpus this defaults to 0,1 rather than to
-        # inheriting the tree's mask. Empty = inherit.
+        # Cores for the system-info node. It reads a handful of counters a
+        # few times a second. That is small, but it still has no business on
+        # the isolated RT cores, so this one defaults to 0,1. Empty = inherit.
         DeclareLaunchArgument("sysinfo_cpus", default_value="0,1"),
         # foxglove_bridge on port 8765, so the native Foxglove app connects
-        # to the robot directly. On by default on the robot: that is the
-        # live view of a normal run. Off for a simulation, where the session
-        # already starts a bridge from viz.launch.py and two of them would
-        # fight over the port.
+        # to the robot directly. On by default on the robot, because that is
+        # the live view of a normal run. Off for a simulation. A simulation
+        # session already starts a bridge from viz.launch.py, and two of them
+        # would fight over the port.
         DeclareLaunchArgument(
             "foxglove", default_value="true" if hardware == "real" else "false",
         ),

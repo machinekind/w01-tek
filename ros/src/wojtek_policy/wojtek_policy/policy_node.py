@@ -119,8 +119,8 @@ class PolicyNode(Node):
         self.create_subscription(Twist, "cmd_vel", self._on_cmd, 10)
         self._pub = self.create_publisher(JointState, "wojtek/joint_targets", 10)
         # Per-tick timing, so a run can be watched live and read back from
-        # the bag afterwards. Two floats and one publisher made here, so the
-        # control tick pays almost nothing for it.
+        # the bag afterwards. The publisher is made once here and the
+        # message is two floats, so the control tick barely pays for it.
         self._timing_pub = self.create_publisher(
             PolicyTiming, "wojtek/policy_timing", 10
         )
@@ -235,9 +235,9 @@ class PolicyNode(Node):
         return (self.get_clock().now() - stamp).nanoseconds < timeout * 1e9
 
     def _tick(self):
-        # Taken at the top of every tick, including the ones that hold, so
-        # the period is what the timer really did rather than what the busy
-        # path did.
+        # Taken at the top of every tick, including the ones that hold. That
+        # way the period says what the timer really did, even over a stretch
+        # where no targets went out.
         tick_t = time.perf_counter()
         period_ms = (
             0.0 if self._last_tick_t is None

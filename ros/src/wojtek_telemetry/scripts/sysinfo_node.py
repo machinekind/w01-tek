@@ -10,9 +10,9 @@ stamps the message once, so the fields can be compared with each other.
 Every run records all topics, so the same numbers are in the bag afterwards.
 
 The throttle status comes from `vcgencmd get_throttled`, with the sysfs copy
-of the same word as a fallback. A host with neither of those, such as a Mac
-running the docker simulation, leaves the Pi fields at zero and gets one log
-line saying so at startup.
+of the same word as a fallback. A Mac running the docker simulation has
+neither. There the Pi fields stay at zero, and the node says so once at
+startup.
 """
 
 import os
@@ -98,8 +98,8 @@ class SysInfoNode(Node):
         self._disk_path = self.get_parameter("disk_path").value
         self._iface = self.get_parameter("net_iface").value
 
-        # Which throttle source works here, decided once so a missing
-        # vcgencmd does not cost a failed process launch every tick.
+        # Which throttle source works here, decided once. Asking again every
+        # tick would launch a process that fails, five times a second.
         self._read_throttled = _pick_throttle_reader()
         if self._read_throttled is None:
             self.get_logger().info(
@@ -157,8 +157,8 @@ class SysInfoNode(Node):
         try:
             freq = psutil.cpu_freq()
         except Exception:
-            # psutil raises rather than returns on hosts that report no
-            # frequency at all, macOS among them.
+            # On a host that reports no frequency at all psutil raises here
+            # instead of answering. macOS is one of those.
             freq = None
         return float(freq.current) if freq else 0.0
 
@@ -200,7 +200,8 @@ class SysInfoNode(Node):
 
         A missing interface and the very first tick both report no traffic.
         The counters restart from zero when the interface goes down and
-        comes back, which would otherwise show up as a negative rate.
+        comes back. That would read as a negative rate, so the result is
+        clamped.
         """
         counters = psutil.net_io_counters(pernic=True).get(self._iface)
         now = time.monotonic()

@@ -649,6 +649,17 @@ def default_config() -> config_dict.ConfigDict:
                 # reward prices foot slip, and the mu-teacher probe showed
                 # an unpriced mu input goes unused. 0 = off.
                 slip_cmd=0.0,
+                # SELF-IDENT PROBE terms (positive, 0 = off): rewards for
+                # deliberately visiting the excitations that make model
+                # parameters observable. The stage-1 identifiability study
+                # (2026-08-16) measured that motor strength is INVISIBLE in
+                # any passive data (the forcerange cap never binds), kd
+                # needs free-leg transients, mu needs slip events. A probe
+                # policy maximizes these under a fall penalty; they are
+                # NEVER enabled on a locomotion policy.
+                probe_sat=0.0,
+                probe_slip=0.0,
+                probe_transient=0.0,
                 # Finite-difference BASE acceleration penalty (Sony
                 # 2502.10983 prices base angular acceleration; QuietWalk
                 # 2604.23702 identifies foot-ground force as the driver of
@@ -1379,6 +1390,7 @@ class WojtekJoystick(WojtekEnv):
             "last_torque": jp.zeros(12),
             "last_base_vz": jp.zeros(()),
             "last_gyro_xy": jp.zeros(2),
+            "last_qvel_probe": jp.zeros(12),
             "motor_targets": anchor,
             "step_count": jp.array(0),
             "phase": jp.array(0.0),  # master clock; per-leg via _leg_phases
@@ -1628,6 +1640,7 @@ class WojtekJoystick(WojtekEnv):
         info["last_torque"] = data.actuator_force
         info["last_base_vz"] = data.qvel[2]
         info["last_gyro_xy"] = self._gyro(data)[:2]
+        info["last_qvel_probe"] = data.qvel[self._vadr]
         info["motor_targets"] = motor_targets
         # For the curriculum wrapper: where the base is, and how far the
         # commands asked to go so far. The resample below has not run yet,
@@ -2117,6 +2130,19 @@ class WojtekJoystick(WojtekEnv):
             * k_lin
             * k_ang
             * moving,
+            # Self-ident probe income (see the scales entries): fraction of
+            # the torque cap actually used (motor-strength observability),
+            # raw contact slip (mu), and joint-velocity change (kd/kp).
+            # Deliberately NOT gated by moving/tracking — the probe runs on
+            # a zero command and pays for excitation itself.
+            "probe_sat": jp.mean(
+                jp.abs(data.actuator_force)
+                / (self._torque_cap + 1e-6)
+            ),
+            "probe_slip": slip,
+            "probe_transient": jp.mean(
+                jp.abs(qvel - info["last_qvel_probe"]) / self.dt
+            ),
             # Base shock: how hard THIS step jerked the body (see the
             # scales entry). Finite differences against the previous
             # step's values carried in info; both terms are per-step

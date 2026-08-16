@@ -403,8 +403,8 @@ class WojtekEnv(mjx_env.MjxEnv):
             return jp.concatenate([source[n] for n in names])
 
         state_names = self.actor_obs_names
-        # The actor's gyro can carry two corruptions, the per-episode bias
-        # draw (info["gyro_bias"]) and the vibration-resonator state
+        # The actor's gyro can carry two corruptions, the bias drawn at
+        # reset (info["gyro_bias"]) and the vibration-resonator state
         # (info["gyro_vib"], see gyro_vib_step). Only the actor's copy is
         # touched. The critic reads the clean catalog below.
         actor_catalog = catalog

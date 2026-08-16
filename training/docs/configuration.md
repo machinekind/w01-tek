@@ -134,8 +134,8 @@ All three tasks support these paths through their `default_config()`:
 | `task.env.obs_noise.gravity` | `0.05` | Uniform actor gravity-vector noise scale. |
 | `task.env.obs_noise.joint_pos` | `0.01` rad | Uniform actor joint-position noise scale. |
 | `task.env.obs_noise.joint_vel` | `1.5` rad/s | Uniform actor joint-velocity noise scale. |
-| `task.env.obs_noise.gyro_bias` | `0.0` rad/s (off) | Half-width of the per-episode gyro zero-rate offset. Each reset draws the offset uniformly from ±this bound, holds it for the whole episode, and adds it to the actor's gyro only. The white `gyro` noise redraws every step, so it cannot represent a constant offset. |
-| `task.env.obs_noise.gyro_vib` | `0.0` (off) | Gain of the gyro-vib feedback corruption, implemented in `base.gyro_vib_step` with the mixing matrix `base.VIB_MIX`. Each control step, the change in joint torque drives a resonator tuned to half the control rate, and the resonator's state is added to the gyro reading the actor sees. This models the frame vibration a real IMU picks up from the policy's own action jitter. `imu-grid --vib-gain` sweeps this gain. |
+| `task.env.obs_noise.gyro_bias` | `0.0` rad/s (off) | A real gyro reads a small constant rate even when the robot is still. This value bounds that offset. Each reset draws one uniformly from ±this bound, keeps it for the whole episode, and adds it to the gyro the actor sees. The white `gyro` noise redraws every step, so it cannot stand in for an offset that holds still. |
+| `task.env.obs_noise.gyro_vib` | `0.0` (off) | Feeds the policy's own vibration back into its gyro. On the real robot, jittery actions shake the frame, and the IMU sits on that frame. Here, each control step the change in joint torque drives a resonator tuned to half the control rate, and the resonator's state is added to the gyro the actor sees (`base.gyro_vib_step`, `base.VIB_MIX`). This value is the gain, and 0 turns it off. `imu-grid --vib-gain` sweeps it. |
 | `task.env.obs_noise.gyro_vib_decay` | `0.9` | How sharply the resonator rings. A drive at the resonant frequency is amplified by 1/(1−decay), which is about tenfold at 0.9. |
 | `task.env.obs.state` | task-specific | Ordered actor observation names. |
 | `task.env.obs.privileged` | task-specific | Ordered critic-only observation names. |
@@ -1077,8 +1077,8 @@ the 50 Hz control rate, driven by gyro noise and loop latency. Nothing in
 the battery or the courses perturbs the IMU, so the sim never showed it.
 
 The main axis is a **pinned gyro bias**. Each cell writes a fixed bias
-vector into `info["gyro_bias"]` every step. That is the same key the env's
-per-episode bias DR draws at reset. The actor's gyro carries the bias; the
+vector into `info["gyro_bias"]` every step. That is the same key the bias
+DR fills at reset. The actor's gyro carries the bias; the
 critic and the physics never see it. The key exists in every env and holds
 zeros when a run never trained bias DR, so the grid runs against any
 checkpoint of this project unchanged. That is the point. It measures a
@@ -1102,9 +1102,9 @@ sweeps the gain to find where a policy's stand goes unstable. That
 critical gain is the policy's stability margin, and the margin is what
 to compare across policies.
 
-Two more axes cover loop delay. `--latency-substeps` pins the per-episode
-control-latency draw (`info["ctrl_delay"]`, the same pin mechanism) to
-chosen substep counts. The random draw lands on the worst case in about
+Two more axes cover loop delay. `--latency-substeps` pins the control
+latency the env draws each episode (`info["ctrl_delay"]`, the same pin
+mechanism) to chosen substep counts. The random draw lands on the worst case in about
 one seed in six, so an unpinned grid mostly measures mild latency.
 `--lag-tau` swaps in the battery's explicit-PD substep loop
 (`make_lagged_rollout_fns`), which puts a first-order lag on the joint
@@ -1124,13 +1124,13 @@ and against the bias=0 baseline row, which every grid includes. Results
 land in `runs/<run>/imu_grid/imu_grid.json`, and `--out` adds one
 combined markdown table.
 
-Measured on `wojtek_terrain_blind_v4_1` (2026-08-11): the exogenous axes
-do not reproduce the real robot's standing limit cycle. Stand `qvel_rms`
-stays at 0.013 rad/s across bias up to 0.2 rad/s, white noise up to 4x
-the trained value, pinned full-period latency, and 10 ms torque lag,
-with zero falls. The robot is motionless in every one of those cells.
-The vibration ratio of ~0.69 there is spectral noise on a near-zero
-signal, which is exactly what the `qvel_rms` column exposes. The
+Measured on `wojtek_terrain_blind_v4_1` (2026-08-11). No fixed
+corruption reproduces the real robot's standing limit cycle. Bias up to
+0.2 rad/s, white noise at 4x the trained value, latency pinned to a
+full control period, and 10 ms of torque lag all leave the stand
+motionless, with `qvel_rms` at 0.013 rad/s and no falls. The vibration
+ratio of ~0.69 in those cells is spectral noise on a near-zero signal,
+which is exactly what the `qvel_rms` column exposes. The
 feedback axis does reproduce the failure. Sweeping `--vib-gain` over
 {0.03, 0.1, 0.3, 1.0}, the stand stays motionless through gain 0.1
 (`qvel_rms` 0.012-0.014) and oscillates violently at gain 0.3, with

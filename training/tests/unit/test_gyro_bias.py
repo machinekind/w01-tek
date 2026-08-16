@@ -1,4 +1,4 @@
-"""Model-free tests of the per-episode gyro-bias DR. They drive the
+"""Model-free tests of the gyro-bias DR. They drive the
 _build_obs application path through a stub catalog, checking that the
 actor's gyro carries the bias while the critic stays clean, and they check
 the config default. The reset-time draw itself needs a live env, so

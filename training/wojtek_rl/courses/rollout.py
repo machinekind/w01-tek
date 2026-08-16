@@ -59,8 +59,8 @@ def _hold_command(state, cmd, gyro_bias=None):
     instead of ours, and lurch off the task.
 
     `gyro_bias` (a fixed 3-vector, rad/s) additionally pins
-    info["gyro_bias"], the per-episode zero-rate offset _build_obs adds
-    to the actor's gyro. The pin overwrites the reset-time draw, so an
+    info["gyro_bias"], the constant gyro offset _build_obs adds to the
+    actor's gyro for the episode. The pin overwrites the reset-time draw, so an
     IMU robustness pass measures a chosen bias instead of a random one.
     None, the value on every normal benchmark run, keeps the env's own
     draw. That draw is zeros for any run that never trained the bias DR.

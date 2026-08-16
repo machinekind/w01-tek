@@ -100,14 +100,15 @@ def default_config() -> config_dict.ConfigDict:
         knee_target_max=0.0,
         obs_noise=config_dict.create(
             gyro=0.2, gravity=0.05, joint_pos=0.01, joint_vel=1.5,
-            # Half-width of the per-episode gyro zero-rate offset, rad/s:
-            # drawn U(+-gyro_bias) at reset and constant through the episode,
-            # added to the actor's gyro only (the critic reads the clean
-            # signal). 0 disables. The white `gyro` noise above cannot
-            # represent it: a real gyro's offset is constant on the episode
-            # timescale, not redrawn every step.
+            # A real gyro reads a small constant rate even when the robot
+            # is still. This value bounds that offset, in rad/s. Each
+            # reset draws one uniformly from +-gyro_bias, keeps it for the
+            # whole episode, and adds it to the gyro the actor sees. The
+            # critic reads the clean signal. 0 disables. The white `gyro`
+            # noise above redraws every step, so it cannot stand in for an
+            # offset that holds still.
             gyro_bias=0.0,
-            # Feedback corruption of the actor's gyro, off by default. It
+            # Vibration feedback into the actor's gyro, off by default. It
             # models a loop this sim does not carry on its own. On the
             # real robot, the policy jitters its actions, the motors
             # jitter their torque, the frame vibrates, and the IMU sits on

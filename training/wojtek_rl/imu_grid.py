@@ -22,8 +22,8 @@ predate the bias DR carry zeros in the same pytree slot and nothing
 retraces. No bias level needs an env rebuild or recompile. Everything
 else the run trained with, white obs noise and the latency and encoder
 draws, stays as stored in the run's config. A cell therefore measures
-this policy, as deployed, plus a zero-rate gyro offset. A real gyro has
-that offset, and the white training noise cannot represent it.
+this policy, as deployed, plus a constant gyro offset. A real gyro has
+such an offset, and the white training noise cannot represent it.
 
 The optional white-noise axis (--noise-gyro) works differently. Noise
 scales are baked into the jitted observation path from the env config, so
@@ -110,8 +110,9 @@ def _pin(state, cmd, bias, latency=None):
     _hold_command. Values change, structure does not, so nothing retraces.
     The command pin also zeroes steps_since_cmd so the env never resamples
     over us. The bias pin overwrites the reset-time draw with the cell's
-    vector. The latency pin overwrites info["ctrl_delay"], the per-episode
-    substep-latency draw, so a cell measures a chosen constant latency.
+    vector. The latency pin overwrites info["ctrl_delay"], the control
+    latency the env drew for the episode, so a cell measures a chosen
+    constant latency.
     The random draw lands on the worst case in only about one seed in six.
     """
     state.info["command"] = cmd
@@ -322,8 +323,8 @@ def main():
                     "value rebuilds the env (default: the run's own value "
                     "only)")
     ap.add_argument("--vib-gain", type=float, nargs="+", default=None,
-                    help="gains for the gyro-vib feedback corruption "
-                    "(obs_noise.gyro_vib). The policy's own torque jitter "
+                    help="gains for the vibration feedback on the actor's "
+                    "gyro (obs_noise.gyro_vib). The policy's own torque jitter "
                     "comes back into its gyro through a resonator at half "
                     "the control rate. Each value rebuilds the env. Sweep "
                     "it to find the gain where standing goes unstable "
@@ -334,7 +335,7 @@ def main():
                     "ideal actuators. Takes one value per invocation "
                     "because it recompiles the whole grid")
     ap.add_argument("--latency-substeps", type=int, nargs="+", default=None,
-                    help="pin the per-episode control-latency draw "
+                    help="pin the control latency the env draws each episode "
                     "(info['ctrl_delay']) to these substep counts, one grid "
                     "axis each. The random draw lands on the worst case in "
                     "about one seed in six (default: the env's own draw "

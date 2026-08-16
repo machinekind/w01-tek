@@ -135,7 +135,7 @@ All three tasks support these paths through their `default_config()`:
 | `task.env.obs_noise.joint_pos` | `0.01` rad | Uniform actor joint-position noise scale. |
 | `task.env.obs_noise.joint_vel` | `1.5` rad/s | Uniform actor joint-velocity noise scale. |
 | `task.env.obs_noise.gyro_bias` | `0.0` rad/s (off) | A real gyro reads a small constant rate even when the robot is still. This value bounds that offset. Each reset draws one uniformly from ±this bound, keeps it for the whole episode, and adds it to the gyro the actor sees. The white `gyro` noise redraws every step, so it cannot stand in for an offset that holds still. |
-| `task.env.obs_noise.gyro_vib` | `0.0` (off) | Feeds the policy's own vibration back into its gyro. On the real robot, jittery actions shake the frame, and the IMU sits on that frame. Here, each control step the change in joint torque drives a resonator tuned to half the control rate, and the resonator's state is added to the gyro the actor sees (`base.gyro_vib_step`, `base.VIB_MIX`). This value is the gain, and 0 turns it off. `imu-grid --vib-gain` sweeps it. |
+| `task.env.obs_noise.gyro_vib` | `0.0` (off) | Feeds the policy's own vibration back into its gyro. On the real robot, jittery actions shake the frame, and the IMU sits on that frame. Here, each control step the change in joint torque drives a resonator tuned to half the control rate, and the resonator's state is added to the gyro the actor sees (`base.gyro_vib_step`, `base.VIB_MIX`). This value is the gain, and 0 turns it off. Each reset copies it into `info["gyro_vib_gain"]`, which is what the step reads, so an eval sweep can pin another gain without rebuilding the env. `imu-grid --vib-gain` sweeps it, and `imu-grid --bisect-vib` finds the gain where the policy's stand goes unstable. |
 | `task.env.obs_noise.gyro_vib_decay` | `0.9` | How sharply the resonator rings. A drive at the resonant frequency is amplified by 1/(1−decay), which is about tenfold at 0.9. |
 | `task.env.obs.state` | task-specific | Ordered actor observation names. |
 | `task.env.obs.privileged` | task-specific | Ordered critic-only observation names. |
@@ -1097,10 +1097,10 @@ control step, the change in joint torque drives a resonator tuned to
 half the control rate, and the resonator's state is added to the gyro
 reading the actor sees (`base.gyro_vib_step`, mixing matrix
 `base.VIB_MIX`). The critic and the physics see nothing. The setting
-lives in the env config, so a future run can train against it. The grid
-sweeps the gain to find where a policy's stand goes unstable. That
-critical gain is the policy's stability margin, and the margin is what
-to compare across policies.
+lives in the env config, so a future run can train against it. Each reset
+copies the configured gain into `info["gyro_vib_gain"]`, and the step
+reads it from there, so the grid pins a gain the same way it pins the
+bias. No gain rebuilds the env.
 
 Two more axes cover loop delay. `--latency-substeps` pins the control
 latency the env draws each episode (`info["ctrl_delay"]`, the same pin
@@ -1116,24 +1116,28 @@ drives lag, and its gyro drifts, all at the same moment, so the grid can
 run its axes together. What can be combined depends on where a setting
 takes effect:
 
-- Bias and pinned latency are values written into `info` each step, so
-  they are always crossed. Nothing recompiles.
+- Bias, pinned latency and the vibration gain are values written into
+  `info` each step, so they are always crossed. Nothing recompiles.
 - `--lag-tau` takes a list. Every value runs inside every env build, next
-  to the bias and latency cells that build already covers. A lag of 0 is
-  the env's own ideal actuators, and it runs first when it is in the
-  list. Each value is one JIT compile per env build.
-- The noise scale and the vibration gain are baked into the env, so each
-  value is a rebuild. By default they are swept one at a time, and a bad
-  cell then names the single thing that broke it. `--cross-noise-vib`
-  adds every noise level paired with every vibration gain. The baseline
-  cell, where both are left as trained, always comes first.
+  to the bias, latency and vibration cells that build already covers. A
+  lag of 0 is the env's own ideal actuators, and it runs first when it is
+  in the list. Each value is one JIT compile per env build. The lagged
+  step advances the gyro-vib resonator on its own applied torque, so a
+  vibration gain acts in a lagged cell too.
+- The white-noise scale is the one axis still baked into the env, so each
+  value is a rebuild. Noise and vibration are swept one at a time by
+  default, and a bad cell then names the single thing that broke it.
+  `--cross-noise-vib` adds every noise level paired with every vibration
+  gain. The baseline cell, where both are left as trained, always comes
+  first.
 
-So a full grid costs one env build per `(noise, vib)` pair, one compile
-per lag value inside each build, and a rollout per bias and latency cell.
-Find where a policy is weak with the cheap one-at-a-time grid first, then
-compose only around that spot. `noise_vib_levels` and `lag_levels` in
-`imu_grid.py` are the plain functions that enumerate all of this, and
-`tests/unit/test_imu_grid.py` covers them without an env.
+So a full grid costs one env build per noise level, one compile per lag
+value inside each build, and a rollout per vibration, bias and latency
+cell. Find where a policy is weak with the cheap one-at-a-time grid
+first, then compose only around that spot. `noise_vib_levels`,
+`env_builds` and `lag_levels` in `imu_grid.py` are the plain functions
+that enumerate all of this, and `tests/unit/test_imu_grid.py` covers them
+without an env.
 
 Every cell in `imu_grid.json` carries its own `lag_tau`, next to
 `noise_gyro`, `vib_gain`, `latency`, `axis` and `bias`. The list of lags
@@ -1171,6 +1175,53 @@ loop from action to vibration to IMU. Compare that margin across
 policies, for example a policy trained with `action_filter` against one
 without. A single cell is not a pass or fail verdict.
 
+`--bisect-vib LO HI` finds that critical gain, so it no longer has to be
+read off a sweep someone picked by hand. The search asks one question at
+a time. It stands the policy up at some gain, over `--seeds` seeds, and
+asks whether the stand went bad. A seed went bad if the robot fell, or if
+its `qvel_rms` over the measured window is above `--bisect-threshold`
+(0.1 rad/s by default).
+The gain counts as unstable if any seed fell, or if a majority of the
+seeds were over the threshold. The search first checks that the bracket
+holds the answer, so `LO` has to come back stable and `HI` unstable. When
+it does not, there is nothing in the bracket to bisect, and the run
+reports which side the answer is on instead of a number. A policy that is
+still quiet at the top of the bracket comes back as `above 0.5`, with the
+`qvel_rms` it measured up there. Otherwise the search halves the bracket
+until it is narrower than `--bisect-tol` (0.02 by default) and reports
+the midpoint. Every probe reuses one env build and one compile, because
+the gain is pinned rather than configured, so the whole search costs
+about a dozen stand rollouts.
+
+The threshold is a number someone chose. The two terrain policies show
+why it has to be stated. Their standing `qvel_rms` against the gain looks
+like this:
+
+| gain | off | 0.1 | 0.2 | 0.3 | 0.5 |
+|---|---|---|---|---|---|
+| `wojtek_terrain_blind_v4_1` | 0.012 | 0.014 | 1.957 | 3.044 | 3.731 |
+| `wojtek_terrain_blind_v5` | 0.071 | 0.071 | 0.073 | 0.165 | 0.193 |
+
+v4.1 snaps. It is motionless, and then it is in a full limit cycle, so
+any threshold between those two values finds about the same gain. One
+seed over a 3 s window puts it at 0.134 with the default threshold, and
+at 0.148 with the threshold at 0.05. v5 has no snap in this range. It
+drifts upward, so the threshold decides where its critical gain lands as
+much as the policy does. At the default 0.1 rad/s it comes out around
+0.25. Below 0.071 it would come out as `below 0.05` instead, because that
+is what v5 idles at with the loop off. So two policies are only
+comparable when they were bisected at the same threshold and the same
+seed count, and a critical gain is worth reading next to the raw cells
+that produced numbers like these. The default stays at 0.1 rad/s because
+it is well above a quiet stand and far below a real limit cycle.
+
+The critical gain lands in `imu_grid.json` under `critical_gain`, with
+the bracket, the settings and every probe the search made, the two
+bracket checks included. It leads the `--out` report in its own table.
+A cell tells what one fault did to one policy. The critical gain is one
+number per policy, so it is the value to compare when asking which
+policy has more room before its own vibration takes over.
+
 ```bash
 # Does the un-filtered terrain policy show the standing limit cycle in sim?
 ./training/run.sh imu-grid --runs runs/wojtek_terrain_blind_v4_1 \
@@ -1184,6 +1235,14 @@ without. A single cell is not a pass or fail verdict.
 ./training/run.sh imu-grid --runs runs/<name> \
   --noise-gyro 0.4 --vib-gain 0.1 0.3 --cross-noise-vib \
   --lag-tau 0 0.01
+
+# Which policy has the wider margin against its own vibration?
+./training/run.sh imu-grid --runs runs/<a> runs/<b> \
+  --bisect-vib 0.05 0.5 --out runs/imu_grid_report.md
+
+# The same search on its own, keeping an earlier grid's cells
+./training/run.sh imu-grid --runs runs/<name> --bisect-only \
+  --bisect-vib 0.05 0.5
 ```
 
 The course benchmark can run under the same pinned bias.
@@ -1194,9 +1253,11 @@ frozen. The bias pin changes only what the actor's gyro reads.
 [`training/jobs/imu_grid.sh`](../jobs/imu_grid.sh) is the payload form.
 It takes `CKPTS_LIST` (required), `BIAS_LEVELS`, `AXES`, `NOISE_GYRO`,
 `VIB_GAIN`, `LAG_TAU`, `LATENCY_SUBSTEPS`, `CROSS_NOISE_VIB`, `SEEDS`,
-`STAND_SEC`/`WALK_SEC`/`WALK_VX`, and `IMU_GRID_OUT`. The sweep lists are
-space separated, and an empty one drops its flag, so the grid runs the
-run's own trained value on that axis.
+`STAND_SEC`/`WALK_SEC`/`WALK_VX`, `BISECT_VIB`, `BISECT_TOL`,
+`BISECT_THRESHOLD`, and `IMU_GRID_OUT`. The sweep lists are space
+separated, and an empty one drops its flag, so the grid runs the run's
+own trained value on that axis. `BISECT_VIB` is the bracket, written as
+`"LO HI"`, and leaving it empty skips the search.
 
 ## Job payload configuration
 

@@ -1,9 +1,10 @@
 """Model-free tests of the IMU robustness grid. They check that the
 spectral detector detects the failure mode it was built for, a 25 Hz
 standing limit cycle at the 50 Hz control rate, and they check the grid's
-cell layout, its env-build and lag enumeration, and the bias vectors.
-Applying the bias in a rollout uses the courses' pin mechanism and the
-env's info["gyro_bias"] path, which test_gyro_bias.py covers.
+cell layout, its env-build and lag enumeration, the bias vectors, and the
+critical-gain bisection against a fake probe. Applying the bias in a
+rollout uses the courses' pin mechanism and the env's info["gyro_bias"]
+path, which test_gyro_bias.py covers.
 """
 
 import numpy as np
@@ -12,6 +13,9 @@ import pytest
 from wojtek_rl.imu_grid import (
     NYQUIST_BAND_HZ,
     bias_vector,
+    bisect_threshold,
+    critical_gain_str,
+    env_builds,
     grid_cells,
     lag_levels,
     noise_vib_levels,
@@ -104,6 +108,95 @@ def test_baseline_is_the_whole_grid_when_nothing_is_swept():
     # Crossing needs both lists. One list alone has nothing to pair with.
     assert noise_vib_levels([0.4], None, cross=True) == [(None, None),
                                                         (0.4, None)]
+
+
+def test_one_env_build_per_noise_level():
+    # The vibration gain is pinned per step, so every gain of a noise
+    # level shares that level's build. Only the noise scale is baked in.
+    builds = env_builds(noise_vib_levels([0.4], [0.1, 0.3], cross=True))
+    assert builds == [(None, [None, 0.1, 0.3]), (0.4, [None, 0.1, 0.3])]
+
+
+def test_env_builds_keep_the_baseline_first():
+    assert env_builds([(None, None)]) == [(None, [None])]
+    builds = env_builds(noise_vib_levels([0.8, 0.4], [0.3]))
+    assert [n for n, _ in builds] == [None, 0.8, 0.4], "first-asked order"
+    assert builds[0] == (None, [None, 0.3])
+
+
+# A fake policy that goes unstable above a gain of 0.2 and shakes harder
+# the higher the gain goes. bisect_threshold only ever reads the bool.
+def _fake_probe(flip=0.2, calls=None):
+    def probe(gain):
+        if calls is not None:
+            calls.append(gain)
+        return gain > flip, round(0.01 + 10 * max(gain - flip, 0.0), 4)
+
+    return probe
+
+
+def test_bisection_brackets_the_flip():
+    res = bisect_threshold(_fake_probe(0.2), 0.0, 1.0, tol=0.02)
+    assert res["lo"] <= 0.2 <= res["hi"]
+    assert res["hi"] - res["lo"] <= 0.02
+    assert abs(res["critical_gain"] - 0.2) <= 0.02
+    assert res["reason"] is None
+
+
+def test_bisection_records_every_probe_in_order():
+    calls = []
+    res = bisect_threshold(_fake_probe(0.2, calls), 0.0, 1.0, tol=0.02)
+    assert [p[0] for p in res["probes"]] == calls
+    assert calls[:3] == [0.0, 1.0, 0.5], "the ends first, then the middle"
+    assert res["probes"][0] == (0.0, False, 0.01)
+    assert res["probes"][1][1] is True
+    # Every probe carries the number that decided it.
+    assert all(p[2] is not None for p in res["probes"])
+
+
+def test_a_plain_bool_probe_is_enough():
+    res = bisect_threshold(lambda g: g > 0.2, 0.0, 1.0, tol=0.05)
+    assert abs(res["critical_gain"] - 0.2) <= 0.05
+    assert res["probes"][0] == (0.0, False, None)
+
+
+def test_bisection_reports_a_bracket_that_never_flips():
+    # Already unstable at the low end, so the margin is below the bracket.
+    low = bisect_threshold(_fake_probe(0.2), 0.5, 1.0, tol=0.02)
+    assert low["critical_gain"] is None
+    assert low["outcome"] == "below the bracket"
+    assert critical_gain_str(low) == "below 0.5"
+    assert len(low["probes"]) == 1, "no point probing on"
+    # Stable all the way up, so the margin is above it. A gentle policy
+    # that never snaps inside the bracket lands here, and "above 0.5" is
+    # a real answer, so the number it measured up there comes with it.
+    high = bisect_threshold(_fake_probe(2.0), 0.0, 0.5, tol=0.02)
+    assert high["critical_gain"] is None
+    assert high["outcome"] == "above the bracket"
+    assert critical_gain_str(high) == "above 0.5"
+    assert len(high["probes"]) == 2
+    assert high["probes"][-1] == (0.5, False, 0.01)
+    assert "qvel_rms 0.01" in high["reason"]
+
+
+def test_bisection_rejects_an_empty_bracket():
+    res = bisect_threshold(_fake_probe(), 1.0, 1.0, tol=0.02)
+    assert res["critical_gain"] is None and res["probes"] == []
+    assert critical_gain_str(res) == "none"
+
+
+def test_a_tighter_tolerance_costs_more_probes():
+    coarse = bisect_threshold(_fake_probe(0.2), 0.0, 1.0, tol=0.2)
+    fine = bisect_threshold(_fake_probe(0.2), 0.0, 1.0, tol=0.001)
+    assert coarse["hi"] - coarse["lo"] <= 0.2
+    assert fine["hi"] - fine["lo"] <= 0.001
+    assert len(fine["probes"]) > len(coarse["probes"])
+
+
+def test_max_iters_stops_an_impossible_tolerance():
+    res = bisect_threshold(_fake_probe(0.2), 0.0, 1.0, tol=0.0, max_iters=5)
+    assert len(res["probes"]) == 2 + 5
+    assert res["critical_gain"] is not None, "the bracket still stands"
 
 
 def test_lag_levels_default_to_the_ideal_actuators():

@@ -4,9 +4,11 @@
 # latency, and actuator-torque lag. Those axes can be combined, because
 # the real robot carries all of them at once. Standing and straight-walk
 # rollouts are scored on vibration, the near-Nyquist 20-25 Hz band, falls,
-# and walk tracking. See wojtek_rl/imu_grid.py for what a cell means and
-# why the bias is pinned. The grid runs on CPU for determinism and parity
-# with the battery and the courses.
+# and walk tracking. BISECT_VIB adds the critical-gain search, which finds
+# the vibration gain where a policy's stand stops being motionless. That
+# gain is the number to compare across policies. See wojtek_rl/imu_grid.py
+# for what a cell means and why the bias is pinned. The grid runs on CPU
+# for determinism and parity with the battery and the courses.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 source training/jobs/_lib.sh
@@ -22,8 +24,8 @@ source training/jobs/_lib.sh
 # the measurement env. Empty keeps the run's own trained value only.
 : "${NOISE_GYRO:=}"
 # Optional gains for the vibration feedback on the actor's gyro
-# (obs_noise.gyro_vib). Each value rebuilds the measurement env. Empty
-# leaves the loop off.
+# (obs_noise.gyro_vib). Each value is pinned per step, so none of them
+# rebuilds the measurement env. Empty leaves the loop off.
 : "${VIB_GAIN:=}"
 # Actuator-torque lag time constants in seconds; 0 keeps the env's own
 # ideal actuators. Every value runs inside every env build and costs a
@@ -33,8 +35,19 @@ source training/jobs/_lib.sh
 # Empty leaves the env's own per-episode draw.
 : "${LATENCY_SUBSTEPS:=}"
 # 1 also runs every NOISE_GYRO level paired with every VIB_GAIN, on top
-# of the one-at-a-time cells. Each pair is another env build.
+# of the one-at-a-time cells. Each pair costs rollouts and no env build.
 : "${CROSS_NOISE_VIB:=0}"
+# Optional bracket for the critical-gain bisection, as "LO HI". LO has to
+# come back stable and HI unstable. Empty skips the search.
+: "${BISECT_VIB:=}"
+# How narrow the bisection's bracket gets before it stops. Read only when
+# BISECT_VIB is set.
+: "${BISECT_TOL:=0.02}"
+# Standing qvel_rms in rad/s above which a probed gain counts as
+# unstable, in a majority of SEEDS seeds. A fall makes a seed unstable on
+# its own. It is a chosen number, so compare policies at the same one.
+# Read only when BISECT_VIB is set.
+: "${BISECT_THRESHOLD:=0.1}"
 # Rollouts per cell and scenario.
 : "${SEEDS:=3}"
 # Measured standing / walking window per rollout, seconds.
@@ -81,6 +94,14 @@ CROSS_FLAG=()
 if [ "$CROSS_NOISE_VIB" != "0" ]; then
     CROSS_FLAG=(--cross-noise-vib)
 fi
+# The tolerance and the threshold only mean anything to the search, so
+# they ride along inside its own guard.
+BISECT_FLAG=()
+if [ -n "$BISECT_VIB" ]; then
+    BISECT_FLAG=(--bisect-vib $BISECT_VIB \
+                 --bisect-tol "$BISECT_TOL" \
+                 --bisect-threshold "$BISECT_THRESHOLD")
+fi
 
 # Guard the array expansion. Under set -u, bash before 4.4 treats an empty
 # array expanded the plain way as unbound.
@@ -95,4 +116,5 @@ run_main python3 -m wojtek_rl.imu_grid \
     ${LAG_FLAG[@]+"${LAG_FLAG[@]}"} \
     ${LATENCY_FLAG[@]+"${LATENCY_FLAG[@]}"} \
     ${CROSS_FLAG[@]+"${CROSS_FLAG[@]}"} \
+    ${BISECT_FLAG[@]+"${BISECT_FLAG[@]}"} \
     --out "$IMU_GRID_OUT"

@@ -119,9 +119,13 @@ def default_config() -> config_dict.ConfigDict:
             # control rate (25 Hz at 50 Hz), and the resonator's state is
             # added to the gyro reading the actor sees. The critic and the
             # physics see nothing. `gyro_vib` is the gain, and 0 disables
-            # it. `gyro_vib_decay` sets how sharply the resonator rings.
-            # At 0.9, a drive at the resonant frequency is amplified about
-            # tenfold. The recurrence lives in base.gyro_vib_step.
+            # it. Each reset copies this value into
+            # info["gyro_vib_gain"], and the step reads it from there, so
+            # an eval sweep can pin another gain without rebuilding the
+            # env (see wojtek_rl/imu_grid.py). `gyro_vib_decay` sets how
+            # sharply the resonator rings. At 0.9, a drive at the
+            # resonant frequency is amplified about tenfold. The
+            # recurrence lives in base.gyro_vib_step.
             gyro_vib=0.0,
             gyro_vib_decay=0.9,
         ),
@@ -1220,11 +1224,19 @@ class WojtekJoystick(WojtekEnv):
             "ctrl_delay": jp.int32(d),
             "encoder_offset": epsilon,
             "gyro_bias": gyro_bias,
-            # State of the gyro-vib resonator (obs_noise.gyro_vib). Always
-            # present so the info structure never changes shape. It stays
-            # zero unless the gain is set, and adding zero to the gyro
-            # changes nothing.
+            # State of the gyro-vib resonator, and the gain that drives
+            # it. Both are always present so the info structure never
+            # changes shape. The gain comes from obs_noise.gyro_vib at
+            # reset, so the config still decides what a training run
+            # sees. Keeping it here, the way gyro_bias is kept, lets the
+            # step read a value the caller can overwrite. An eval sweep
+            # can then pin another gain without rebuilding the env. At
+            # gain 0 the state stays exactly zero, and adding zero to the
+            # gyro changes nothing.
             "gyro_vib": jp.zeros(3),
+            "gyro_vib_gain": jp.float32(
+                self._config.obs_noise.get("gyro_vib", 0.0)
+            ),
         }
         metrics = {f"reward/{k}": jp.zeros(()) for k in self._config.reward.scales}
         # Posture and command-mix telemetry, written every step; declared on
@@ -1399,16 +1411,17 @@ class WojtekJoystick(WojtekEnv):
         info["last_act"] = action
         # Advance the gyro-vib resonator on this step's torque change.
         # This has to run before last_torque is overwritten below, or the
-        # change would always read as zero. With the gain unset the whole
-        # branch is skipped at trace time.
-        gv = self._config.obs_noise.get("gyro_vib", 0.0)
-        if gv:
-            info["gyro_vib"] = gyro_vib_step(
-                info["gyro_vib"],
-                data.actuator_force - info["last_torque"],
-                gv,
-                self._config.obs_noise.get("gyro_vib_decay", 0.9),
-            )
+        # change would always read as zero. The recurrence runs on every
+        # step now, and the gain is the episode's own value. Reset took
+        # that value from obs_noise.gyro_vib, and an eval sweep can
+        # overwrite it. At gain 0 gyro_vib_step returns exactly zero, so
+        # a run with the loop off sees the observations it saw before.
+        info["gyro_vib"] = gyro_vib_step(
+            info["gyro_vib"],
+            data.actuator_force - info["last_torque"],
+            info["gyro_vib_gain"],
+            self._config.obs_noise.get("gyro_vib_decay", 0.9),
+        )
         info["last_torque"] = data.actuator_force
         info["motor_targets"] = motor_targets
         # For the curriculum wrapper: where the base is, and how far the

@@ -1,7 +1,9 @@
 """Model-free tests of the gyro-vib sensor model. They check that the
 resonator rings at half the control rate, that the config default keeps it
-off, and that _build_obs adds the state to the actor's gyro only. The
-update inside env.step needs a live env, so tests/integration covers it.
+off, that a gain of 0 leaves both the state and the observation exactly as
+they were, and that _build_obs adds the state to the actor's gyro only.
+The update inside env.step needs a live env, so tests/integration covers
+it.
 """
 
 import numpy as np
@@ -52,6 +54,43 @@ def test_resonance_amplifies_alternating_drive():
         hist.append(x[0])
     assert np.sign(hist[-1]) == -np.sign(hist[-2]) != 0
     np.testing.assert_allclose(abs(x[0]), 0.1 * drive / 0.1, rtol=1e-2)
+
+
+def test_zero_gain_is_exactly_zero():
+    # env.step runs the recurrence on every step now, gain or no gain, so
+    # that a sweep can change the gain without a recompile. A run with the
+    # loop off must therefore still see a state of exactly zero. A
+    # rounding-sized value would already be a changed observation.
+    rng = np.random.default_rng(0)
+    x = np.zeros(3)
+    for _ in range(50):
+        x = gyro_vib_step(x, rng.standard_normal(12), gain=0.0, decay=0.9)
+        assert np.all(np.asarray(x) == 0.0)
+
+
+def test_zero_gain_clears_a_ringing_state():
+    # Switching the gain off mid-episode (a bisection probe does exactly
+    # that between rollouts) must not leave the resonator ringing on.
+    x = np.array([0.4, -0.2, 0.1])
+    x = gyro_vib_step(x, TAU_X, gain=0.0, decay=0.9)
+    assert np.all(np.asarray(x) == 0.0)
+
+
+def test_zero_gain_leaves_the_observation_untouched():
+    # Checkpoints have to keep working. At gain 0 the actor's gyro must
+    # read the same as it did when the update was skipped altogether,
+    # which is what an env with no gyro_vib key in info produces.
+    import jax.numpy as jp
+
+    from test_gyro_bias import _make_stub
+
+    zero = gyro_vib_step(jp.zeros(3), jp.zeros(12), gain=0.0, decay=0.9)
+    with_key = _make_stub()._build_obs(None, {"gyro_vib": zero})
+    without_key = _make_stub()._build_obs(None, {})
+    np.testing.assert_array_equal(with_key["state"], without_key["state"])
+    np.testing.assert_array_equal(
+        with_key["privileged_state"], without_key["privileged_state"]
+    )
 
 
 def test_build_obs_adds_vib_to_actor_only():

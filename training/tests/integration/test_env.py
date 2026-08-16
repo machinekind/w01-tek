@@ -51,6 +51,42 @@ def test_tilted_robot_terminates(env, reset_state):
     assert float(state.done) == 1.0
 
 
+# -- gyro-vib feedback --------------------------------------------------------
+#
+# The resonator update runs on every step now, so that a sweep can change
+# its gain without rebuilding the env. These two tests are the live-env
+# half of tests/unit/test_gyro_vib.py. The default preset leaves the gain
+# at 0, and a run with the gain at 0 has to see exactly what it saw when
+# the update was skipped altogether.
+
+
+def test_gyro_vib_is_exactly_zero_at_the_default_gain(env, reset_state):
+    step = jax.jit(env.step)
+    state = reset_state
+    assert float(state.info["gyro_vib_gain"]) == 0.0
+    # A changing action makes the joint torques change, which is what
+    # drives the resonator when a gain is set.
+    for i in range(20):
+        state = step(state, jp.full(12, 0.3 * (-1.0) ** i))
+        np.testing.assert_array_equal(
+            np.asarray(state.info["gyro_vib"]), np.zeros(3)
+        )
+
+
+def test_a_pinned_gain_drives_the_resonator(env, reset_state):
+    # The grid pins info["gyro_vib_gain"] the way it pins the bias. The
+    # same compiled step then measures another gain.
+    step = jax.jit(env.step)
+    state = reset_state
+    state.info["gyro_vib_gain"] = jp.float32(0.5)
+    for i in range(20):
+        state = step(state, jp.full(12, 0.3 * (-1.0) ** i))
+        state.info["gyro_vib_gain"] = jp.float32(0.5)
+    assert float(state.info["gyro_vib_gain"]) == 0.5
+    assert np.any(np.asarray(state.info["gyro_vib"]) != 0.0)
+    assert np.all(np.isfinite(np.asarray(state.info["gyro_vib"])))
+
+
 # -- abduction_ctrl_limit -----------------------------------------------------
 
 

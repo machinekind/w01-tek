@@ -32,15 +32,27 @@ env_overrides, one recompile per level. Use it to probe the stability
 margin of a policy whose nominal cell looks clean. Raise the noise past
 the training value and watch which policy's vibration blows up first.
 
+The vibration gain (--vib-gain) is pinned again, the way the bias is.
+The env copies obs_noise.gyro_vib into info["gyro_vib_gain"] at reset and
+reads it there every step, so a cell just overwrites that scalar. Every
+gain then runs inside one env build and one compile. That is what makes
+--bisect-vib affordable. It bisects for the gain where the policy's stand
+stops being motionless, a dozen or so stand rollouts on the same compiled
+env. That critical gain is the policy's stability margin against the loop
+from action to vibration to IMU. It is the number to compare across
+policies. The battery's lagged step advances the same resonator, so a
+gain acts in a lagged cell too.
+
 The real robot does not hand the policy one fault at a time. It shakes,
 its drives lag, and its gyro drifts, all at once. So the grid can compose
 its axes. --lag-tau takes a list, and every lag value is run inside every
-env build, next to the bias and latency cells that env build already
-crosses. --cross-noise-vib adds the pairs of a noise level and a
-vibration gain to the env builds, on top of the single-mechanism cells.
-Both cost compile time: one env build per (noise, vib) pair, and one JIT
-compile per lag value inside each build. Start from the single-mechanism
-cells to find where a policy is weak, then compose only around that spot.
+env build, next to the bias, latency and vibration cells that env build
+already crosses. --cross-noise-vib adds the pairs of a noise level and a
+vibration gain, on top of the single-mechanism cells. Only two of these
+axes cost compile time now. Each noise level is one env build, and each
+lag value is one JIT compile inside that build. A vibration gain costs
+neither. Start from the single-mechanism cells to find where a policy is
+weak, then compose only around that spot.
 
 Metrics per cell, over the post-settle window:
   - vibration: battery.vibration_index, the fraction of joint-velocity
@@ -53,9 +65,10 @@ Metrics per cell, over the post-settle window:
     tracking even when nothing falls.
 
 Output: runs/<run>/imu_grid/imu_grid.json per run, a table per run on
-stdout, and one combined markdown report via --out. The grid has no
-gates. It is a measurement. Compare cells across policies and against the
-bias=0 baseline rows the grid always includes.
+stdout, and one combined markdown report via --out. With --bisect-vib the
+same JSON gains a "critical_gain" block. The grid has no gates. It is a
+measurement. Compare cells across policies and against the bias=0
+baseline rows the grid always includes.
 """
 
 import argparse
@@ -118,6 +131,23 @@ def noise_vib_levels(noise_gyro=None, vib_gain=None, cross=False) -> list:
     return levels
 
 
+def env_builds(levels) -> list:
+    """Group the (noise, vib) cells into the env builds that run them.
+
+    Only the white-noise scale is baked into the compiled observation
+    path. The vibration gain is pinned per step now, so every gain of one
+    noise level shares that level's build. Returns (noise, [vib, ...])
+    pairs in the order the levels first ask for them, so the untouched
+    baseline build still leads.
+    """
+    builds = {}
+    for noise, vib in levels:
+        vibs = builds.setdefault(noise, [])
+        if vib not in vibs:
+            vibs.append(vib)
+    return list(builds.items())
+
+
 def lag_levels(lag_tau=None) -> list:
     """List the actuator-lag time constants to run inside one env build.
 
@@ -152,9 +182,9 @@ def scenario_metrics(qvel_hist: np.ndarray, dt: float) -> dict:
     }
 
 
-def _pin(state, cmd, bias, latency=None):
-    """Pin command, gyro bias, and optionally control latency for the
-    next step.
+def _pin(state, cmd, bias, latency=None, vib_gain=None):
+    """Pin command, gyro bias, and optionally control latency and the
+    vibration gain for the next step.
 
     This is the same in-place-dict mechanism as the course follower's
     _hold_command. Values change, structure does not, so nothing retraces.
@@ -164,16 +194,23 @@ def _pin(state, cmd, bias, latency=None):
     latency the env drew for the episode, so a cell measures a chosen
     constant latency.
     The random draw lands on the worst case in only about one seed in six.
+    The vibration pin overwrites info["gyro_vib_gain"], which reset filled
+    from obs_noise.gyro_vib, so a cell measures a chosen gain on an env
+    built for another one.
     """
     state.info["command"] = cmd
     state.info["steps_since_cmd"] = jp.zeros_like(state.info["steps_since_cmd"])
     state.info["gyro_bias"] = bias
     if latency is not None:
         state.info["ctrl_delay"] = jp.int32(latency)
+    if vib_gain is not None:
+        state.info["gyro_vib_gain"] = jp.float32(vib_gain)
 
 
-def _rollout(env, reset, step, inf, cmd, n_steps, bias, seed, latency=None):
-    """Roll out `n_steps` under a fixed command and pinned bias/latency.
+def _rollout(env, reset, step, inf, cmd, n_steps, bias, seed, latency=None,
+             vib_gain=None):
+    """Roll out `n_steps` under a fixed command and pinned bias, latency
+    and vibration gain.
 
     Returns (qvel_hist, vx_hist, fell_at). The histories exclude the
     first SETTLE_STEPS. fell_at is a step index, or None when the robot
@@ -183,7 +220,7 @@ def _rollout(env, reset, step, inf, cmd, n_steps, bias, seed, latency=None):
     state = reset(rng)
     qvel_hist, vx_hist = [], []
     for i in range(n_steps):
-        _pin(state, cmd, bias, latency)
+        _pin(state, cmd, bias, latency, vib_gain)
         rng, k = jax.random.split(rng)
         act, _ = inf(state.obs, k)
         state = step(state, act)
@@ -197,8 +234,9 @@ def _rollout(env, reset, step, inf, cmd, n_steps, bias, seed, latency=None):
 
 
 def _cell(env, reset, step, inf, bias, seeds, seed_base, stand_steps,
-          walk_steps, walk_vx, dt, latency=None):
-    """Run one (bias vector, latency) cell, a stand and a walk over `seeds`."""
+          walk_steps, walk_vx, dt, latency=None, vib_gain=None):
+    """Run one (bias vector, latency, vib gain) cell, a stand and a walk
+    over `seeds`."""
     stand_cmd = jp.array([0.0, 0.0, 0.0, HEIGHT_CMD])
     walk_cmd = jp.array([walk_vx, 0.0, 0.0, HEIGHT_CMD])
     bias_jp = jp.asarray(bias)
@@ -211,7 +249,7 @@ def _cell(env, reset, step, inf, bias, seeds, seed_base, stand_steps,
         for s in range(seeds):
             qvel, vx, fell_at = _rollout(
                 env, reset, step, inf, cmd, steps, bias_jp, seed_base + s,
-                latency,
+                latency, vib_gain,
             )
             if fell_at is not None:
                 fell.append(round(fell_at * dt, 2))
@@ -232,8 +270,8 @@ def _cell(env, reset, step, inf, bias, seeds, seed_base, stand_steps,
 
 
 def _lag_str(lag) -> str:
-    """Show a lag of 0 as "off", the way an unset vib gain is shown. Zero
-    is not "no value", it is the ideal-actuator cell."""
+    """A lag of 0 prints as "off", like an unset vib gain. It is the
+    ideal-actuator cell."""
     return "off" if not lag else f"{lag:g}"
 
 
@@ -270,31 +308,30 @@ def run_grid(run_dir: Path, bias_levels, axes, noise_levels, seeds,
              latency_levels=(None,), lag_taus=(0.0,)) -> dict:
     """Run the full grid for one run. Writes and returns its imu_grid.json.
 
-    Each entry of `noise_levels` is one env build. Inside a build the grid
-    crosses `lag_taus` x `latency_levels` x the bias cells, so a cell can
-    carry several faults at once, the way the machine does.
+    `noise_levels` lists the (noise, vib) cells. env_builds groups them
+    into one build per white-noise scale, because only that scale is baked
+    into the compiled env. Inside a build the grid crosses `lag_taus` x
+    the build's vibration gains x `latency_levels` x the bias cells, so a
+    cell can carry several faults at once, the way the machine does.
 
     A lag of 0 keeps the env's own ideal actuators. A lag above 0 swaps in
     the battery's explicit-PD substep loop (make_lagged_rollout_fns), where
     the joint torque follows its target with a first-order delay, the way a
     real drive does. The env's actuators apply torque instantly and cannot
     show that delay. Each lag value is its own JIT compile in every env
-    build, so a long lag list is slow to start.
+    build, so a long lag list is slow to start. The lagged step advances
+    the gyro-vib resonator on its own applied torque, so a vibration gain
+    acts in a lagged cell too.
     """
     cells = []
     print(f"\nimu_grid -- {run_dir}")
     print(_HEADER)
-    for noise, vib in noise_levels:
-        overrides = {}
+    for noise, vibs in env_builds(noise_levels):
+        overrides = None
         if noise is not None:
-            overrides.setdefault("obs_noise", {})["gyro"] = noise
-        if vib is not None:
-            # The resonator updates inside env.step, so its gain has to
-            # enter through the env config. Pinning an info value, the way
-            # bias and latency enter, cannot switch it on.
-            overrides.setdefault("obs_noise", {})["gyro_vib"] = vib
+            overrides = {"obs_noise": {"gyro": noise}}
         run, env, ckpt, inf = load_checkpoint_policy(
-            run_dir, env_overrides=overrides or None
+            run_dir, env_overrides=overrides
         )
         dt = env.dt
         stand_steps = int(round(stand_sec / dt))
@@ -305,22 +342,24 @@ def run_grid(run_dir: Path, bias_levels, axes, noise_levels, seeds,
                 reset, step = jax.jit(reset_fn), jax.jit(step_fn)
             else:
                 reset, step = jax.jit(env.reset), jax.jit(env.step)
-            for latency in latency_levels:
-                for axis, bias in grid_cells(bias_levels, axes):
-                    cell = _cell(
-                        env, reset, step, inf, bias_vector(axis, bias) if bias
-                        else np.zeros(3), seeds, seed_base, stand_steps,
-                        walk_steps, walk_vx, dt, latency,
-                    )
-                    entry = {"noise_gyro": noise, "vib_gain": vib,
-                             "latency": latency, "lag_tau": float(lag_tau),
-                             "axis": axis, "bias": bias, **cell}
-                    cells.append(entry)
-                    print(
-                        _cell_row(cell, noise, axis, bias, latency, vib,
-                                  lag_tau),
-                        flush=True,
-                    )
+            for vib in vibs:
+                for latency in latency_levels:
+                    for axis, bias in grid_cells(bias_levels, axes):
+                        cell = _cell(
+                            env, reset, step, inf,
+                            bias_vector(axis, bias) if bias else np.zeros(3),
+                            seeds, seed_base, stand_steps, walk_steps,
+                            walk_vx, dt, latency, vib,
+                        )
+                        entry = {"noise_gyro": noise, "vib_gain": vib,
+                                 "latency": latency, "lag_tau": float(lag_tau),
+                                 "axis": axis, "bias": bias, **cell}
+                        cells.append(entry)
+                        print(
+                            _cell_row(cell, noise, axis, bias, latency, vib,
+                                      lag_tau),
+                            flush=True,
+                        )
     results = {
         "run": run["run_name"],
         "checkpoint": ckpt.name,
@@ -333,24 +372,246 @@ def run_grid(run_dir: Path, bias_levels, axes, noise_levels, seeds,
         "band_hz": list(NYQUIST_BAND_HZ),
         "cells": cells,
     }
-    out = run_dir / "imu_grid" / "imu_grid.json"
+    write_run_json(run_dir, results)
+    return results
+
+
+def run_json_path(run_dir: Path) -> Path:
+    return run_dir / "imu_grid" / "imu_grid.json"
+
+
+def write_run_json(run_dir: Path, results: dict) -> dict:
+    out = run_json_path(run_dir)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(results, indent=1))
     return results
 
 
+def bisect_threshold(probe, lo, hi, tol, max_iters=20) -> dict:
+    """Find the gain where `probe` flips from stable to unstable.
+
+    `probe(gain)` answers whether that gain is unstable. It may return a
+    plain bool, or a (unstable, qvel_rms) pair when it has a measured
+    number to record. The search assumes the answer only ever flips once,
+    from stable to unstable, as the gain rises, which is what a stability
+    margin means.
+
+    The bracket has to hold that flip. The low end must come back stable
+    and the high end unstable. When it does not, "critical_gain" stays
+    empty and "outcome" says which side the answer is on, either "above
+    the bracket" or "below the bracket". A bracket that never flips has
+    no threshold in it, and a guessed number would read like a measured
+    one. Saying "above 0.5" is still a real result, so "reason" carries
+    the gain and the number the failing end measured. Otherwise the
+    bracket is halved until it is narrower than `tol`, and the critical
+    gain is its midpoint.
+
+    "probes" holds every question asked, in order, including the two
+    bracket checks. Each entry is the gain, the answer, and whatever the
+    probe measured there.
+    """
+    probes = []
+
+    def ask(gain):
+        answer = probe(gain)
+        unstable, qvel_rms = (
+            answer if isinstance(answer, tuple) else (answer, None)
+        )
+        unstable = bool(unstable)
+        probes.append((round(float(gain), 6), unstable, qvel_rms))
+        return unstable
+
+    def measured():
+        """What the last probe measured, for the reason line."""
+        qvel_rms = probes[-1][2]
+        return "" if qvel_rms is None else f", qvel_rms {qvel_rms:g}"
+
+    lo, hi = float(lo), float(hi)
+    result = {"lo": lo, "hi": hi, "tol": float(tol), "critical_gain": None,
+              "probes": probes, "reason": None, "outcome": "bracketed"}
+    if not lo < hi:
+        result["outcome"] = "empty bracket"
+        result["reason"] = f"lo {lo:g} is not below hi {hi:g}"
+        return result
+    if ask(lo):
+        result["outcome"] = "below the bracket"
+        result["reason"] = (
+            f"lo probe unstable at gain {lo:g}{measured()}, so the critical "
+            f"gain is below {lo:g}"
+        )
+        return result
+    if not ask(hi):
+        result["outcome"] = "above the bracket"
+        result["reason"] = (
+            f"hi probe stable at gain {hi:g}{measured()}, so the critical "
+            f"gain is above {hi:g}"
+        )
+        return result
+    for _ in range(max_iters):
+        if hi - lo <= tol:
+            break
+        mid = 0.5 * (lo + hi)
+        if ask(mid):
+            hi = mid
+        else:
+            lo = mid
+    result.update(lo=round(lo, 6), hi=round(hi, 6),
+                  critical_gain=round(0.5 * (lo + hi), 6))
+    return result
+
+
+def stand_probe(env, reset, step, inf, seeds, seed_base, stand_steps, dt,
+                threshold):
+    """Build the probe bisect_threshold asks. It answers whether the
+    stand is unstable at a given vibration gain.
+
+    One stand rollout per seed, at the pinned gain, no walk. A seed counts
+    as unstable when it falls, or when its qvel_rms over the measured
+    window is above `threshold`. The cell is unstable when any seed falls,
+    or when a majority of the seeds are over the threshold. So one noisy
+    seed out of three still counts as stable, and two do not.
+
+    Also returns the mean qvel_rms of the seeds that stayed up, so the
+    probe list shows how the stand grew from motionless to shaking.
+    """
+    stand_cmd = jp.array([0.0, 0.0, 0.0, HEIGHT_CMD])
+    zero_bias = jp.zeros(3)
+    n = SETTLE_STEPS + stand_steps
+
+    def probe(gain):
+        rms, falls = [], 0
+        for s in range(seeds):
+            qvel, _, fell_at = _rollout(
+                env, reset, step, inf, stand_cmd, n, zero_bias,
+                seed_base + s, None, gain,
+            )
+            if fell_at is not None:
+                falls += 1
+                continue
+            rms.append(scenario_metrics(qvel, dt)["qvel_rms"])
+        over = falls + sum(1 for r in rms if r > threshold)
+        unstable = falls > 0 or 2 * over > seeds
+        mean_rms = round(float(np.mean(rms)), 4) if rms else None
+        return unstable, mean_rms
+
+    return probe
+
+
+def run_bisect(run_dir: Path, lo, hi, tol, threshold, seeds, seed_base,
+               stand_sec) -> tuple:
+    """Bisect the critical vibration gain of one run's policy.
+
+    Returns (run name, the bisect_threshold result plus the settings that
+    produced it). One env build and one compile cover the whole search,
+    because the gain is pinned per step.
+    """
+    run, env, ckpt, inf = load_checkpoint_policy(run_dir)
+    dt = env.dt
+    reset, step = jax.jit(env.reset), jax.jit(env.step)
+    probe = stand_probe(
+        env, reset, step, inf, seeds, seed_base,
+        int(round(stand_sec / dt)), dt, threshold,
+    )
+    result = bisect_threshold(probe, lo, hi, tol)
+    result.update({
+        "checkpoint": ckpt.name,
+        "threshold": float(threshold),
+        "seeds": seeds,
+        "seed_base": seed_base,
+        "stand_sec": stand_sec,
+    })
+    return run["run_name"], result
+
+
+def critical_gain_str(crit: dict) -> str:
+    """The headline value, or where it is when the bracket missed it."""
+    if crit["critical_gain"] is not None:
+        return f"{crit['critical_gain']:g}"
+    if crit.get("outcome") == "above the bracket":
+        return f"above {crit['hi']:g}"
+    if crit.get("outcome") == "below the bracket":
+        return f"below {crit['lo']:g}"
+    return "none"
+
+
+def bisect_line(run_name: str, crit: dict) -> str:
+    """One line per run, for stdout."""
+    where = (
+        f"bracket {crit['lo']:g}-{crit['hi']:g}"
+        if crit["critical_gain"] is not None else crit["reason"]
+    )
+    return (
+        f"critical vib gain -- {run_name}: {critical_gain_str(crit)}. "
+        f"{where}. Threshold qvel_rms {crit['threshold']:g} rad/s, "
+        f"{crit['seeds']} seeds, {len(crit['probes'])} probes."
+    )
+
+
+def merge_critical_gain(run_dir: Path, results, run_name: str,
+                        crit: dict) -> dict:
+    """Put `crit` under "critical_gain" in the run's imu_grid.json.
+
+    `results` is the grid this invocation just ran, or None when only the
+    bisection ran. In that case the file on disk is read and updated, so a
+    bisection never throws away cells an earlier grid measured.
+    """
+    if results is None:
+        path = run_json_path(run_dir)
+        results = (
+            json.loads(path.read_text()) if path.exists() else {"cells": []}
+        )
+    results.setdefault("run", run_name)
+    results["critical_gain"] = crit
+    return write_run_json(run_dir, results)
+
+
+def _critical_gain_table(all_results: list) -> list:
+    """The critical-gain summary, or nothing when no run was bisected.
+
+    It leads the report because it is the one number to compare across
+    policies. Each cell below it is a single measurement, and no single
+    measurement is a verdict.
+    """
+    rows = [r for r in all_results if r.get("critical_gain")]
+    if not rows:
+        return []
+    lines = [
+        "## Critical gain per run",
+        "",
+        "The gyro-vib gain where the stand stops being motionless, found "
+        "by bisection. Higher is a wider stability margin. A gain given as "
+        "\"above\" or \"below\" a number means the bracket did not hold the "
+        "flip, so the margin is on that side of it. The threshold is the "
+        "standing qvel_rms in rad/s that counts as unstable, and it is a "
+        "chosen number, so only compare runs bisected at the same one.",
+        "",
+        "| run | critical gain | bracket | threshold (qvel_rms) | seeds |",
+        "|---|---|---|---|---|",
+    ]
+    for res in rows:
+        c = res["critical_gain"]
+        lines.append(
+            f"| {res['run']} | {critical_gain_str(c)} "
+            f"| {c['lo']:g}-{c['hi']:g} | {c['threshold']:g} | {c['seeds']} |"
+        )
+    return lines + [""]
+
+
 def write_report(out: Path, all_results: list) -> None:
     """Write one markdown table over every run, for cross-policy comparison."""
-    lines = [
-        "# IMU robustness grid",
-        "",
-        "| run | noise | vib | lat | lag | axis | bias | stand vib | "
-        "stand band20-25 | stand qvel_rms | stand falls | walk vib | "
-        "walk vx_err | walk falls |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
-    ]
+    lines = ["# IMU robustness grid", ""]
+    lines += _critical_gain_table(all_results)
+    if any(res.get("cells") for res in all_results):
+        lines += [
+            "## Cells",
+            "",
+            "| run | noise | vib | lat | lag | axis | bias | stand vib | "
+            "stand band20-25 | stand qvel_rms | stand falls | walk vib | "
+            "walk vx_err | walk falls |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        ]
     for res in all_results:
-        for c in res["cells"]:
+        for c in res.get("cells", ()):
             st, wk = c["stand"], c["walk"]
 
             def _m(d, key):
@@ -393,16 +654,18 @@ def main():
                     "only)")
     ap.add_argument("--vib-gain", type=float, nargs="+", default=None,
                     help="gains for the vibration feedback on the actor's "
-                    "gyro (obs_noise.gyro_vib). The policy's own torque jitter "
+                    "gyro (info['gyro_vib_gain'], set at reset from "
+                    "obs_noise.gyro_vib). The policy's own torque jitter "
                     "comes back into its gyro through a resonator at half "
-                    "the control rate. Each value rebuilds the env. Sweep "
-                    "it to find the gain where standing goes unstable "
-                    "(default: off)")
+                    "the control rate. Each value is pinned per step, so no "
+                    "value rebuilds the env. Sweep it to see where standing "
+                    "goes unstable, or use --bisect-vib to find that gain "
+                    "properly (default: off)")
     ap.add_argument("--cross-noise-vib", action="store_true",
                     help="also run every noise level paired with every "
                     "vibration gain, on top of the one-at-a-time cells. The "
-                    "real robot has both at once. Each pair is another env "
-                    "build (default: off)")
+                    "real robot has both at once. The pairs cost rollouts "
+                    "and no env build (default: off)")
     ap.add_argument("--lag-tau", type=float, nargs="+", default=[0.0],
                     help="first-order actuator-torque lags in seconds, via "
                     "the battery's explicit-PD path. 0 keeps the native "
@@ -424,12 +687,36 @@ def main():
                     help="measured walking window per rollout (default 10)")
     ap.add_argument("--walk-vx", type=float, default=0.4,
                     help="walk scenario's commanded speed (default 0.4)")
+    ap.add_argument("--bisect-vib", type=float, nargs=2, default=None,
+                    metavar=("LO", "HI"),
+                    help="after the grid, bisect this bracket for the "
+                    "critical vibration gain, the gain where the policy's "
+                    "stand stops being motionless. LO must come back stable "
+                    "and HI unstable, or the search reports that instead of "
+                    "a number. Stand rollouts only, no walk (default: off)")
+    ap.add_argument("--bisect-only", action="store_true",
+                    help="skip the grid and only bisect. An existing "
+                    "imu_grid.json keeps its cells. Only the critical_gain "
+                    "block is rewritten (default: off)")
+    ap.add_argument("--bisect-tol", type=float, default=0.02,
+                    help="stop bisecting once the bracket is this narrow "
+                    "(default 0.02)")
+    ap.add_argument("--bisect-threshold", type=float, default=0.1,
+                    help="a probed gain counts as unstable when the standing "
+                    "qvel_rms is above this many rad/s in a majority of the "
+                    "--seeds seeds, or when any seed falls. A quiet stand "
+                    "measures 0.01 to 0.07 rad/s and a real limit cycle "
+                    "reaches about 3, so 0.1 is clear of both. It is a "
+                    "chosen number, so only compare policies bisected at the "
+                    "same one (default 0.1)")
     ap.add_argument("--out", default=None,
                     help="combined markdown report path (optional)")
     args = ap.parse_args()
 
-    # One env build per (noise, vib) pair, one JIT compile per lag value
-    # inside each build.
+    if args.bisect_only and not args.bisect_vib:
+        ap.error("--bisect-only needs --bisect-vib LO HI")
+    # One env build per noise level, one JIT compile per lag value inside
+    # each build. The vibration gain is pinned, so it costs neither.
     noise_levels = noise_vib_levels(
         args.noise_gyro, args.vib_gain, args.cross_noise_vib
     )
@@ -437,11 +724,23 @@ def main():
     latency_levels = [None] + (args.latency_substeps or [])
     all_results = []
     for run in args.runs:
-        all_results.append(run_grid(
-            Path(run), args.bias_levels, args.axes, noise_levels,
-            args.seeds, args.seed_base, args.stand_sec, args.walk_sec,
-            args.walk_vx, latency_levels, lag_taus,
-        ))
+        run_dir = Path(run)
+        results = None
+        if not args.bisect_only:
+            results = run_grid(
+                run_dir, args.bias_levels, args.axes, noise_levels,
+                args.seeds, args.seed_base, args.stand_sec, args.walk_sec,
+                args.walk_vx, latency_levels, lag_taus,
+            )
+        if args.bisect_vib:
+            lo, hi = args.bisect_vib
+            run_name, crit = run_bisect(
+                run_dir, lo, hi, args.bisect_tol, args.bisect_threshold,
+                args.seeds, args.seed_base, args.stand_sec,
+            )
+            print(bisect_line(run_name, crit), flush=True)
+            results = merge_critical_gain(run_dir, results, run_name, crit)
+        all_results.append(results)
     if args.out:
         write_report(Path(args.out), all_results)
 

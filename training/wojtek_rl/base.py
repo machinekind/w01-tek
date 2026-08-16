@@ -45,9 +45,16 @@ def gyro_vib_step(vib, tau_rate, gain, decay, mix=None):
     sat. A drive at that frequency is amplified by 1/(1-decay). A
     constant drive is damped by 1/(1+decay). This stays a pure function
     so the recurrence can be tested without an env.
+
+    The gain may be a traced value. The env carries it per episode in
+    ``info["gyro_vib_gain"]``, so a sweep can change it without a
+    recompile. A gain of 0 therefore selects a zero rather than
+    multiplying by one. The step then returns exactly zero whatever the
+    drive and the state were, instead of leaning on ``0 * x`` staying
+    zero. Turning the gain off also clears the state on the same step.
     """
     m = VIB_MIX if mix is None else mix
-    return -decay * vib + gain * (m @ tau_rate)
+    return jp.where(gain == 0.0, 0.0, -decay * vib + gain * (m @ tau_rate))
 
 
 # Actuator indices of the knee cranks (third joints), paths.LEGS order.

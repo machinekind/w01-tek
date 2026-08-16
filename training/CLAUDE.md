@@ -47,7 +47,7 @@ payloads below.
 | `train.sh` | One training run of any `+experiment=` preset, with optional terrain build and wandb setup. |
 | `stiff_ladder.sh` | Gated PD-stiffness ladder: fine-tunes successively stiffer rungs from a start checkpoint and stops on gate rejection or diminishing returns. |
 | `stiff_grid.sh` | Eval-only sim2real robustness grid over existing runs, sweeping Kt miscalibration, actuator lag and torque envelope, then one aggregated report. |
-| `imu_grid.sh` | Eval-only IMU robustness grid over existing runs. Sweeps a pinned gyro bias and optional white gyro-noise levels, and scores standing and walking vibration, the 20-25 Hz limit-cycle band, falls, and walk tracking. |
+| `imu_grid.sh` | Eval-only IMU robustness grid over existing runs. Sweeps a pinned gyro bias, and optionally white gyro noise, the gyro-vib feedback gain, pinned control latency, and actuator-torque lag, alone or combined. Scores standing and walking vibration, the 20-25 Hz limit-cycle band, falls, and walk tracking. |
 | `terrain_scan.sh` | Eval-only terrain measurement suite: builds the fixed measurement arena and scores checkpoints on it. |
 | `terrain_sizing.sh` | Bounded terrain training slices at several env counts, reporting peak GPU memory and steps/s per size. |
 

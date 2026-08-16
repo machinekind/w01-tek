@@ -1,9 +1,9 @@
 """Model-free tests of the IMU robustness grid. They check that the
 spectral detector detects the failure mode it was built for, a 25 Hz
 standing limit cycle at the 50 Hz control rate, and they check the grid's
-cell layout and the bias vectors. Applying the bias in a rollout uses the
-courses' pin mechanism and the env's info["gyro_bias"] path, which
-test_gyro_bias.py covers.
+cell layout, its env-build and lag enumeration, and the bias vectors.
+Applying the bias in a rollout uses the courses' pin mechanism and the
+env's info["gyro_bias"] path, which test_gyro_bias.py covers.
 """
 
 import numpy as np
@@ -13,6 +13,8 @@ from wojtek_rl.imu_grid import (
     NYQUIST_BAND_HZ,
     bias_vector,
     grid_cells,
+    lag_levels,
+    noise_vib_levels,
     scenario_metrics,
 )
 
@@ -73,3 +75,43 @@ def test_grid_cells_without_baseline():
 def test_bias_vector_is_one_axis(axis, idx):
     v = bias_vector(axis, 0.1)
     assert v[idx] == 0.1 and np.count_nonzero(v) == 1
+
+
+def test_env_builds_default_to_one_mechanism_each():
+    levels = noise_vib_levels([0.4, 0.8], [0.1, 0.3])
+    assert levels[0] == (None, None), "the untouched baseline runs first"
+    assert levels == [
+        (None, None), (0.4, None), (0.8, None), (None, 0.1), (None, 0.3)
+    ]
+    assert all(n is None or v is None for n, v in levels), (
+        "without --cross-noise-vib no cell carries both faults"
+    )
+
+
+def test_crossing_adds_every_pair():
+    plain = noise_vib_levels([0.4, 0.8], [0.1, 0.3])
+    crossed = noise_vib_levels([0.4, 0.8], [0.1, 0.3], cross=True)
+    assert crossed[0] == (None, None), "the baseline still runs first"
+    assert crossed[:len(plain)] == plain, "the single-fault cells stay"
+    assert set(crossed[len(plain):]) == {
+        (0.4, 0.1), (0.4, 0.3), (0.8, 0.1), (0.8, 0.3)
+    }
+
+
+def test_baseline_is_the_whole_grid_when_nothing_is_swept():
+    assert noise_vib_levels() == [(None, None)]
+    assert noise_vib_levels(None, None, cross=True) == [(None, None)]
+    # Crossing needs both lists. One list alone has nothing to pair with.
+    assert noise_vib_levels([0.4], None, cross=True) == [(None, None),
+                                                        (0.4, None)]
+
+
+def test_lag_levels_default_to_the_ideal_actuators():
+    assert lag_levels() == [0.0]
+    assert lag_levels([]) == [0.0]
+
+
+def test_lag_levels_lead_with_zero_and_drop_repeats():
+    assert lag_levels([0.005, 0.0, 0.01]) == [0.0, 0.005, 0.01]
+    assert lag_levels([0.005, 0.005, 0.01]) == [0.005, 0.01]
+    assert lag_levels(["0.005", 0.01]) == [0.005, 0.01], "strings parse"

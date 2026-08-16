@@ -871,7 +871,7 @@ using the preset.
 | `video-probe` | `./training/run.sh video-probe --run runs/<name> [--arena {flat,train,eval} --cell NAME --seconds S --fps F --vx V --camera NAME --out FILE --list-cells]`; renders the showcase clip: 960x720 with every overlay on. `--cell` films one measurement cell of the eval arena from the spawn `terrain-scan` uses; `--arena train`/`eval` needs a terrain run. Output lands in `training/videos/<run_name>/` unless `--out` says otherwise. |
 | `battery` | `./training/run.sh battery --run runs/<name> [--out FILE --alpha A --lag-tau T]`; writes the fixed comparison battery. `--alpha`/`--lag-tau` are eval-only plant perturbations, see "Robustness grid (eval-only)" below. |
 | `courses` | `./training/run.sh courses --run runs/<name> [--seeds N --only NAME... --video --video-size WxH --overlay-torque --overlay-camera --paths --out FILE --list]`; writes the path-following course benchmark. `--list` prints the catalogue without loading a run. See "Course benchmark" below. |
-| `imu-grid` | `./training/run.sh imu-grid --runs runs/<name>... [--bias-levels B... --axes x y z --noise-gyro S... --vib-gain G... --latency-substeps D... --lag-tau T --seeds N --stand-sec S --walk-sec S --walk-vx V --out FILE]`; writes the IMU robustness grid. Its axes are pinned gyro bias, white gyro noise, the gyro-vib feedback loop, pinned control latency, and actuator-torque lag. See "IMU robustness grid" below. |
+| `imu-grid` | `./training/run.sh imu-grid --runs runs/<name>... [--bias-levels B... --axes x y z --noise-gyro S... --vib-gain G... --cross-noise-vib --latency-substeps D... --lag-tau T... --seeds N --stand-sec S --walk-sec S --walk-vx V --out FILE]`; writes the IMU robustness grid. Its axes are pinned gyro bias, white gyro noise, the gyro-vib feedback loop, pinned control latency, and actuator-torque lag, and they can be combined in one cell. See "IMU robustness grid" below. |
 | `report` | `./training/run.sh report --run runs/<name> [--out-json FILE --out-md FILE]`; writes battery, torque, power, impact proxy, and termination summary. |
 | `export` | `./training/run.sh export --run runs/<name> [--out DIR]`; writes `policy.npz` plus `policy_meta.json`, the schema-2 deployment contract built from the run's env (`wojtek_rl/deploy_contract.py`), and validates the deploy runtime end-to-end against the env before writing. |
 | `app` | `./training/run.sh app [--host HOST --port PORT]`; runs the interactive navigation demo. `WOJTEK_RUN_DIR`, `HOST`, and `PORT` environment variables supply defaults; see [demo README](../demo/README.md). |
@@ -1111,6 +1111,36 @@ one seed in six, so an unpinned grid mostly measures mild latency.
 torque. The env's ideal actuators apply torque instantly and cannot show
 that lag.
 
+The machine does not hand the policy one fault at a time. It shakes, its
+drives lag, and its gyro drifts, all at the same moment, so the grid can
+run its axes together. What can be combined depends on where a setting
+takes effect:
+
+- Bias and pinned latency are values written into `info` each step, so
+  they are always crossed. Nothing recompiles.
+- `--lag-tau` takes a list. Every value runs inside every env build, next
+  to the bias and latency cells that build already covers. A lag of 0 is
+  the env's own ideal actuators, and it runs first when it is in the
+  list. Each value is one JIT compile per env build.
+- The noise scale and the vibration gain are baked into the env, so each
+  value is a rebuild. By default they are swept one at a time, and a bad
+  cell then names the single thing that broke it. `--cross-noise-vib`
+  adds every noise level paired with every vibration gain. The baseline
+  cell, where both are left as trained, always comes first.
+
+So a full grid costs one env build per `(noise, vib)` pair, one compile
+per lag value inside each build, and a rollout per bias and latency cell.
+Find where a policy is weak with the cheap one-at-a-time grid first, then
+compose only around that spot. `noise_vib_levels` and `lag_levels` in
+`imu_grid.py` are the plain functions that enumerate all of this, and
+`tests/unit/test_imu_grid.py` covers them without an env.
+
+Every cell in `imu_grid.json` carries its own `lag_tau`, next to
+`noise_gyro`, `vib_gain`, `latency`, `axis` and `bias`. The list of lags
+the invocation ran is at the top of the file as `lag_taus`. The stdout
+table and the `--out` markdown both have a `lag` column, where a lag of 0
+reads `off`, the same way an unswept `vib` does.
+
 Each cell scores a 10 s stand and a 10 s straight walk over a few seeds.
 The scores are `vibration` (the battery's index of joint-velocity power
 above 5 Hz), `band_20_25` (the power fraction in the 20-25 Hz band where
@@ -1148,6 +1178,12 @@ without. A single cell is not a pass or fail verdict.
 
 # Probe the stability margin: raise white gyro noise past the trained value
 ./training/run.sh imu-grid --runs runs/<name> --noise-gyro 0.4 0.8
+
+# Compose the faults: two vibration gains, each with and without 10 ms of
+# drive lag, and both crossed with the raised noise
+./training/run.sh imu-grid --runs runs/<name> \
+  --noise-gyro 0.4 --vib-gain 0.1 0.3 --cross-noise-vib \
+  --lag-tau 0 0.01
 ```
 
 The course benchmark can run under the same pinned bias.
@@ -1157,7 +1193,10 @@ never overwrite the frozen `courses.json`. The follower constants stay
 frozen. The bias pin changes only what the actor's gyro reads.
 [`training/jobs/imu_grid.sh`](../jobs/imu_grid.sh) is the payload form.
 It takes `CKPTS_LIST` (required), `BIAS_LEVELS`, `AXES`, `NOISE_GYRO`,
-`SEEDS`, `STAND_SEC`/`WALK_SEC`/`WALK_VX`, and `IMU_GRID_OUT`.
+`VIB_GAIN`, `LAG_TAU`, `LATENCY_SUBSTEPS`, `CROSS_NOISE_VIB`, `SEEDS`,
+`STAND_SEC`/`WALK_SEC`/`WALK_VX`, and `IMU_GRID_OUT`. The sweep lists are
+space separated, and an empty one drops its flag, so the grid runs the
+run's own trained value on that axis.
 
 ## Job payload configuration
 

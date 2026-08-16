@@ -1,6 +1,8 @@
 #!/bin/bash
-# IMU robustness grid: an eval-only gyro-bias sweep, plus optional white
-# gyro-noise levels, over existing runs. Standing and straight-walk
+# IMU robustness grid: an eval-only gyro-bias sweep over existing runs,
+# plus optional white gyro noise, gyro-vib feedback, pinned control
+# latency, and actuator-torque lag. Those axes can be combined, because
+# the real robot carries all of them at once. Standing and straight-walk
 # rollouts are scored on vibration, the near-Nyquist 20-25 Hz band, falls,
 # and walk tracking. See wojtek_rl/imu_grid.py for what a cell means and
 # why the bias is pinned. The grid runs on CPU for determinism and parity
@@ -19,6 +21,20 @@ source training/jobs/_lib.sh
 # Optional absolute white gyro-noise scales to sweep. Each value rebuilds
 # the measurement env. Empty keeps the run's own trained value only.
 : "${NOISE_GYRO:=}"
+# Optional gains for the vibration feedback on the actor's gyro
+# (obs_noise.gyro_vib). Each value rebuilds the measurement env. Empty
+# leaves the loop off.
+: "${VIB_GAIN:=}"
+# Actuator-torque lag time constants in seconds; 0 keeps the env's own
+# ideal actuators. Every value runs inside every env build and costs a
+# JIT compile there.
+: "${LAG_TAU:=0}"
+# Optional control-latency substep counts to pin, one grid axis each.
+# Empty leaves the env's own per-episode draw.
+: "${LATENCY_SUBSTEPS:=}"
+# 1 also runs every NOISE_GYRO level paired with every VIB_GAIN, on top
+# of the one-at-a-time cells. Each pair is another env build.
+: "${CROSS_NOISE_VIB:=0}"
 # Rollouts per cell and scenario.
 : "${SEEDS:=3}"
 # Measured standing / walking window per rollout, seconds.
@@ -49,6 +65,22 @@ NOISE_FLAG=()
 if [ -n "$NOISE_GYRO" ]; then
     NOISE_FLAG=(--noise-gyro $NOISE_GYRO)
 fi
+VIB_FLAG=()
+if [ -n "$VIB_GAIN" ]; then
+    VIB_FLAG=(--vib-gain $VIB_GAIN)
+fi
+LAG_FLAG=()
+if [ -n "$LAG_TAU" ]; then
+    LAG_FLAG=(--lag-tau $LAG_TAU)
+fi
+LATENCY_FLAG=()
+if [ -n "$LATENCY_SUBSTEPS" ]; then
+    LATENCY_FLAG=(--latency-substeps $LATENCY_SUBSTEPS)
+fi
+CROSS_FLAG=()
+if [ "$CROSS_NOISE_VIB" != "0" ]; then
+    CROSS_FLAG=(--cross-noise-vib)
+fi
 
 # Guard the array expansion. Under set -u, bash before 4.4 treats an empty
 # array expanded the plain way as unbound.
@@ -59,4 +91,8 @@ run_main python3 -m wojtek_rl.imu_grid \
     --seeds "$SEEDS" \
     --stand-sec "$STAND_SEC" --walk-sec "$WALK_SEC" --walk-vx "$WALK_VX" \
     ${NOISE_FLAG[@]+"${NOISE_FLAG[@]}"} \
+    ${VIB_FLAG[@]+"${VIB_FLAG[@]}"} \
+    ${LAG_FLAG[@]+"${LAG_FLAG[@]}"} \
+    ${LATENCY_FLAG[@]+"${LATENCY_FLAG[@]}"} \
+    ${CROSS_FLAG[@]+"${CROSS_FLAG[@]}"} \
     --out "$IMU_GRID_OUT"

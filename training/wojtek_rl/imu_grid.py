@@ -32,6 +32,16 @@ env_overrides, one recompile per level. Use it to probe the stability
 margin of a policy whose nominal cell looks clean. Raise the noise past
 the training value and watch which policy's vibration blows up first.
 
+The real robot does not hand the policy one fault at a time. It shakes,
+its drives lag, and its gyro drifts, all at once. So the grid can compose
+its axes. --lag-tau takes a list, and every lag value is run inside every
+env build, next to the bias and latency cells that env build already
+crosses. --cross-noise-vib adds the pairs of a noise level and a
+vibration gain to the env builds, on top of the single-mechanism cells.
+Both cost compile time: one env build per (noise, vib) pair, and one JIT
+compile per lag value inside each build. Start from the single-mechanism
+cells to find where a policy is weak, then compose only around that spot.
+
 Metrics per cell, over the post-settle window:
   - vibration: battery.vibration_index, the fraction of joint-velocity
     power above 5 Hz.
@@ -82,6 +92,46 @@ def grid_cells(bias_levels, axes) -> list:
     every axis."""
     cells = [("-", 0.0)] if 0.0 in bias_levels else []
     return cells + [(a, b) for b in bias_levels if b != 0.0 for a in axes]
+
+
+def noise_vib_levels(noise_gyro=None, vib_gain=None, cross=False) -> list:
+    """List the (noise, vib) pairs, one env build each.
+
+    None means "leave that setting as the run trained it". The baseline,
+    where both are left alone, always comes first, so every table starts
+    from the row the others are read against.
+
+    By default each level then appears on its own, so a cell that goes bad
+    names the one thing that broke it. With `cross` on, every noise level
+    is also paired with every vibration gain, because the real robot has
+    both at the same time. Each pair is another env build and another
+    compile, so the default keeps the grid cheap and the crossed grid is
+    something you ask for.
+    """
+    noise = list(noise_gyro or [])
+    vib = list(vib_gain or [])
+    levels = [(None, None)]
+    levels += [(n, None) for n in noise]
+    levels += [(None, v) for v in vib]
+    if cross:
+        levels += [(n, v) for n in noise for v in vib]
+    return levels
+
+
+def lag_levels(lag_tau=None) -> list:
+    """List the actuator-lag time constants to run inside one env build.
+
+    0 means the env's own ideal actuators, and it leads when it is asked
+    for, for the same reason the baseline leads above. Repeats are
+    dropped, because each value costs a JIT compile. An empty list means
+    the ideal actuators only.
+    """
+    out = []
+    for tau in (lag_tau if lag_tau else [0.0]):
+        tau = float(tau)
+        if tau not in out:
+            out.append(tau)
+    return ([0.0] if 0.0 in out else []) + [t for t in out if t != 0.0]
 
 
 def scenario_metrics(qvel_hist: np.ndarray, dt: float) -> dict:
@@ -181,8 +231,14 @@ def _cell(env, reset, step, inf, bias, seeds, seed_base, stand_steps,
     return out
 
 
+def _lag_str(lag) -> str:
+    """Show a lag of 0 as "off", the way an unset vib gain is shown. Zero
+    is not "no value", it is the ideal-actuator cell."""
+    return "off" if not lag else f"{lag:g}"
+
+
 def _cell_row(cell: dict, noise, axis: str, bias: float, latency=None,
-              vib=None) -> str:
+              vib=None, lag=0.0) -> str:
     def _f(d, key):
         v = d.get(key)
         return f"{v:>7.3f}" if v is not None else "      -"
@@ -192,7 +248,8 @@ def _cell_row(cell: dict, noise, axis: str, bias: float, latency=None,
     lat_s = "own" if latency is None else str(latency)
     vib_s = "off" if vib is None else f"{vib:g}"
     return (
-        f"{noise_s:>5} {vib_s:>5} {lat_s:>4} {axis:>4} {bias:>5.2f}  "
+        f"{noise_s:>5} {vib_s:>5} {lat_s:>4} {_lag_str(lag):>5} "
+        f"{axis:>4} {bias:>5.2f}  "
         f"{_f(st, 'vibration_mean')} {_f(st, 'band_20_25_mean')} "
         f"{_f(st, 'qvel_rms_mean')} "
         f"{st['falls']:>2}/{st['seeds']}  "
@@ -202,7 +259,7 @@ def _cell_row(cell: dict, noise, axis: str, bias: float, latency=None,
 
 
 _HEADER = (
-    f"{'noise':>5} {'vib':>5} {'lat':>4} {'axis':>4} {'bias':>5}  "
+    f"{'noise':>5} {'vib':>5} {'lat':>4} {'lag':>5} {'axis':>4} {'bias':>5}  "
     f"{'st.vib':>7} {'st.band':>7} {'st.rms':>7} {'falls':>5}  "
     f"{'wk.vib':>7} {'wk.verr':>7} {'falls':>5}"
 )
@@ -210,17 +267,22 @@ _HEADER = (
 
 def run_grid(run_dir: Path, bias_levels, axes, noise_levels, seeds,
              seed_base, stand_sec, walk_sec, walk_vx,
-             latency_levels=(None,), lag_tau=0.0) -> dict:
+             latency_levels=(None,), lag_taus=(0.0,)) -> dict:
     """Run the full grid for one run. Writes and returns its imu_grid.json.
 
-    `lag_tau` > 0 swaps in the battery's explicit-PD substep loop
-    (make_lagged_rollout_fns). The joint torque then follows its target
-    with a first-order delay, the way a real drive does. The env's own
-    actuators apply torque instantly and cannot show that delay.
+    Each entry of `noise_levels` is one env build. Inside a build the grid
+    crosses `lag_taus` x `latency_levels` x the bias cells, so a cell can
+    carry several faults at once, the way the machine does.
+
+    A lag of 0 keeps the env's own ideal actuators. A lag above 0 swaps in
+    the battery's explicit-PD substep loop (make_lagged_rollout_fns), where
+    the joint torque follows its target with a first-order delay, the way a
+    real drive does. The env's actuators apply torque instantly and cannot
+    show that delay. Each lag value is its own JIT compile in every env
+    build, so a long lag list is slow to start.
     """
     cells = []
-    print(f"\nimu_grid -- {run_dir}"
-          + (f" (lag_tau={lag_tau:g}s)" if lag_tau > 0 else ""))
+    print(f"\nimu_grid -- {run_dir}")
     print(_HEADER)
     for noise, vib in noise_levels:
         overrides = {}
@@ -234,27 +296,31 @@ def run_grid(run_dir: Path, bias_levels, axes, noise_levels, seeds,
         run, env, ckpt, inf = load_checkpoint_policy(
             run_dir, env_overrides=overrides or None
         )
-        if lag_tau > 0:
-            reset_fn, step_fn = make_lagged_rollout_fns(env, lag_tau)
-            reset, step = jax.jit(reset_fn), jax.jit(step_fn)
-        else:
-            reset, step = jax.jit(env.reset), jax.jit(env.step)
         dt = env.dt
         stand_steps = int(round(stand_sec / dt))
         walk_steps = int(round(walk_sec / dt))
-        for latency in latency_levels:
-            for axis, bias in grid_cells(bias_levels, axes):
-                cell = _cell(
-                    env, reset, step, inf, bias_vector(axis, bias) if bias
-                    else np.zeros(3), seeds, seed_base, stand_steps,
-                    walk_steps, walk_vx, dt, latency,
-                )
-                entry = {"noise_gyro": noise, "vib_gain": vib,
-                         "latency": latency, "axis": axis, "bias": bias,
-                         **cell}
-                cells.append(entry)
-                print(_cell_row(cell, noise, axis, bias, latency, vib),
-                      flush=True)
+        for lag_tau in lag_taus:
+            if lag_tau > 0:
+                reset_fn, step_fn = make_lagged_rollout_fns(env, lag_tau)
+                reset, step = jax.jit(reset_fn), jax.jit(step_fn)
+            else:
+                reset, step = jax.jit(env.reset), jax.jit(env.step)
+            for latency in latency_levels:
+                for axis, bias in grid_cells(bias_levels, axes):
+                    cell = _cell(
+                        env, reset, step, inf, bias_vector(axis, bias) if bias
+                        else np.zeros(3), seeds, seed_base, stand_steps,
+                        walk_steps, walk_vx, dt, latency,
+                    )
+                    entry = {"noise_gyro": noise, "vib_gain": vib,
+                             "latency": latency, "lag_tau": float(lag_tau),
+                             "axis": axis, "bias": bias, **cell}
+                    cells.append(entry)
+                    print(
+                        _cell_row(cell, noise, axis, bias, latency, vib,
+                                  lag_tau),
+                        flush=True,
+                    )
     results = {
         "run": run["run_name"],
         "checkpoint": ckpt.name,
@@ -263,7 +329,7 @@ def run_grid(run_dir: Path, bias_levels, axes, noise_levels, seeds,
         "stand_sec": stand_sec,
         "walk_sec": walk_sec,
         "walk_vx": walk_vx,
-        "lag_tau": lag_tau,
+        "lag_taus": [float(t) for t in lag_taus],
         "band_hz": list(NYQUIST_BAND_HZ),
         "cells": cells,
     }
@@ -278,9 +344,10 @@ def write_report(out: Path, all_results: list) -> None:
     lines = [
         "# IMU robustness grid",
         "",
-        "| run | noise | vib | lat | axis | bias | stand vib | stand band20-25 | "
-        "stand qvel_rms | stand falls | walk vib | walk vx_err | walk falls |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "| run | noise | vib | lat | lag | axis | bias | stand vib | "
+        "stand band20-25 | stand qvel_rms | stand falls | walk vib | "
+        "walk vx_err | walk falls |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for res in all_results:
         for c in res["cells"]:
@@ -293,8 +360,10 @@ def write_report(out: Path, all_results: list) -> None:
             noise = "own" if c["noise_gyro"] is None else f"{c['noise_gyro']:g}"
             vib = "off" if c.get("vib_gain") is None else f"{c['vib_gain']:g}"
             lat = "own" if c.get("latency") is None else str(c["latency"])
+            lag = _lag_str(c.get("lag_tau"))
             lines.append(
-                f"| {res['run']} | {noise} | {vib} | {lat} | {c['axis']} | {c['bias']:g} "
+                f"| {res['run']} | {noise} | {vib} | {lat} | {lag} "
+                f"| {c['axis']} | {c['bias']:g} "
                 f"| {_m(st, 'vibration_mean')} | {_m(st, 'band_20_25_mean')} "
                 f"| {_m(st, 'qvel_rms_mean')} "
                 f"| {st['falls']}/{st['seeds']} | {_m(wk, 'vibration_mean')} "
@@ -329,11 +398,17 @@ def main():
                     "the control rate. Each value rebuilds the env. Sweep "
                     "it to find the gain where standing goes unstable "
                     "(default: off)")
-    ap.add_argument("--lag-tau", type=float, default=0.0,
-                    help="first-order actuator-torque lag in seconds, via "
+    ap.add_argument("--cross-noise-vib", action="store_true",
+                    help="also run every noise level paired with every "
+                    "vibration gain, on top of the one-at-a-time cells. The "
+                    "real robot has both at once. Each pair is another env "
+                    "build (default: off)")
+    ap.add_argument("--lag-tau", type=float, nargs="+", default=[0.0],
+                    help="first-order actuator-torque lags in seconds, via "
                     "the battery's explicit-PD path. 0 keeps the native "
-                    "ideal actuators. Takes one value per invocation "
-                    "because it recompiles the whole grid")
+                    "ideal actuators. Every value runs inside every env "
+                    "build, and each one costs a JIT compile there "
+                    "(default: 0)")
     ap.add_argument("--latency-substeps", type=int, nargs="+", default=None,
                     help="pin the control latency the env draws each episode "
                     "(info['ctrl_delay']) to these substep counts, one grid "
@@ -353,18 +428,19 @@ def main():
                     help="combined markdown report path (optional)")
     args = ap.parse_args()
 
-    # One env build per (noise, vib) pair. The baseline comes first, then
-    # each perturbation on its own, so every cell isolates one mechanism.
-    noise_levels = [(None, None)]
-    noise_levels += [(n, None) for n in (args.noise_gyro or [])]
-    noise_levels += [(None, v) for v in (args.vib_gain or [])]
+    # One env build per (noise, vib) pair, one JIT compile per lag value
+    # inside each build.
+    noise_levels = noise_vib_levels(
+        args.noise_gyro, args.vib_gain, args.cross_noise_vib
+    )
+    lag_taus = lag_levels(args.lag_tau)
     latency_levels = [None] + (args.latency_substeps or [])
     all_results = []
     for run in args.runs:
         all_results.append(run_grid(
             Path(run), args.bias_levels, args.axes, noise_levels,
             args.seeds, args.seed_base, args.stand_sec, args.walk_sec,
-            args.walk_vx, latency_levels, args.lag_tau,
+            args.walk_vx, latency_levels, lag_taus,
         ))
     if args.out:
         write_report(Path(args.out), all_results)

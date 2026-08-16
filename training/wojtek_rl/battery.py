@@ -45,6 +45,7 @@ import numpy as np
 from mujoco import mjx
 
 from wojtek_rl import paths
+from wojtek_rl.base import gyro_vib_step
 
 # Actuator order is per leg (abduction, hip, knee) tiled over paths.LEGS
 # (rear_left, rear_right, front_right, front_left) -- see base.py._qadr and
@@ -868,6 +869,16 @@ def make_lagged_rollout_fns(env, lag_tau: float, torque_envelope=None):
             n_substeps, envelope=torque_envelope,
         )
         info["tau_applied"] = tau_applied
+        # Advance the gyro-vib resonator on this step's torque change, the
+        # same way env.step does, so a vibration gain still acts in a
+        # lagged cell. Here the applied torque is the lag filter's output.
+        info["gyro_vib"] = gyro_vib_step(
+            info["gyro_vib"],
+            tau_applied - info["last_torque"],
+            info["gyro_vib_gain"],
+            env._config.obs_noise.get("gyro_vib_decay", 0.9),
+        )
+        info["last_torque"] = tau_applied
         # _explicit_pd_substeps leaves data.ctrl holding the last substep's
         # APPLIED TORQUE (the torque-mode model's ctrl channel) -- restore
         # the POSITION SETPOINT there instead, matching what the native

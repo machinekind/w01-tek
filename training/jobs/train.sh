@@ -9,7 +9,10 @@ source training/jobs/_lib.sh
 # numbers. MODULE selects another trainer with the same Hydra surface;
 # wojtek_rl.distill is single-GPU and keeps the preset's own env count.
 
-: "${GPUS:=4}"
+# The floor for the machine's GPU count, which the submit decides. PPO
+# sizes itself to whatever the box has, so a single-GPU rental is as valid
+# as a 4-GPU node.
+: "${GPUS:=1}"
 : "${ON_FAILURE:=aborts, the first failing step ends the run}"
 # Persistent dir for tracking output, if the machine has one.
 : "${STORE_DIR:=}"

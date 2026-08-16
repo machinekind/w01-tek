@@ -134,6 +134,9 @@ All three tasks support these paths through their `default_config()`:
 | `task.env.obs_noise.gravity` | `0.05` | Uniform actor gravity-vector noise scale. |
 | `task.env.obs_noise.joint_pos` | `0.01` rad | Uniform actor joint-position noise scale. |
 | `task.env.obs_noise.joint_vel` | `1.5` rad/s | Uniform actor joint-velocity noise scale. |
+| `task.env.obs_noise.gyro_bias` | `0.0` rad/s (off) | A real gyro reads a small constant rate even when the robot is still. This value bounds that offset. Each reset draws one uniformly from ±this bound, keeps it for the whole episode, and adds it to the gyro the actor sees. The white `gyro` noise redraws every step, so it cannot stand in for an offset that holds still. |
+| `task.env.obs_noise.gyro_vib` | `0.0` (off) | Feeds the policy's own vibration back into its gyro. On the real robot, jittery actions shake the frame, and the IMU sits on that frame. Here, each control step the change in joint torque drives a resonator tuned to half the control rate, and the resonator's state is added to the gyro the actor sees (`base.gyro_vib_step`, `base.VIB_MIX`). This value is the gain, and 0 turns it off. Each reset copies it into `info["gyro_vib_gain"]`, which is what the step reads, so an eval sweep can pin another gain without rebuilding the env. `imu-grid --vib-gain` sweeps it, and `imu-grid --bisect-vib` finds the gain where the policy's stand goes unstable. |
+| `task.env.obs_noise.gyro_vib_decay` | `0.9` | How sharply the resonator rings. A drive at the resonant frequency is amplified by 1/(1−decay), which is about tenfold at 0.9. |
 | `task.env.obs.state` | task-specific | Ordered actor observation names. |
 | `task.env.obs.privileged` | task-specific | Ordered critic-only observation names. |
 | `task.env.obs.include` | `[]` | Whitelist applied to actor observations. The `obs` group sets this; an empty list means use every name in `obs.state`. |
@@ -868,6 +871,7 @@ using the preset.
 | `video-probe` | `./training/run.sh video-probe --run runs/<name> [--arena {flat,train,eval} --cell NAME --seconds S --fps F --vx V --camera NAME --out FILE --list-cells]`; renders the showcase clip: 960x720 with every overlay on. `--cell` films one measurement cell of the eval arena from the spawn `terrain-scan` uses; `--arena train`/`eval` needs a terrain run. Output lands in `training/videos/<run_name>/` unless `--out` says otherwise. |
 | `battery` | `./training/run.sh battery --run runs/<name> [--out FILE --alpha A --lag-tau T]`; writes the fixed comparison battery. `--alpha`/`--lag-tau` are eval-only plant perturbations, see "Robustness grid (eval-only)" below. |
 | `courses` | `./training/run.sh courses --run runs/<name> [--seeds N --only NAME... --video --video-size WxH --overlay-torque --overlay-camera --paths --out FILE --list]`; writes the path-following course benchmark. `--list` prints the catalogue without loading a run. See "Course benchmark" below. |
+| `imu-grid` | `./training/run.sh imu-grid --runs runs/<name>... [--bias-levels B... --axes x y z --noise-gyro S... --vib-gain G... --cross-noise-vib --latency-substeps D... --lag-tau T... --seeds N --stand-sec S --walk-sec S --walk-vx V --out FILE]`; writes the IMU robustness grid. Its axes are pinned gyro bias, white gyro noise, the gyro-vib feedback loop, pinned control latency, and actuator-torque lag, and they can be combined in one cell. See "IMU robustness grid" below. |
 | `report` | `./training/run.sh report --run runs/<name> [--out-json FILE --out-md FILE]`; writes battery, torque, power, impact proxy, and termination summary. |
 | `export` | `./training/run.sh export --run runs/<name> [--out DIR]`; writes `policy.npz` plus `policy_meta.json`, the schema-2 deployment contract built from the run's env (`wojtek_rl/deploy_contract.py`), and validates the deploy runtime end-to-end against the env before writing. |
 | `app` | `./training/run.sh app [--host HOST --port PORT]`; runs the interactive navigation demo. `WOJTEK_RUN_DIR`, `HOST`, and `PORT` environment variables supply defaults; see [demo README](../demo/README.md). |
@@ -1063,6 +1067,197 @@ gated PASS/FAIL against the stiffness ladder's gates 1-4 -- see
 that stays PASS across every lag and envelope, per alpha-world.
 Filenames without the `_env<tag>` segment (grid runs predating this axis)
 are still read, treated as envelope `none`.
+
+## IMU robustness grid (eval-only)
+
+`wojtek_rl/imu_grid.py` is the sensor-side counterpart of the plant grid
+above. It exists because the terrain v4.1 policy oscillated while standing
+on the real robot. The oscillation was a limit cycle at about 25 Hz, half
+the 50 Hz control rate, driven by gyro noise and loop latency. Nothing in
+the battery or the courses perturbs the IMU, so the sim never showed it.
+
+The main axis is a **pinned gyro bias**. Each cell writes a fixed bias
+vector into `info["gyro_bias"]` every step. That is the same key the bias
+DR fills at reset. The actor's gyro carries the bias; the
+critic and the physics never see it. The key exists in every env and holds
+zeros when a run never trained bias DR, so the grid runs against any
+checkpoint of this project unchanged. That is the point. It measures a
+policy trained *without* bias DR under the bias it will meet on hardware.
+The grid can also sweep absolute white gyro-noise scales. Noise scales are
+baked into the compiled observation path, so each value rebuilds the
+measurement env via `env_overrides`.
+
+The `--vib-gain` axis closes the loop that made the robot oscillate. On
+the machine, the policy's action jitter shakes the frame, and the IMU
+sits on that frame, so the policy sees its own jitter and reacts to it.
+The sim carries none of that, which is why white noise and bias probes
+leave the policy standing still. `task.env.obs_noise.gyro_vib` (default
+0, off for every preset) models the loop as a sensor effect. Each
+control step, the change in joint torque drives a resonator tuned to
+half the control rate, and the resonator's state is added to the gyro
+reading the actor sees (`base.gyro_vib_step`, mixing matrix
+`base.VIB_MIX`). The critic and the physics see nothing. The setting
+lives in the env config, so a future run can train against it. Each reset
+copies the configured gain into `info["gyro_vib_gain"]`, and the step
+reads it from there, so the grid pins a gain the same way it pins the
+bias. No gain rebuilds the env.
+
+Two more axes cover loop delay. `--latency-substeps` pins the control
+latency the env draws each episode (`info["ctrl_delay"]`, the same pin
+mechanism) to chosen substep counts. The random draw lands on the worst case in about
+one seed in six, so an unpinned grid mostly measures mild latency.
+`--lag-tau` swaps in the battery's explicit-PD substep loop
+(`make_lagged_rollout_fns`), which puts a first-order lag on the joint
+torque. The env's ideal actuators apply torque instantly and cannot show
+that lag.
+
+The machine does not hand the policy one fault at a time. It shakes, its
+drives lag, and its gyro drifts, all at the same moment, so the grid can
+run its axes together. What can be combined depends on where a setting
+takes effect:
+
+- Bias, pinned latency and the vibration gain are values written into
+  `info` each step, so they are always crossed. Nothing recompiles.
+- `--lag-tau` takes a list. Every value runs inside every env build, next
+  to the bias, latency and vibration cells that build already covers. A
+  lag of 0 is the env's own ideal actuators, and it runs first when it is
+  in the list. Each value is one JIT compile per env build. The lagged
+  step advances the gyro-vib resonator on its own applied torque, so a
+  vibration gain acts in a lagged cell too.
+- The white-noise scale is the one axis still baked into the env, so each
+  value is a rebuild. Noise and vibration are swept one at a time by
+  default, and a bad cell then names the single thing that broke it.
+  `--cross-noise-vib` adds every noise level paired with every vibration
+  gain. The baseline cell, where both are left as trained, always comes
+  first.
+
+So a full grid costs one env build per noise level, one compile per lag
+value inside each build, and a rollout per vibration, bias and latency
+cell. Find where a policy is weak with the cheap one-at-a-time grid
+first, then compose only around that spot. `noise_vib_levels`,
+`env_builds` and `lag_levels` in `imu_grid.py` are the plain functions
+that enumerate all of this, and `tests/unit/test_imu_grid.py` covers them
+without an env.
+
+Every cell in `imu_grid.json` carries its own `lag_tau`, next to
+`noise_gyro`, `vib_gain`, `latency`, `axis` and `bias`. The list of lags
+the invocation ran is at the top of the file as `lag_taus`. The stdout
+table and the `--out` markdown both have a `lag` column, where a lag of 0
+reads `off`, the same way an unswept `vib` does.
+
+Each cell scores a 10 s stand and a 10 s straight walk over a few seeds.
+The scores are `vibration` (the battery's index of joint-velocity power
+above 5 Hz), `band_20_25` (the power fraction in the 20-25 Hz band where
+the real-robot limit cycle lived), `qvel_rms`, falls, and the walk's
+`vx_err_rms`. `qvel_rms` is the absolute joint-velocity scale, and it
+guards the other two. The spectral scores are fractions of total power,
+so a near-motionless stand can score high on microscopic buzz. A high
+spectral score means a real oscillation only when `qvel_rms` shows the
+joints actually moving. The grid has no gates. Compare cells across runs
+and against the bias=0 baseline row, which every grid includes. Results
+land in `runs/<run>/imu_grid/imu_grid.json`, and `--out` adds one
+combined markdown table.
+
+Measured on `wojtek_terrain_blind_v4_1` (2026-08-11). No fixed
+corruption reproduces the real robot's standing limit cycle. Bias up to
+0.2 rad/s, white noise at 4x the trained value, latency pinned to a
+full control period, and 10 ms of torque lag all leave the stand
+motionless, with `qvel_rms` at 0.013 rad/s and no falls. The vibration
+ratio of ~0.69 in those cells is spectral noise on a near-zero signal,
+which is exactly what the `qvel_rms` column exposes. The
+feedback axis does reproduce the failure. Sweeping `--vib-gain` over
+{0.03, 0.1, 0.3, 1.0}, the stand stays motionless through gain 0.1
+(`qvel_rms` 0.012-0.014) and oscillates violently at gain 0.3, with
+`qvel_rms` 3.04 rad/s and 68% of the power in 20-25 Hz, rising to 96%
+at gain 1.0. That is the hardware failure's signature. The critical
+gain between 0.1 and 0.3 is the policy's stability margin against the
+loop from action to vibration to IMU. Compare that margin across
+policies, for example a policy trained with `action_filter` against one
+without. A single cell is not a pass or fail verdict.
+
+`--bisect-vib LO HI` finds that critical gain, so it no longer has to be
+read off a sweep someone picked by hand. The search asks one question at
+a time. It stands the policy up at some gain, over `--seeds` seeds, and
+asks whether the stand went bad. A seed went bad if the robot fell, or if
+its `qvel_rms` over the measured window is above `--bisect-threshold`
+(0.1 rad/s by default).
+The gain counts as unstable if any seed fell, or if a majority of the
+seeds were over the threshold. The search first checks that the bracket
+holds the answer, so `LO` has to come back stable and `HI` unstable. When
+it does not, there is nothing in the bracket to bisect, and the run
+reports which side the answer is on instead of a number. A policy that is
+still quiet at the top of the bracket comes back as `above 0.5`, with the
+`qvel_rms` it measured up there. Otherwise the search halves the bracket
+until it is narrower than `--bisect-tol` (0.02 by default) and reports
+the midpoint. Every probe reuses one env build and one compile, because
+the gain is pinned rather than configured, so the whole search costs
+about a dozen stand rollouts.
+
+The threshold is a number someone chose. The two terrain policies show
+why it has to be stated. Their standing `qvel_rms` against the gain looks
+like this:
+
+| gain | off | 0.1 | 0.2 | 0.3 | 0.5 |
+|---|---|---|---|---|---|
+| `wojtek_terrain_blind_v4_1` | 0.012 | 0.014 | 1.957 | 3.044 | 3.731 |
+| `wojtek_terrain_blind_v5` | 0.071 | 0.071 | 0.073 | 0.165 | 0.193 |
+
+v4.1 snaps. It is motionless, and then it is in a full limit cycle, so
+any threshold between those two values finds about the same gain. One
+seed over a 3 s window puts it at 0.134 with the default threshold, and
+at 0.148 with the threshold at 0.05. v5 has no snap in this range. It
+drifts upward, so the threshold decides where its critical gain lands as
+much as the policy does. At the default 0.1 rad/s it comes out around
+0.25. Below 0.071 it would come out as `below 0.05` instead, because that
+is what v5 idles at with the loop off. So two policies are only
+comparable when they were bisected at the same threshold and the same
+seed count, and a critical gain is worth reading next to the raw cells
+that produced numbers like these. The default stays at 0.1 rad/s because
+it is well above a quiet stand and far below a real limit cycle.
+
+The critical gain lands in `imu_grid.json` under `critical_gain`, with
+the bracket, the settings and every probe the search made, the two
+bracket checks included. It leads the `--out` report in its own table.
+A cell tells what one fault did to one policy. The critical gain is one
+number per policy, so it is the value to compare when asking which
+policy has more room before its own vibration takes over.
+
+```bash
+# Does the un-filtered terrain policy show the standing limit cycle in sim?
+./training/run.sh imu-grid --runs runs/wojtek_terrain_blind_v4_1 \
+  runs/wojtek_terrain_blind_v5 --out runs/imu_grid_report.md
+
+# Probe the stability margin: raise white gyro noise past the trained value
+./training/run.sh imu-grid --runs runs/<name> --noise-gyro 0.4 0.8
+
+# Compose the faults: two vibration gains, each with and without 10 ms of
+# drive lag, and both crossed with the raised noise
+./training/run.sh imu-grid --runs runs/<name> \
+  --noise-gyro 0.4 --vib-gain 0.1 0.3 --cross-noise-vib \
+  --lag-tau 0 0.01
+
+# Which policy has the wider margin against its own vibration?
+./training/run.sh imu-grid --runs runs/<a> runs/<b> \
+  --bisect-vib 0.05 0.5 --out runs/imu_grid_report.md
+
+# The same search on its own, keeping an earlier grid's cells
+./training/run.sh imu-grid --runs runs/<name> --bisect-only \
+  --bisect-vib 0.05 0.5
+```
+
+The course benchmark can run under the same pinned bias.
+`./training/run.sh courses --run runs/<name> --gyro-bias 0,0.1,0` writes
+`courses_bias.json`. Biased scores are a different measurement, so they
+never overwrite the frozen `courses.json`. The follower constants stay
+frozen. The bias pin changes only what the actor's gyro reads.
+[`training/jobs/imu_grid.sh`](../jobs/imu_grid.sh) is the payload form.
+It takes `CKPTS_LIST` (required), `BIAS_LEVELS`, `AXES`, `NOISE_GYRO`,
+`VIB_GAIN`, `LAG_TAU`, `LATENCY_SUBSTEPS`, `CROSS_NOISE_VIB`, `SEEDS`,
+`STAND_SEC`/`WALK_SEC`/`WALK_VX`, `BISECT_VIB`, `BISECT_TOL`,
+`BISECT_THRESHOLD`, and `IMU_GRID_OUT`. The sweep lists are space
+separated, and an empty one drops its flag, so the grid runs the run's
+own trained value on that axis. `BISECT_VIB` is the bracket, written as
+`"LO HI"`, and leaving it empty skips the search.
 
 ## Job payload configuration
 

@@ -21,6 +21,42 @@ from mujoco_playground._src import mjx_env
 from wojtek_rl import paths, terrain_env
 from wojtek_rl.build_model import BASE_BOX_NAMES, FOOT_RADIUS
 
+# How the 12 joint-torque changes reach the 3 gyro axes in the gyro-vib
+# sensor model (obs_noise.gyro_vib). Row x sums the legs with alternating
+# signs, so a left/right torque imbalance shakes the roll reading. Row y
+# does the same for rear versus front and pitch. Row z alternates signs
+# inside each leg. How vibration travels through a real frame to the IMU
+# is unknown and differs per machine. This matrix only has to be fixed,
+# reach all three axes, and stay the same for every policy measured. Rows
+# have unit length so the gain means the same thing on every axis.
+VIB_MIX = np.stack([
+    np.repeat([1.0, -1.0, 1.0, -1.0], 3),
+    np.repeat([1.0, 1.0, -1.0, -1.0], 3),
+    np.tile([1.0, -1.0, 1.0], 4),
+]) / np.sqrt(12.0)
+
+
+def gyro_vib_step(vib, tau_rate, gain, decay, mix=None):
+    """Advance the gyro-vib resonator by one control step.
+
+    ``x_t = -decay * x_{t-1} + gain * (mix @ tau_rate)``. The negative
+    coefficient makes the state ring at half the control rate, 25 Hz at
+    the 50 Hz control rate, where the real robot's standing oscillation
+    sat. A drive at that frequency is amplified by 1/(1-decay). A
+    constant drive is damped by 1/(1+decay). This stays a pure function
+    so the recurrence can be tested without an env.
+
+    The gain may be a traced value. The env carries it per episode in
+    ``info["gyro_vib_gain"]``, so a sweep can change it without a
+    recompile. A gain of 0 therefore selects a zero rather than
+    multiplying by one. The step then returns exactly zero whatever the
+    drive and the state were, instead of leaning on ``0 * x`` staying
+    zero. Turning the gain off also clears the state on the same step.
+    """
+    m = VIB_MIX if mix is None else mix
+    return jp.where(gain == 0.0, 0.0, -decay * vib + gain * (m @ tau_rate))
+
+
 # Actuator indices of the knee cranks (third joints), paths.LEGS order.
 KNEE_ACTUATORS = (2, 5, 8, 11)
 # Actuator indices of the abduction joints (first joints), paths.LEGS order.
@@ -364,17 +400,30 @@ class WojtekEnv(mjx_env.MjxEnv):
         """
         catalog = self._obs_catalog(data, info)
 
-        def gather(names):
-            missing = [n for n in names if n not in catalog]
+        def gather(names, source=catalog):
+            missing = [n for n in names if n not in source]
             if missing:
                 raise KeyError(
                     f"unknown obs component(s) {missing}; available: "
-                    f"{sorted(catalog)}"
+                    f"{sorted(source)}"
                 )
-            return jp.concatenate([catalog[n] for n in names])
+            return jp.concatenate([source[n] for n in names])
 
         state_names = self.actor_obs_names
-        state = gather(state_names)
+        # The actor's gyro can carry two corruptions, the bias drawn at
+        # reset (info["gyro_bias"]) and the vibration-resonator state
+        # (info["gyro_vib"], see gyro_vib_step). Only the actor's copy is
+        # touched. The critic reads the clean catalog below.
+        actor_catalog = catalog
+        corrupt = jp.zeros(3)
+        present = False
+        for key in ("gyro_bias", "gyro_vib"):
+            term = info.get(key)
+            if term is not None:
+                corrupt, present = corrupt + term, True
+        if present and "gyro" in catalog:
+            actor_catalog = {**catalog, "gyro": catalog["gyro"] + corrupt}
+        state = gather(state_names, actor_catalog)
         if rng is not None:
             noise = self._config.obs_noise
             scales = jp.concatenate(

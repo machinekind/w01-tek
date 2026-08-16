@@ -49,7 +49,7 @@ def step_budget(course, dt: float) -> int:
     return min(MAX_COURSE_STEPS, int(round((TIME_FACTOR * ideal + 2.0) / dt)))
 
 
-def _hold_command(state, cmd):
+def _hold_command(state, cmd, gyro_bias=None):
     """Pin the follower's command into the env state for the next step.
 
     Also zeroes steps_since_cmd so the env's own command resampling never
@@ -57,12 +57,21 @@ def _hold_command(state, cmd):
     the counter reaches command.resample_steps (250 = 5 s) and then builds
     the observation from it -- the policy would be handed a random command
     instead of ours, and lurch off the task.
+
+    `gyro_bias` (a fixed 3-vector, rad/s) additionally pins
+    info["gyro_bias"], the constant gyro offset _build_obs adds to the
+    actor's gyro for the episode. The pin overwrites the reset-time draw, so an
+    IMU robustness pass measures a chosen bias instead of a random one.
+    None, the value on every normal benchmark run, keeps the env's own
+    draw. That draw is zeros for any run that never trained the bias DR.
     """
     state.info["command"] = cmd
     state.info["steps_since_cmd"] = jp.zeros_like(state.info["steps_since_cmd"])
+    if gyro_bias is not None:
+        state.info["gyro_bias"] = gyro_bias
 
 
-def _settle(env, reset, step, inf, seed):
+def _settle(env, reset, step, inf, seed, gyro_bias=None):
     """Reset, then stand at HEIGHT_CMD for STAND_STEPS.
 
     Reset poses the robot for a randomly sampled height command, and that
@@ -73,7 +82,7 @@ def _settle(env, reset, step, inf, seed):
     state = reset(rng)
     stand_cmd = jp.array([0.0, 0.0, 0.0, HEIGHT_CMD])
     for _ in range(STAND_STEPS):
-        _hold_command(state, stand_cmd)
+        _hold_command(state, stand_cmd, gyro_bias)
         rng, k = jax.random.split(rng)
         act, _ = inf(state.obs, k)
         state = step(state, act)
@@ -85,7 +94,8 @@ def _settle(env, reset, step, inf, seed):
 _SETTLE_FALL_INFO = {"fell_at": 0, "completed": False, "steps": 0, "frames": []}
 
 
-def course_rollout(env, reset, step, inf, course, foot_radius, seed=0, view=None):
+def course_rollout(env, reset, step, inf, course, foot_radius, seed=0, view=None,
+                   gyro_bias=None):
     """Walk `course` once under `inf`; record what the score needs.
 
     `reset`/`step` are the jitted env fns (passed in so the caller compiles
@@ -98,7 +108,7 @@ def course_rollout(env, reset, step, inf, course, foot_radius, seed=0, view=None
     `fell_at`, `completed`, `steps` and, when `view` (a video.SceneView) is
     given, the rendered `frames`.
     """
-    rng, state = _settle(env, reset, step, inf, seed)
+    rng, state = _settle(env, reset, step, inf, seed, gyro_bias)
     if state is None:
         return {}, dict(_SETTLE_FALL_INFO)
 
@@ -135,7 +145,7 @@ def course_rollout(env, reset, step, inf, course, foot_radius, seed=0, view=None
                 data=state.data.replace(qvel=state.data.qvel.at[:2].add(kick))
             )
 
-        _hold_command(state, cmd)
+        _hold_command(state, cmd, gyro_bias)
         rng, k = jax.random.split(rng)
         act, _ = inf(state.obs, k)
         state = step(state, act)
@@ -177,7 +187,8 @@ def course_rollout(env, reset, step, inf, course, foot_radius, seed=0, view=None
     }
 
 
-def spin_rollout(env, reset, step, inf, spin: SpinCourse, seed=0, view=None):
+def spin_rollout(env, reset, step, inf, spin: SpinCourse, seed=0, view=None,
+                 gyro_bias=None):
     """Hold `spin`'s pure-spin command until the rotation completes.
 
     No follower: the command is [0, 0, wz, HEIGHT_CMD] every step. Progress
@@ -189,7 +200,7 @@ def spin_rollout(env, reset, step, inf, spin: SpinCourse, seed=0, view=None):
     the spin signals (yaw_progress, wz measured vs commanded, planar drift
     from the start point) and `total_length` the required rotation in rad.
     """
-    rng, state = _settle(env, reset, step, inf, seed)
+    rng, state = _settle(env, reset, step, inf, seed, gyro_bias)
     if state is None:
         return {}, dict(_SETTLE_FALL_INFO)
 
@@ -207,7 +218,7 @@ def spin_rollout(env, reset, step, inf, spin: SpinCourse, seed=0, view=None):
     fell_at, completed, progress = None, False, 0.0
     frames = []
     for i in range(n_steps):
-        _hold_command(state, cmd)
+        _hold_command(state, cmd, gyro_bias)
         rng, k = jax.random.split(rng)
         act, _ = inf(state.obs, k)
         state = step(state, act)

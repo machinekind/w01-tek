@@ -1,22 +1,23 @@
 #!/bin/bash
-# IMU robustness grid: eval-only gyro-bias (and optional gyro white-noise)
-# sweep over existing runs, scored on standing and straight-walk rollouts --
-# vibration, the near-Nyquist 20-25 Hz band, falls, and walk tracking. See
-# wojtek_rl/imu_grid.py for what a cell means and why the bias is pinned.
-# CPU-mode for determinism and parity with the battery and the courses.
+# IMU robustness grid: an eval-only gyro-bias sweep, plus optional white
+# gyro-noise levels, over existing runs. Standing and straight-walk
+# rollouts are scored on vibration, the near-Nyquist 20-25 Hz band, falls,
+# and walk tracking. See wojtek_rl/imu_grid.py for what a cell means and
+# why the bias is pinned. The grid runs on CPU for determinism and parity
+# with the battery and the courses.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 source training/jobs/_lib.sh
 
-: "${ON_FAILURE:=a missing run directory is skipped with a WARN; a crash inside the grid aborts the remaining cells (per-run JSONs written so far survive)}"
+: "${ON_FAILURE:=a missing run directory is skipped with a WARN. A crash inside the grid aborts the remaining cells, and the per-run JSONs written so far survive}"
 # Space-separated run names under the training runs dir.
 : "${CKPTS_LIST:?space-separated run names under training/runs}"
-# Gyro bias magnitudes in rad/s; 0 is the baseline cell.
+# Gyro bias magnitudes in rad/s. 0 is the baseline cell.
 : "${BIAS_LEVELS:=0 0.05 0.1 0.2}"
 # Body axes biased, one cell each.
 : "${AXES:=x y z}"
-# Optional absolute white gyro-noise scales to sweep (each rebuilds the
-# measurement env); empty = the run's own trained value only.
+# Optional absolute white gyro-noise scales to sweep. Each value rebuilds
+# the measurement env. Empty keeps the run's own trained value only.
 : "${NOISE_GYRO:=}"
 # Rollouts per cell and scenario.
 : "${SEEDS:=3}"
@@ -49,7 +50,7 @@ if [ -n "$NOISE_GYRO" ]; then
     NOISE_FLAG=(--noise-gyro $NOISE_GYRO)
 fi
 
-# Guard the array expansion: under set -u, bash before 4.4 treats an empty
+# Guard the array expansion. Under set -u, bash before 4.4 treats an empty
 # array expanded the plain way as unbound.
 run_main python3 -m wojtek_rl.imu_grid \
     --runs "${RUNS[@]}" \

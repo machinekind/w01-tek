@@ -306,11 +306,11 @@ def test_terrain_initial_level_in_lower_half(terrain_env_inst):
 
 
 def test_base_terrain_contact_reads_the_lowest_corner(terrain_env_inst, monkeypatch):
-    """The base collides as a chessboard of small boxes (ce9a464), and the
-    diagnostic has to use each box's extent along world z, not its centre
-    height. A chessboard cell is taller than it is wide (hz > hx), so at the
-    same centre height a level cell touches the surface while a cell rotated
-    onto its end still clears it."""
+    """The base collides as a chessboard of small boxes (ce9a464). The
+    diagnostic has to use each box's extent along world z rather than its
+    centre height. A chessboard cell is taller than it is wide (hz > hx),
+    so at the same centre height a level cell touches the surface while a
+    cell rotated onto its end still clears it."""
     env = terrain_env_inst
     flat = jp.zeros_like(env._terrain.lookup)  # surface at z = 0 everywhere
     monkeypatch.setattr(
@@ -319,12 +319,13 @@ def test_base_terrain_contact_reads_the_lowest_corner(terrain_env_inst, monkeypa
     hx, _, hz = np.array(env._base_geom_half)[0]
     assert hz > hx + BASE_CONTACT_TOL, "the orientation contrast needs hz > hx"
     level = np.eye(3)
-    # 90 degrees about y: world z now runs along the box's x axis, so the
-    # reach below the centre is hx instead of hz.
+    # Rotated 90 degrees about y, world z runs along the box's x axis, so
+    # the reach below the centre is hx instead of hz.
     on_end = np.array([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]])
 
     def contact(z_all, z_one=None, rot_one=level):
-        """All base cells level at z_all; optionally one cell moved/rotated."""
+        """Place every base cell level at z_all, with one cell optionally
+        moved or rotated."""
         ngeom = env.mj_model.ngeom
         xpos = np.zeros((ngeom, 3), dtype=np.float32)
         xmat = np.zeros((ngeom, 3, 3), dtype=np.float32)
@@ -339,8 +340,8 @@ def test_base_terrain_contact_reads_the_lowest_corner(terrain_env_inst, monkeypa
 
     assert not contact(hz + 0.05)  # every cell well clear
     assert contact(hz + 0.05, z_one=hz + 0.005)  # one cell down is contact
-    # The orientation contrast, both at centre height hz: a level cell
-    # reaches hz below its centre and touches, the same cell on its end
+    # The orientation contrast, both at centre height hz. A level cell
+    # reaches hz below its centre and touches. The same cell on its end
     # reaches only hx and stays clear.
     assert contact(hz + 0.05, z_one=hz)
     assert not contact(hz + 0.05, z_one=hz, rot_one=on_end)
@@ -738,7 +739,7 @@ def test_contact_floor_is_derived_from_the_model(terrain_env_inst):
     """The warp contact-budget warning fires against a floor computed from the
     robot's own collision set, not a rule of thumb. Warp allows four contacts per
     geom-heightfield pair, so 29 geoms put 116 contacts in the pool before a
-    single box is touched -- the number the terrain presets carry as
+    single box is touched. The terrain presets carry that number as
     sim.naconmax_per_env."""
     n = terrain_env_inst._count_ground_colliding_geoms()
     assert n == 29, n  # 9 chessboard base cells + 4 feet + 16 per-leg proxies

@@ -1,7 +1,7 @@
-"""The gyro-vib sensor model, without an env: the resonator rings at half
-the control rate, the config default keeps it off, and _build_obs adds the
-state to the actor's gyro only. The update inside env.step needs a live
-env and is covered by tests/integration.
+"""Model-free tests of the gyro-vib sensor model. They check that the
+resonator rings at half the control rate, that the config default keeps it
+off, and that _build_obs adds the state to the actor's gyro only. The
+update inside env.step needs a live env, so tests/integration covers it.
 """
 
 import numpy as np
@@ -29,8 +29,8 @@ TAU_X = np.repeat([1.0, -1.0, 1.0, -1.0], 3)
 
 def test_dc_drive_is_attenuated():
     # A drive that never changes settles to a constant gain*d/(1+decay).
-    # The resonator damps steady input instead of amplifying it; only
-    # input near its ringing frequency gets amplified.
+    # The resonator damps steady input. Only input near its ringing
+    # frequency gets amplified.
     drive = float(VIB_MIX[0] @ TAU_X)
     x = np.zeros(3)
     for _ in range(200):

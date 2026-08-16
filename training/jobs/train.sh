@@ -7,8 +7,9 @@ source training/jobs/_lib.sh
 # PPO data-parallelizes over every local GPU, so NUM_ENVS and BATCH are
 # whole-machine totals, not per-GPU numbers.
 
-# A floor, not a request: PPO sizes itself to whatever the box has, so a
-# single-GPU rental is as valid as a 4-GPU node. The submit says how many.
+# The floor for the machine's GPU count, which the submit decides. PPO
+# sizes itself to whatever the box has, so a single-GPU rental is as valid
+# as a 4-GPU node.
 : "${GPUS:=1}"
 : "${ON_FAILURE:=aborts, the first failing step ends the run}"
 # Persistent dir for tracking output, if the machine has one.

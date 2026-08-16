@@ -91,10 +91,10 @@ def run_courses(
     """Run the course benchmark against `run_dir`'s latest checkpoint.
 
     `gyro_bias` (fixed 3-vector, rad/s, or None) is pinned into every
-    rollout's info["gyro_bias"] -- the IMU robustness variant of the
-    benchmark (see wojtek_rl.imu_grid).  Scores from a biased pass are NOT
-    comparable to the frozen benchmark's; main() writes them to a separate
-    file for that reason.
+    rollout's info["gyro_bias"]. That is the IMU robustness variant of
+    the benchmark (see wojtek_rl.imu_grid). Scores from a biased pass are
+    not comparable to the frozen benchmark's, so main() writes them to a
+    separate file.
     """
     from wojtek_rl.build_model import FOOT_RADIUS
 
@@ -124,8 +124,9 @@ def run_courses(
         "checkpoint": ckpt.name,
         "seeds": seeds,
         "seed_base": seed_base,
-        # None on the frozen benchmark; a biased pass marks its scores as
-        # a different measurement (they never overwrite courses.json).
+        # None on the frozen benchmark. A biased pass records its bias
+        # here to mark the scores as a different measurement, and its
+        # scores never overwrite courses.json.
         "gyro_bias": None if gyro_bias is None else np.asarray(gyro_bias).tolist(),
         "follower": {
             "lookahead_m": LOOKAHEAD_M,
@@ -311,9 +312,9 @@ def main():
     )
     ap.add_argument(
         "--gyro-bias", default=None, metavar="BX,BY,BZ",
-        help="pin a fixed gyro bias (rad/s) into every rollout -- the IMU "
-        "robustness variant; scores go to courses_bias.json, never to the "
-        "frozen courses.json",
+        help="pin a fixed gyro bias (rad/s) into every rollout, the IMU "
+        "robustness variant. Scores go to courses_bias.json and never "
+        "touch the frozen courses.json",
     )
     ap.add_argument(
         "--list", action="store_true", help="print the catalogue and exit"

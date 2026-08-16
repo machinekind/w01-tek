@@ -107,20 +107,20 @@ def default_config() -> config_dict.ConfigDict:
             # represent it: a real gyro's offset is constant on the episode
             # timescale, not redrawn every step.
             gyro_bias=0.0,
-            # Feedback corruption of the actor's gyro, off by default. The
-            # real robot oscillated while standing because of a loop this
-            # sim does not carry on its own: the policy jitters its
-            # actions, the motors jitter their torque, the frame vibrates,
-            # and the IMU sits on that frame, so the policy sees the
-            # vibration and reacts to it. This models the loop as a sensor
-            # effect. Each control step, the change in joint torque drives
-            # a resonator tuned to half the control rate (25 Hz at 50 Hz),
-            # and the resonator's state is added to the gyro reading the
-            # actor sees. The critic and the physics see nothing.
-            # `gyro_vib` is the gain; 0 disables. `gyro_vib_decay` sets how
-            # sharply the resonator rings: at 0.9, a drive at the resonant
-            # frequency is amplified about tenfold. The recurrence lives in
-            # base.gyro_vib_step.
+            # Feedback corruption of the actor's gyro, off by default. It
+            # models a loop this sim does not carry on its own. On the
+            # real robot, the policy jitters its actions, the motors
+            # jitter their torque, the frame vibrates, and the IMU sits on
+            # that frame, so the policy sees the vibration and reacts to
+            # it. That loop made the robot oscillate while standing. Here
+            # the loop becomes a sensor effect. Each control step, the
+            # change in joint torque drives a resonator tuned to half the
+            # control rate (25 Hz at 50 Hz), and the resonator's state is
+            # added to the gyro reading the actor sees. The critic and the
+            # physics see nothing. `gyro_vib` is the gain, and 0 disables
+            # it. `gyro_vib_decay` sets how sharply the resonator rings.
+            # At 0.9, a drive at the resonant frequency is amplified about
+            # tenfold. The recurrence lives in base.gyro_vib_step.
             gyro_vib=0.0,
             gyro_vib_decay=0.9,
         ),

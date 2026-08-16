@@ -3,9 +3,11 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 source training/jobs/_lib.sh
 
-# One Brax PPO training run of a Hydra experiment preset.
-# PPO data-parallelizes over every local GPU, so NUM_ENVS and BATCH are
-# whole-machine totals, not per-GPU numbers.
+# One training run of a Hydra experiment preset.
+# The default trainer is Brax PPO, which data-parallelizes over every
+# local GPU, so NUM_ENVS and BATCH are whole-machine totals, not per-GPU
+# numbers. MODULE selects another trainer with the same Hydra surface;
+# wojtek_rl.distill is single-GPU and keeps the preset's own env count.
 
 # The floor for the machine's GPU count, which the submit decides. PPO
 # sizes itself to whatever the box has, so a single-GPU rental is as valid
@@ -14,6 +16,8 @@ source training/jobs/_lib.sh
 : "${ON_FAILURE:=aborts, the first failing step ends the run}"
 # Persistent dir for tracking output, if the machine has one.
 : "${STORE_DIR:=}"
+# Python module to run: wojtek_rl.train (PPO) or wojtek_rl.distill.
+: "${MODULE:=wojtek_rl.train}"
 : "${EXPERIMENT:=locomotion}"
 # Empty: the preset picks the run dir.
 : "${RUN_NAME:=}"
@@ -91,7 +95,7 @@ fi
 # ++ = add-or-override: the root `ppo:` block is an empty dict, so plain
 # `ppo.foo=` fails hydra's struct check for keys the preset did not set.
 # shellcheck disable=SC2086
-run_main python3 -m wojtek_rl.train \
+run_main python3 -m "$MODULE" \
     "+experiment=$EXPERIMENT" \
     "++ppo.num_envs=$NUM_ENVS" \
     "++ppo.batch_size=$BATCH" \

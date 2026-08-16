@@ -267,12 +267,19 @@ def battery_scenarios():
     }
 
 
-def load_checkpoint_policy(run_dir: Path, *, flat: bool = True, env_overrides=None):
+def load_checkpoint_policy(
+    run_dir: Path, *, flat: bool = True, env_overrides=None, spin_run=None,
+):
     """Load a run's measurement env + latest-checkpoint policy.
 
     Shared by run_battery, report.py and terrain_scan.py, so "which checkpoint
     is latest" and "no random pushes while measuring" can't drift between them.
     Returns (run, env, ckpt, inf) where inf = jax.jit(policy).
+
+    `spin_run` (a run dir) turns the policy into the seam-test composite:
+    that run's policy acts on pure-spin and stand command windows, this
+    run's everywhere else -- see wojtek_rl.seam. `run` then carries a
+    `seam` record naming both, and `ckpt` stays the base's.
 
     `flat` forces `terrain.enable=false`, which is the default and what the
     fixed battery wants: its scenarios are a comparison against flat keepers,
@@ -329,7 +336,12 @@ def load_checkpoint_policy(run_dir: Path, *, flat: bool = True, env_overrides=No
         (p for p in ckpt_dir.iterdir() if p.name.isdigit()),
         key=lambda p: int(p.name),
     )
-    policy = load_policy(ckpt, env, build_ppo_params([], smoke=False))
+    ppo_params = build_ppo_params([], smoke=False)
+    policy = load_policy(ckpt, env, ppo_params)
+    if spin_run is not None:
+        from wojtek_rl import seam
+
+        run, policy = seam.attach_switch(run, env, policy, spin_run, ppo_params)
     return run, env, ckpt, jax.jit(policy)
 
 
@@ -900,6 +912,7 @@ def make_lagged_rollout_fns(env, lag_tau: float, torque_envelope=None):
 
 def run_battery(
     run_dir: Path, alpha: float = 1.0, lag_tau: float = 0.0, torque_envelope=None,
+    spin_run=None,
 ) -> dict:
     """Run the fixed scenario battery against `run_dir`'s checkpoint.
 
@@ -914,7 +927,7 @@ def run_battery(
     battery table half of eval_report.json (always called with the
     defaults, so that path is unaffected by this function's new params).
     """
-    run, env, ckpt, inf = load_checkpoint_policy(run_dir)
+    run, env, ckpt, inf = load_checkpoint_policy(run_dir, spin_run=spin_run)
     if alpha != 1.0:
         apply_kt_miscalibration(env.mj_model, alpha)
         env._mjx_model = mjx.put_model(env.mj_model, impl=env._backend)
@@ -941,6 +954,8 @@ def run_battery(
         "alpha": alpha, "lag_tau": lag_tau,
         "torque_envelope": list(torque_envelope) if torque_envelope else None,
     }
+    if "seam" in run:
+        results["seam"] = run["seam"]
     for name, (cmd_at, n) in battery_scenarios().items():
         rec, fell_at, _term = rollout(env, reset, step, inf, cmd_at, n)
         results[name] = scenario_result(name, rec, fell_at, env.dt, torque_cap)
@@ -971,12 +986,19 @@ def main():
         "full static cap. Forces the explicit-PD path even when "
         "--lag-tau is 0. See apply_torque_envelope.",
     )
+    ap.add_argument(
+        "--spin-run", default=None,
+        help="run dir whose policy acts on pure-spin and stand command "
+        "windows (vx=vy=0), making the measured policy the seam-test "
+        "composite; see wojtek_rl.seam",
+    )
     args = ap.parse_args()
     torque_envelope = parse_torque_envelope(args.torque_envelope)
 
     results = run_battery(
         Path(args.run), alpha=args.alpha, lag_tau=args.lag_tau,
         torque_envelope=torque_envelope,
+        spin_run=Path(args.spin_run) if args.spin_run else None,
     )
     out = Path(args.out) if args.out else Path(args.run) / "battery.json"
     out.parent.mkdir(parents=True, exist_ok=True)

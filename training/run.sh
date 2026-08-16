@@ -21,6 +21,7 @@ case "${1:-}" in
   battery) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.battery "$@" ;;
   courses) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.courses "$@" ;;  # path-following benchmark
   imu-grid) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.imu_grid "$@" ;;  # gyro bias/noise robustness grid
+  distill) shift; "$PY" -m wojtek_rl.distill "$@" ;;  # DAgger student from routed teachers
   report) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.report "$@" ;;
   terrain-scan) shift; "$PY" -m wojtek_rl.terrain_scan "$@" ;;  # GPU-sized; --backend jax to cross-check
   export) shift; JAX_PLATFORMS=cpu "$PY" -m wojtek_rl.export_policy "$@" ;;

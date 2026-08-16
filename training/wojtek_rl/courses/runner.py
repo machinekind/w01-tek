@@ -87,6 +87,7 @@ def run_courses(
     overlay_torque: bool = False,
     overlay_camera: bool = False,
     gyro_bias=None,
+    spin_run: Path | None = None,
 ) -> dict:
     """Run the course benchmark against `run_dir`'s latest checkpoint.
 
@@ -98,7 +99,7 @@ def run_courses(
     """
     from wojtek_rl.build_model import FOOT_RADIUS
 
-    run, env, ckpt, inf = load_checkpoint_policy(run_dir)
+    run, env, ckpt, inf = load_checkpoint_policy(run_dir, spin_run=spin_run)
     if overlay_camera and env._config.get("height_scan") is None:
         raise SystemExit(
             f"task {run.get('task')!r} has no height_scan config, so there is "
@@ -144,6 +145,8 @@ def run_courses(
         },
         "courses": {},
     }
+    if "seam" in run:
+        results["seam"] = run["seam"]
 
     def friction_key(n):
         f = getattr(catalogue[n], "friction", None)  # SpinCourse has none
@@ -319,6 +322,12 @@ def main():
     ap.add_argument(
         "--list", action="store_true", help="print the catalogue and exit"
     )
+    ap.add_argument(
+        "--spin-run", default=None,
+        help="run dir whose policy acts on pure-spin and stand command "
+        "windows (vx=vy=0), making the measured policy the seam-test "
+        "composite; see wojtek_rl.seam",
+    )
     args = ap.parse_args()
 
     if args.list:
@@ -363,6 +372,7 @@ def main():
         overlay_torque=args.overlay_torque,
         overlay_camera=args.overlay_camera,
         gyro_bias=gyro_bias,
+        spin_run=Path(args.spin_run) if args.spin_run else None,
     )
     print_table(results)
     default_name = "courses.json" if gyro_bias is None else "courses_bias.json"

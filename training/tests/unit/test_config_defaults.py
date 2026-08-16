@@ -59,6 +59,7 @@ def test_terrain_gate_defaults():
         "flat_pitch_tol_deg": 2.0,
         "flat_pitch_rough_cut": 0.25,
         "flat_pitch_row_only": False,
+        "flat_pitch_spin_exempt": False,
     }
 
 

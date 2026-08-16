@@ -521,6 +521,11 @@ def default_config() -> config_dict.ConfigDict:
                 flat_pitch_tol_deg=2.0,
                 flat_pitch_rough_cut=0.25,
                 flat_pitch_row_only=False,
+                # spin_exempt opens the gate during pure-spin command
+                # windows (vx=vy=0, wz!=0): turning in place pitches the
+                # body past the cone by nature, and charging it fights any
+                # spin-practice curriculum.
+                flat_pitch_spin_exempt=False,
             ),
             scales=config_dict.create(
                 tracking_lin_vel=1.5,
@@ -1701,6 +1706,16 @@ class WojtekJoystick(WojtekEnv):
                         1.0,
                     )
                 )
+            if tg.get("flat_pitch_spin_exempt", False):
+                # Pure-spin windows leave vx=vy at exact zero (sampler
+                # construction, sticky included), so the comparison is a
+                # window-type test, not a threshold tune.
+                spin_cmd = (
+                    (jp.abs(cmd[2]) > 1e-6)
+                    & (jp.abs(cmd[0]) < 1e-6)
+                    & (jp.abs(cmd[1]) < 1e-6)
+                )
+                gate_flat = jp.where(spin_cmd, 0.0, gate_flat)
             if self._orientation_tol_flat is not None:
                 orientation_tol = (
                     self._orientation_tol_flat

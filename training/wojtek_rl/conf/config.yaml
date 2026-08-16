@@ -50,6 +50,47 @@ early_stop:
 # after the task's own ppo block (so CLI ppo.foo=... wins).
 ppo: {}
 
+# DAgger distillation trainer (wojtek_rl.distill); train.py ignores this
+# block. teachers/routing/warm_start are required and come from a preset
+# (terrain_distill). ppo.* still supplies the network factory,
+# num_envs and num_timesteps (the env-step budget); the PPO update
+# hyper-parameters are unused by distillation.
+distill:
+  teachers: {} # name -> run dir under training/, e.g. runs/wojtek_terrain_blind_v4_2
+  routing:
+    # tile: flat_row + types (privileged tile identity, per episode).
+    # command: command_window + moving (the command channel the student
+    # observes; vx=vy=0 is the window, per step).
+    mode: tile
+    flat_row: null # tile mode: teacher name labeling the flat row (terrain_level 0)
+    types: {} # tile mode: terrain type -> teacher name; must cover terrain.TYPES exactly
+    command_window: null # command mode: teacher for pure-spin/stand windows
+    moving: null # command mode: teacher for every moving command
+  warm_start: null # run dir whose latest checkpoint initializes the student
+  unroll_length: 32 # env steps collected per iteration
+  epochs: 2 # SGD passes over each iteration's batch
+  num_minibatches: 32
+  learning_rate: 3.0e-4
+  # Cosine decay target over the whole run; null = constant learning_rate.
+  learning_rate_end: null
+  grad_clip: 1.0
+  # DAgger mixing: probability (redrawn per episode, annealed linearly
+  # start -> end over training) that an env is driven by its routed
+  # TEACHER instead of the student. Labels come from the teacher either
+  # way; teacher-driven episodes are the BC leg (states only a competent
+  # terrain walker reaches).
+  teacher_act_frac_start: 0.5
+  teacher_act_frac_end: 0.0
+  save_every_steps: 25000000
+  # How the student acts during data collection: "sample" draws from its
+  # tanh-normal (the learned scale head sets the noise), "mode" is the
+  # deterministic tanh(loc).
+  student_act: sample
+  # Loss weight on command-window samples (pure spin and stand); 1.0 is
+  # plain MSE. The window's target actions are the smallest in the batch
+  # and go first when the fit has to choose.
+  window_loss_weight: 1.0
+
 hydra:
   run:
     dir: .

@@ -31,6 +31,7 @@ from dataclasses import dataclass
 import numpy as np
 from loguru import logger
 
+from wojtek_rl import perf
 from wojtek_rl.agent.parsing import iter_json_objects, strip_think
 from wojtek_rl.agent.spatial import FrontierCluster, frontier_clusters
 from wojtek_rl.vlm_nav import _safe_err
@@ -301,7 +302,8 @@ class SearchController:
 
     async def _run(self, target: str):
         try:
-            await self._run_inner(target)
+            with perf.span("search.goal", target=target):
+                await self._run_inner(target)
         except asyncio.CancelledError:
             raise
         except Exception as e:  # never leave a zombie "searching" status
@@ -313,12 +315,17 @@ class SearchController:
 
         # -- initial 360 look-around: seeds both the occupancy map (each
         # observation fuses depth via ego_jpeg) and the value map.
-        for k in range(SCAN_STOPS):
-            vs = await self._observe(target)
-            if self._promising(vs) and await self._try_candidate(target, vs):
-                return
-            if k < SCAN_STOPS - 1:
-                await self._do_cmd(f"turn_left {SCAN_TURN_DEG:g}")
+        # Timed as one stage: the carousel is ~60 s of the ~140 s a castle
+        # search needs, i.e. the single biggest block before the robot even
+        # starts exploring.
+        with perf.span("search.scan_carousel", stops=SCAN_STOPS):
+            for k in range(SCAN_STOPS):
+                vs = await self._observe(target)
+                if self._promising(vs) and await self._try_candidate(target, vs):
+                    return
+                if k < SCAN_STOPS - 1:
+                    with perf.span("search.turn"):
+                        await self._do_cmd(f"turn_left {SCAN_TURN_DEG:g}")
 
         # -- frontier loop: commit to the best-value frontier, watch for the
         # target while driving, look around on arrival.
@@ -330,7 +337,9 @@ class SearchController:
                 return
             self._attempted.append((goal.x, goal.y))
             self._set_state("moving", note=f"heading to frontier at ({goal.x:.1f}, {goal.y:.1f})")
-            det = await self._drive_and_watch(goal, target)
+            with perf.span("search.leg") as sp:
+                det = await self._drive_and_watch(goal, target)
+                sp["detected"] = det is not None
             if det is not None and await self._try_candidate(target, det):
                 return
             if det is not None:
@@ -351,7 +360,9 @@ class SearchController:
     async def _try_candidate(self, target: str, vs: ViewScore) -> bool:
         """Approach + verify one detection; True ends the search as found."""
         self._set_state("approaching", note=f"possible {target}: {vs.description[:60]}")
-        ok = await self._approach_and_verify(target, vs)
+        with perf.span("search.approach_verify") as sp:
+            ok = await self._approach_and_verify(target, vs)
+            sp["confirmed"] = bool(ok)
         if ok:
             self._found_xy = self._point_ahead(ASSUMED_TARGET_DIST_M)
             self._set_state("found", note=f"{target} confirmed")
@@ -367,8 +378,13 @@ class SearchController:
     async def _observe(self, target: str) -> ViewScore:
         """Grab a frame (this also fuses depth into the occupancy map), score
         it, and splat the score into the value map at the current pose."""
-        frame = self.frame_fn()
-        vs = await self.score_view(target, frame)
+        with perf.span("search.frame"):
+            frame = self.frame_fn()
+        # The observer VLM call: run once per scan pose and ~1/detect_period_s
+        # while driving, so it sets the pace of the whole search.
+        with perf.span("search.score_view") as sp:
+            vs = await self.score_view(target, frame)
+            sp["visible"] = bool(vs.visible)
         x, y, yaw = self.sim.pose()
         self.value.splat(x, y, yaw, vs.score)
         self._observations += 1

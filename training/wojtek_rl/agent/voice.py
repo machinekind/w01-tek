@@ -30,6 +30,8 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
+from wojtek_rl import perf
+
 SAMPLE_RATE = 24000          # what the browser worklet produces
 FRAME_MS = 100               # one websocket binary frame
 SPEECH_RMS = 0.012           # normalised RMS above which a frame counts as speech
@@ -54,6 +56,12 @@ class Utterance:
     pcm: np.ndarray              # int16, mono, SAMPLE_RATE
     seconds: float
     ended_on: str                # "silence" | "max_length" | "flush"
+    # Trailing silence that had to accumulate before the segmenter believed
+    # the sentence was over. It is pure dead time on the critical path -- the
+    # human has stopped talking and nothing is happening yet -- and it is the
+    # one stage that no faster GPU shortens, so the profiler reports it
+    # alongside the model calls rather than hiding it inside them.
+    endpoint_wait_s: float = 0.0
 
     def to_wav_bytes(self) -> bytes:
         """16-bit PCM WAV in memory -- what faster-whisper wants to open."""
@@ -152,11 +160,14 @@ class VoiceSegmenter:
         # Judge the length on speech alone, discounting however much trailing
         # silence actually accumulated -- NOT the configured timeout, which a
         # flush never reaches and which would then discard a real sentence.
-        speech_s = seconds - self._silence_s
+        silence_s = self._silence_s
+        speech_s = seconds - silence_s
         self.reset()
         if speech_s < self.min_utterance_s:
             return None
-        return Utterance(pcm=pcm, seconds=seconds, ended_on=reason)
+        return Utterance(
+            pcm=pcm, seconds=seconds, ended_on=reason, endpoint_wait_s=silence_s
+        )
 
 
 class RemoteTranscriber:
@@ -217,8 +228,15 @@ class VoiceListener:
             await self._recognise(utt)
 
     async def _recognise(self, utt: Utterance) -> None:
+        # The turn's clock starts HERE: the human has finished speaking and
+        # everything from now to the first spoken syllable is waiting.
+        perf.start_turn("voice", seconds=round(utt.seconds, 2), ended_on=utt.ended_on)
+        perf.record("mic.endpoint", utt.endpoint_wait_s * 1000.0,
+                    ended_on=utt.ended_on)
         try:
-            text = await asyncio.to_thread(self._transcribe_blocking, utt)
+            with perf.span("asr.transcribe", audio_s=round(utt.seconds, 2)) as sp:
+                text = await asyncio.to_thread(self._transcribe_blocking, utt)
+                sp["chars"] = len(text or "")
         except Exception as e:  # a bad utterance must not kill the socket
             logger.warning(f"transcription failed: {e}")
             return

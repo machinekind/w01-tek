@@ -352,8 +352,11 @@ class VlmNavigator:
         return decision_to_command(decision)
 
     async def _run(self, goal: str):
+        from wojtek_rl import perf
+
         try:
-            await self._run_inner(goal)
+            with perf.span("nav.goal", goal=goal):
+                await self._run_inner(goal)
         except asyncio.CancelledError:
             raise
         except Exception as e:  # never leave a zombie "executing" status
@@ -363,9 +366,12 @@ class VlmNavigator:
     def _grab_frame(self) -> str:
         """The frame handed to the model: clean square VLN-CE frame for FutureNav,
         else the HUD-composited ego view the prompt-based backends expect."""
-        if self.vlnce_frame:
-            return self.sim.vlm_frame_jpeg()
-        return self.sim.ego_jpeg()
+        from wojtek_rl import perf
+
+        with perf.span("nav.frame", vlnce=self.vlnce_frame):
+            if self.vlnce_frame:
+                return self.sim.vlm_frame_jpeg()
+            return self.sim.ego_jpeg()
 
     async def _think_ahead(self, goal: str, history: list[dict], step: int) -> VlmDecision:
         """Overlap mode: grab a frame mid-execution and start the next decision.
@@ -373,12 +379,18 @@ class VlmNavigator:
         The history snapshot excludes the currently executing command's outcome
         (not known yet); the frame is slightly stale (captured during the move),
         which for a 0.25 m step is a fair trade to hide the 1-3 s inference."""
+        from wojtek_rl import perf
+
         if self.overlap_delay_s:
             await asyncio.sleep(self.overlap_delay_s)
         ego = self._grab_frame()
-        return await self.client.decide(
-            goal, ego, list(history), step, self.max_steps, self.sim.pose()
-        )
+        # Tagged `prefetch`: this inference is deliberately hidden behind the
+        # walk, so it costs wall-clock but not felt latency. Ranking it next
+        # to a blocking decide() without the tag would overstate the cost.
+        with perf.span("nav.decide_prefetch", step=step):
+            return await self.client.decide(
+                goal, ego, list(history), step, self.max_steps, self.sim.pose()
+            )
 
     async def _run_inner(self, goal: str):
         self._pending = None
@@ -391,6 +403,8 @@ class VlmNavigator:
             self._pending = None
 
     async def _run_loop(self, goal: str):
+        from wojtek_rl import perf
+
         history: list[dict] = []
         self.history = history  # exposed for eval logging (read-only)
         failures = 0
@@ -406,13 +420,19 @@ class VlmNavigator:
             try:
                 if self._pending is not None:
                     pending, self._pending = self._pending, None
-                    decision = await asyncio.wait_for(pending, self.vlm_timeout_s)
+                    # What the loop actually waits for a prefetched decision:
+                    # zero when the overlap worked, the rest of the inference
+                    # when it did not.
+                    with perf.span("nav.await_prefetch", step=step):
+                        decision = await asyncio.wait_for(pending, self.vlm_timeout_s)
                 else:
                     ego = self._grab_frame()
-                    decision = await asyncio.wait_for(
-                        self.client.decide(goal, ego, history, step, self.max_steps, self.sim.pose()),
-                        self.vlm_timeout_s,
-                    )
+                    with perf.span("nav.decide", step=step):
+                        decision = await asyncio.wait_for(
+                            self.client.decide(goal, ego, history, step, self.max_steps,
+                                               self.sim.pose()),
+                            self.vlm_timeout_s,
+                        )
                 cmd = self._decision_to_command(decision)
             except asyncio.CancelledError:
                 raise
@@ -465,7 +485,10 @@ class VlmNavigator:
             blocked_before = getattr(self.sim.executor, "blocked", 0)
             if self.overlap and (self.max_steps is None or step < self.max_steps):
                 self._pending = asyncio.create_task(self._think_ahead(goal, history, step + 1))
-            result = await self._wait_executor()
+            # Walking time, not thinking time: separated so a slow route is
+            # never mistaken for a slow model (and vice versa).
+            with perf.span("nav.execute", step=step, cmd=cmd):
+                result = await self._wait_executor()
             abnormal = True
             if result == "timeout":
                 self.sim.submit_command("stop")

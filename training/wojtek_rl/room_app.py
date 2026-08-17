@@ -40,7 +40,7 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
-from wojtek_rl import paths
+from wojtek_rl import paths, perf
 from wojtek_rl.agent.goals import TERMINAL_STATES, outcome_phrase
 from wojtek_rl.agent.llm import DEFAULT_AGENT_MODEL, DEFAULT_AGENT_URL
 from wojtek_rl.agent.nav import TracedVlmNavigator
@@ -544,6 +544,9 @@ def get_trace():
             else default_trace_path(paths.PROJECT_DIR / "runs", _scene_name)
         )
         _trace = Trace(path)
+        # Stage timings ride the same file: a session trace IS the latency
+        # recording, readable with `./training/run.sh perf <file>`.
+        perf.bind(_trace)
         logger.info(f"agent trace -> {path}")
         _trace.add("session.start", scene=_scene_name, agent_model=_agent_model,
                    agent_url=_agent_url, nav_backend=_vlm_backend)
@@ -954,6 +957,27 @@ def api_trace(limit: int = 200, kind: str | None = None):
     }
 
 
+@app.get("/api/perf")
+def api_perf():
+    """Where this session's time is going, ranked, live.
+
+    Built from the in-memory ring, so it covers the recent past rather than
+    the whole session -- the trace FILE is complete, and
+    `./training/run.sh perf <path>` reports on all of it.
+    """
+    from wojtek_rl import perf_report
+
+    if _trace is None:
+        return {"ok": True, "path": None, "stages": [], "note": "nothing timed yet"}
+    events = _trace.recent(limit=_trace.ring.maxlen or 2000)
+    return {
+        "ok": True,
+        "path": str(_trace.path) if _trace.path else None,
+        "partial": _trace.seq > len(events),
+        **perf_report.report(events),
+    }
+
+
 @app.get("/api/agent_health")
 async def agent_health():
     """Is the chat agent's endpoint actually serving? The UI header turns red
@@ -1081,6 +1105,11 @@ async def ws(sock: WebSocket):
     get_trace().subscribe(on_trace)
 
     async def chat_turn(text: str, spoken: bool = False):
+        # A spoken turn's clock already started when the mic closed the
+        # utterance; a typed one starts here, so both kinds get a critical
+        # path in the report.
+        if perf.current_turn() is None:
+            perf.start_turn("text", chars=len(text))
         # A turn that never returns leaves the UI on "thinking…" forever, which
         # is what a dead endpoint used to look like. Bound it and report why.
         try:
@@ -1099,6 +1128,10 @@ async def ws(sock: WebSocket):
             result = {"ok": False, "error": str(e)}
         await acks.put({"type": "chat_reply", **result, "spoken": spoken})
         if spoken and result.get("ok"):
+            # The answer is on screen from here; everything after this is the
+            # gap between reading it and hearing it, which is the complaint
+            # people actually voice about the demo.
+            perf.mark("reply.text")
             speaker.say(result.get("say", ""))
 
     def start_chat(text: str, spoken: bool = False):
@@ -1191,6 +1224,9 @@ async def ws(sock: WebSocket):
 
     reader_task = asyncio.create_task(reader())
     dt = 1.0 / CONTROL_HZ
+    # The loop's stages fire at CONTROL_HZ; one trace event per tick per stage
+    # would bury the decision events, so they are rolled up per window.
+    meter = perf.Meter(trace=get_trace())
     i = 0
     vlm_rev = -1  # -1 so every (re)connected client gets the current status
     agent_rev = -1
@@ -1205,15 +1241,19 @@ async def ws(sock: WebSocket):
                 break
             t0 = loop.time()
             sim = get_sim()  # /api/scene may have swapped it since last tick
-            payload = sim.step()
+            with meter.time("sim.step"):
+                payload = sim.step()
             payload["robot"] = ROBOT_KEY
             if i % RENDER_EVERY == 0:
-                payload["frame"], payload["ego"] = sim.render_pair()
+                with meter.time("sim.render_pair"):
+                    payload["frame"], payload["ego"] = sim.render_pair()
             if i % MAP_EVERY == 0:
-                payload["map"] = sim.map_jpeg()
+                with meter.time("sim.map_jpeg"):
+                    payload["map"] = sim.map_jpeg()
             while not acks.empty():
                 await sock.send_text(json.dumps(acks.get_nowait()))
-            await sock.send_text(json.dumps(payload))
+            with meter.time("ws.send"):
+                await sock.send_text(json.dumps(payload))
             if _navigator is not None and _navigator.rev != vlm_rev:
                 vlm_rev = _navigator.rev
                 await sock.send_text(json.dumps({"type": "vlm_status", **_navigator.status()}))
@@ -1240,6 +1280,11 @@ async def ws(sock: WebSocket):
                         await acks.put({"type": "chat_reply", "ok": True, "say": phrase,
                                         "steps": [], "spoken": True})
             i += 1
+            # The whole tick, including the parts not metered separately: when
+            # this exceeds dt the robot's control loop is running slow, which
+            # looks like sluggish walking rather than a slow answer.
+            meter.add("loop.tick", (loop.time() - t0) * 1000.0)
+            meter.tick()
             await asyncio.sleep(max(0.0, dt - (loop.time() - t0)))
     except (WebSocketDisconnect, RuntimeError):
         pass
@@ -1248,6 +1293,7 @@ async def ws(sock: WebSocket):
         if chat_task is not None and not chat_task.done():
             chat_task.cancel()
         speaker.cancel()
+        meter.flush(force=True)  # the last window still counts
         get_trace().unsubscribe(on_trace)
 
 

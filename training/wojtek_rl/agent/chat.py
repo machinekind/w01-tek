@@ -19,6 +19,7 @@ import re
 
 from loguru import logger
 
+from wojtek_rl import perf
 from wojtek_rl.agent.llm import AgentLLM, text_content, user_message
 from wojtek_rl.agent.parsing import parse_agent_reply, strip_think
 from wojtek_rl.agent.prompts import load
@@ -171,7 +172,8 @@ class WojtekAgent:
             question=str(self.turn_context.get("user_text", "") or "-"),
         )
         try:
-            out = await self.llm.chat([user_message(prompt)], max_tokens=200)
+            with perf.span("llm.translate", chars=len(text)):
+                out = await self.llm.chat([user_message(prompt)], max_tokens=200)
         except Exception as e:
             logger.warning(f"translation failed, sending the source line: {_safe_err(e)}")
             return text
@@ -191,7 +193,19 @@ class WojtekAgent:
         unknown_tool / repeat_nudge), latency/token metadata when the client
         exposes it, and the (truncated) tool result -- so the demo UI can show
         exactly what the model saw and did.
+
+        The whole turn is timed as one `chat.turn` span, with every model call
+        and every tool nested inside it, so the profiler can say whether a
+        slow answer was the model, a tool, or the number of round trips.
         """
+        with perf.span("chat.turn", voice=voice) as sp:
+            result = await self._ask(text, voice=voice)
+            debug = result.get("debug") or {}
+            sp["llm_calls"] = len(debug.get("llm_calls") or [])
+            sp["tools"] = [s["tool"] for s in result.get("steps") or []]
+            return result
+
+    async def _ask(self, text: str, voice: bool = False) -> dict:
         text = text.strip()
         if not text:
             return {"ok": False, "error": "empty message"}
@@ -209,7 +223,10 @@ class WojtekAgent:
                 + self._history
                 + turn
             )
-            raw = await self.llm.chat(messages)
+            with perf.span("llm.chat", context_messages=len(messages),
+                           voice=voice) as sp:
+                raw = await self.llm.chat(messages)
+                sp["tokens"] = (getattr(self.llm, "last_meta", None) or {}).get("tokens")
             meta = getattr(self.llm, "last_meta", None) or {}
             entry = {
                 "raw": raw[:2000],
@@ -273,7 +290,9 @@ class WojtekAgent:
                 continue
             last_call = call_key
             try:
-                result: ToolResult = await tool.fn(reply.args)
+                with perf.span(f"tool.{reply.tool}") as sp:
+                    result: ToolResult = await tool.fn(reply.args)
+                    sp["images"] = len(result.images)
             except Exception as e:
                 logger.warning(f"tool {reply.tool} failed: {_safe_err(e)}")
                 result = ToolResult(text=f"tool error: {_safe_err(e)}")
@@ -302,7 +321,8 @@ class WojtekAgent:
         # VERBATIM, same rule as tools.keep_full_instruction.
         if not steps and "stop" in self.tools and STOP_HINT_RE.search(text):
             try:
-                result = await self.tools["stop"].fn({})
+                with perf.span("tool.stop", guard=True):
+                    result = await self.tools["stop"].fn({})
                 steps.append({"tool": "stop", "args": {}, "result": result.text})
                 llm_calls.append({"kind": "stop_guard"})
                 self._trace("chat.stop_guard", result=result.text)
@@ -312,7 +332,8 @@ class WojtekAgent:
                 logger.warning(f"stop guard failed: {_safe_err(e)}")
         if not steps and "navigate" in self.tools and NAV_HINT_RE.search(text):
             try:
-                result = await self.tools["navigate"].fn({"instruction": text})
+                with perf.span("tool.navigate", guard=True):
+                    result = await self.tools["navigate"].fn({"instruction": text})
                 steps.append(
                     {"tool": "navigate", "args": {"instruction": text}, "result": result.text}
                 )

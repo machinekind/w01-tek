@@ -16,6 +16,11 @@ Module map:
   goals.py    the goal state machine (idle / navigating / searching)
   tools.py    tool registry binding sim + goals to the chat loop
   chat.py     WojtekAgent: persona prompt, tool loop, context management
+
+Stage timings live one level up in `wojtek_rl.perf` (stdlib-only, so any
+module here or in wojtek_eval can time itself without an import cycle); they
+are written into this package's session trace and read by
+`wojtek_rl.perf_report`.
 """
 
 from wojtek_rl.agent.chat import WojtekAgent

@@ -83,7 +83,12 @@ restart, done.
 3. Whisper large-v2 vs large-v3 A/B on real mic audio (v3 hallucinates more
    on silence; guards exist either way).
 4. Stage voice decision + clone (Głuś must be replaced before the demo).
-5. W4 hardening: failure drills, latency pass, stage runbook.
+5. W4 hardening: failure drills, latency pass, stage runbook.  The
+   measurement half of the latency pass exists — every stage of both stacks
+   is timed into the session trace and ranked by `./training/run.sh perf`
+   ([training/docs/latency.md](../../training/docs/latency.md)); what is
+   missing is a live GPU session to record, after which the acceleration
+   work is ordered by the critical path instead of by guess.
 
 Branch: `agentic-ros2` (checked out at the repo root for convenient prompt
 editing; `claude/quadruped-agentic-ros2-0a713b` is the same line of work).

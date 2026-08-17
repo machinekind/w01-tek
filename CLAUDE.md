@@ -57,6 +57,11 @@ keep the command, seed, and resulting run directory together.
 - [MJWarp backend report](docs/plans/mjwarp-phase0-report.md) — backend buffer
   sizing and validation context.
 - [Demo guide](training/demo/README.md) — interactive navigation demo usage.
+- [Latency](training/docs/latency.md) — the stage profiler (`run.sh perf`),
+  the stage vocabulary shared by the demo and ROS stacks, and how to read a
+  critical path before optimising anything.  Its companion
+  [TTS optimization](training/docs/tts-optimization.md) lists the safe and
+  lossy levers for the cloned voice, ordered by what to try first.
 - [SCAN-Planner](training/docs/scan-planner.md) — the collision-aware local
   planner that executes the VLM's mid-level commands; read it before touching
   `wojtek_rl/scan/`, the room demo's executor, or the nav-eval collision

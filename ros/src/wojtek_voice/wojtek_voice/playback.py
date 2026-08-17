@@ -27,15 +27,21 @@ class SpeechSynthesizer:
         self._q: queue.Queue = queue.Queue()
         self._cancel = threading.Event()
         self._thread: threading.Thread | None = None
+        # Which reply the frames coming out right now belong to.  Written by
+        # the worker thread that calls emit_frame, read inside that same
+        # callback, so the published audio can carry the utterance id it
+        # answers -- without which no one can measure how long the human
+        # waited between speaking and hearing.
+        self.current_tag = None
 
     def start(self):
         self._thread = threading.Thread(target=self._work, daemon=True)
         self._thread.start()
 
-    def say(self, text: str):
+    def say(self, text: str, tag=None):
         text = (text or "").strip()
         if text:
-            self._q.put(text)
+            self._q.put((text, tag))
 
     def cancel(self):
         """Barge-in: drop the queue, stop mid-sentence at next chunk."""
@@ -52,7 +58,8 @@ class SpeechSynthesizer:
 
     def _work(self):
         while True:
-            text = self._q.get()
+            text, tag = self._q.get()
+            self.current_tag = tag
             self._cancel.clear()
             try:
                 for pcm, rate in self.engine.synth_stream(text):

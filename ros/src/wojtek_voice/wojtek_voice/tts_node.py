@@ -59,7 +59,10 @@ class TtsNode(Node):
 
     def on_sentence(self, msg: Sentence):
         if msg.text:  # a bare final marker carries no audio
-            self.synth.say(msg.text)
+            # The utterance id rides along so the published frames say which
+            # question they answer; the latency probe needs that pairing to
+            # measure the wait between a human speaking and hearing.
+            self.synth.say(msg.text, tag=msg.utterance_id)
 
     def on_barge_in(self, _msg: Empty):
         self.synth.cancel()
@@ -69,6 +72,7 @@ class TtsNode(Node):
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.sample_rate = SAMPLE_RATE
         msg.channels = 1
+        msg.utterance_id = self.synth.current_tag or ""
         self._seq += 1
         msg.seq = self._seq
         msg.samples = frame.tolist()

@@ -14,6 +14,7 @@ possible on a CPU box.
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -30,6 +31,9 @@ ARGS = [
     ("tts_ref_wav", "", "voice-clone reference wav (denoised)"),
     ("tts_ref_text", "", "exact transcript of the reference (F5 only)"),
     ("device", "cuda", "device for ASR/TTS models"),
+    ("vad_silence_s", "0.7", "trailing silence that closes an utterance"),
+    ("perf", "false", "run the passive latency probe alongside the stack"),
+    ("perf_out", "", "probe JSONL path; read with ./training/run.sh perf"),
 ]
 
 
@@ -41,7 +45,10 @@ def generate_launch_description():
         Node(package="wojtek_voice", executable="audio_bridge",
              parameters=[{"port": cfg["ws_port"]}]),
         Node(package="wojtek_voice", executable="vad",
-             parameters=[{"backend": cfg["vad_backend"]}]),
+             parameters=[{
+                 "backend": cfg["vad_backend"],
+                 "silence_end_s": cfg["vad_silence_s"],
+             }]),
         Node(package="wojtek_voice", executable="asr",
              parameters=[{
                  "model": cfg["asr_model"],
@@ -61,5 +68,14 @@ def generate_launch_description():
                  "ref_wav": cfg["tts_ref_wav"],
                  "ref_text": cfg["tts_ref_text"],
                  "device": cfg["device"],
+             }]),
+        # Passive: it only subscribes, so leaving it on costs nothing but a
+        # few subscriptions -- and a session nobody measured is a session
+        # whose latency is an opinion.
+        Node(package="wojtek_agent_perf", executable="probe",
+             condition=IfCondition(cfg["perf"]),
+             parameters=[{
+                 "out": cfg["perf_out"],
+                 "vad_silence_s": cfg["vad_silence_s"],
              }]),
     ])

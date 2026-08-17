@@ -24,6 +24,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +33,7 @@ from typing import Protocol
 import numpy as np
 from loguru import logger
 
+from wojtek_rl import perf
 from wojtek_rl.agent.voice import SAMPLE_RATE, pcm_frames, resample_linear
 
 # Piper's pl_PL voices are 22.05 kHz; the browser context runs at 24 kHz.
@@ -80,6 +82,20 @@ _ABBREVIATIONS = (
 )
 _SENTENCE_END_RE = re.compile(r"(?<=[.!?…])\s+")
 MIN_CHUNK_CHARS = 25  # shorter than this, glue onto the next sentence
+# The FIRST chunk is the only one anyone waits through, so it is allowed to
+# be short: "Widzę kanapę." (13 chars) used to be glued onto the sentence
+# after it, which meant the whole reply was synthesised before a single
+# sample shipped -- exactly the replies the dog gives most often lost the
+# pipelining that chunking exists for (measured 2026-08-17). Later chunks
+# keep the higher floor, where a merge costs nothing but smoother delivery.
+FIRST_CHUNK_MIN_CHARS = 8
+# A long opening sentence is split at a clause boundary instead, so the
+# voice starts within a breath rather than after the whole thought.
+# Roughly five seconds of speech: past that, waiting for the whole opening
+# sentence is the dominant cost on a ~1.0 RTF voice, and a comma is a natural
+# place to have already started talking.
+FIRST_CHUNK_MAX_CHARS = 60
+_CLAUSE_END_RE = re.compile(r"(?<=[,;:–—])\s+")
 
 
 def split_sentences(text: str, min_chars: int = MIN_CHUNK_CHARS) -> list[str]:
@@ -113,8 +129,44 @@ def split_sentences(text: str, min_chars: int = MIN_CHUNK_CHARS) -> list[str]:
     return chunks
 
 
+def speech_chunks(text: str, min_chars: int = MIN_CHUNK_CHARS) -> list[str]:
+    """Sentence chunks, with the FIRST one cut short enough to start fast.
+
+    `split_sentences` merges anything under min_chars forward, which is right
+    for the body of a reply (the seams are audible and nobody is waiting) and
+    wrong for its opening: "Widzę kanapę." would be glued to the sentence
+    after it, so the whole answer had to be synthesised before a single
+    sample shipped -- the pipelining that chunking exists for never happened
+    for the short punchy replies the dog gives most often (measured
+    2026-08-17).
+
+    So the first chunk is taken at the first real sentence end, and only the
+    remainder is merged the conservative way. A long opening sentence is cut
+    at its first clause boundary instead, so the voice starts within a breath
+    rather than after the whole thought.
+    """
+    sentences = split_sentences(text, min_chars=FIRST_CHUNK_MIN_CHARS)
+    if not sentences:
+        return []
+    first, rest = sentences[0], sentences[1:]
+    chunks = [first, *split_sentences(" ".join(rest), min_chars=min_chars)]
+    if len(chunks[0]) > FIRST_CHUNK_MAX_CHARS:
+        parts = _CLAUSE_END_RE.split(chunks[0], maxsplit=1)
+        if len(parts) == 2 and len(parts[0]) >= FIRST_CHUNK_MIN_CHARS:
+            chunks = [parts[0], parts[1], *chunks[1:]]
+    return chunks
+
+
 class TtsEngine(Protocol):
-    """Text -> PCM16 mono at `rate`."""
+    """Text -> PCM16 mono at `rate`.
+
+    An engine MAY also offer `synth_stream(text) -> Iterator[np.ndarray]`,
+    yielding audio as it is produced (same contract as the ROS stack's
+    engines). The Speaker prefers it when present: with a whole-utterance
+    call nothing is audible until the last sample exists, which on a
+    diffusion voice is seconds of silence after the answer is already on
+    screen.
+    """
 
     rate: int
 
@@ -189,6 +241,19 @@ class SilentTts:
         return np.zeros(0, np.int16)
 
 
+def _header_ms(response, name: str) -> float | None:
+    """A timing header the TTS server attached, in ms. Absent or malformed
+    means an older server -- the client still works, it just cannot break the
+    round trip down."""
+    raw = (getattr(response, "headers", None) or {}).get(name)
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 class RemoteTts:
     """Speech from tts_server.py on a GPU box (Chatterbox multilingual with a
     cloned voice) -- same one-method shape as PiperTts, so the demo swaps
@@ -206,16 +271,79 @@ class RemoteTts:
     def synthesize(self, text: str) -> np.ndarray:
         import httpx
 
+        t0 = time.monotonic()
         r = httpx.post(
             f"{self.url}/synthesize", json={"text": text}, timeout=self.timeout_s
         )
         r.raise_for_status()
+        round_trip_ms = (time.monotonic() - t0) * 1000.0
+        perf.record("tts.request", round_trip_ms, chars=len(text), bytes=len(r.content))
+        # The server reports what it spent inside the request, so the round
+        # trip splits into GPU time, time spent queued behind another
+        # sentence, and what is left -- the wire. Without that split a slow
+        # voice and a busy voice look identical from here, and they need
+        # opposite fixes.
+        gpu = _header_ms(r, "x-synth-ms")
+        queued = _header_ms(r, "x-queue-ms") or 0.0
+        if gpu is not None:
+            perf.record("tts.server_gpu", gpu, chars=len(text))
+            if queued:
+                perf.record("tts.server_queue", queued, chars=len(text))
+            perf.record("tts.network", max(0.0, round_trip_ms - gpu - queued),
+                        bytes=len(r.content))
         return wav_bytes_to_pcm(r.content)
+
+    def synth_stream(self, text: str):
+        """Raw PCM16 as the server produces it, clause by clause.
+
+        The server splits the text and flushes each piece the moment it
+        exists, so time-to-first-sound stops being "the whole sentence" and
+        becomes "the first clause". Falls back to the one-shot call against
+        an older server (or one whose stream endpoint is missing), because a
+        voice that speaks late is still better than one that does not speak.
+        """
+        import httpx
+
+        try:
+            with httpx.stream(
+                "POST", f"{self.url}/synthesize_stream",
+                json={"text": text}, timeout=self.timeout_s,
+            ) as r:
+                if r.status_code == 404:
+                    r.read()
+                    yield self.synthesize(text)
+                    return
+                r.raise_for_status()
+                tail = b""
+                for raw in r.iter_bytes():
+                    if not raw:
+                        continue
+                    buf = tail + raw
+                    # int16 frames must not be split across a chunk boundary.
+                    usable = len(buf) - (len(buf) % 2)
+                    tail = buf[usable:]
+                    if usable:
+                        yield np.frombuffer(buf[:usable], dtype=np.int16)
+        except httpx.HTTPError as e:
+            logger.warning(f"remote TTS stream failed ({e}); falling back to one shot")
+            yield self.synthesize(text)
 
     def health(self) -> dict:
         import httpx
 
         return httpx.get(f"{self.url}/health", timeout=5.0).json()
+
+
+def _rate_fields(span_fields: dict, pcm, rate: int, took_s: float) -> None:
+    """Audio produced, and the real-time factor it was produced at.
+
+    RTF above 1.0 means the voice cannot keep up with itself: no amount of
+    streaming rescues that, only a faster engine. Below 1.0, streaming turns
+    the wait into the first partial's time instead of the whole sentence's.
+    """
+    audio_s = len(pcm) / max(rate, 1)
+    span_fields["audio_s"] = round(audio_s, 2)
+    span_fields["rtf"] = round(took_s / audio_s, 2) if audio_s else None
 
 
 class Speaker:
@@ -254,6 +382,41 @@ class Speaker:
             self._task.cancel()
         self._task = None
 
+    async def _audio_for(self, chunk: str, index: int):
+        """Yield (part, pcm) for one text chunk, as early as the engine can.
+
+        A streaming engine hands back audio while it is still generating, so
+        the first partial can already be playing; a plain engine yields once,
+        after the whole chunk exists. Both paths are timed the same way, so
+        the report shows what streaming actually bought.
+
+        Blocking work stays off the event loop: the generator is advanced one
+        step at a time in a worker thread, which keeps the 50 Hz control loop
+        and barge-in responsive while the voice model runs.
+        """
+        stream = getattr(self.engine, "synth_stream", None)
+        if stream is None:
+            t0 = time.monotonic()
+            with perf.span("tts.synth", chars=len(chunk), chunk=index,
+                           streamed=False) as sp:
+                pcm = await asyncio.to_thread(self.engine.synthesize, chunk)
+                _rate_fields(sp, pcm, self.engine.rate, time.monotonic() - t0)
+            yield 0, pcm
+            return
+        it = await asyncio.to_thread(stream, chunk)
+        part = 0
+        while True:
+            t0 = time.monotonic()
+            with perf.span("tts.synth", chars=len(chunk), chunk=index,
+                           part=part, streamed=True) as sp:
+                pcm = await asyncio.to_thread(next, it, None)
+                if pcm is None:
+                    sp["end"] = True
+                    return
+                _rate_fields(sp, pcm, self.engine.rate, time.monotonic() - t0)
+            yield part, pcm
+            part += 1
+
     async def _run(self, text: str) -> None:
         """Synthesise sentence by sentence, streaming each as it is ready.
 
@@ -262,23 +425,59 @@ class Speaker:
         answer starts playing after one sentence has been made, while the
         rest is synthesised behind it.
         """
-        chunks = split_sentences(text) or [text]
-        for chunk in chunks:
+        chunks = speech_chunks(text) or [text]
+        # Three clocks, because "why is it slow to speak" has three different
+        # answers: `tts.first_audio` is this reply's time-to-sound,
+        # `reply.text_to_sound` is the gap a person sees between the answer
+        # appearing and being heard, and `voice.reply` is the whole mic-to-
+        # voice wait. A cancelled reply (barge-in) never reaches its first
+        # frame and reports none of them, rather than inventing a number.
+        first_audio = perf.Timer("tts.first_audio", chars=len(text),
+                                 chunks=len(chunks), first_chunk_chars=len(chunks[0]))
+        spoke = False
+        speak = perf.Timer("tts.speak", chars=len(text))
+        for i, chunk in enumerate(chunks):
             try:
-                pcm = await asyncio.to_thread(self.engine.synthesize, chunk)
+                async for part, pcm in self._audio_for(chunk, i):
+                    if not len(pcm):
+                        continue
+                    pcm = resample_linear(pcm, self.engine.rate, self.out_rate)
+                    # Pushing frames onto the socket is separate from making
+                    # them: when the event loop is busy rendering the demo's
+                    # video panels THIS is where the delay lands, and it
+                    # would otherwise hide inside a synthesis number.
+                    with perf.span("tts.stream", chunk=i, part=part,
+                                   audio_s=round(len(pcm) / max(self.out_rate, 1), 2)):
+                        for frame in pcm_frames(pcm, rate=self.out_rate):
+                            await self.send_frame(frame.tobytes())
+                            if not spoke:
+                                spoke = True
+                                first_audio.stop()
+                                gap = perf.since_mark_ms("reply.text")
+                                if gap is not None:
+                                    perf.record("reply.text_to_sound", gap,
+                                                chars=len(text),
+                                                first_chunk_chars=len(chunks[0]))
+                                waited = perf.turn_elapsed_ms()
+                                if waited is not None:
+                                    perf.record("voice.reply", waited, chars=len(text))
+                            # Yield between frames so a cancel (barge-in)
+                            # lands promptly instead of after the whole
+                            # reply is queued.
+                            await asyncio.sleep(0)
             except asyncio.CancelledError:
                 raise
-            except Exception as e:  # missing voice, broken binary
+            except Exception as e:  # missing voice, broken binary, dead server
                 logger.warning(f"tts failed: {e}")
+                if not spoke:
+                    speak.cancel()
+                    first_audio.cancel()
                 return
-            if not len(pcm):
-                continue
-            pcm = resample_linear(pcm, self.engine.rate, self.out_rate)
-            for frame in pcm_frames(pcm, rate=self.out_rate):
-                await self.send_frame(frame.tobytes())
-                # Yield between frames so a cancel (barge-in) lands promptly
-                # instead of after the whole reply has been queued.
-                await asyncio.sleep(0)
+        if spoke:
+            speak.stop()
+        else:
+            speak.cancel()
+            first_audio.cancel()
         self.spoken += 1
 
 

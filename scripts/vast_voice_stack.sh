@@ -26,6 +26,9 @@ ASR_LANGUAGE="${ASR_LANGUAGE:-pl}"
 VAD_BACKEND="${VAD_BACKEND:-silero}"
 TTS_ENGINE="${TTS_ENGINE:-chatterbox}"
 TTS_REF_WAV="${TTS_REF_WAV:-}"                 # local wav to upload with `refs`
+# Extra flags for tts_server.py on `tts-http`, so a latency A/B is a variable
+# rather than an edit: --compile, --cfg-weight 0, --cache 0, --progress ...
+TTS_ARGS="${TTS_ARGS:-}"
 TTS_REF_TEXT_FILE="${TTS_REF_TEXT_FILE:-}"     # its exact transcript (F5 needs it)
 STACK_DIR="${STACK_DIR:-~/wojtek_voice}"
 VLLM_DIR="${VLLM_DIR:-~/wojtek_vllm}"          # shared with vast_stack.sh on a shared box
@@ -251,9 +254,12 @@ set -euo pipefail
 cd ${STACK_DIR}
 if ! curl -sf localhost:8120/health >/dev/null 2>&1; then
   setsid nohup env TTS_REF_WAV="\$PWD/refs/ref.wav" TTS_LANGUAGE=pl \\
-    ./venv/bin/python tts_server.py --port 8120 >> tts_http.log 2>&1 < /dev/null &
-  sleep 8
-  pgrep -f tts_server.py >/dev/null && echo "tts http up on :8120" || { tail -10 tts_http.log; exit 1; }
+    ./venv/bin/python tts_server.py --port 8120 ${TTS_ARGS} >> tts_http.log 2>&1 < /dev/null &
+  # Warmup loads the model AND encodes the reference voice before serving, so
+  # the first spoken line does not pay for either (~57 s on an A6000).
+  echo "waiting for the voice to warm up..."
+  for i in \$(seq 1 40); do curl -sf localhost:8120/health >/dev/null 2>&1 && break; sleep 5; done
+  curl -sf localhost:8120/health >/dev/null && echo "tts http up on :8120" || { tail -10 tts_http.log; exit 1; }
 else
   echo "tts http already up"
 fi

@@ -432,3 +432,89 @@ def test_the_stream_endpoint_ships_pieces_and_caches_them():
     before = len(model.calls)
     client.post("/synthesize_stream", json={"text": text})
     assert model.calls[before:] == []                 # second time, all cached
+
+
+# ---- safe optimisations: do the same work, less often -----------------------
+
+
+class RefModel(StubModel):
+    """Stub that charges for reference encoding the way chatterbox does:
+    prepare_conditionals is the expensive per-reference work."""
+
+    def __init__(self):
+        super().__init__()
+        self.prepared = []
+        self.kwargs = []
+
+    def prepare_conditionals(self, wav_fpath, exaggeration=0.5):
+        self.prepared.append(wav_fpath)
+
+    def generate(self, text, **kwargs):
+        self.kwargs.append(kwargs)
+        return super().generate(text, **kwargs)
+
+
+def ref_server(ref="/refs/glus.wav", **kwargs):
+    from fastapi.testclient import TestClient
+
+    from wojtek_rl.agent import tts_server
+
+    model = RefModel()
+    app = tts_server.build_app(ref, "pl", "cpu", model_factory=lambda: model, **kwargs)
+    return TestClient(app), model, app
+
+
+def test_the_reference_voice_is_encoded_once_not_per_line():
+    """chatterbox re-runs prepare_conditionals on every generate() that gets
+    an audio_prompt_path -- librosa load, resample, embed_ref, the S3
+    tokenizer and the voice encoder -- for a voice that never changes."""
+    client, model, _ = ref_server()
+    first = client.post("/synthesize", json={"text": "Idę!"})
+    second = client.post("/synthesize", json={"text": "Już wracam!"})
+    assert model.prepared == ["/refs/glus.wav"]           # exactly once
+    assert float(first.headers["x-cond-ms"]) >= 0.0
+    assert float(second.headers["x-cond-ms"]) == 0.0      # never paid again
+
+
+def test_generate_is_not_handed_the_reference_path():
+    """Passing audio_prompt_path is what triggers the re-encode, so the
+    request path must not pass it once conditionals are prepared."""
+    client, model, _ = ref_server()
+    client.post("/synthesize", json={"text": "Hau!"})
+    assert model.calls == ["Hau!"]
+    assert "audio_prompt_path" not in model.kwargs[-1]
+    assert model.kwargs[-1]["language_id"] == "pl"
+
+
+def test_warmup_encodes_the_voice_before_serving():
+    client, model, app = ref_server()
+    app.state.warmup()
+    assert model.prepared == ["/refs/glus.wav"]
+    assert model.calls == ["Hau hau."]                    # one throwaway line
+    assert float(client.post("/synthesize", json={"text": "Idę!"})
+                 .headers["x-cond-ms"]) == 0.0
+
+
+def test_streaming_path_also_reuses_the_prepared_voice():
+    client, model, _ = ref_server()
+    client.post("/synthesize_stream",
+                json={"text": "Szukam kanapy, ale jej nie widzę. Zaraz wrócę."})
+    assert model.prepared == ["/refs/glus.wav"]
+    assert all("audio_prompt_path" not in kw for kw in model.kwargs)
+
+
+def test_tuning_knobs_reach_generate():
+    """A speed/quality A/B should be a server flag, not a code edit."""
+    client, model, _ = ref_server(ref="", tuning={"cfg_weight": 0.0,
+                                                  "temperature": 0.6})
+    client.post("/synthesize", json={"text": "Hau!"})
+    assert model.kwargs[-1]["cfg_weight"] == 0.0
+    assert model.kwargs[-1]["temperature"] == 0.6
+
+
+def test_a_broken_compile_still_serves_audio():
+    """torch.compile is opt-in and must degrade to the eager model rather
+    than take the voice down."""
+    client, model, _ = ref_server(ref="", compile_backbone=True)
+    r = client.post("/synthesize", json={"text": "Hau!"})   # stub has no .t3
+    assert r.status_code == 200 and len(r.content) > 44

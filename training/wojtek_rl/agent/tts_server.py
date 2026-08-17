@@ -98,15 +98,19 @@ def pcm_to_wav_bytes(pcm: np.ndarray, rate: int = SAMPLE_RATE) -> bytes:
 
 
 def build_app(ref_wav: str, language: str, device: str, cache_size: int = CACHE_SIZE,
-              model_factory=None):
+              model_factory=None, tuning: dict | None = None,
+              compile_backbone: bool = False):
     """`model_factory` overrides how the voice is loaded (tests inject a stub;
-    the server itself loads Chatterbox lazily on first use)."""
+    the server itself loads Chatterbox lazily on first use). `tuning` carries
+    generation knobs (exaggeration, cfg_weight, temperature) so a quality/
+    speed A/B is a server flag rather than an edit."""
     from fastapi import FastAPI, Request
     from fastapi.responses import Response
 
     app = FastAPI()
     lock = threading.Lock()  # one GPU synth at a time
-    state: dict = {"model": None}
+    state: dict = {"model": None, "conds_ready": False}
+    tuning = dict(tuning or {})
     # Measured on an A6000: Chatterbox runs at RTF 1.3-1.6, i.e. it generates
     # slower than the speech plays, and even a four-character line costs
     # ~2.8 s. The robot's most common lines are fixed strings (goal
@@ -128,9 +132,33 @@ def build_app(ref_wav: str, language: str, device: str, cache_size: int = CACHE_
         while len(cache) > cache_size:
             cache.popitem(last=False)
 
+    def compile_model(m):
+        """Opt-in torch.compile of the AR backbone.
+
+        Batch-1 autoregressive decode is dominated by kernel-launch overhead,
+        which is exactly what reduce-overhead mode (CUDA graphs) removes. Kept
+        opt-in and guarded: a compile failure must degrade to the eager model,
+        never take the voice down. Costs a slow first call, so it pairs with
+        the startup warmup.
+        """
+        target = getattr(getattr(m, "t3", None), "patched_model", None)
+        if target is None:
+            print("compile: no t3.patched_model to compile; skipping", flush=True)
+            return m
+        try:
+            import torch
+
+            m.t3.patched_model = torch.compile(target, mode="reduce-overhead")
+            print("compile: t3 backbone compiled (reduce-overhead)", flush=True)
+        except Exception as e:  # missing torch, unsupported backend, bad graph
+            print(f"compile failed ({e}); running eager", flush=True)
+        return m
+
     def model():
         if state["model"] is None and model_factory is not None:
             state["model"] = model_factory()
+            if compile_backbone:
+                state["model"] = compile_model(state["model"])
         if state["model"] is None:
             # resemble-perth's implicit watermarker resolves to None when its
             # optional deps are broken (observed on a fresh vast box) and
@@ -147,20 +175,44 @@ def build_app(ref_wav: str, language: str, device: str, cache_size: int = CACHE_
             state["model"] = ChatterboxMultilingualTTS.from_pretrained(device=device)
         return state["model"]
 
+    def ensure_conditionals() -> float:
+        """Encode the reference voice ONCE, not on every line.
+
+        chatterbox's `generate(audio_prompt_path=...)` calls
+        prepare_conditionals internally every single call: librosa load and
+        resample of the reference, s3gen embed_ref, the S3 tokenizer and the
+        voice encoder -- all of it repeated for a voice that never changes.
+        Preparing it once and then omitting audio_prompt_path is
+        bit-identical and cuts that work from every request.
+
+        Returns the milliseconds spent (0.0 when already prepared).
+        """
+        if not ref_wav or state["conds_ready"]:
+            return 0.0
+        t0 = time.monotonic()
+        model().prepare_conditionals(ref_wav)
+        state["conds_ready"] = True
+        return (time.monotonic() - t0) * 1000.0
+
+    def gen_kwargs() -> dict:
+        """Generation arguments. audio_prompt_path is deliberately absent:
+        the conditionals are already loaded (see ensure_conditionals)."""
+        return dict(language_id=language, **tuning)
+
     def warmup():
-        """Load the model and synthesise one short line before serving.
+        """Load the model, encode the voice, and synthesise one short line
+        before serving.
 
         Without it the first /synthesize of a session also pays the model
         load and CUDA's first kernel compile -- which lands on the first
         thing the robot says to an audience.
         """
         t0 = time.monotonic()
-        kwargs = {"language_id": language}
-        if ref_wav:
-            kwargs["audio_prompt_path"] = ref_wav
         try:
-            model().generate("Hau hau.", **kwargs)
-            print(f"tts warm in {time.monotonic() - t0:.1f}s", flush=True)
+            cond_ms = ensure_conditionals()
+            model().generate("Hau hau.", **gen_kwargs())
+            note = f" (voice encoded in {cond_ms / 1000:.1f}s)" if cond_ms else ""
+            print(f"tts warm in {time.monotonic() - t0:.1f}s{note}", flush=True)
         except Exception as e:  # a failed warmup must not stop the server
             print(f"tts warmup failed ({e}); first reply will be slow", flush=True)
 
@@ -182,22 +234,21 @@ def build_app(ref_wav: str, language: str, device: str, cache_size: int = CACHE_
         text = (payload.get("text") or "").strip()
         if not text:
             return Response(pcm_to_wav_bytes(np.zeros(0, np.int16)), media_type="audio/wav")
-        kwargs = {"language_id": language}
-        if ref_wav:
-            kwargs["audio_prompt_path"] = ref_wav
         # Timing headers: the caller cannot otherwise tell a slow voice from
         # a voice queued behind the previous sentence, and the two need
         # opposite fixes (smaller model vs more workers). x-audio-ms lets the
         # client compute the real-time factor without decoding the WAV.
         t_in = time.monotonic()
         hit = cached(text)
+        cond_ms = 0.0
         if hit is not None:
             pcm, gpu_ms, queue_ms = hit, 0.0, 0.0
         else:
             with lock:
                 t_gpu = time.monotonic()
                 m = model()
-                pcm_f = m.generate(text, **kwargs).detach().cpu().numpy().squeeze()
+                cond_ms = ensure_conditionals()
+                pcm_f = m.generate(text, **gen_kwargs()).detach().cpu().numpy().squeeze()
                 gpu_ms = (time.monotonic() - t_gpu) * 1000.0
             queue_ms = (t_gpu - t_in) * 1000.0
             pcm = np.clip(pcm_f * 32767.0, -32768, 32767).astype(np.int16)
@@ -208,6 +259,9 @@ def build_app(ref_wav: str, language: str, device: str, cache_size: int = CACHE_
             "x-queue-ms": f"{queue_ms:.1f}",
             "x-audio-ms": f"{len(pcm) / SAMPLE_RATE * 1000.0:.1f}",
             "x-cache": "hit" if hit is not None else "miss",
+            # Non-zero only on the request that encoded the voice; if this is
+            # ever non-zero twice, the conditional cache regressed.
+            "x-cond-ms": f"{cond_ms:.1f}",
         }
         return Response(pcm_to_wav_bytes(pcm), media_type="audio/wav", headers=headers)
 
@@ -227,9 +281,6 @@ def build_app(ref_wav: str, language: str, device: str, cache_size: int = CACHE_
         payload = await request.json()
         text = (payload.get("text") or "").strip()
         pieces = split_for_stream(text)
-        kwargs = {"language_id": language}
-        if ref_wav:
-            kwargs["audio_prompt_path"] = ref_wav
 
         def gen():
             for piece in pieces:
@@ -239,7 +290,8 @@ def build_app(ref_wav: str, language: str, device: str, cache_size: int = CACHE_
                     continue
                 with lock:
                     m = model()
-                    pcm_f = m.generate(piece, **kwargs).detach().cpu().numpy().squeeze()
+                    ensure_conditionals()
+                    pcm_f = m.generate(piece, **gen_kwargs()).detach().cpu().numpy().squeeze()
                 pcm = np.clip(pcm_f * 32767.0, -32768, 32767).astype(np.int16)
                 pcm = resample_linear(pcm, m.sr, SAMPLE_RATE)
                 remember(piece, pcm)
@@ -268,8 +320,35 @@ def main():
         "loading the model and for CUDA's first kernel compile, which is "
         "seconds of silence in front of a live audience",
     )
+    p.add_argument(
+        "--compile",
+        action="store_true",
+        help="torch.compile the AR backbone (reduce-overhead/CUDA graphs). "
+        "Safe -- same weights, same sampling -- but the first call pays "
+        "compilation, so keep the warmup on. Measure before trusting it.",
+    )
+    p.add_argument(
+        "--progress",
+        action="store_true",
+        help="keep chatterbox's per-token tqdm bar (off by default: it "
+        "prints ~24x/s during generation for no benefit on a server)",
+    )
+    # Generation knobs, so a speed/quality A/B is a flag rather than an edit.
+    # NOTE: cfg_weight only changes how the two logit streams are combined --
+    # chatterbox duplicates the batch unconditionally, so setting it to 0
+    # does NOT halve the compute (verified in chatterbox 0.1.7 source).
+    p.add_argument("--exaggeration", type=float, default=None)
+    p.add_argument("--cfg-weight", type=float, default=None)
+    p.add_argument("--temperature", type=float, default=None)
     args = p.parse_args()
-    app = build_app(args.ref, args.language, args.device, cache_size=args.cache)
+    if not args.progress:
+        # tqdm honours this; set before chatterbox is imported.
+        os.environ.setdefault("TQDM_DISABLE", "1")
+    tuning = {k: v for k, v in (("exaggeration", args.exaggeration),
+                                ("cfg_weight", args.cfg_weight),
+                                ("temperature", args.temperature)) if v is not None}
+    app = build_app(args.ref, args.language, args.device, cache_size=args.cache,
+                    tuning=tuning, compile_backbone=args.compile)
     if not args.no_warmup:
         app.router.on_startup.append(app.state.warmup)
     uvicorn.run(app, host=args.host, port=args.port)

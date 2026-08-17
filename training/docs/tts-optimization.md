@@ -25,6 +25,43 @@ forever; above it, playback underruns after `B / (RTF − 1)` seconds of speech
 reply).  Streaming is a latency tool for engines that are already faster than
 real time; it does not rescue a slow one.
 
+## Measured on Blackwell (RTX 5080, torch 2.8+cu128, 2026-08-17)
+
+The deployment target is a DGX Spark (GB10, Grace Blackwell), so benchmarks
+moved to a Blackwell rental. This changed the conclusion completely:
+
+| variant | median call | RTF | verdict |
+|---|---|---|---|
+| base (as shipped) | 3.44–3.60 s | **0.86–0.90** | already under 1.0 |
+| S15 no hidden states per step | 3.61 s | 0.89 | **no gain** |
+| S15+S16 analyzer off, SDPA restored (verified applied) | 3.58 s | 0.89 | **no gain** |
+| S2 `torch.compile(reduce-overhead)` | 3.60 s | 0.92 | **slightly worse** |
+
+**The same engine is RTF 0.90 on a $0.08/hr RTX 5080 and RTF 1.35 on an
+A6000.** Hardware generation, not our patches, is what crosses the
+streaming threshold — and the micro-optimisations that looked compelling in
+the source are worth nothing measurable at these sequence lengths. Decode is
+dominated by the per-layer GEMMs of a 30-layer 0.5B model, not by attention
+kernels, hidden-state allocation, or launch overhead.
+
+**Do not implement the vendored patched decode (S15/S16).** It was measured
+and it does not pay. Same for `--compile`: it exists behind a flag, it did
+not help here, leave it off unless a future card says otherwise.
+
+First-piece latency, which is what clause-level streaming actually exposes:
+
+| first piece | GPU time | audio produced |
+|---|---|---|
+| `Szukam kanapy,` | 1.90 s | 1.96 s |
+| `Widzę kanapę.` | 3.02 s | 2.20 s |
+| `Już się zatrzymuję!` | 3.83 s | 4.32 s |
+
+Note the third row: 19 characters produced **4.32 s of audio**. Cost tracks
+*generated audio duration*, and the duration is set by how the model paces
+speech — which Chatterbox copies from the reference clip. A brisk reference
+should cut both the audio length and the GPU time proportionally (L12); this
+is untested and is the cheapest experiment left.
+
 ## What the source actually does (chatterbox-tts 0.1.7)
 
 Read before trusting any estimate below — three of them changed once the
@@ -85,7 +122,8 @@ package source was read rather than recalled.
 | L8 | Distil the flow decoder to few-step / one-step (consistency, rectified flow) | most of the 20 % | high (training) | Research effort for a fifth of the budget. |
 | L9 | Prune / distil / shrink T3 | large | high (training) | Best theoretical payoff, worst effort, the voice may shift. |
 | L10 | Lower sample rate / mel resolution | small | low | Audible on a PA system. |
-| L11 | Different engine entirely (Piper, Kokoro, XTTS-v2, F5) | **10× measured** | low | Loses the cloned voice — that is the whole trade. |
+| L11 | Different engine entirely (Piper, Kokoro, XTTS-v2, F5) | **10× measured** | low | Loses the cloned voice — that is the whole trade. Much less pressing now that Blackwell puts Chatterbox under RTF 1.0. |
+| L12 | **Brisker reference clip** so the model paces speech faster | proportional to audio length | trivial | Untested and the cheapest experiment left: 19 chars generated 4.32 s of audio, and cost tracks generated duration. Chatterbox copies the reference's pace, so a quick-speaking reference should cut GPU time by the same factor. Changes how the dog sounds. |
 
 ## Order to try them
 
@@ -97,25 +135,29 @@ Done already (shipped, unmeasured on GPU except where noted):
   measured), **S8** no-op resample skip.
 - **S2** available behind `--compile`; needs a GPU A/B before trusting.
 
+Measured and **rejected** (do not spend time here): S15, S16, S2 — see the
+Blackwell table above.
+
 Next, in order:
 
-1. **S15 + S16** — one patched `T3.inference`: no attentions/hidden states
-   per step, no per-token GPU sync. Biggest remaining safe win, hits the 80 %
-   stage, and it is a contained vendored copy of one method.
-2. **S2 measurement** — run `--compile` against the fixed line set; keep it
-   only if the A/B says so.
-3. **L2** — fewer flow-matching steps (the 20 % stage, one knob).
-4. **L3** — FP8/int8 on T3, once the decode patch and compile are in.
-5. **S11** — rent a faster card: 1.3–1.8× for money instead of engineering.
-6. **L1 with a patched decode** — dropping the duplicated CFG batch is the
-   other ~2×, but it changes the voice; A/B on the real stage lines.
-7. **S9 + L6** — streaming and pipelining, deliberately *after* the above:
-   they pay only once RTF < 1.
-8. **S4** — TensorRT-LLM, if this becomes a permanent product path.
-9. **L8 / L9 / S13** — distillation, pruning, speculative decoding.
+1. **L12** — try a brisker reference clip. Cost tracks generated audio
+   duration and the reference sets the pace; this is one wav file and a
+   rerun of the bench.
+2. **S9 + L6 in anger** — streaming and pipelining now PAY, because RTF < 1
+   on the target generation. The client and server already do clause-level
+   streaming; what is missing is a live end-to-end read→heard measurement on
+   Blackwell (expect ~1.9–3.0 s for the first piece).
+3. **L2** — fewer flow-matching steps, the one remaining cheap knob.
+4. **L3** — FP8 on T3. Blackwell has native FP8, so this is the lever most
+   likely to still have headroom.
+5. **L1 with a patched decode** — halving the duplicated CFG batch. Now that
+   the cheap patches are known worthless, this is the only structural change
+   left worth the risk, and it changes the voice.
+6. **S4** — TensorRT-LLM, if this becomes a permanent product path.
+7. **L8 / L9 / S13** — distillation, pruning, speculative decoding.
    Research-grade; park them.
-10. **L11** — swap engine. Last technically, first practically if the stage
-    date is close and a generic voice is acceptable.
+8. **L11** — swap engine. Much less pressing now: the cloned voice is
+   already fast enough on the target hardware.
 
 Rough stacking: S1 + S2 + L1 plausibly gives ~2.5–3× on the AR stage, i.e.
 total RTF ≈ 0.5–0.6 — under 1.0, where streaming finally becomes a win

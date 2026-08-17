@@ -78,7 +78,13 @@ that gap is TTS and nothing else. Measured 2026-08-17, four typical replies:
 | engine | read → heard | RTF (wall s per audio s) |
 |---|---|---|
 | piper `pl_PL-mc_speech-medium`, local CPU | **0.48 s** | 0.20–0.39 |
-| Chatterbox multilingual, RTX A6000 | **5.7 s** (worst 6.4 s) | **1.33–1.61** |
+| Chatterbox multilingual, RTX A6000 (Ada) | **5.7 s** (worst 6.4 s) | **1.33–1.61** |
+| Chatterbox multilingual, RTX 5080 (Blackwell) | first piece **1.9–3.0 s** | **0.86–0.90** |
+
+The deployment target is a DGX Spark (GB10, Blackwell), and on that
+generation the same engine already runs faster than real time — so
+clause-level streaming pays there and cannot underrun. The Ada numbers below
+are kept because they are what the demo ran on in August.
 
 Chatterbox's cost curve (A6000, median of 3, via the server's `x-synth-ms`):
 

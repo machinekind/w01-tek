@@ -622,6 +622,7 @@ def default_config() -> config_dict.ConfigDict:
                 probe_sat=0.0,
                 probe_slip=0.0,
                 probe_transient=0.0,
+                probe_free_transient=0.0,
                 # Finite-difference BASE acceleration penalty (Sony
                 # 2502.10983 prices base angular acceleration; QuietWalk
                 # 2604.23702 identifies foot-ground force as the driver of
@@ -2057,6 +2058,20 @@ class WojtekJoystick(WojtekEnv):
             "probe_slip": slip,
             "probe_transient": jp.mean(
                 jp.abs(qvel - info["last_qvel_probe"]) / self.dt
+            ),
+            # Free-leg transients specifically: the identifiability map
+            # showed kd is readable ONLY from unloaded-leg motion, and a
+            # four-feet-planted probe never produces any. Per-leg |dqvel|
+            # gated by that leg's foot being airborne.
+            # Capped at 40 rad/s^2 per joint: above that it is jerk noise,
+            # not information, and an uncapped version is a reward
+            # explosion (measured: 5794/step — an airborne leg can shake
+            # at arbitrary jerk for free).
+            "probe_free_transient": jp.mean(
+                jp.minimum(
+                    jp.abs(qvel - info["last_qvel_probe"]) / self.dt, 40.0
+                ).reshape(4, 3).mean(axis=1)
+                * (1.0 - contact.astype(jp.float32))
             ),
             # Base shock: how hard THIS step jerked the body (see the
             # scales entry). Finite differences against the previous

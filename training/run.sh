@@ -29,6 +29,7 @@ case "${1:-}" in
   build-room)  shift; "$PY" -m wojtek_rl.build_room "$@" ;;
   room)  shift; "$PY" -m wojtek_rl.room_app "$@" ;;  # GL backend picked per-OS in room_app
   perf)  shift; "$PY" -m wojtek_rl.perf_report "$@" ;;  # stage latency from a session trace
+  tts-bench) shift; "$PY" -m wojtek_rl.agent.tts_bench "$@" ;;  # voice RTF on THIS gpu
   grid)  shift; "$PY" -m wojtek_eval.gridmap "$@" ;;
   scan-bench) shift; MUJOCO_GL="${MUJOCO_GL:-$([ "$(uname)" = Linux ] && echo egl || echo cgl)}" "$PY" -m wojtek_rl.scan_bench "$@" ;;  # SCAN local planner A/B
   nav-eval) shift; MUJOCO_GL="${MUJOCO_GL:-$([ "$(uname)" = Linux ] && echo egl || echo cgl)}" "$PY" -m wojtek_eval.runner "$@" ;;

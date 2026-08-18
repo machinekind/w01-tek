@@ -37,6 +37,33 @@ moved to a Blackwell rental. This changed the conclusion completely:
 | S15+S16 analyzer off, SDPA restored (verified applied) | 3.58 s | 0.89 | **no gain** |
 | S2 `torch.compile(reduce-overhead)` | 3.60 s | 0.92 | **slightly worse** |
 
+### Does this transfer to the Spark? Not established.
+
+The 5080 got the *architecture and toolchain* right (sm_120, torch 2.8+cu128,
+the package pins below), which is what makes the packaging finding
+trustworthy. It is NOT a speed proxy for GB10:
+
+| | RTX 5080 (measured) | GB10 (target, approx. public specs) |
+|---|---|---|
+| CUDA cores | ~10 750 | ~6 100 |
+| memory bandwidth | ~960 GB/s GDDR7 | **~273 GB/s LPDDR5X** |
+| host CPU | x86 | 20× ARM (Grace) |
+
+Roughly half the compute and a third of the bandwidth, so a
+compute-proportional scaling would put GB10 near **RTF 1.3–1.8 — back above
+1.0**. Do not plan the stage around "streaming is safe on the target" until
+it is measured there.
+
+What is known: decode ran at ~30 tokens/s reading ~1 GB of weights per token,
+i.e. ~30 GB/s effective — **3 % of the 5080's bandwidth**, so this workload is
+not bandwidth-bound, which is the axis where the Spark is weakest. Against
+that, GB10 has fewer SMs at lower clocks, and the decode loop is a Python
+loop with a GPU sync per token, which Grace's weaker single-thread
+performance will punish harder than an x86 host does.
+
+Settle it with `./training/run.sh tts-bench` (see below) — one command, on
+the Spark, the day it lands.
+
 **The same engine is RTF 0.90 on a $0.08/hr RTX 5080 and RTF 1.35 on an
 A6000.** Hardware generation, not our patches, is what crosses the
 streaming threshold — and the micro-optimisations that looked compelling in
@@ -125,43 +152,83 @@ package source was read rather than recalled.
 | L11 | Different engine entirely (Piper, Kokoro, XTTS-v2, F5) | **10× measured** | low | Loses the cloned voice — that is the whole trade. Much less pressing now that Blackwell puts Chatterbox under RTF 1.0. |
 | L12 | **Brisker reference clip** so the model paces speech faster | proportional to audio length | trivial | Untested and the cheapest experiment left: 19 chars generated 4.32 s of audio, and cost tracks generated duration. Chatterbox copies the reference's pace, so a quick-speaking reference should cut GPU time by the same factor. Changes how the dog sounds. |
 
-## Order to try them
+## The plan
 
-Done already (shipped, unmeasured on GPU except where noted):
+Status of every lever. Tick a box only when a number backs it; write the
+number in Result, and say where it was measured — a win on one card is not a
+win on another, which is the lesson of this whole file.
 
-- **S1** reference conditionals encoded once — verify with `x-cond-ms`.
-- **S7** tqdm bar off by default.
-- **S10** line cache (`x-cache`), **warmup** at startup (57 s on an A6000,
-  measured), **S8** no-op resample skip.
-- **S2** available behind `--compile`; needs a GPU A/B before trusting.
+### Shipped
 
-Measured and **rejected** (do not spend time here): S15, S16, S2 — see the
-Blackwell table above.
+- [x] **S1 · reference voice encoded once** — Result: `prepare_conditionals`
+  no longer runs per request; `x-cond-ms` non-zero exactly once. Not yet
+  timed on GPU with a real reference (our benches ran ref-less), so the size
+  of the win is unquantified — but it is strictly less work.
+- [x] **S7 · tqdm bar off** (`--progress` restores it) — Result: not
+  separately measurable above noise; free, kept.
+- [x] **S8 · skip the no-op resample** — Result: ~1 %, free.
+- [x] **S10 · line cache + startup warmup** — Result: repeated line costs the
+  GPU **zero** (`x-cache: hit`); warmup absorbs a **57 s** model load (A6000)
+  that used to land on the first spoken line.
+- [x] **first-chunk-early splitting + clause streaming** — Result: long reply
+  **6.42 s → 3.32 s** to first sound (A6000); short replies unchanged, their
+  floor is the engine.
 
-Next, in order:
+### Measured and rejected — do not redo these
 
-1. **L12** — try a brisker reference clip. Cost tracks generated audio
-   duration and the reference sets the pace; this is one wav file and a
-   rerun of the bench.
-2. **S9 + L6 in anger** — streaming and pipelining now PAY, because RTF < 1
-   on the target generation. The client and server already do clause-level
-   streaming; what is missing is a live end-to-end read→heard measurement on
-   Blackwell (expect ~1.9–3.0 s for the first piece).
-3. **L2** — fewer flow-matching steps, the one remaining cheap knob.
-4. **L3** — FP8 on T3. Blackwell has native FP8, so this is the lever most
-   likely to still have headroom.
-5. **L1 with a patched decode** — halving the duplicated CFG batch. Now that
-   the cheap patches are known worthless, this is the only structural change
-   left worth the risk, and it changes the voice.
-6. **S4** — TensorRT-LLM, if this becomes a permanent product path.
-7. **L8 / L9 / S13** — distillation, pruning, speculative decoding.
-   Research-grade; park them.
-8. **L11** — swap engine. Much less pressing now: the cloned voice is
-   already fast enough on the target hardware.
+- [x] **S15 · no hidden states per decode step** — Result: RTF 0.89 vs 0.90
+  base (RTX 5080). **No gain.** Looked compelling in the source; is not.
+- [x] **S16 · analyzer off, SDPA restored** (patch verified applied:
+  `attn: sdpa, analyzer: False`) — Result: RTF 0.89 vs 0.90. **No gain**, and
+  it costs the long-tail EOS guard. Rejected.
+- [x] **S2 · `torch.compile(reduce-overhead)`** — Result: RTF **0.92**,
+  slightly *worse* than eager, 3 s compile warm. Flag kept (`--compile`),
+  default off. Re-test only if a future card says otherwise.
+- [x] **L1 · `cfg_weight=0` as a flag** — Result: **buys no speed**; the
+  batch is duplicated unconditionally in 0.1.7, so the flag only changes
+  quality. Exposed as `--cfg-weight` for voice A/B, not for latency.
+
+### Open, in priority order
+
+- [ ] **Verify RTF on the actual target (GB10).** Everything below assumes a
+  number we have not measured on the Spark. `./training/run.sh tts-bench`.
+  Interim: a clock/power sweep plus an RTX 5070 data point would give an
+  extrapolation with error bars for ~$0.10.
+- [ ] **L12 · brisker reference clip.** Cheapest untried lever: 19 characters
+  produced **4.32 s of audio**, cost tracks generated duration, and
+  Chatterbox copies the reference's pace. Needs one (ideally two) reference
+  wavs — they are the user's private assets, so this is blocked on a file.
+- [ ] **Live read→heard on Blackwell**, server + client end to end with the
+  cache warm, rather than model-only timings. Expect ~1.9–3.0 s first piece.
+- [ ] **L2 · fewer flow-matching steps** — the one remaining cheap knob, and
+  it targets the 20 % stage.
+- [ ] **L3 · FP8 on T3** — Blackwell has native FP8; the lever most likely to
+  still have headroom, and the one that matters most if GB10 lands above 1.0.
+- [ ] **L1 with a patched decode** — halving the duplicated CFG batch is the
+  only structural change still worth the risk. Changes the voice; A/B it.
+- [ ] **S4 · TensorRT-LLM** — only if this becomes a permanent product path.
+- [ ] **L8 / L9 / S13** — flow distillation, pruning, speculative decoding.
+  Research-grade; parked.
+- [ ] **L11 · swap engine** — pressure depends entirely on the GB10 number.
+  If the Spark lands above ~1.2 RTF, this returns to the top of the list.
 
 Rough stacking: S1 + S2 + L1 plausibly gives ~2.5–3× on the AR stage, i.e.
 total RTF ≈ 0.5–0.6 — under 1.0, where streaming finally becomes a win
 instead of a stutter.
+
+## Answering "is it fast enough HERE" on a new machine
+
+```bash
+./training/run.sh tts-bench                          # RTF over the fixed lines
+./training/run.sh tts-bench --ref ~/refs/voice.wav   # with the cloned voice
+./training/run.sh tts-bench --clock-sweep 1000,1500,2000,2500
+```
+
+It prints the RTF, the first-piece latencies, and what the number means
+("streaming is comfortable" / "underruns after N s of speech"). `--json`
+keeps the run for comparison. The clock sweep answers whether the loop is
+clock-bound (RTF scales with MHz) or overhead-bound (flat) — which is how to
+predict a slower card without owning one.
 
 ## How to A/B any of them
 

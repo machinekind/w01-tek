@@ -97,6 +97,58 @@ def make_rnd(
     return RND(init=init, intrinsic=intrinsic, loss=loss, optimizer=optimizer)
 
 
+def make_selfident(
+    obs_size: int,
+    target_dim: int,
+    hidden: Sequence[int] = (256, 256),
+    learning_rate: float = 1e-4,
+) -> RND:
+    """End-to-end active identification (EPI-style, arXiv 1907.11740):
+    the predictor regresses the TRUE privileged environment factors from
+    the actor-visible observation, and its per-sample error is the
+    intrinsic reward — the policy is paid for visiting states where its
+    own parameters are still ambiguous, with no hand-chosen excitation
+    proxies. Unlike RND's novelty, the target is a per-env CONSTANT, so
+    there is no noisy-TV failure mode; the irreducible floor is the
+    genuinely unidentifiable part.
+
+    Plumbing trick: callers pass x_aug = concat([inputs, target]) through
+    the same RND bundle signatures; functions split internally. The
+    RNDState.target_params slot is unused (kept for dataclass parity).
+    """
+    predictor = networks.MLP(layer_sizes=list(hidden) + [target_dim])
+    optimizer = optax.adam(learning_rate=learning_rate)
+
+    def _split(xy: jax.Array):
+        return xy[..., :obs_size], xy[..., obs_size:]
+
+    def init(key: PRNGKey) -> RNDState:
+        dummy = jp.zeros((1, obs_size))
+        predictor_params = predictor.init(key, dummy)
+        return RNDState(
+            target_params={},
+            predictor_params=predictor_params,
+            opt_state=optimizer.init(predictor_params),
+            reward_ms=jp.ones(()),
+            count=jp.zeros(()),
+        )
+
+    def intrinsic(state: RNDState, xy: jax.Array) -> jax.Array:
+        x, y = _split(xy)
+        p = predictor.apply(state.predictor_params, x)
+        return jp.mean(jp.square(p - jax.lax.stop_gradient(y)), axis=-1)
+
+    def loss(
+        predictor_params: Params, target_params: Params, xy: jax.Array
+    ) -> jax.Array:
+        del target_params
+        x, y = _split(xy)
+        p = predictor.apply(predictor_params, x)
+        return jp.mean(jp.square(p - jax.lax.stop_gradient(y)))
+
+    return RND(init=init, intrinsic=intrinsic, loss=loss, optimizer=optimizer)
+
+
 def normalize_intrinsic(
     state: RNDState, raw: jax.Array, batch_ms: jax.Array
 ) -> tuple[jax.Array, RNDState]:

@@ -332,12 +332,27 @@ def train(
         f'(available: {sorted(obs_shape) if isinstance(obs_shape, Mapping) else "non-dict obs"})'
     )
   rnd_coef = float(rnd_config['coef'])
-  rnd = rnd_lib.make_rnd(
-      obs_size=int(obs_shape[rnd_obs_key][0]),
-      hidden=tuple(int(h) for h in rnd_config['hidden']),
-      out_dim=int(rnd_config['out_dim']),
-      learning_rate=float(rnd_config['learning_rate']),
-  )
+  # Self-ident mode (rnd.mode == 'selfident'): the predictor regresses the
+  # last `target_dim` entries of `target_key` (the env_factors component,
+  # appended last in the privileged list) from the actor obs, and its error
+  # IS the intrinsic reward — end-to-end active identification, no proxies.
+  _si_mode = str(rnd_config.get('mode', 'rnd')) == 'selfident'
+  _si_target_key = str(rnd_config.get('target_key', 'privileged_state'))
+  _si_target_dim = int(rnd_config.get('target_dim', 44))
+  if _si_mode:
+    rnd = rnd_lib.make_selfident(
+        obs_size=int(obs_shape[rnd_obs_key][0]),
+        target_dim=_si_target_dim,
+        hidden=tuple(int(h) for h in rnd_config['hidden']),
+        learning_rate=float(rnd_config['learning_rate']),
+    )
+  else:
+    rnd = rnd_lib.make_rnd(
+        obs_size=int(obs_shape[rnd_obs_key][0]),
+        hidden=tuple(int(h) for h in rnd_config['hidden']),
+        out_dim=int(rnd_config['out_dim']),
+        learning_rate=float(rnd_config['learning_rate']),
+    )
   rnd_loss_and_pgrad_fn = gradients.loss_and_pgrad(
       rnd.loss, pmap_axis_name=_PMAP_AXIS_NAME, has_aux=False
   )
@@ -345,11 +360,12 @@ def train(
   def rnd_inputs(obs, normalizer_params):
     # Always normalized by the trainer's running statistics (maintained even
     # when normalize_observations is off) and clipped, per the paper.
-    return rnd_lib.clip_inputs(
-        running_statistics.normalize(
-            _remove_pixels(obs), normalizer_params
-        )[rnd_obs_key]
-    )
+    norm = running_statistics.normalize(_remove_pixels(obs), normalizer_params)
+    x = rnd_lib.clip_inputs(norm[rnd_obs_key])
+    if _si_mode:
+      y = rnd_lib.clip_inputs(norm[_si_target_key][..., -_si_target_dim:])
+      return jnp.concatenate([x, y], axis=-1)
+    return x
   # <<< RND
 
   steps_between_logging = training_metrics_steps or env_step_per_training_step

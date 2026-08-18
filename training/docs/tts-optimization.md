@@ -64,6 +64,17 @@ performance will punish harder than an x86 host does.
 Settle it with `./training/run.sh tts-bench` (see below) — one command, on
 the Spark, the day it lands.
 
+**A Spark does not have to be owned to be measured.** GB10 boxes rent by the
+hour with full root SSH (~$0.60–0.80/hr as of 2026-08: Enverge Spark private
+beta, SPARK Hosting, and individuals on the NVIDIA developer forums), which
+is cheaper than the discrete-GPU rentals this file already quotes.
+`scripts/spark_tts_bench.sh` is the whole session in one paste: it reports
+what the box actually is, installs Chatterbox **without replacing the
+vendor's aarch64 torch** (chatterbox pins `torch==2.6.0`; letting pip act on
+that would destroy the NVIDIA build), runs the benchmark, and finishes with
+the clock sweep. Account signup and payment are the user's to do; the script
+assumes an SSH prompt already exists.
+
 **The same engine is RTF 0.90 on a $0.08/hr RTX 5080 and RTF 1.35 on an
 A6000.** Hardware generation, not our patches, is what crosses the
 streaming threshold — and the micro-optimisations that looked compelling in

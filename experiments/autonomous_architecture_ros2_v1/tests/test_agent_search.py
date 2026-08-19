@@ -8,7 +8,6 @@ asyncio.run() with a scripted observer standing in for the VLM.
 import asyncio
 import math
 
-import numpy as np
 
 from wojtek_eval.mapping import FREE, OnlineMap
 from wojtek_agent.search import (

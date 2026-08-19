@@ -68,7 +68,7 @@ repository** — this repository never names private hosts or a provider account
 Then the demo, from the main checkout, pointed at the tunnel:
 
 ```bash
-./training/run.sh room --vlm-backend futurenav \
+./experiments/autonomous_architecture_ros2_v1/run.sh room --vlm-backend futurenav \
   --vlm-url http://127.0.0.1:8100 --agent-url http://127.0.0.1:8090
 ```
 

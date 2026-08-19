@@ -243,7 +243,7 @@ The intended production shape is two models, each doing what it is good at:
 | Qwen3-VL-4B-FP8 (vLLM) | 8090 | chat, tools, and the search observer |
 
 ```bash
-./training/run.sh room --vlm-backend futurenav \
+./experiments/autonomous_architecture_ros2_v1/run.sh room --vlm-backend futurenav \
     --vlm-url http://127.0.0.1:8100 --agent-url http://127.0.0.1:8090
 ```
 
@@ -288,7 +288,7 @@ frame is attached, so a look-then-answer exchange lands around 2 s.
 Point the demo at it (both knobs also exist as `--agent-url/--agent-model`):
 
 ```bash
-AGENT_URL=http://127.0.0.1:8000 ./training/run.sh room --vlm-backend futurenav --vlm-url http://127.0.0.1:8100
+AGENT_URL=http://127.0.0.1:8000 ./experiments/autonomous_architecture_ros2_v1/run.sh room --vlm-backend futurenav --vlm-url http://127.0.0.1:8100
 ```
 
 `AGENT_URL` defaults to `VLM_URL`, then `http://127.0.0.1:8000`. The chat

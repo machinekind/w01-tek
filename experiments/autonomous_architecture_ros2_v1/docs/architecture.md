@@ -183,7 +183,7 @@ licensing, rebuilt with:
     --name castle --max-extent 40 --skip-collision --up z
 ./training/run.sh build-room --name castle
 python -m wojtek_eval.gridmap --name castle      # occupancy for SCAN/search
-SCENE=castle ./training/run.sh room ...
+SCENE=castle ./experiments/autonomous_architecture_ros2_v1/run.sh room ...
 ```
 
 `objects.json` is hand-annotated (mesh-band scatter, see the file comment).
@@ -254,6 +254,8 @@ experiments/autonomous_architecture_ros2_v1/ros/src/
   wojtek_sim_bridge/         # room-sim node + ui/trace websocket bridge
 experiments/autonomous_architecture_ros2_v1/
   wojtek_agent/              # chat, tools, goal FSM, search, TTS/ASR services (libraries)
+                             # audio_frames.py + speech_text.py are shared with the nodes
+  wojtek_demo/               # the interactive demo app (fork of wojtek_rl.room_app)
   tests/                     # model-free unit tests for the above
 training/jobs/agent_stack.sh # parameterized GPU-box payload (env-declared, no secrets)
 ```

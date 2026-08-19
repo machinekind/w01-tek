@@ -1,4 +1,15 @@
-"""Room demo: the trained robot walks a photo-textured scanned room.
+"""Room demo with the conversational agent layer (EXPERIMENTAL).
+
+Forked from `wojtek_rl.room_app` (training keeps that copy unchanged) and
+extended with the chat agent, object search, the goal FSM, the voice loop and
+the AGENT DECISIONS trace panel.  The fork is deliberate: an experiment must
+not mutate the training project's demo, and W3 of the architecture replaces
+this app with ROS nodes anyway.  Run it with `./run.sh room` from the
+experiment root (module path: wojtek_demo.room_app).
+
+Original module docstring follows.
+
+Room demo: the trained robot walks a photo-textured scanned room.
 
 Plain-MuJoCo counterpart of wojtek_rl.app (which is MJX-only and cannot do the
 room's mesh collisions): mujoco.mj_step drives the exported NumPy policy
@@ -41,6 +52,11 @@ import numpy as np
 from loguru import logger
 
 from wojtek_rl import paths
+from wojtek_agent.goals import TERMINAL_STATES, outcome_phrase
+from wojtek_agent.llm import DEFAULT_AGENT_MODEL, DEFAULT_AGENT_URL
+from wojtek_agent.nav import TracedVlmNavigator
+from wojtek_agent.spatial import PoseHistory
+from wojtek_agent.voice import SAMPLE_RATE as VOICE_SAMPLE_RATE
 from wojtek_rl.midlevel import Forward, MidLevelExecutor, Stop, parse_command
 from wojtek_rl.navigation import NavConfig, command_to_target, quat_to_yaw
 from wojtek_rl.np_policy import actuator_addresses, gravity_from_quat, load_policy_runtime
@@ -66,6 +82,9 @@ MAP_EVERY = 10
 # FutureNav's training camera (Habitat R2R RGB sensor): square, HFOV 90.
 VLM_FRAME_PX = 224
 VLNCE_HFOV_DEG = 90.0
+# Whole chat turn (may include several model calls plus tool work). Past this
+# the UI gets a failure it can show instead of an endless "thinking…".
+CHAT_TURN_TIMEOUT_S = 90.0
 
 
 _scene_name = os.environ.get("SCENE", "room")
@@ -132,6 +151,14 @@ class RoomSim:
         self._cmd = (0.0, 0.0, 0.0)
         self._tick = 0
         self.resets = 0  # lets the VLM navigator tell a fall-reset from completion
+        # Chat-agent spatial memory: sim clock + timestamped pose ring buffer
+        # ("describe your last 3 seconds"). Both survive fall-resets, like the
+        # online map: the robot's history didn't un-happen because it fell.
+        self.sim_time = 0.0
+        self.pose_history = PoseHistory()
+        # Planner footprint cylinders on the chase cam: debug aid, off by
+        # default (a UI toggle turns them on).
+        self.show_overlay = False
         self.reset()
         logger.success("room sim ready")
 
@@ -170,11 +197,30 @@ class RoomSim:
             self._vlm_frame_cam = self.vlm_cam
         self.vlm_renderer = mujoco.Renderer(self.model, height=VLM_FRAME_PX, width=VLM_FRAME_PX)
         occ = paths.scene_dir(_scene_name) / "occupancy.npz"
+        self._spawn_xy = None
+        spawn_env = os.environ.get("WOJTEK_SPAWN")
+        if spawn_env:
+            sx, sy = (float(v) for v in spawn_env.split(","))
+            self._spawn_xy = (sx, sy)
         if occ.exists():
             from wojtek_eval.gridmap import GridMap
 
             g = GridMap.load(occ)
             res, origin, shape = g.res, g.origin, g.occ.shape
+            # The home keyframe spawns at the world origin, but a scanned
+            # scene's origin can sit INSIDE furniture (the castle hall has its
+            # table cluster there); a spawn inside inflated occupancy makes
+            # the planner reject every command -- the robot answers but never
+            # moves (live finding 2026-08-14).  Move to the nearest free cell
+            # unless WOJTEK_SPAWN chose a spot.
+            if self._spawn_xy is None and not g.is_free(0.0, 0.0):
+                snapped = g._snap_free(0.0, 0.0, max_r=4.0)
+                if snapped is not None:
+                    self._spawn_xy = g.cell_to_world(*snapped)
+                    logger.info(
+                        f"scene origin is occupied; spawning at "
+                        f"({self._spawn_xy[0]:.2f}, {self._spawn_xy[1]:.2f})"
+                    )
         else:
             half = _world_half()
             res = RESOLUTION
@@ -187,6 +233,9 @@ class RoomSim:
         self.resets += 1
         mujoco = self._mujoco
         mujoco.mj_resetDataKeyframe(self.model, self.data, self.model.key("home").id)
+        if getattr(self, "_spawn_xy", None) is not None:
+            self.data.qpos[0] = self._spawn_xy[0]
+            self.data.qpos[1] = self._spawn_xy[1]
         mujoco.mj_forward(self.model, self.data)
         # The home keyframe was settled on the flat training plane; the room's
         # scanned floor hulls sit a couple of cm higher. Settle onto them
@@ -299,6 +348,8 @@ class RoomSim:
 
         nx, ny, nyaw = self.pose()
         self.omap.mark_pose(nx, ny)
+        self.sim_time += 1.0 / CONTROL_HZ
+        self.pose_history.add(self.sim_time, nx, ny, nyaw)
         return {
             "type": "state",
             "x": nx, "y": ny, "yaw": nyaw,
@@ -316,7 +367,8 @@ class RoomSim:
         from PIL import Image
 
         self.chase_renderer.update_scene(self.data, **scene_kw)
-        self._overlay_footprint(self.chase_renderer)
+        if self.show_overlay:
+            self._overlay_footprint(self.chase_renderer)
         frame = self.chase_renderer.render()
         buf = io.BytesIO()
         Image.fromarray(frame).save(buf, format="JPEG", quality=82)
@@ -382,10 +434,19 @@ class RoomSim:
         self.cam.lookat[:] = [x, y, VIEW["lookat_z"]]
         return self._jpeg(camera=self.cam), self.ego_jpeg()
 
-    def ego_jpeg(self) -> str:
-        """VLM frame: ego RGB + self-built minimap HUD. Also the map-update
-        tick -- the ego depth image is fused into the online map here, i.e.
-        exactly when the VLM looks."""
+    def ego_jpeg(self, hud: bool = True) -> str:
+        """VLM frame: ego RGB, optionally with the self-built minimap HUD.
+        Also the map-update tick -- the ego depth image is fused into the
+        online map here, i.e. exactly when the VLM looks.
+
+        hud=False returns the bare camera view. The HUD exists for the
+        navigator, whose prompt explains the minimap legend; a model that was
+        NOT told about the inset reads it as part of the room. Measured: the
+        search observer scored the inset itself as the target ("a map showing
+        a toy's location", bbox exactly over the paste rectangle), approached
+        it, lost it at close range, blacklisted the spot and repeated. Any
+        consumer whose prompt does not describe the minimap wants hud=False.
+        """
 
         from wojtek_eval.mapping import compose_hud, unproject_depth
 
@@ -399,7 +460,12 @@ class RoomSim:
         cam_mat = self.data.cam_xmat[self._ego_id].reshape(3, 3).copy()
         pts = unproject_depth(depth, self._ego_fovy, cam_pos, cam_mat, stride=4)
         self.omap.integrate_points(pts, cam_xy=cam_pos[:2])
-        frame = compose_hud(rgb, self.omap, self.pose(), px=170)
+        if hud:
+            frame = compose_hud(rgb, self.omap, self.pose(), px=170)
+        else:
+            from PIL import Image
+
+            frame = Image.fromarray(rgb)
         buf = io.BytesIO()
         frame.save(buf, format="JPEG", quality=70)
         return base64.b64encode(buf.getvalue()).decode("ascii")
@@ -432,7 +498,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(title="Wojtek room demo")
-_STATIC = Path(__file__).resolve().parent.parent / "demo" / "static"
+_STATIC = Path(__file__).resolve().parent / "static"
 app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
 
 _sim: RoomSim | None = None
@@ -445,6 +511,54 @@ _vlm_backend = os.environ.get("VLM_BACKEND", "local")
 _vlm_model = os.environ.get("VLM_MODEL")  # None -> backend default
 _vlm_url = os.environ.get("VLM_URL")  # futurenav backend only
 _local_planner = os.environ.get("LOCAL_PLANNER", "1") != "0"
+# Chat agent (wojtek_agent): its own OpenAI-compatible endpoint/model,
+# independent of the navigation backend -- one vLLM server can serve both.
+_agent_url = os.environ.get("AGENT_URL")
+_agent_model = os.environ.get("AGENT_MODEL")
+_vlm_max_steps = int(os.environ.get("VLM_MAX_STEPS") or 0) or None
+# Voice mode: Polish by default, because that is what this demo is for. The
+# open Qwen Omni weights do not cover Polish speech in EITHER direction, so
+# hearing is Whisper and speaking is a separate TTS -- see docs/agent.md.
+_asr_language = os.environ.get("ASR_LANGUAGE", "pl")
+# ASR_URL points recognition at a GPU box (wojtek_agent.asr_server).
+# Unset = run whisper in-process on the CPU, which is ~2x realtime for
+# large-v3 and adds seconds of dead air to every exchange.
+_asr_url = os.environ.get("ASR_URL")
+_asr_model = os.environ.get("ASR_MODEL", "large-v3")
+_asr_device = os.environ.get("ASR_DEVICE", "cpu")
+_asr_compute = os.environ.get("ASR_COMPUTE", "int8")
+_tts_engine_kind = os.environ.get("TTS_ENGINE", "piper")
+_tts_voice = os.environ.get("TTS_VOICE", "pl_PL-mc_speech-medium")
+_tts_engine = None
+# Everything in this system runs in English -- reasoning, tools, traces --
+# except the sentence the dog speaks aloud, which is ASR_LANGUAGE. `direct`
+# has the model write that sentence itself; `translate` adds a rendering call
+# (slower and worse on a 4B, see docs/polish-voice.md).
+_lang_mode = os.environ.get("AGENT_LANG_MODE", "direct")
+_agent = None
+_agent_llm = None
+_goals = None
+_trace = None
+_trace_path = os.environ.get("AGENT_TRACE")  # None -> runs/agent_traces/<scene>_<stamp>.jsonl
+
+
+def get_trace():
+    """Session trace, created on first use and appended to for the life of
+    the process (a scene switch keeps the same file: it is one session)."""
+    global _trace
+    if _trace is None:
+        from wojtek_agent.trace import Trace, default_trace_path
+
+        path = (
+            Path(_trace_path)
+            if _trace_path
+            else default_trace_path(paths.PROJECT_DIR / "runs", _scene_name)
+        )
+        _trace = Trace(path)
+        logger.info(f"agent trace -> {path}")
+        _trace.add("session.start", scene=_scene_name, agent_model=_agent_model,
+                   agent_url=_agent_url, nav_backend=_vlm_backend)
+    return _trace
 
 
 def get_sim() -> RoomSim:
@@ -466,22 +580,50 @@ def get_navigator() -> VlmNavigator:
                 FUTURENAV_MAX_ROTATION,
                 FUTURENAV_MAX_STEPS,
                 FUTURENAV_TIMEOUT_S,
-                FutureNavVlmClient,
             )
+            from wojtek_agent.futurenav_client import TracedFutureNavVlmClient
 
-            client = FutureNavVlmClient(_vlm_url or DEFAULT_FUTURENAV_URL)
+            client = TracedFutureNavVlmClient(_vlm_url or DEFAULT_FUTURENAV_URL)
             # vlnce_frame: feed the clean square HFOV-90 VLN-CE frame upstream
             # trained on. max_rotation: upstream EARLY_STOP_ROTATION anti-spin.
             # overlap: pipeline the next decision while the current 0.25 m step
             # runs, so the robot keeps moving instead of idling during inference.
-            _navigator = VlmNavigator(
+            _navigator = TracedVlmNavigator(
                 get_sim(), client, max_steps=FUTURENAV_MAX_STEPS,
                 vlm_timeout_s=FUTURENAV_TIMEOUT_S, overlap=True,
                 vlnce_frame=True, max_rotation=FUTURENAV_MAX_ROTATION,
+                trace=get_trace(),
             )
         elif _vlm_backend == "anthropic":
             client = AnthropicVlmClient(_vlm_model or DEFAULT_MODEL)
-            _navigator = VlmNavigator(get_sim(), client)
+            _navigator = TracedVlmNavigator(get_sim(), client, trace=get_trace())
+        elif _vlm_backend == "openai":
+            # Any OpenAI-compatible server (vLLM). Defaults to the SAME
+            # endpoint/model as the chat agent, so one served model drives the
+            # goal box, the agent's `navigate` tool and the search observer --
+            # no second GPU process, no 18 GB on-device download.
+            from wojtek_eval.vlm_openai import OpenAIVlmClient
+            from wojtek_agent.nav import (
+                INSTRUCTION_PROMPT,
+                NAV_MAX_ROTATION,
+                NAV_MAX_STEPS,
+            )
+            from wojtek_rl.vlm_nav import ACTIONS
+
+            client = OpenAIVlmClient(
+                base_url=_vlm_url or _agent_url or DEFAULT_AGENT_URL,
+                model=_vlm_model or _agent_model or DEFAULT_AGENT_MODEL,
+                # The client's own defaults are wojtek_eval's, whose action set
+                # includes frontier `explore` -- Tier-A-only, so RoomSim
+                # rejects it and every step fails. Pin the base nav contract,
+                # extended for the multi-step routes the chat agent forwards.
+                system_prompt=INSTRUCTION_PROMPT,
+                actions=ACTIONS,
+            )
+            _navigator = TracedVlmNavigator(
+                get_sim(), client, max_steps=_vlm_max_steps or NAV_MAX_STEPS,
+                max_rotation=NAV_MAX_ROTATION, trace=get_trace(),
+            )
         else:
             from wojtek_rl.vlm_local import (
                 DEFAULT_LOCAL_MODEL,
@@ -490,8 +632,90 @@ def get_navigator() -> VlmNavigator:
             )
 
             client = LocalVlmClient(_vlm_model or DEFAULT_LOCAL_MODEL)
-            _navigator = VlmNavigator(get_sim(), client, vlm_timeout_s=LOCAL_VLM_TIMEOUT_S)
+            _navigator = TracedVlmNavigator(
+                get_sim(), client, vlm_timeout_s=LOCAL_VLM_TIMEOUT_S, trace=get_trace()
+            )
     return _navigator
+
+
+def get_agent_llm():
+    """One shared chat client for the agent brain AND the search observer."""
+    global _agent_llm
+    if _agent_llm is None:
+        from wojtek_agent.llm import AgentLLM
+
+        _agent_llm = AgentLLM(
+            base_url=_agent_url or _vlm_url or DEFAULT_AGENT_URL,
+            model=_agent_model or DEFAULT_AGENT_MODEL,
+        )
+    return _agent_llm
+
+
+def get_goals():
+    """The goal state machine: navigate delegates to the shared VlmNavigator,
+    search builds its controller lazily over the shared agent LLM."""
+    global _goals
+    if _goals is None:
+        from wojtek_agent.goals import GoalManager
+        from wojtek_agent.search import SearchController, make_score_view
+
+        def search_factory():
+            sim = get_sim()
+            return SearchController(
+                sim,
+                make_score_view(get_agent_llm()),
+                hfov_deg=sim._ego_fovy,
+                # Bare camera: the observer is never told about the minimap
+                # HUD and otherwise detects the target inside its own inset.
+                frame_fn=lambda: sim.ego_jpeg(hud=False),
+                trace=get_trace(),
+            )
+
+        _goals = GoalManager(
+            navigator_factory=get_navigator,
+            search_factory=search_factory,
+            trace=get_trace(),
+            language=_asr_language,
+        )
+    return _goals
+
+
+def get_agent():
+    global _agent
+    if _agent is None:
+        from wojtek_agent.chat import WojtekAgent
+        from wojtek_agent.tools import build_tools
+
+        sim = get_sim()
+        # One dict shared by the loop and its tools: the agent writes the raw
+        # user text each turn, so `navigate` can forward the instruction as
+        # spoken instead of whatever noun phrase the model distilled.
+        turn_context: dict = {}
+        from wojtek_agent.search import make_score_view
+
+        score_view = make_score_view(get_agent_llm())
+
+        async def visibility_check(target: str):
+            """Is `target` in the CURRENT camera view?  Drives the
+            navigate-vs-search decision: walking toward something not in
+            view is a guess, so navigate redirects to search."""
+            try:
+                frame = sim.ego_jpeg(hud=False)
+            except TypeError:
+                frame = sim.ego_jpeg()
+            vs = await score_view(target, frame)
+            return vs.visible
+
+        tools = build_tools(
+            sim, get_goals(), sim.pose_history, turn_context=turn_context,
+            visibility_check=visibility_check,
+        )
+        _agent = WojtekAgent(
+            get_agent_llm(), tools, trace=get_trace(), turn_context=turn_context,
+            lang_mode=_lang_mode, reply_language=_asr_language,
+        )
+        logger.info(f"agent language: mode={_lang_mode} reply={_asr_language}")
+    return _agent
 
 
 def _preload_local_vlm():
@@ -524,12 +748,39 @@ _transcriber_lock = threading.Lock()
 def _get_transcriber():
     global _transcriber
     with _transcriber_lock:
+        if _transcriber is None and _asr_url:
+            from wojtek_agent.voice import RemoteTranscriber
+
+            _transcriber = RemoteTranscriber(_asr_url)
+            try:
+                logger.info(f"ASR: remote {_asr_url} -> {_transcriber.health()}")
+            except Exception as e:
+                logger.warning(f"remote ASR at {_asr_url} unreachable: {e}")
         if _transcriber is None:
             from wojtek_eval.hearing import Transcriber
 
-            _transcriber = Transcriber("small")
+            # Polish needs a bigger model than the eval battery's "small":
+            # large-v3 is the best-measured open Polish recogniser, and int8
+            # keeps it around 2.5 GB so it can share a card with the brain.
+            logger.info(f"ASR: faster-whisper {_asr_model} ({_asr_compute}) lang={_asr_language}")
+            _transcriber = Transcriber(
+                _asr_model,
+                device=_asr_device,
+                compute_type=_asr_compute,
+                language=_asr_language,
+            )
             _transcriber._ensure_loaded()
     return _transcriber
+
+
+def get_tts_engine():
+    global _tts_engine
+    if _tts_engine is None:
+        from wojtek_agent.tts import build_engine
+
+        _tts_engine = build_engine(_tts_engine_kind, _tts_voice)
+        logger.info(f"TTS: {type(_tts_engine).__name__} voice={_tts_voice}")
+    return _tts_engine
 
 
 @app.on_event("startup")
@@ -582,7 +833,7 @@ async def set_scene(request: Request):
     loads: no concurrent stepping, no lock. The client reloads the page
     afterwards, which refreshes /api/info (minimap extent, map geometry).
     """
-    global _sim, _navigator, _scene_name, _scene_xml
+    global _sim, _navigator, _scene_name, _scene_xml, _agent, _goals
     body = await request.json()
     name = str(body.get("name", ""))
     have = _available_scenes()
@@ -590,6 +841,10 @@ async def set_scene(request: Request):
         return {"ok": False, "error": f"unknown scene {name!r} (have {have})"}
     if name == _scene_name and _sim is not None:
         return {"ok": True, "scene": name}
+    if _goals is not None:
+        _goals.cancel("scene change")
+        _goals = None
+    _agent = None  # its tools close over the old sim's map/pose history
     if _navigator is not None:
         _navigator.cancel("scene change")
         _navigator = None
@@ -691,6 +946,58 @@ def tune():
     return FileResponse(str(_STATIC / "tune.html"))
 
 
+@app.get("/api/trace")
+def api_trace(limit: int = 200, kind: str | None = None):
+    """Recent session trace: what fired, when, with what result.
+
+    The live debug panels answer "what is it doing now"; this answers "what
+    did it do ten minutes ago", and survives a browser reload. `kind` is a
+    prefix filter (`chat`, `search`, `nav`, `goal`). The same events are on
+    disk as JSONL at `path`.
+    """
+    if _trace is None:
+        return {"ok": True, "path": None, "events": [], "note": "nothing traced yet"}
+    return {
+        "ok": True,
+        "path": str(_trace.path) if _trace.path else None,
+        "total": _trace.seq,
+        "events": _trace.recent(limit=min(max(limit, 1), 1000), kind_prefix=kind),
+    }
+
+
+@app.get("/api/agent_health")
+async def agent_health():
+    """Is the chat agent's endpoint actually serving? The UI header turns red
+    when it is not, so a dead vLLM box is visible before someone types."""
+    llm = get_agent_llm()
+    try:
+        client = llm._ensure_client()
+        resp = await client.get(f"{llm.base_url}/models", timeout=5.0)
+        models = [m.get("id") for m in (resp.json().get("data") or [])]
+        return {"ok": resp.status_code == 200, "url": llm.base_url, "models": models}
+    except Exception as e:
+        return {"ok": False, "url": llm.base_url, "error": str(e)}
+
+
+@app.post("/api/chat")
+async def api_chat(request: Request):
+    """One chat turn with the dog, for curl/scripts (the demo UI uses /ws).
+
+    Async on purpose: tool calls render on the event loop, serialized with
+    the control loop. Long tool turns park the sim between ticks, same
+    trade the scene switch makes.
+    """
+    body = await request.json()
+    text = str(body.get("text", ""))
+    try:
+        return await asyncio.wait_for(get_agent().ask(text), CHAT_TURN_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        return {"ok": False, "error": f"no answer within {CHAT_TURN_TIMEOUT_S:g}s"}
+    except Exception as e:
+        logger.exception("chat turn failed")
+        return {"ok": False, "error": str(e)}
+
+
 @app.get("/api/info")
 def info():
     sim = get_sim()
@@ -702,6 +1009,21 @@ def info():
         "vlm_backend": _vlm_backend,
         "vlm_model": _vlm_model,
         "vlm_url": _vlm_url,
+        # Chat agent endpoint, shown in the UI header: the demo is useless to
+        # debug if you cannot see which brain the dog is actually talking to.
+        "agent_url": _agent_url or _vlm_url or DEFAULT_AGENT_URL,
+        "agent_model": _agent_model or DEFAULT_AGENT_MODEL,
+        # Voice stack, so the UI can say what it is actually running (and
+        # whether it will be able to speak at all).
+        "voice": {
+            "asr_model": _asr_model,
+            "asr_language": _asr_language,
+            "asr_url": _asr_url,
+            "tts_engine": type(get_tts_engine()).__name__,
+            "tts_voice": _tts_voice,
+            "sample_rate": VOICE_SAMPLE_RATE,
+            "lang_mode": _lang_mode,
+        },
         "local_planner": sim.scan is not None,
         "scene": _scene_name,
         "scenes": _available_scenes(),
@@ -729,17 +1051,102 @@ async def ws(sock: WebSocket):
     await asyncio.sleep(2.5 / CONTROL_HZ)
     sim = get_sim()
     acks: asyncio.Queue[dict] = asyncio.Queue()
+    chat_task: asyncio.Task | None = None
+
+    # -- voice: mic frames in, spoken reply out (both binary ws frames) ----
+    from wojtek_agent.tts import Speaker
+    from wojtek_agent.voice import VoiceListener
+
+    async def send_audio(pcm_bytes: bytes):
+        await sock.send_bytes(pcm_bytes)
+
+    speaker = Speaker(get_tts_engine(), send_audio)
+
+    async def on_heard(text: str, utt):
+        """One recognised utterance -> a chat turn -> a spoken reply."""
+        await acks.put({"type": "heard", "text": text, "seconds": round(utt.seconds, 1)})
+        if chat_task is not None and not chat_task.done():
+            # Preempt rather than drop: if you said something new, the answer
+            # being composed for the previous sentence is already stale.
+            logger.info("new utterance preempts the turn in flight")
+            chat_task.cancel()
+            speaker.cancel()
+        start_chat(text, spoken=True)
+
+    listener = VoiceListener(_get_transcriber(), on_heard)
+
+    # Live decision feed: every trace event (model output, tool call, FSM
+    # transition, FutureNav action) reaches the browser as it happens.
+    def on_trace(event: dict):
+        try:
+            acks.put_nowait({"type": "trace", **event})
+        except asyncio.QueueFull:
+            pass
+        # Say the goal switch immediately, before the model's own reply: the
+        # robot is already turning away from the old target by now.
+        if event.get("kind") == "goal.switch" and event.get("text"):
+            speaker.say(event["text"])
+            acks.put_nowait({"type": "chat_reply", "ok": True, "say": event["text"],
+                             "steps": [], "spoken": True})
+
+    get_trace().subscribe(on_trace)
+
+    async def chat_turn(text: str, spoken: bool = False):
+        # A turn that never returns leaves the UI on "thinking…" forever, which
+        # is what a dead endpoint used to look like. Bound it and report why.
+        try:
+            result = await asyncio.wait_for(
+                get_agent().ask(text, voice=spoken), CHAT_TURN_TIMEOUT_S
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"chat turn timed out after {CHAT_TURN_TIMEOUT_S:g}s")
+            result = {
+                "ok": False,
+                "error": f"no answer within {CHAT_TURN_TIMEOUT_S:g}s "
+                f"(is the agent model at {_agent_url or DEFAULT_AGENT_URL} reachable?)",
+            }
+        except Exception as e:  # endpoint down / misconfigured
+            logger.exception("chat turn failed")
+            result = {"ok": False, "error": str(e)}
+        await acks.put({"type": "chat_reply", **result, "spoken": spoken})
+        if spoken and result.get("ok"):
+            speaker.say(result.get("say", ""))
+
+    def start_chat(text: str, spoken: bool = False):
+        nonlocal chat_task
+        chat_task = asyncio.create_task(chat_turn(text, spoken=spoken))
 
     async def reader():
+        nonlocal chat_task
         try:
             while True:
-                raw = await sock.receive_text()
+                # Two kinds of client frame: JSON control messages, and raw
+                # PCM16 from the mic worklet. receive() demuxes both.
+                packet = await sock.receive()
+                if packet.get("type") == "websocket.disconnect":
+                    break
+                if packet.get("bytes") is not None:
+                    # Barge-in: the dog stops talking the moment the human
+                    # starts. Checked before the frame is consumed, so the
+                    # first voiced frame already silences playback.
+                    was_speaking = listener.seg.speaking
+                    await listener.feed_frame(packet["bytes"])
+                    if listener.seg.speaking and not was_speaking and speaker.speaking:
+                        speaker.cancel()
+                        await acks.put({"type": "barge_in"})
+                    continue
+                raw = packet.get("text")
+                if raw is None:
+                    continue
                 try:
                     msg = json.loads(raw)
                     t = msg.get("type")
                     # Manual input always wins over an active VLM goal.
-                    if t in ("target", "command", "reset") and _navigator and _navigator.running:
-                        _navigator.cancel(t)
+                    if t in ("target", "command", "reset"):
+                        if _navigator and _navigator.running:
+                            _navigator.cancel(t)
+                        if _goals is not None:
+                            _goals.cancel(t)
                     if t == "target":
                         get_sim().set_target(msg["x"], msg["y"])
                     elif t == "command":
@@ -756,6 +1163,37 @@ async def ws(sock: WebSocket):
                     elif t == "goal_cancel":
                         if _navigator is not None:
                             _navigator.cancel("user")
+                        if _goals is not None:
+                            _goals.cancel("user")
+                    elif t == "chat":
+                        if chat_task is not None and not chat_task.done():
+                            # The newest instruction wins. Dropping it made the
+                            # robot look like it ignored you; the old turn's
+                            # answer is stale the moment you say something else.
+                            logger.info("new message preempts the turn in flight")
+                            chat_task.cancel()
+                            speaker.cancel()
+                            start_chat(str(msg.get("text", "")), spoken=listener.enabled)
+                        else:
+                            # Speak the answer whenever the mic is live, even
+                            # if this particular question was typed: once you
+                            # are in a conversation, replies should be heard.
+                            start_chat(str(msg.get("text", "")), spoken=listener.enabled)
+                    elif t == "chat_reset":
+                        if _agent is not None:
+                            _agent.reset()
+                    elif t == "voice":
+                        on = bool(msg.get("on"))
+                        listener.set_enabled(on)
+                        if not on:
+                            speaker.cancel()
+                        await acks.put({"type": "voice_state", "on": on})
+                    elif t == "shush":  # user hit stop while the dog talks
+                        speaker.cancel()
+                    elif t == "overlay":
+                        get_sim().show_overlay = bool(msg.get("on"))
+                        await acks.put({"type": "overlay_state",
+                                        "on": get_sim().show_overlay})
                 except (ValueError, KeyError, TypeError) as e:
                     # Malformed client message must not kill the reader.
                     logger.warning(f"bad ws message {raw!r}: {e}")
@@ -766,6 +1204,8 @@ async def ws(sock: WebSocket):
     dt = 1.0 / CONTROL_HZ
     i = 0
     vlm_rev = -1  # -1 so every (re)connected client gets the current status
+    agent_rev = -1
+    announced: tuple | None = None  # last outcome spoken, so it is said once
     try:
         loop = asyncio.get_event_loop()
         while True:
@@ -788,12 +1228,38 @@ async def ws(sock: WebSocket):
             if _navigator is not None and _navigator.rev != vlm_rev:
                 vlm_rev = _navigator.rev
                 await sock.send_text(json.dumps({"type": "vlm_status", **_navigator.status()}))
+            if _goals is not None and _goals.rev != agent_rev:
+                agent_rev = _goals.rev
+                status = _goals.status()
+                await sock.send_text(json.dumps({"type": "agent_status", **status}))
+                # Say out loud how the goal ended. A behaviour that finishes
+                # silently is indistinguishable from one still running.
+                key = (status.get("kind"), status.get("state"), status.get("goal"))
+                if status.get("state") in TERMINAL_STATES and key != announced:
+                    announced = key
+                    phrase = outcome_phrase(
+                        status.get("kind") or "",
+                        status.get("state") or "",
+                        status.get("goal") or "",
+                        reason=(status.get("detail") or {}).get("reason"),
+                        language=_asr_language,
+                    )
+                    if phrase:
+                        logger.info(f"announcing outcome: {phrase!r}")
+                        speaker.say(phrase)
+                        get_trace().add("goal.announce", text=phrase, goal_state=status.get("state"))
+                        await acks.put({"type": "chat_reply", "ok": True, "say": phrase,
+                                        "steps": [], "spoken": True})
             i += 1
             await asyncio.sleep(max(0.0, dt - (loop.time() - t0)))
     except (WebSocketDisconnect, RuntimeError):
         pass
     finally:
         reader_task.cancel()
+        if chat_task is not None and not chat_task.done():
+            chat_task.cancel()
+        speaker.cancel()
+        get_trace().unsubscribe(on_trace)
 
 
 def main(argv=None):
@@ -818,10 +1284,11 @@ def main(argv=None):
     )
     p.add_argument(
         "--vlm-backend",
-        choices=("local", "anthropic", "futurenav"),
+        choices=("local", "anthropic", "futurenav", "openai"),
         default=os.environ.get("VLM_BACKEND", "local"),
         help="local = Qwen3-VL via mlx-vlm on-device; anthropic = Claude API; "
-        "futurenav = FutureNav-4B action server (--vlm-url)",
+        "futurenav = FutureNav-4B action server (--vlm-url); openai = any "
+        "OpenAI-compatible server, by default the same one as --agent-url",
     )
     p.add_argument(
         "--vlm-model",
@@ -833,14 +1300,37 @@ def main(argv=None):
         default=os.environ.get("VLM_URL"),
         help="FutureNav action server base URL (futurenav backend only)",
     )
+    p.add_argument(
+        "--agent-url",
+        default=os.environ.get("AGENT_URL"),
+        help="chat agent's OpenAI-compatible base URL (default: --vlm-url, "
+        "else http://127.0.0.1:8000)",
+    )
+    p.add_argument(
+        "--agent-model",
+        default=os.environ.get("AGENT_MODEL"),
+        help="chat agent model id served at --agent-url "
+        "(default: Qwen/Qwen3-VL-4B-Instruct-FP8)",
+    )
+    p.add_argument(
+        "--vlm-max-steps",
+        type=int,
+        default=int(os.environ.get("VLM_MAX_STEPS") or 0) or None,
+        help="cap the decisions in one navigation goal. Unset (the default on "
+        "the openai backend) means no cap: the goal ends when the model says "
+        "done/stop, you cancel, it spins in place, or it is wedged. Set this "
+        "only for benchmark-shaped, comparable episodes",
+    )
     args = p.parse_args(argv)
-    global _scene_name, _vlm_url, _local_planner
+    global _scene_name, _vlm_url, _local_planner, _agent_url, _agent_model, _vlm_max_steps
+    _vlm_max_steps = args.vlm_max_steps
     _local_planner = not args.no_local_planner
     _scene_name = args.scene_name
     _scene_xml = args.scene or paths.scene_xml(_scene_name)
     _policy_npz = args.policy
     _vlm_backend, _vlm_model = args.vlm_backend, args.vlm_model
     _vlm_url = args.vlm_url
+    _agent_url, _agent_model = args.agent_url, args.agent_model
 
     import uvicorn
 

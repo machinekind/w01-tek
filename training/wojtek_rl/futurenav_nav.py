@@ -67,11 +67,6 @@ class FutureNavVlmClient:
     def __init__(self, url: str = DEFAULT_FUTURENAV_URL):
         self.url = url.rstrip("/")
         self._episode_goal: str | None = None
-        # Everything the server said about the last step: its raw action text
-        # and per-stage timings. The navigator copies this into the trace so
-        # the UI can show what the VLA actually emitted, not just the
-        # mid-level command it was translated into.
-        self.last_meta: dict | None = None
 
     def _post(self, path: str, payload: dict) -> dict:
         req = urllib.request.Request(
@@ -89,10 +84,4 @@ class FutureNavVlmClient:
             self._episode_goal = goal
             logger.info(f"futurenav episode reset: {goal!r}")
         out = await asyncio.to_thread(self._post, "/act", {"frame_b64": ego_b64})
-        self.last_meta = {
-            "action": out.get("action"),
-            "raw": out.get("raw"),
-            "server_step": out.get("step"),
-            "timings": out.get("timings"),
-        }
         return decision_from_action(str(out.get("action", "")), str(out.get("raw", "")))

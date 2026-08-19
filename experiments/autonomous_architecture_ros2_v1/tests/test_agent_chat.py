@@ -528,7 +528,7 @@ def test_nav_guard_skips_when_model_already_navigated():
         ['{"thought": "go", "tool": "navigate", "args": {"instruction": "Idź do drzwi."}}',
          '{"thought": "done", "say": "Ruszam!"}']
     )
-    out = ask(agent, "Idź do drzwi.")
+    ask(agent, "Idź do drzwi.")  # called for the side effect on `record`
     assert len(record) == 1  # exactly one navigate, no double-fire
 
 

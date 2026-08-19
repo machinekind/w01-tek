@@ -21,11 +21,6 @@ services:
         hard: 102400
     volumes:
       - ../src:/ros2_ws/src
-      # The experimental agentic stack's ROS packages, kept out of ros/src so
-      # that the robot workspace (deploy.sh rsyncs src/ only) can never ship
-      # them. A second colcon base path, so sim.sh --build still builds them
-      # for PC-side development. See experiments/*/README.md.
-      - ../../experiments/autonomous_architecture_ros2_v1/ros/src:/ros2_ws/experimental_src
       # The policy store, the same ros/policies the host checkout uses. A
       # policy fetched in the container is fetched for the host too, and
       # deploy.sh rsyncs the same store to the RPi.

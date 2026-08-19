@@ -1,75 +1,33 @@
-"""Text-to-speech text hygiene and sentence assembly for token streams.
+"""Sentence assembly for the ROS brain nodes.
 
-speakable()/split_sentences() are lifted from training/wojtek_agent/tts.py
-(#131) — keep fixes in sync.  SentenceAssembler is new: it turns an LLM
-token stream into flushable sentences so TTS starts while the model is
-still generating (the punctuation-flush contract from the design doc).
+`speakable()` / `split_sentences()` live in `wojtek_agent.speech_text` and are
+imported, not copied -- this package and `wojtek_agent` ship together as one
+experiment.  `SentenceAssembler` is the ROS-side addition: it turns an LLM
+token stream into flushable sentences so TTS starts while the model is still
+generating (the punctuation-flush contract from the design doc).
+
+Deployment note: the node venv needs the experiment root on PYTHONPATH so
+`wojtek_agent` is importable next to the colcon overlay.
 """
 
 from __future__ import annotations
 
-import re
-
-_EMOJI_RE = re.compile(
-    "[" "\U0001f300-\U0001faff" "\U00002600-\U000027bf" "\U0001f1e6-\U0001f1ff" "]+"
+from wojtek_agent.speech_text import (  # noqa: F401  (re-exported for the nodes)
+    MIN_CHUNK_CHARS,
+    speakable,
+    split_sentences,
 )
-_MARKDOWN_RE = re.compile(r"[*_`#>]+")
 
 
-def speakable(text: str) -> str:
-    """Strip what a voice should not read out loud.
 
-    A chat reply may carry emoji and light markdown; spoken, "🐕" becomes
-    "pies" or a pause, and asterisks become audible noise.  The transcript in
-    the UI keeps the original — only the audio is cleaned.
-    """
-    text = _EMOJI_RE.sub("", text)
-    text = _MARKDOWN_RE.sub("", text)
-    return " ".join(text.split())
 
 
 # Sentence splitting for chunked synthesis.  Abbreviations are the whole
 # problem: Polish is full of them and each one ends in a period that is not a
 # sentence end.  Splitting mid-sentence is audible (a dropped beat and a
 # restarted intonation contour), so err towards keeping text together.
-_ABBREVIATIONS = (
-    "np", "itd", "itp", "tzn", "tj", "ok", "dr", "mgr", "inż", "prof", "ul",
-    "godz", "min", "sek", "m.in", "tzw", "ww", "br", "pl", "ang", "por",
-    "mr", "mrs", "dr", "st", "no", "vs", "etc", "e.g", "i.e",
-)
-_SENTENCE_END_RE = re.compile(r"(?<=[.!?…])\s+")
-MIN_CHUNK_CHARS = 25  # shorter than this, glue onto the next sentence
 
 
-def split_sentences(text: str, min_chars: int = MIN_CHUNK_CHARS) -> list[str]:
-    """Split a reply into speakable chunks, longest-safe first.
-
-    Chunking exists purely for latency: the first sentence can be synthesised
-    and playing while the rest is still being made.  A too-eager split costs
-    more (choppy delivery) than it saves, so single clauses are merged
-    forward and known abbreviations never end a chunk.
-    """
-    text = " ".join((text or "").split())
-    if not text:
-        return []
-    parts = _SENTENCE_END_RE.split(text)
-    chunks: list[str] = []
-    for part in parts:
-        if not part:
-            continue
-        if chunks:
-            prev = chunks[-1]
-            last_word = prev.rstrip(".").rsplit(" ", 1)[-1].lower()
-            # "...ok." / "...np." is an abbreviation, not an ending; and a
-            # digit before the period is a decimal or an ordinal.
-            if last_word in _ABBREVIATIONS or (prev[:-1] or " ")[-1].isdigit():
-                chunks[-1] = f"{prev} {part}"
-                continue
-            if len(prev) < min_chars:
-                chunks[-1] = f"{prev} {part}"
-                continue
-        chunks.append(part)
-    return chunks
 
 
 class SentenceAssembler:

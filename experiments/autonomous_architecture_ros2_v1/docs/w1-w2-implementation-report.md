@@ -8,7 +8,7 @@ recorded, gate-checked footage.
 
 ## 1. Verified: interactive demo
 
-`SCENE=castle|flat|room|apartment ./training/run.sh room`, with FutureNav,
+`SCENE=castle|flat|room|apartment ./experiments/autonomous_architecture_ros2_v1/run.sh room`, with FutureNav,
 Qwen3-VL, whisper and Chatterbox served from one GPU host:
 
 - **Polish voice loop, end to end**: mic → whisper large-v3 → Qwen3-VL agent →

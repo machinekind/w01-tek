@@ -19,7 +19,6 @@ The files:
   translate_style.txt  style when the translate mode is active
   translate.txt        the standalone translation call         {language} {text}
   search_observer.txt  the search observer's scoring call      {target}
-  nav_system.txt       the VLM navigator's system prompt       {MIN_TURN_DEG} {MAX_TURN_DEG} {MIN_FORWARD_M} {MAX_FORWARD_M} {MAX_BACKWARD_M}
 """
 
 from __future__ import annotations

@@ -127,7 +127,7 @@ cancels in-flight generation for the interrupted utterance_id.
 ## Speech stack
 
 - **ASR**: faster-whisper, model configurable (`model` parameter).
-  **Benchmark large-v2 against large-v3 on our own Polish recordings in W1**
+  **Benchmark large-v2 against large-v3 on our own Polish recordings early**
   — v3 scores better on FLEURS (PL 4.74; 0.36 s measured on an RTX 5880)
   but is known to hallucinate more on silence/noise, and v2 sometimes wins
   in practice. The #131 guards (`no_speech_prob > 0.6`,
@@ -155,7 +155,7 @@ cancels in-flight generation for the interrupted utterance_id.
   **Głuś is the development default for now; it will be replaced before the
   stage** — a cloned character voice in public is a personality-rights
   exposure and F5's PL checkpoint is CC-BY-NC. The stage voice must be
-  chosen and cloned (or stock) by end of W3 so rehearsals use the real one.
+  chosen and cloned (or stock) before rehearsals, so they use the real one.
 
 ## Simulator strategy
 
@@ -237,7 +237,7 @@ engineering audit, not legal advice.
   colcon builds with that venv active so installed node scripts get venv
   shebangs.  Bielik default:
   `speakleash/Bielik-4.5B-v3.0-Instruct-FP8-Dynamic` (~5 GB, Ada+; bf16 repo
-  on Ampere).  The talk-only stack fits a 24 GB card; the full W3 stack
+  on Ampere).  The talk-only stack fits a 24 GB card; the full walk-and-look stack
   (+ Qwen + FutureNav) returns to the ≥48 GB sizing above.
 - Provisioning scripts, host selection and scheduled teardown live in the
   private operations repository — this repository never names private hosts
@@ -267,16 +267,16 @@ payload — `package.xml` carries only ROS deps. Apache-2.0 everywhere.
 
 ## Milestones (4 weeks)
 
-1. **W1 — hear yourself think.** `wojtek_agent_msgs`; `audio_bridge` (reuse
+1. **Hear yourself think.** `wojtek_agent_msgs`; `audio_bridge` (reuse
    the #131 mic worklet); `vad` + `asr` nodes; router dataset + first
    fine-tune; E2E on the GPU box: speak Polish in browser →
    `/wojtek/asr/final`.
-2. **W2 — talk.** `bielik` + `tts` nodes (both engines), barge-in path,
+2. **Talk.** `bielik` + `tts` nodes (both engines), barge-in path,
    router in the loop; talk-only stage demo works end to end.
-3. **W3 — walk and look.** `vlm_agent` node wrapping the #131 modules; sim
+3. **Walk and look.** `vlm_agent` node wrapping the #131 modules; sim
    node + ui_bridge; FutureNav + SCAN wired; visual-question translate path;
    full loop: "znajdź krzesło" → search → spoken outcome.
-4. **W4 — harden.** Latency budget pass, failure drills (model down, GPU
+4. **Harden.** Latency budget pass, failure drills (model down, GPU
    OOM, network blip), demo recording (`agent.record` port), stage runbook,
    scheduled teardown of the rented box (operations repository).
 
@@ -287,9 +287,9 @@ so `./training/run.sh test` / `colcon test` stay fast and honest.
 
 - **pyannote streaming latency** — mitigated by the silero fallback hook.
 - **Bielik translation quality/latency for the visual path** — measure early
-  in W2; fallback is Qwen answering in Polish directly (`think_en` mode was
+  while building the talk milestone; fallback is Qwen answering in Polish directly (`think_en` mode was
   measured fine in #131).
 - **Two LLMs + FutureNav on one card** — VRAM plan above is tight on 48 GB;
   budget a 2×24 or 80 GB offer as plan B.
 - **Voice rights on stage** — decided above; needs an actual chosen stage
-  voice by W2.
+  voice before the talk milestone is called done.

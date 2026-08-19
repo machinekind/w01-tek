@@ -7,13 +7,15 @@
 
 A conversational, voice-driven agent layer for Wojtek, ported to ROS 2 nodes so
 that a research setup running on a rented cloud GPU box migrates 1:1 onto the
-robot later. W1 and W2 of the architecture are built and verified live; W3
-(walking through the ROS stack rather than the demo app) is not.
+robot later.  The architecture has four milestones — **hear**, **talk**,
+**walk and look**, **harden**.  Hear and talk are built and verified live;
+walk and look (driving the robot through the ROS stack rather than through the
+demo app) is not.
 
 | document | what it is |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | target architecture and the settled decisions |
-| [docs/w1-w2-implementation-report.md](docs/w1-w2-implementation-report.md) | what is built and verified, with the findings behind it |
+| [docs/implementation-report.md](docs/implementation-report.md) | what is built and verified, with the findings behind it |
 | [docs/agent-layer.md](docs/agent-layer.md) | agent design reference: tools, prompting contracts, measured latencies |
 | [docs/polish-voice-research-report.md](docs/polish-voice-research-report.md) | Polish voice research report and decision record |
 
@@ -93,7 +95,8 @@ SCENE=flat ./experiments/autonomous_architecture_ros2_v1/run.sh room \
 That runs `wojtek_demo/room_app.py`, this experiment's fork of the training
 project's room demo. `./training/run.sh room` still starts the original,
 agent-free demo — the fork exists so the experiment can evolve the app (and be
-replaced by ROS nodes at W3) without the training project carrying agent code.
+replaced by ROS nodes in the walk-and-look milestone) without the training
+project carrying agent code.
 
 The talk-only ROS stack, after `run.sh build` in an environment with ROS 2
 sourced:

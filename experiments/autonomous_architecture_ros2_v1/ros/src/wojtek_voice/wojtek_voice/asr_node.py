@@ -6,8 +6,8 @@ it runs on one worker thread fed by a queue — the subscription callback
 never waits on the GPU, and utterances that pile up behind a slow decode are
 processed in order rather than dropped.
 
-Partial transcripts (/wojtek/asr/partial from the live chunks) are a planned
-W2 addition; the message contract already supports them.
+Partial transcripts (/wojtek/asr/partial from the live chunks) are planned but
+not implemented; the message contract already supports them.
 """
 
 from __future__ import annotations

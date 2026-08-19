@@ -136,7 +136,7 @@ This stack is **experimental** and lives in one directory,
 - `README.md` — what this experiment is, its layout, and how to run its tests
 - `docs/agent-layer.md` — architecture, prompting contracts, the measured latencies
 - `docs/polish-voice-research-report.md` — why the voice is a cascade, every model considered, licences
-- `docs/architecture.md` and `docs/w1-w2-implementation-report.md` — the ROS 2 port of this
+- `docs/architecture.md` and `docs/implementation-report.md` — the ROS 2 port of this
   stack: target architecture, and what is built and verified so far
 
 Elsewhere:

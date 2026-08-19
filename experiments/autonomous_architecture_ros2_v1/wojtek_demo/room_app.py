@@ -3,8 +3,8 @@
 Forked from `wojtek_rl.room_app` (training keeps that copy unchanged) and
 extended with the chat agent, object search, the goal FSM, the voice loop and
 the AGENT DECISIONS trace panel.  The fork is deliberate: an experiment must
-not mutate the training project's demo, and W3 of the architecture replaces
-this app with ROS nodes anyway.  Run it with `./run.sh room` from the
+not mutate the training project's demo, and the architecture's walk-and-look
+milestone replaces this app with ROS nodes anyway.  Run it with `./run.sh room` from the
 experiment root (module path: wojtek_demo.room_app).
 
 Original module docstring follows.

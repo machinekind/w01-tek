@@ -1,4 +1,4 @@
-# Agentic stack — implementation report, W1–W2 (2026-08-16)
+# Agentic stack — implementation report (2026-08-16)
 
 Companion to the [target architecture](architecture.md), whose decisions are
 settled. This report records what has been **built and verified**, the
@@ -25,7 +25,7 @@ Qwen3-VL, whisper and Chatterbox served from one GPU host:
 - **Fallback-reply quarantine**: one bad LLM turn can no longer collapse the
   JSON contract for the rest of a session (see §4).
 
-## 2. Verified: ROS 2 stack (W1 + W2 of the architecture)
+## 2. Verified: ROS 2 stack (the hear and talk milestones)
 
 `ros/src/wojtek_agent_msgs`
 (under this experiment directory), `wojtek_voice` (audio bridge speaking the
@@ -123,7 +123,7 @@ is in the architecture document.
 
 ## 8. Remaining work, in order
 
-1. **W3** — wrap the Qwen agent, the room sim and the demo UI as ROS nodes
+1. **Walk and look** — wrap the Qwen agent, the room sim and the demo UI as ROS nodes
    (`vlm_agent`, sim bridge, ui bridge) so the ROS stack walks, not just talks.
 2. **Router fine-tune** — `ros/src/wojtek_brain/tools/gen_router_dataset.py` →
    `train_router.py` (HerBERT default; compare mmBERT and ModernBERT on the
@@ -132,4 +132,4 @@ is in the architecture document.
    hallucinates more on silence, and the guards apply either way.
 4. **Stage voice decision and clone** — the development voice must be replaced
    by a neutral, rights-clear voice before any public demo.
-5. **W4 hardening** — failure drills, latency pass, stage runbook.
+5. **Harden** — failure drills, latency pass, stage runbook.

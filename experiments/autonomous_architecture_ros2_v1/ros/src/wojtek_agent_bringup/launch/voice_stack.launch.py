@@ -1,6 +1,6 @@
 """The talk-only stack: browser mic → VAD → ASR → router → Bielik → TTS.
 
-W2 milestone bring-up — no navigation yet.  Everything runs on one box
+This is the talk milestone of the architecture — no navigation yet.  Everything runs on one box
 (localhost DDS); the browser connects to the audio bridge websocket.
 
     ros2 launch wojtek_agent_bringup voice_stack.launch.py \

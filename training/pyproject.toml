@@ -49,7 +49,8 @@ vlm-local = ["mlx-vlm>=0.3.3", "pillow"]
 # Navigation evaluation harness (wojtek_eval/): kinematic sim, occupancy
 # mapping, spoken-instruction chain, remote VLM client.
 eval = ["trimesh>=4.0", "pillow", "faster-whisper>=1.0"]
-# Realtime Polish voice for the room demo (wojtek_rl/agent/{voice,tts}.py):
+# Realtime Polish voice for the room demo, whose implementation lives in the
+# experimental agentic stack (../experiments/.../wojtek_agent/{voice,tts}.py):
 # faster-whisper hears, Piper speaks. Both run on CPU next to the browser --
 # the GPU box only serves the brain. Piper voices are downloaded separately:
 #   python -m piper.download_voices pl_PL-gosia-medium
@@ -57,6 +58,11 @@ voice = ["faster-whisper>=1.0", "piper-tts>=1.3"]
 # Engine-parameter identification from rosbags (wojtek_rl/sysid/):
 # ROS-free ros2 bag reader + CMA-ES.
 sysid = ["rosbags>=0.10", "cmaes>=0.10"]
+
+[tool.pytest.ini_options]
+# room_app and vlm_nav import wojtek_agent, which lives in the experimental
+# tree outside this project. Keep bare `pytest` working, not just run.sh.
+pythonpath = [".", "../experiments/autonomous_architecture_ros2_v1"]
 
 [build-system]
 # PEP 639 (bare-string license + license-files) needs hatchling >= 1.26.

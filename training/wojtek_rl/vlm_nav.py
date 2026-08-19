@@ -89,7 +89,7 @@ NAV_TOOL = {
 }
 
 # The prompt text lives in agent/prompts/nav_system.txt (editable).
-from wojtek_rl.agent.prompts import load as _load_prompt
+from wojtek_agent.prompts import load as _load_prompt
 
 SYSTEM_PROMPT = _load_prompt(
     "nav_system",

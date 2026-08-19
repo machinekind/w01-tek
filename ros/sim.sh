@@ -195,7 +195,7 @@ if $BUILD; then
     set -e
     cd /ros2_ws
     source /opt/ros/${ROS_DISTRO:-jazzy}/setup.bash
-    src_pkgs=" $(colcon list --base-paths src --names-only | tr "\n" " ") "
+    src_pkgs=" $(colcon list --base-paths src experimental_src --names-only | tr "\n" " ") "
     for d in build install; do
       for p in "$d"/*/; do
         [ -d "$p" ] || continue
@@ -208,7 +208,8 @@ if $BUILD; then
         esac
       done
     done
-    colcon build --packages-skip md80_hardware_interface \
+    colcon build --base-paths src experimental_src \
+      --packages-skip md80_hardware_interface \
       --event-handlers status- desktop_notification-'
 fi
 

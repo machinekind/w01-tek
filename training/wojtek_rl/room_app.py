@@ -41,11 +41,11 @@ import numpy as np
 from loguru import logger
 
 from wojtek_rl import paths
-from wojtek_rl.agent.goals import TERMINAL_STATES, outcome_phrase
-from wojtek_rl.agent.llm import DEFAULT_AGENT_MODEL, DEFAULT_AGENT_URL
-from wojtek_rl.agent.nav import TracedVlmNavigator
-from wojtek_rl.agent.spatial import PoseHistory
-from wojtek_rl.agent.voice import SAMPLE_RATE as VOICE_SAMPLE_RATE
+from wojtek_agent.goals import TERMINAL_STATES, outcome_phrase
+from wojtek_agent.llm import DEFAULT_AGENT_MODEL, DEFAULT_AGENT_URL
+from wojtek_agent.nav import TracedVlmNavigator
+from wojtek_agent.spatial import PoseHistory
+from wojtek_agent.voice import SAMPLE_RATE as VOICE_SAMPLE_RATE
 from wojtek_rl.midlevel import Forward, MidLevelExecutor, Stop, parse_command
 from wojtek_rl.navigation import NavConfig, command_to_target, quat_to_yaw
 from wojtek_rl.np_policy import actuator_addresses, gravity_from_quat, load_policy_runtime
@@ -500,7 +500,7 @@ _vlm_backend = os.environ.get("VLM_BACKEND", "local")
 _vlm_model = os.environ.get("VLM_MODEL")  # None -> backend default
 _vlm_url = os.environ.get("VLM_URL")  # futurenav backend only
 _local_planner = os.environ.get("LOCAL_PLANNER", "1") != "0"
-# Chat agent (wojtek_rl.agent): its own OpenAI-compatible endpoint/model,
+# Chat agent (wojtek_agent): its own OpenAI-compatible endpoint/model,
 # independent of the navigation backend -- one vLLM server can serve both.
 _agent_url = os.environ.get("AGENT_URL")
 _agent_model = os.environ.get("AGENT_MODEL")
@@ -509,7 +509,7 @@ _vlm_max_steps = int(os.environ.get("VLM_MAX_STEPS") or 0) or None
 # open Qwen Omni weights do not cover Polish speech in EITHER direction, so
 # hearing is Whisper and speaking is a separate TTS -- see docs/agent.md.
 _asr_language = os.environ.get("ASR_LANGUAGE", "pl")
-# ASR_URL points recognition at a GPU box (wojtek_rl.agent.asr_server).
+# ASR_URL points recognition at a GPU box (wojtek_agent.asr_server).
 # Unset = run whisper in-process on the CPU, which is ~2x realtime for
 # large-v3 and adds seconds of dead air to every exchange.
 _asr_url = os.environ.get("ASR_URL")
@@ -536,7 +536,7 @@ def get_trace():
     the process (a scene switch keeps the same file: it is one session)."""
     global _trace
     if _trace is None:
-        from wojtek_rl.agent.trace import Trace, default_trace_path
+        from wojtek_agent.trace import Trace, default_trace_path
 
         path = (
             Path(_trace_path)
@@ -592,7 +592,7 @@ def get_navigator() -> VlmNavigator:
             # goal box, the agent's `navigate` tool and the search observer --
             # no second GPU process, no 18 GB on-device download.
             from wojtek_eval.vlm_openai import OpenAIVlmClient
-            from wojtek_rl.agent.nav import (
+            from wojtek_agent.nav import (
                 INSTRUCTION_PROMPT,
                 NAV_MAX_ROTATION,
                 NAV_MAX_STEPS,
@@ -631,7 +631,7 @@ def get_agent_llm():
     """One shared chat client for the agent brain AND the search observer."""
     global _agent_llm
     if _agent_llm is None:
-        from wojtek_rl.agent.llm import AgentLLM
+        from wojtek_agent.llm import AgentLLM
 
         _agent_llm = AgentLLM(
             base_url=_agent_url or _vlm_url or DEFAULT_AGENT_URL,
@@ -645,8 +645,8 @@ def get_goals():
     search builds its controller lazily over the shared agent LLM."""
     global _goals
     if _goals is None:
-        from wojtek_rl.agent.goals import GoalManager
-        from wojtek_rl.agent.search import SearchController, make_score_view
+        from wojtek_agent.goals import GoalManager
+        from wojtek_agent.search import SearchController, make_score_view
 
         def search_factory():
             sim = get_sim()
@@ -672,15 +672,15 @@ def get_goals():
 def get_agent():
     global _agent
     if _agent is None:
-        from wojtek_rl.agent.chat import WojtekAgent
-        from wojtek_rl.agent.tools import build_tools
+        from wojtek_agent.chat import WojtekAgent
+        from wojtek_agent.tools import build_tools
 
         sim = get_sim()
         # One dict shared by the loop and its tools: the agent writes the raw
         # user text each turn, so `navigate` can forward the instruction as
         # spoken instead of whatever noun phrase the model distilled.
         turn_context: dict = {}
-        from wojtek_rl.agent.search import make_score_view
+        from wojtek_agent.search import make_score_view
 
         score_view = make_score_view(get_agent_llm())
 
@@ -738,7 +738,7 @@ def _get_transcriber():
     global _transcriber
     with _transcriber_lock:
         if _transcriber is None and _asr_url:
-            from wojtek_rl.agent.voice import RemoteTranscriber
+            from wojtek_agent.voice import RemoteTranscriber
 
             _transcriber = RemoteTranscriber(_asr_url)
             try:
@@ -765,7 +765,7 @@ def _get_transcriber():
 def get_tts_engine():
     global _tts_engine
     if _tts_engine is None:
-        from wojtek_rl.agent.tts import build_engine
+        from wojtek_agent.tts import build_engine
 
         _tts_engine = build_engine(_tts_engine_kind, _tts_voice)
         logger.info(f"TTS: {type(_tts_engine).__name__} voice={_tts_voice}")
@@ -1043,8 +1043,8 @@ async def ws(sock: WebSocket):
     chat_task: asyncio.Task | None = None
 
     # -- voice: mic frames in, spoken reply out (both binary ws frames) ----
-    from wojtek_rl.agent.tts import Speaker
-    from wojtek_rl.agent.voice import VoiceListener
+    from wojtek_agent.tts import Speaker
+    from wojtek_agent.voice import VoiceListener
 
     async def send_audio(pcm_bytes: bytes):
         await sock.send_bytes(pcm_bytes)

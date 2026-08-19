@@ -1,0 +1,211 @@
+"""Transport-level voice plumbing: segmentation, framing, resampling.
+
+Lifted from training/wojtek_agent/voice.py (the #131 agent layer) so the
+ROS workspace stays deployable without the training project on the robot.
+Keep the two in sync when a segmentation bug is fixed — the training copy is
+the one exercised by the sim demo, this one by the ROS nodes.
+
+The browser sends 100 ms frames of mono PCM16 at 24 kHz (AudioWorklet
+capture path).  Segmentation is energy-based by default: no extra
+dependency, microseconds per frame, and the failure mode that matters
+(cutting a sentence in half) is governed by the silence timeout, not by
+frame-level precision.  Pass a `vad` callable to swap in silero/pyannote.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+import numpy as np
+
+SAMPLE_RATE = 24000          # what the browser worklet produces
+FRAME_MS = 100               # one websocket binary frame
+SPEECH_RMS = 0.012           # normalised RMS above which a frame counts as speech
+MIN_UTTERANCE_S = 0.35       # shorter than this is a cough, not a sentence
+SILENCE_END_S = 0.7          # trailing silence that closes an utterance
+MAX_UTTERANCE_S = 20.0       # hard stop; something is wrong (open mic, TV on)
+PREROLL_S = 0.3              # audio kept from before the trigger, so no clipped onsets
+
+
+def frame_rms(pcm: np.ndarray) -> float:
+    """Normalised RMS of an int16 frame, 0.0-1.0."""
+    if not len(pcm):
+        return 0.0
+    x = pcm.astype(np.float32) / 32768.0
+    return float(np.sqrt(np.mean(x * x)))
+
+
+@dataclass
+class Utterance:
+    """One closed segment of speech, ready for the recogniser."""
+
+    pcm: np.ndarray              # int16, mono, SAMPLE_RATE
+    seconds: float
+    ended_on: str                # "silence" | "max_length" | "flush"
+
+
+@dataclass
+class VoiceSegmenter:
+    """Turns a stream of PCM frames into utterances.
+
+    Stateful and cheap: feed() returns an Utterance the moment speech ends,
+    otherwise None.  Pre-roll keeps the audio just before the trigger so the
+    first syllable is not clipped — a recogniser that never hears the "Wo"
+    of "Wojtek" invents something else.
+    """
+
+    sample_rate: int = SAMPLE_RATE
+    speech_rms: float = SPEECH_RMS
+    silence_end_s: float = SILENCE_END_S
+    min_utterance_s: float = MIN_UTTERANCE_S
+    max_utterance_s: float = MAX_UTTERANCE_S
+    preroll_s: float = PREROLL_S
+    vad = None  # optional callable(pcm_int16) -> bool, overriding the RMS test
+
+    _speaking: bool = field(default=False, init=False)
+    _voiced: list[np.ndarray] = field(default_factory=list, init=False)
+    _preroll: list[np.ndarray] = field(default_factory=list, init=False)
+    _silence_s: float = field(default=0.0, init=False)
+    _length_s: float = field(default=0.0, init=False)
+
+    @property
+    def speaking(self) -> bool:
+        return self._speaking
+
+    def _is_speech(self, pcm: np.ndarray) -> bool:
+        if self.vad is not None:
+            return bool(self.vad(pcm))
+        return frame_rms(pcm) >= self.speech_rms
+
+    def feed(self, pcm: np.ndarray) -> Utterance | None:
+        if not len(pcm):
+            return None
+        dur = len(pcm) / self.sample_rate
+        speech = self._is_speech(pcm)
+
+        if not self._speaking:
+            # Keep a rolling pre-roll window while idle.
+            self._preroll.append(pcm)
+            kept = 0.0
+            for i in range(len(self._preroll) - 1, -1, -1):
+                kept += len(self._preroll[i]) / self.sample_rate
+                if kept >= self.preroll_s:
+                    del self._preroll[:i]
+                    break
+            if speech:
+                self._speaking = True
+                self._voiced = list(self._preroll)
+                self._length_s = sum(len(f) for f in self._voiced) / self.sample_rate
+                self._preroll = []
+                self._silence_s = 0.0
+            return None
+
+        self._voiced.append(pcm)
+        self._length_s += dur
+        self._silence_s = 0.0 if speech else self._silence_s + dur
+
+        if self._silence_s >= self.silence_end_s:
+            return self._close("silence")
+        if self._length_s >= self.max_utterance_s:
+            return self._close("max_length")
+        return None
+
+    def flush(self) -> Utterance | None:
+        """End the utterance now (mic released, socket closing)."""
+        return self._close("flush") if self._speaking else None
+
+    def reset(self) -> None:
+        self._speaking = False
+        self._voiced = []
+        self._preroll = []
+        self._silence_s = 0.0
+        self._length_s = 0.0
+
+    def _close(self, reason: str) -> Utterance | None:
+        pcm = np.concatenate(self._voiced) if self._voiced else np.zeros(0, np.int16)
+        seconds = len(pcm) / self.sample_rate
+        # Judge the length on speech alone, discounting however much trailing
+        # silence actually accumulated — NOT the configured timeout, which a
+        # flush never reaches and which would then discard a real sentence.
+        speech_s = seconds - self._silence_s
+        self.reset()
+        if speech_s < self.min_utterance_s:
+            return None
+        return Utterance(pcm=pcm, seconds=seconds, ended_on=reason)
+
+
+class UtteranceStream:
+    """Event view over a VoiceSegmenter, for a node that must narrate state.
+
+    feed() yields (event, utterance_id, payload) triples:
+    ("started", id, None) on the speech trigger, ("frame", id, pcm) for every
+    in-speech frame (pre-roll first), and ("ended", id, Utterance) when the
+    segment closes — the Utterance carries the full PCM, so a final-only
+    consumer needs no reassembly.  Segments that close below the minimum
+    length yield ("aborted", id, None).
+    """
+
+    def __init__(self, segmenter: VoiceSegmenter | None = None, make_id=None):
+        self.seg = segmenter or VoiceSegmenter()
+        self._n = 0
+        self._make_id = make_id or self._default_id
+        self.utterance_id: str | None = None
+        self._emitted: int = 0  # voiced frames already yielded as "frame"
+
+    def _default_id(self) -> str:
+        self._n += 1
+        return f"utt-{self._n:04d}"
+
+    def feed(self, pcm: np.ndarray):
+        was_speaking = self.seg.speaking
+        utt = self.seg.feed(pcm)
+
+        if not was_speaking and self.seg.speaking:
+            self.utterance_id = self._make_id()
+            self._emitted = 0
+            yield ("started", self.utterance_id, None)
+
+        if self.seg.speaking:
+            # Emit whatever the segmenter holds beyond what we already sent —
+            # on the trigger frame that includes the pre-roll.
+            for frame in self.seg._voiced[self._emitted:]:
+                yield ("frame", self.utterance_id, frame)
+            self._emitted = len(self.seg._voiced)
+
+        if utt is not None:
+            uid, self.utterance_id = self.utterance_id, None
+            yield ("ended", uid, utt)
+        elif was_speaking and not self.seg.speaking:
+            uid, self.utterance_id = self.utterance_id, None
+            yield ("aborted", uid, None)
+
+    def flush(self):
+        uid, self.utterance_id = self.utterance_id, None
+        utt = self.seg.flush()
+        if utt is not None:
+            yield ("ended", uid, utt)
+        elif uid is not None:
+            yield ("aborted", uid, None)
+
+
+def pcm_frames(pcm: np.ndarray, frame_ms: int = FRAME_MS, rate: int = SAMPLE_RATE):
+    """Slice PCM into playback-sized frames (the browser plays them in order)."""
+    n = max(1, int(rate * frame_ms / 1000))
+    for i in range(0, len(pcm), n):
+        yield pcm[i : i + n]
+
+
+def resample_linear(pcm: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
+    """Cheap linear resample — TTS engines rarely emit at the browser's rate.
+
+    Good enough for speech playback; a windowed-sinc would cost more than the
+    artefact is worth at these rates.
+    """
+    if src_rate == dst_rate or not len(pcm):
+        return pcm
+    n_out = int(round(len(pcm) * dst_rate / src_rate))
+    if n_out <= 0:
+        return np.zeros(0, np.int16)
+    x = np.linspace(0.0, len(pcm) - 1, n_out, dtype=np.float64)
+    out = np.interp(x, np.arange(len(pcm)), pcm.astype(np.float64))
+    return np.clip(np.rint(out), -32768, 32767).astype(np.int16)

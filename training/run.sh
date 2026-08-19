@@ -2,6 +2,10 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 PY=.venv/bin/python
+# The experimental agentic layer (wojtek_agent) lives outside this project, in
+# experiments/autonomous_architecture_ros2_v1/. room_app and vlm_nav import it,
+# so its root goes on PYTHONPATH here rather than in every caller.
+export PYTHONPATH="$(cd .. && pwd)/experiments/autonomous_architecture_ros2_v1${PYTHONPATH:+:$PYTHONPATH}"
 # Headless-render default for eval/app: egl exists only on Linux; macOS
 # must stay unset so mujoco picks its own default (cgl).
 if [[ "$(uname)" == "Linux" ]]; then export MUJOCO_GL="${MUJOCO_GL:-egl}"; fi

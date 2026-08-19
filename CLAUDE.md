@@ -19,6 +19,16 @@ keep the command, seed, and resulting run directory together.
 - `ros/src/wojtek_description/mujoco/wojtek.xml` is the model source;
   `wojtek_mjx.xml` and `scene_mjx.xml` are generated via `./training/run.sh
   build`.  Do not hand-edit generated XML.
+- `experiments/` holds work that is **not production and not on the robot**.
+  Each subdirectory is one self-contained experiment with its own `README.md`
+  stating its status, and carries whatever it needs (ROS packages, Python
+  packages, tests, docs).  Nothing in `experiments/` may become a dependency
+  of `wojtek_bringup` or reach the robot through `ros/deploy.sh`, which
+  rsyncs `ros/src/` only.  Interfaces there are unstable by definition:
+  promote code into `ros/` or `training/` when it stops being an experiment,
+  and do not treat an experiment's layout as precedent for the rest of the
+  tree.  See
+  [experiments/autonomous_architecture_ros2_v1/README.md](experiments/autonomous_architecture_ros2_v1/README.md).
 - `skills/` contains opt-in local guides.  Claude users must explicitly
   symlink a skill or ask to read its `SKILL.md`; see [skills/README.md](skills/README.md).
 - Use **Wojtek** everywhere: prose, artifact names, run names, and new paths.
@@ -114,6 +124,9 @@ git diff --check
 
 # Anything touching the env, the model, DR, or the latency path
 ./training/run.sh test-slow   # tests/integration: real MJX, minutes
+
+# Anything under experiments/ (that experiment's own model-free suite)
+./experiments/autonomous_architecture_ros2_v1/run.sh test
 
 # Model-generation change (inspect generated XML before committing it)
 ./training/run.sh build

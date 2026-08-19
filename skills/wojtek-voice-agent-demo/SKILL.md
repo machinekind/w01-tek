@@ -11,8 +11,8 @@ On one rented CUDA box: **FutureNav-4B** (`:8100`, navigation), **vLLM/Qwen3-VL-
 They meet over one SSH tunnel.
 
 Budget **~25 min** from nothing to a talking dog, then ~$0.60/hr. Design notes live in
-`training/docs/agent.md`; the model survey and every rejected option in
-`training/docs/polish-voice.md`.
+`experiments/autonomous_architecture_ros2_v1/docs/agent-layer.md`; the model survey and
+every rejected option in `experiments/autonomous_architecture_ros2_v1/docs/polish-voice-research-report.md`.
 
 Layers, so you know which one broke:
 
@@ -79,7 +79,7 @@ I/O; `GET /api/trace` and `runs/agent_traces/*.jsonl` have the same events after
 ## 4. Recording a session
 
 ```bash
-python -m wojtek_rl.agent.record --out demo.mp4 --seconds 180
+python -m wojtek_agent.record --out demo.mp4 --seconds 180
 ```
 
 Films chase cam + ego view + map + captions straight off the websocket, with the dog's speech
@@ -130,8 +130,15 @@ under a dollar an hour, while a re-deploy is 30 GB of download plus 15 minutes.
 
 ## Related
 
-- `training/docs/agent.md` — architecture, prompting contracts, the measured latencies
-- `training/docs/polish-voice.md` — why the voice is a cascade, every model considered, licences
+This stack is **experimental** and lives in one directory,
+`experiments/autonomous_architecture_ros2_v1/`. Its documents, relative to that root:
+
+- `README.md` — what this experiment is, its layout, and how to run its tests
+- `docs/agent-layer.md` — architecture, prompting contracts, the measured latencies
+- `docs/polish-voice-research-report.md` — why the voice is a cascade, every model considered, licences
+- `docs/architecture.md` and `docs/w1-w2-implementation-report.md` — the ROS 2 port of this
+  stack: target architecture, and what is built and verified so far
+
+Elsewhere:
+
 - `skills/futurenav-nav-demo/SKILL.md` — the narrower FutureNav-only loop
-- `docs/plans/agentic-ros2.md` and `docs/plans/agentic-ros2-w2-report.md` — the ROS 2 port of
-  this stack: target architecture, and what is built and verified so far

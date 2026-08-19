@@ -574,7 +574,7 @@ $("reset").onclick = () => ws.send(JSON.stringify({type: "reset"}));
 // silence timeout), so there is no push-to-talk button to hold. Capture is a
 // worklet rather than MediaRecorder: we need raw PCM frames as they happen,
 // not a webm blob at the end of a recording.
-const RATE = 24000;                       // matches wojtek_rl.agent.voice
+const RATE = 24000;                       // matches wojtek_agent.voice
 const WORKLET_SRC = `
 class PCMTap extends AudioWorkletProcessor {
   process(inputs) {

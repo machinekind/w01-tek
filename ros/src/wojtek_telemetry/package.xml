@@ -11,7 +11,7 @@
     Every run records all topics, so these end up in the same bag as the
     control data and can be read back side by side afterwards.
   </description>
-  <maintainer email="kchmielewski707@gmail.com">Jakub Chmielewski</maintainer>
+  <maintainer email="wysocki@undef.pl">Marcin Wysocki</maintainer>
   <license>Apache License 2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>

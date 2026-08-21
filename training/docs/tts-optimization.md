@@ -37,7 +37,59 @@ moved to a Blackwell rental. This changed the conclusion completely:
 | S15+S16 analyzer off, SDPA restored (verified applied) | 3.58 s | 0.89 | **no gain** |
 | S2 `torch.compile(reduce-overhead)` | 3.60 s | 0.92 | **slightly worse** |
 
-### Does this transfer to the Spark? Not established.
+## MEASURED ON THE TARGET (DGX Spark, GB10, 2026-08-21)
+
+Settled by renting an actual Spark for $0.04. **RTF 0.44** — the cloned voice
+generates at more than twice real time on the deployment hardware, so
+clause-level streaming is comfortable and cannot underrun.
+
+| | A6000 (Ada) | RTX 5080 (Blackwell) | **GB10 (target)** |
+|---|---|---|---|
+| RTF | 1.33-1.61 | 0.86-0.90 | **0.44** |
+| torch | 2.6 / cu124 | 2.8 / cu128 | 2.13 / cu130 |
+
+First-piece latency, which is what a listener actually waits for:
+
+| first piece | GPU time | audio |
+|---|---|---|
+| `Szukam kanapy,` | **0.62 s** | 1.04 s |
+| `Widzę kanapę.` | 1.32 s | 2.76 s |
+| `Już się zatrzymuję!` | 1.39 s | 3.00 s |
+
+**Caveat on the comparison**: the torch version moved with the hardware
+(2.8/cu128 on the 5080, 2.13/cu130 on the Spark), so the three columns are
+not a clean hardware A/B. The absolute number on the target is what matters,
+and it is 0.44.
+
+### What the box actually is
+
+- `aarch64`, **20x Cortex-X925**, 121 GB unified (torch reports 130.6 GB
+  total), driver 595.71.05, CUDA 13.0, Python 3.12.
+- **Compute capability 12.1 (sm_121)** -- NOT sm_120 like consumer Blackwell.
+- PyPI `torch==2.13.0+cu130` installs and works, but its `arch_list` is
+  `[sm_80, sm_90, sm_100, sm_110, sm_120]` -- **no sm_121 cubins**. Kernels
+  still run (CUDA family compatibility covers sm_120 -> sm_121), but a plain
+  4096^3 fp16 matmul measured only **7.9 TFLOPS**, a few percent of what GB10
+  is rated for. A vendor-built torch may be much faster; worth checking
+  before concluding anything about compute-bound workloads on this box.
+- Every dependency has an aarch64 wheel: librosa/llvmlite, s3tokenizer,
+  conformer, transformers, diffusers. Nothing compiled from source.
+- Install recipe that works: `pip install torch --index-url
+  https://download.pytorch.org/whl/cu130`, then chatterbox `--no-deps` plus
+  its dependencies with `transformers==4.46.3` pinned. Never let pip touch
+  torch.
+- vast.ai host quirk: the container's `/root/.ssh/authorized_keys` had wrong
+  permissions and sshd refused every key. `vastai execute` only works on
+  STOPPED instances, so the fix is to recreate with
+  `--onstart-cmd 'chmod 700 /root/.ssh; chmod 600 /root/.ssh/authorized_keys'`.
+
+### Superseded: the extrapolation that worried us (kept, because it was wrong)
+
+Before the Spark was measured, the reasoning below predicted RTF 1.3-1.8 on
+GB10 by scaling the 5080 result down by core count and bandwidth. The real
+answer came out **three to four times better** than that scaling suggested,
+which is the case for measuring rather than extrapolating -- in both
+directions.
 
 The 5080 got the *architecture and toolchain* right (sm_120, torch 2.8+cu128,
 the package pins below), which is what makes the packaging finding
@@ -51,8 +103,7 @@ trustworthy. It is NOT a speed proxy for GB10:
 
 Roughly half the compute and a third of the bandwidth, so a
 compute-proportional scaling would put GB10 near **RTF 1.3–1.8 — back above
-1.0**. Do not plan the stage around "streaming is safe on the target" until
-it is measured there.
+1.0**. Measured: 0.44. The scaling argument was simply wrong.
 
 What is known: decode ran at ~30 tokens/s reading ~1 GB of weights per token,
 i.e. ~30 GB/s effective — **3 % of the 5080's bandwidth**, so this workload is
@@ -61,8 +112,8 @@ that, GB10 has fewer SMs at lower clocks, and the decode loop is a Python
 loop with a GPU sync per token, which Grace's weaker single-thread
 performance will punish harder than an x86 host does.
 
-Settle it with `./training/run.sh tts-bench` (see below) — one command, on
-the Spark, the day it lands.
+Settled on 2026-08-21 with `./training/run.sh tts-bench` on a rented GB10 —
+see the target section above.
 
 **A Spark does not have to be owned to be measured.** GB10 boxes rent by the
 hour with full root SSH (~$0.60–0.80/hr as of 2026-08: Enverge Spark private
@@ -207,20 +258,23 @@ win on another, which is the lesson of this whole file.
 
 ### Open, in priority order
 
-- [ ] **Verify RTF on the actual target (GB10).** Everything below assumes a
-  number we have not measured on the Spark. `./training/run.sh tts-bench`.
-  Interim: a clock/power sweep plus an RTX 5070 data point would give an
-  extrapolation with error bars for ~$0.10.
+- [x] **Verify RTF on the actual target (GB10)** — Result: **0.44**, first
+  piece 0.62–1.39 s, measured on a rented Spark for $0.04. Streaming is
+  comfortable; nothing below is needed to make the voice viable.
 - [ ] **L12 · brisker reference clip.** Cheapest untried lever: 19 characters
   produced **4.32 s of audio**, cost tracks generated duration, and
   Chatterbox copies the reference's pace. Needs one (ideally two) reference
   wavs — they are the user's private assets, so this is blocked on a file.
 - [ ] **Live read→heard on Blackwell**, server + client end to end with the
   cache warm, rather than model-only timings. Expect ~1.9–3.0 s first piece.
-- [ ] **L2 · fewer flow-matching steps** — the one remaining cheap knob, and
-  it targets the 20 % stage.
-- [ ] **L3 · FP8 on T3** — Blackwell has native FP8; the lever most likely to
-  still have headroom, and the one that matters most if GB10 lands above 1.0.
+- [ ] **Check a vendor-built torch on the Spark.** PyPI cu130 ships no sm_121
+  cubins and a plain fp16 matmul hit only **7.9 TFLOPS**, far under GB10's
+  rating. If NVIDIA's own build is materially faster, every compute-bound
+  part of the stack benefits — and TTS might drop below 0.3 for free.
+- [ ] **L2 · fewer flow-matching steps** — cheap, but no longer needed for
+  viability; only if we want headroom.
+- [ ] **L3 · FP8 on T3** — Blackwell has native FP8. Demoted: at RTF 0.44 the
+  voice is no longer the constraint.
 - [ ] **L1 with a patched decode** — halving the duplicated CFG batch is the
   only structural change still worth the risk. Changes the voice; A/B it.
 - [ ] **S4 · TensorRT-LLM** — only if this becomes a permanent product path.

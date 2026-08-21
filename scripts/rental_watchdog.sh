@@ -129,7 +129,10 @@ PLIST_EOF
   launchctl load "$PLIST"
   printf 'armed "%s" for %02d:%02d\n' "$NAME" "$((10#$hh))" "$((10#$mm))"
   if [[ -n "$KILL_CMD" ]]; then
-    echo "  will run: $KILL_CMD"
+    # Redact anything that looks like a key before echoing: kill commands get
+    # pasted into terminals, transcripts and screen shares, and a 32+ char
+    # hex blob in one is a leaked credential (learned the hard way).
+    echo "  will run: $(printf '%s' "$KILL_CMD" | sed -E 's/[0-9a-fA-F]{32,}/<redacted>/g')"
   else
     echo "  NO kill command: it will only shout at you. Provider portals that"
     echo "  bill until delete need a real command here."

@@ -12,9 +12,11 @@ mkdir -p wavs
 while IFS=$'\t' read -r id text; do
   [[ -z "$id" || "$id" == \#* ]] && continue
   if [[ ! -f "wavs/$id.wav" ]]; then
-    say -v "$VOICE" -o "wavs/$id.aiff" "$text"
+    # </dev/null: ffmpeg reads stdin and would otherwise swallow the rest
+    # of the manifest this loop is reading (cost the first batch of wavs).
+    say -v "$VOICE" -o "wavs/$id.aiff" "$text" < /dev/null
     ffmpeg -y -loglevel error -i "wavs/$id.aiff" -ac 1 -ar 24000 \
-      -sample_fmt s16 "wavs/$id.wav"
+      -sample_fmt s16 "wavs/$id.wav" < /dev/null
     rm -f "wavs/$id.aiff"
     echo "made wavs/$id.wav  ($text)"
   fi

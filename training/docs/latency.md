@@ -109,11 +109,11 @@ The option space for making the cloned voice fast enough — safe levers,
 lossy levers, and what to try first — is in
 [tts-optimization.md](tts-optimization.md).
 
-So, for a stage voice, in order:
+So, for a stage voice, in order — **as revised by the GB10 measurement**:
 
-1. **Pick an engine with RTF < 1** for anything spoken live; keep the
-   expensive cloned voice for pre-rendered lines. Piper is 10× faster here
-   and sounds like a different (uncloned) dog — that is the trade.
+1. **Run the show on the Spark.** At RTF 0.44 the cloned voice is fast enough
+   live, and the engine-swap trade (a generic voice for speed) is off the
+   table. On Ada-class hardware it would still be on.
 2. **The line cache** (`tts_server`, 64 entries, `x-cache` header) makes a
    repeated fixed line free the second time: acknowledgements, "Już się
    zatrzymuję!", the found-object phrase. Pre-warm it by POSTing the stage

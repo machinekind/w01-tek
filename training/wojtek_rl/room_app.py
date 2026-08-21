@@ -27,6 +27,14 @@ import os
 import sys
 
 os.environ.setdefault("MUJOCO_GL", "egl" if sys.platform == "linux" else "cgl")
+# On glvnd systems with both mesa and NVIDIA ICDs installed, EGL device
+# initialisation dies inside mesa's dri2 path before the NVIDIA driver is
+# ever tried (measured on a DGX Spark GB10, 2026-08-21: pinning the vendor
+# library is the difference between EGLError and 0.4 ms/frame). Pin the
+# NVIDIA ICD when it exists and nobody chose otherwise.
+_NVIDIA_ICD = "/usr/share/glvnd/egl_vendor.d/10_nvidia.json"
+if sys.platform == "linux" and os.path.exists(_NVIDIA_ICD):
+    os.environ.setdefault("__EGL_VENDOR_LIBRARY_FILENAMES", _NVIDIA_ICD)
 
 import argparse
 import asyncio

@@ -37,11 +37,19 @@ cheapest first:
 Option 1 is the recommendation: one engine class behind the existing
 protocol, and the number says it costs nothing in speed.
 
-**MuJoCo cannot render headless there (yet).** EGL initialisation fails even
-with the NVIDIA vendor library present. This blocks running the *room demo*
-on the Spark, not the robot: deployment uses ROS with a real camera, and the
-sim is a laptop/GPU-box tool. Worth one more attempt with an NGC container
-(vendor GL stack) before treating it as a real limitation.
+**MuJoCo renders on the Spark — 0.4 ms/frame — once EGL is pointed at the
+right driver.** (Updated 2026-08-21, second session.) Two layers had to
+align: the container must carry the NVIDIA EGL libraries
+(`libEGL_nvidia.so`, present on hosts exposing graphics capability), and
+glvnd must be pinned to the NVIDIA ICD —
+`__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json`
+— because with mesa's ICD also installed, initialisation dies inside mesa's
+dri2 path before the NVIDIA driver is tried, and mujoco surfaces that as an
+opaque `EGLError`. room_app now sets the pin automatically when the NVIDIA
+json exists. A leftover `EGLError` **at interpreter exit** is destructor
+noise, not a render failure — check for frames, not for a clean shutdown.
+This unblocks recording the demo takes on GB10, i.e. on the same hardware
+the robot will carry.
 
 ## Operational notes
 

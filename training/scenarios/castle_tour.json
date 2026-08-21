@@ -1,0 +1,5 @@
+[{"cmd": "turn_left 180", "wait": 8},
+ {"wav": "scenarios/wavs/q_trasa.wav", "wait": 40},
+ {"wav": "scenarios/wavs/q_gdzie.wav", "wait": 14},
+ {"wav": "scenarios/wavs/q_drzwi.wav", "wait": 140},
+ {"wav": "scenarios/wavs/q_stop.wav", "wait": 8}]

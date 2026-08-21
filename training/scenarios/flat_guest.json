@@ -1,0 +1,5 @@
+[{"wav": "scenarios/wavs/q_widzisz.wav", "wait": 14},
+ {"wav": "scenarios/wavs/q_lodowka.wav", "wait": 12},
+ {"wav": "scenarios/wavs/q_gdzie.wav", "wait": 14},
+ {"wav": "scenarios/wavs/q_kanapa.wav", "wait": 90},
+ {"wav": "scenarios/wavs/q_stop.wav", "wait": 8}]

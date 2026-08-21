@@ -22,6 +22,8 @@ ARGS = [
     ("ws_port", "8765", "audio bridge websocket port"),
     ("vad_backend", "silero", "energy | silero | pyannote"),
     ("asr_model", "large-v3", "faster-whisper checkpoint (benchmark v2 vs v3)"),
+    ("asr_backend", "auto", "auto | faster-whisper | transformers (auto picks "
+     "transformers on aarch64, where ctranslate2 has no CUDA)"),
     ("asr_language", "pl", "ASR language"),
     ("router_model_path", "", "fine-tuned encoder dir; empty = rule router"),
     ("bielik_url", "http://127.0.0.1:8091", "OpenAI-compatible Bielik server"),
@@ -54,6 +56,7 @@ def generate_launch_description():
                  "model": cfg["asr_model"],
                  "language": cfg["asr_language"],
                  "device": cfg["device"],
+                 "backend": cfg["asr_backend"],
              }]),
         Node(package="wojtek_brain", executable="router",
              parameters=[{"model_path": cfg["router_model_path"]}]),

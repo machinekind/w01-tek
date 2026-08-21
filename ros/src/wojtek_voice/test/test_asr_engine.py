@@ -66,3 +66,68 @@ class TestPcmToWhisperInput:
     def test_16k_passthrough_length(self):
         pcm = np.zeros(16000, np.int16)
         assert len(pcm_to_whisper_input(pcm, 16000)) == 16000
+
+
+# ---- backend selection + the transformers adapter ---------------------------
+
+
+def test_backend_auto_picks_transformers_on_aarch64():
+    """ctranslate2's aarch64 wheel is CPU-only (measured on a DGX Spark
+    2026-08-21), so auto must route ARM boxes to the transformers engine."""
+    from wojtek_voice.asr_engine import pick_backend
+
+    assert pick_backend("auto", machine="aarch64") == "transformers"
+    assert pick_backend("auto", machine="x86_64") == "faster-whisper"
+    # An explicit request always wins over the platform rule.
+    assert pick_backend("faster-whisper", machine="aarch64") == "faster-whisper"
+    assert pick_backend("transformers", machine="x86_64") == "transformers"
+
+
+def test_build_asr_engine_honours_the_backend():
+    from wojtek_voice.asr_engine import (
+        TransformersWhisperEngine,
+        WhisperEngine,
+        build_asr_engine,
+    )
+
+    eng = build_asr_engine("transformers", model_size="tiny", language="pl")
+    assert isinstance(eng, TransformersWhisperEngine)
+    assert eng.language == "pl"
+    assert isinstance(build_asr_engine("faster-whisper"), WhisperEngine)
+
+
+def test_transformers_segments_pass_the_same_guards():
+    """Both backends must flow through filter_segments, so the phantom-'6V'
+    incident stays fixed regardless of which engine decoded."""
+    from wojtek_voice.asr_engine import _Segment, filter_segments
+
+    rec = filter_segments([
+        _Segment(text="idź do kuchni", no_speech_prob=0.1, avg_logprob=-0.3),
+        _Segment(text="6V", no_speech_prob=0.9, avg_logprob=-0.2),      # silence
+        _Segment(text="szszsz", no_speech_prob=0.2, avg_logprob=-1.7),  # guessing
+    ])
+    assert rec.text == "idź do kuchni"
+    assert len(rec.dropped) == 2
+
+
+def test_transformers_repo_resolution():
+    from wojtek_voice.asr_engine import TransformersWhisperEngine
+
+    assert TransformersWhisperEngine("large-v3")._repo() == "openai/whisper-large-v3"
+    assert TransformersWhisperEngine("org/custom")._repo() == "org/custom"
+
+
+def test_confident_repetition_loops_are_dropped():
+    """A silence hallucination LOOPS confidently: measured 2026-08-21, the
+    'że to jest w tym,' loop scored avg_logprob -0.25 -- better than real
+    speech at -0.42 -- so only its redundancy gives it away. Whisper's own
+    compression-ratio guard is the third gate."""
+    from wojtek_voice.asr_engine import _Segment, compression_ratio, filter_segments
+
+    loop = "że to jest w tym, " * 40
+    assert compression_ratio(loop) > 2.4
+    rec = filter_segments([_Segment(text=loop, no_speech_prob=0.1, avg_logprob=-0.25)])
+    assert rec.text == "" and len(rec.dropped) == 1
+    # Normal sentences compress poorly and must never trip it.
+    ok = "Idę do lodówki po wodę dla ciebie."
+    assert compression_ratio(ok) < 2.4

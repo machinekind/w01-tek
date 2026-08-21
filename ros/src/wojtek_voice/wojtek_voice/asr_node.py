@@ -21,7 +21,7 @@ from rclpy.node import Node
 
 from wojtek_agent_msgs.msg import AudioChunk, Transcript
 
-from .asr_engine import WhisperEngine
+from .asr_engine import build_asr_engine
 
 
 class AsrNode(Node):
@@ -31,13 +31,18 @@ class AsrNode(Node):
         self.declare_parameter("device", "auto")
         self.declare_parameter("compute", "default")
         self.declare_parameter("language", "pl")
+        # auto = faster-whisper on x86, transformers on aarch64 (the DGX
+        # Spark), where ctranslate2's wheel cannot use the GPU.
+        self.declare_parameter("backend", "auto")
 
-        self.engine = WhisperEngine(
+        self.engine = build_asr_engine(
+            backend=self.get_parameter("backend").value,
             model_size=self.get_parameter("model").value,
             device=self.get_parameter("device").value,
             compute_type=self.get_parameter("compute").value,
             language=self.get_parameter("language").value,
         )
+        self.get_logger().info(f"ASR engine: {type(self.engine).__name__}")
         self.pub_final = self.create_publisher(Transcript, "/wojtek/asr/final", 10)
         self.create_subscription(AudioChunk, "/wojtek/audio/speech", self.on_chunk, 10)
 

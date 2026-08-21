@@ -68,10 +68,11 @@ and it is 0.44.
 - **Compute capability 12.1 (sm_121)** -- NOT sm_120 like consumer Blackwell.
 - PyPI `torch==2.13.0+cu130` installs and works, but its `arch_list` is
   `[sm_80, sm_90, sm_100, sm_110, sm_120]` -- **no sm_121 cubins**. Kernels
-  still run (CUDA family compatibility covers sm_120 -> sm_121), but a plain
-  4096^3 fp16 matmul measured only **7.9 TFLOPS**, a few percent of what GB10
-  is rated for. A vendor-built torch may be much faster; worth checking
-  before concluding anything about compute-bound workloads on this box.
+  still run (CUDA family compatibility covers sm_120 -> sm_121) and they are
+  fast: **84.1 TFLOPS fp16 / 82.3 bf16** on a 4096^3 matmul. (An earlier run
+  reported 7.9 TFLOPS and sent us looking for a vendor torch build; that was
+  a no-warm-up artifact -- time kernels after warming them, or you measure
+  compilation.)
 - Every dependency has an aarch64 wheel: librosa/llvmlite, s3tokenizer,
   conformer, transformers, diffusers. Nothing compiled from source.
 - Install recipe that works: `pip install torch --index-url
@@ -267,10 +268,9 @@ win on another, which is the lesson of this whole file.
   wavs — they are the user's private assets, so this is blocked on a file.
 - [ ] **Live read→heard on Blackwell**, server + client end to end with the
   cache warm, rather than model-only timings. Expect ~1.9–3.0 s first piece.
-- [ ] **Check a vendor-built torch on the Spark.** PyPI cu130 ships no sm_121
-  cubins and a plain fp16 matmul hit only **7.9 TFLOPS**, far under GB10's
-  rating. If NVIDIA's own build is materially faster, every compute-bound
-  part of the stack benefits — and TTS might drop below 0.3 for free.
+- [x] **Check whether torch is leaving performance on the table** — Result:
+  no. 84.1 TFLOPS fp16 with warm-up; the 7.9 figure was a measurement
+  artifact. PyPI cu130 is fine, no vendor build needed.
 - [ ] **L2 · fewer flow-matching steps** — cheap, but no longer needed for
   viability; only if we want headroom.
 - [ ] **L3 · FP8 on T3** — Blackwell has native FP8. Demoted: at RTF 0.44 the

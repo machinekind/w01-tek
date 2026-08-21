@@ -14,6 +14,7 @@ Blackwell. Reproduce any of this with `scripts/spark_stack_probe.sh`.
 | **torch** (PyPI `2.13.0+cu130`) | ✅ works | 84.1 TFLOPS fp16 / 82.3 bf16 (4096³ matmul) |
 | **Chatterbox TTS** | ✅ works | **RTF 0.44**, first piece 0.62–1.39 s |
 | **vLLM** 0.27.1 | ✅ works | 0.5B model: load 242 s, **95.7 tok/s**, coherent Polish |
+| **Qwen3-VL-4B-Instruct-FP8** (the demo brain) | ✅ with two flags | load 303 s; text turn **34.2 tok/s** (64 tok ≈ 1.9 s); vision turn **1.0 s warm** — but **82 s cold** |
 | **whisper via transformers+CUDA** | ✅ works | large-v3: **RTF 0.084** (5 s audio in 0.42 s) |
 | **faster-whisper / ctranslate2** | ❌ **CPU only** | wheel "not compiled with CUDA support"; tiny on CPU ≈ RTF 0.53 |
 | **MuJoCo EGL rendering** | ❌ fails | `EGLError` even with `libegl1`+NVIDIA vendor json; osmesa also broken |
@@ -50,6 +51,26 @@ json exists. A leftover `EGLError` **at interpreter exit** is destructor
 noise, not a render failure — check for frames, not for a clean shutdown.
 This unblocks recording the demo takes on GB10, i.e. on the same hardware
 the robot will carry.
+
+## GB10 quirks that cost a session each (second visit, 2026-08-21)
+
+- **Unified memory: the page cache eats "GPU" memory.** After the 8 GB model
+  download, vLLM saw 35 GiB free of 121 and refused a 0.45 utilization ask.
+  On GB10 size vLLM by *absolute* need, not fraction (0.22 fits the 4B with
+  8k ctx comfortably), and `sync; echo 3 > /proc/sys/vm/drop_caches` before
+  launch when the host allows it.
+- **FP8 needs `VLLM_USE_DEEP_GEMM=0`.** DeepGEMM asserts "Unknown SF
+  transformation" on sm_121; with it disabled the FP8 checkpoint loads and
+  runs. Re-test on vLLM upgrades — this is a backend maturity gap, not a
+  hardware one.
+- **The FIRST vision turn costs 82 s** (vision tower warm-up/autotune); warm
+  turns are ~1 s. Warmup must therefore include one image request, not just
+  text — same policy as tts_server's spoken warmup, extended to the eyes.
+
+Projected spoken turn on GB10, all measured parts: endpoint 0.7 s + ASR
+~0.3 s + one warm vision turn ~1–2 s (+1 s per extra tool round trip) + TTS
+first piece 0.6–1.4 s → **~3–4.5 s mic-to-voice** for a tool-using turn,
+~2.5 s for chat-only, against ~6+ s on the August A6000 stack.
 
 ## Operational notes
 

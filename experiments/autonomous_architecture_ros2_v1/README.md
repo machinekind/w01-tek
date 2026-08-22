@@ -26,6 +26,8 @@ ros/src/wojtek_agent_msgs/     AudioChunk, Transcript, RoutedIntent, Sentence
 ros/src/wojtek_voice/          audio_bridge, VAD, ASR, TTS nodes + web/mic.html
 ros/src/wojtek_brain/          router, Bielik node, router training tools
 ros/src/wojtek_agent_bringup/  voice_stack.launch.py
+ros/src/wojtek_futurenav_bridge/  FutureNav -> /cmd_vel bridge for the ROS sim
+                               (issue #13; see its README for the run sequence)
 wojtek_agent/                  chat, tools, goal FSM, search, spatial map, trace,
                                TTS/ASR services, scenario driver.  Two modules are
                                shared with the ROS nodes on purpose:

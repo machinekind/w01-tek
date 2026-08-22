@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>wojtek_futurenav_bridge</name>
+  <version>0.1.0</version>
+  <description>
+    Bridge between the FutureNav action server and the deployment ROS graph:
+    subscribes the simulated D435 color feed and ground-truth TF, streams
+    frames to POST /act, and executes the discrete VLN actions as /cmd_vel
+    through the mid-level executor.  Sim E2E testing only (issue #13); this
+    package lives outside ros/src so ros/deploy.sh can never ship it.
+  </description>
+  <maintainer email="piotrowskigrzegorz2000@gmail.com">Greg</maintainer>
+  <license>Apache License 2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>tf2_ros_py</depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

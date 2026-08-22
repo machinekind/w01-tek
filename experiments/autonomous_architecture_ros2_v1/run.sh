@@ -23,8 +23,9 @@ case "${1:-}" in
     echo ">> wojtek_agent (python layer)"
     "$PY" -m pytest tests -q "$@"
     echo ">> ROS node logic (rclpy-free modules)"
-    PYTHONPATH="$HERE/ros/src/wojtek_brain:$HERE/ros/src/wojtek_voice:$PYTHONPATH" \
-      "$PY" -m pytest ros/src/wojtek_brain/test ros/src/wojtek_voice/test -q "$@"
+    PYTHONPATH="$HERE/ros/src/wojtek_brain:$HERE/ros/src/wojtek_voice:$HERE/ros/src/wojtek_futurenav_bridge:$PYTHONPATH" \
+      "$PY" -m pytest ros/src/wojtek_brain/test ros/src/wojtek_voice/test \
+        ros/src/wojtek_futurenav_bridge/test -q "$@"
     ;;
   room)
     # The agent demo: MuJoCo room sim + walking policy + chat agent + voice.

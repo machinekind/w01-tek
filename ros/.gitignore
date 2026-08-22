@@ -21,6 +21,9 @@ deploy/rpi/cache/
 # Generated room scene (training: ./run.sh build-room)
 /src/wojtek_description/mujoco/scene_room.xml
 /src/wojtek_description/mujoco/scene_apartment.xml
+# Container-path variants of the generated scenes (sed-derived, see the sim
+# session notes; regenerate with the same one-liner)
+/src/wojtek_description/mujoco/scene_*_abs.xml
 
 # Generated terrain arenas (training: ./run.sh build-terrain [--arena KIND]).
 # One file set per kind: train (unsuffixed), eval, test -- see paths.py.

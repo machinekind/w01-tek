@@ -48,6 +48,19 @@ Visualization Manager:
       Line Style: Billboards
       Line Width: 0.015
       Color: 235; 70; 70
+    - Class: rviz_default_plugins/PointCloud2
+      Name: CloudMap
+      Enabled: true
+      Topic:
+        Value: /cloud_map/points
+        Depth: 1
+      Style: Points
+      Size (Pixels): 3
+      Color Transformer: AxisColor
+      Axis: Z
+      Autocompute Intensity Bounds: false
+      Min Intensity: -0.1
+      Max Intensity: 0.6
   Global Options:
     Fixed Frame: odom
     Frame Rate: 30

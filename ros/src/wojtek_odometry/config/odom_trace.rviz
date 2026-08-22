@@ -1,0 +1,71 @@
+# Odometry-testing view: sim.rviz minus the camera panels, plus the two
+# odom_trace trails -- ground truth in green, the leg-odometry estimate in
+# red. The gap between the lines is the accumulated drift; both start at
+# the same point because odom_trace re-anchors the estimate at startup.
+# Camera follows base_link, so drive from the web console and watch the
+# trails grow behind the robot.
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Tree Height: 400
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Plane Cell Count: 40
+      Cell Size: 0.25
+    - Class: rviz_default_plugins/RobotModel
+      Name: RobotModel
+      Enabled: true
+      Description Source: Topic
+      Description Topic:
+        Value: /robot_description
+        Durability Policy: Transient Local
+      TF Prefix: ""
+      Visual Enabled: true
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: false
+    - Class: rviz_default_plugins/Path
+      Name: GroundTruth
+      Enabled: true
+      Topic:
+        Value: /wojtek/odom_trace/ground_truth
+        Depth: 1
+      Line Style: Billboards
+      Line Width: 0.015
+      Color: 60; 220; 60
+    - Class: rviz_default_plugins/Path
+      Name: LegOdometry
+      Enabled: true
+      Topic:
+        Value: /wojtek/odom_trace/estimate
+        Depth: 1
+      Line Style: Billboards
+      Line Width: 0.015
+      Color: 235; 70; 70
+  Global Options:
+    Fixed Frame: odom
+    Frame Rate: 30
+    Background Color: 35; 38; 41
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Name: Current View
+      Distance: 3.0
+      Pitch: 0.6
+      Yaw: 0.8
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0.1
+      Target Frame: base_link
+Window Geometry:
+  Height: 900
+  Width: 1400

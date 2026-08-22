@@ -222,9 +222,10 @@ def test_cancel_mid_search():
         ctrl = make_controller(sim, score_view)
         ctrl.start("ball")
         await started.wait()
+        task = ctrl._task
         ctrl.cancel("test")
         try:
-            await ctrl._task
+            await task
         except asyncio.CancelledError:
             pass
         return ctrl
@@ -319,11 +320,43 @@ def test_start_rejects_while_running():
         assert ctrl.start("ball")["ok"]
         await asyncio.sleep(0.01)
         second = ctrl.start("mug")
+        task = ctrl._task
         ctrl.cancel("test")
         try:
-            await ctrl._task
+            await task
         except asyncio.CancelledError:
             pass
         return second
 
     assert asyncio.run(scenario())["ok"] is False
+
+
+def test_cancel_then_start_in_the_same_block():
+    """The goal-switch race from the 2026-08-22 take: GoalManager.set_goal
+    cancels the old goal and starts the replacement in ONE synchronous block,
+    before the event loop can process the cancellation. start() must accept
+    immediately -- 'already searching for lodówka' dropped a spoken command
+    on camera."""
+    sim = FakeSim(open_map())
+
+    async def score_view(target, frame):
+        await asyncio.sleep(10)
+        return ViewScore("", False, 0.0)
+
+    async def scenario():
+        ctrl = make_controller(sim, score_view)
+        assert ctrl.start("lodówka")["ok"]
+        await asyncio.sleep(0.01)
+        old = ctrl._task
+        ctrl.cancel("new goal")
+        second = ctrl.start("kanapa")     # same tick, no loop iteration between
+        new = ctrl._task
+        ctrl.cancel("cleanup")
+        for t in (old, new):
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+        return second
+
+    assert asyncio.run(scenario())["ok"] is True

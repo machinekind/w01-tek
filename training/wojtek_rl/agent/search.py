@@ -264,6 +264,12 @@ class SearchController:
             self._task.cancel()
             self.sim.submit_command("stop")
             logger.info(f"search cancelled ({reason})")
+        # Forget the task NOW rather than when the loop processes the
+        # cancellation: set_goal cancels and starts the replacement in the
+        # same synchronous block, and a still-"running" cancelled task made
+        # start() refuse the new goal ("already searching for 'lodówka'" --
+        # live take, 2026-08-22).
+        self._task = None
         if self._state not in ("found", "not_found", "error", "idle"):
             self._set_state("idle", note=f"cancelled ({reason})")
 

@@ -154,7 +154,7 @@ pkill -f 'wojtek_rl.room_app' 2>/dev/null || true
 sleep 2
 [ -f ~/.hf_token ] && export HF_TOKEN="\$(cat ~/.hf_token)"
 setsid nohup env SCENE=${scene} ${spawn} MUJOCO_GL=egl \
-  HF_TOKEN="\${HF_TOKEN:-}" TQDM_DISABLE=1 \
+  HF_TOKEN="\${HF_TOKEN:-}" HF_ORGANIZATION=hvsr-robotics TQDM_DISABLE=1 \
   VLM_BACKEND=openai AGENT_URL=http://127.0.0.1:8090 \
   ASR_URL=http://127.0.0.1:8110 TTS_ENGINE=remote TTS_URL=http://127.0.0.1:8120 \
   AGENT_TRACE=/root/takes/${scene}_trace.jsonl \

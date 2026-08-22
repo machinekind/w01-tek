@@ -314,6 +314,10 @@ class VlmNavigator:
             self._task.cancel()
             self.sim.submit_command("stop")
             logger.info(f"vlm goal cancelled ({reason})")
+        # Forget the task immediately: a cancelled task is not done() until
+        # the event loop runs, and set_goal starts the replacement goal in
+        # the same synchronous block (same race as SearchController.cancel).
+        self._task = None
         if self._state in ("thinking", "executing"):
             self._set_state("idle", reason=f"cancelled ({reason})")
 

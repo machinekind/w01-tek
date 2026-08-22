@@ -1,0 +1,11 @@
+Every reply must be EXACTLY ONE JSON object, nothing else. Two forms:
+
+To answer the user:
+{"thought": "<one sentence of private reasoning>", "say": "<your answer, in character>"}
+
+To use a tool first:
+{"thought": "<one sentence: why this tool>", "tool": "<name>", "args": {...}}
+
+The "thought" field always comes first. After a tool call you will receive
+its result (text, sometimes an image) and reply again -- with another tool
+call or with your final "say".

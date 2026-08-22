@@ -1,0 +1,11 @@
+{
+  "comment": "Hand-annotated from the 0.1-1.6 m mesh-band scatter plus perspective renders. Skokloster castle hall (Habitat test scenes): one 18x21 m baroque room, so radii are generous and names lean on the distinctive furniture.",
+  "objects": [
+    {"name": "table", "aliases": ["wooden table", "big table", "stół", "drewniany stół"], "pos": [0.3, -1.0], "radius": 1.8},
+    {"name": "chair", "aliases": ["chair by the table", "krzesło", "krzesło przy stole"], "pos": [1.0, -0.3], "radius": 1.4},
+    {"name": "fireplace", "aliases": ["hearth", "kominek"], "pos": [7.2, -3.8], "radius": 1.8},
+    {"name": "cabinet", "aliases": ["ornate cabinet", "black cabinet", "gabinet", "szafka", "komoda"], "pos": [0.5, 7.6], "radius": 1.6},
+    {"name": "horse painting", "aliases": ["painting of a horse", "big painting", "obraz konia", "koń na obrazie"], "pos": [4.0, 7.2], "radius": 2.2},
+    {"name": "row of chairs", "aliases": ["chairs by the wall", "rząd krzeseł", "krzesła pod ścianą"], "pos": [-6.3, -2.0], "radius": 2.6}
+  ]
+}

@@ -1,0 +1,171 @@
+<mujoco model="wojtek_flat_scene">
+  <include file="wojtek_mjx.xml"/>
+  <statistic center="0 0 0.15" extent="0.8"/>
+  <visual>
+    <headlight diffuse="0.7 0.7 0.7" ambient="0.45 0.45 0.45" specular="0 0 0"/>
+    <global azimuth="120" elevation="-20"/>
+  </visual>
+  <compiler texturedir="../../../../training/assets/scenes/flat/processed/visual"/>
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.35 0.4 0.5" rgb2="0.1 0.1 0.15" width="512" height="3072"/>
+    <mesh name="flat_0" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_0.obj"/>
+    <texture type="2d" name="flat_0_tex" file="flat_0.png"/>
+    <material name="flat_0_mat" texture="flat_0_tex"/>
+    <mesh name="flat_1" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_1.obj"/>
+    <texture type="2d" name="flat_1_tex" file="flat_1.png"/>
+    <material name="flat_1_mat" texture="flat_1_tex"/>
+    <mesh name="flat_2" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_2.obj"/>
+    <texture type="2d" name="flat_2_tex" file="flat_2.png"/>
+    <material name="flat_2_mat" texture="flat_2_tex"/>
+    <mesh name="flat_3" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_3.obj"/>
+    <texture type="2d" name="flat_3_tex" file="flat_3.png"/>
+    <material name="flat_3_mat" texture="flat_3_tex"/>
+    <mesh name="flat_4" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_4.obj"/>
+    <texture type="2d" name="flat_4_tex" file="flat_4.png"/>
+    <material name="flat_4_mat" texture="flat_4_tex"/>
+    <mesh name="flat_5" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_5.obj"/>
+    <texture type="2d" name="flat_5_tex" file="flat_5.png"/>
+    <material name="flat_5_mat" texture="flat_5_tex"/>
+    <mesh name="flat_6" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_6.obj"/>
+    <texture type="2d" name="flat_6_tex" file="flat_6.png"/>
+    <material name="flat_6_mat" texture="flat_6_tex"/>
+    <mesh name="flat_7" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_7.obj"/>
+    <texture type="2d" name="flat_7_tex" file="flat_7.png"/>
+    <material name="flat_7_mat" texture="flat_7_tex"/>
+    <mesh name="flat_8" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_8.obj"/>
+    <texture type="2d" name="flat_8_tex" file="flat_8.png"/>
+    <material name="flat_8_mat" texture="flat_8_tex"/>
+    <mesh name="flat_9" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_9.obj"/>
+    <texture type="2d" name="flat_9_tex" file="flat_9.png"/>
+    <material name="flat_9_mat" texture="flat_9_tex"/>
+    <mesh name="flat_10" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_10.obj"/>
+    <texture type="2d" name="flat_10_tex" file="flat_10.png"/>
+    <material name="flat_10_mat" texture="flat_10_tex"/>
+    <mesh name="flat_11" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_11.obj"/>
+    <texture type="2d" name="flat_11_tex" file="flat_11.png"/>
+    <material name="flat_11_mat" texture="flat_11_tex"/>
+    <mesh name="flat_12" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_12.obj"/>
+    <texture type="2d" name="flat_12_tex" file="flat_12.png"/>
+    <material name="flat_12_mat" texture="flat_12_tex"/>
+    <mesh name="flat_13" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_13.obj"/>
+    <texture type="2d" name="flat_13_tex" file="flat_13.png"/>
+    <material name="flat_13_mat" texture="flat_13_tex"/>
+    <mesh name="flat_14" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_14.obj"/>
+    <texture type="2d" name="flat_14_tex" file="flat_14.png"/>
+    <material name="flat_14_mat" texture="flat_14_tex"/>
+    <mesh name="flat_15" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_15.obj"/>
+    <texture type="2d" name="flat_15_tex" file="flat_15.png"/>
+    <material name="flat_15_mat" texture="flat_15_tex"/>
+    <mesh name="flat_16" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_16.obj"/>
+    <texture type="2d" name="flat_16_tex" file="flat_16.png"/>
+    <material name="flat_16_mat" texture="flat_16_tex"/>
+    <mesh name="flat_17" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_17.obj"/>
+    <texture type="2d" name="flat_17_tex" file="flat_17.png"/>
+    <material name="flat_17_mat" texture="flat_17_tex"/>
+    <mesh name="flat_18" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_18.obj"/>
+    <texture type="2d" name="flat_18_tex" file="flat_18.png"/>
+    <material name="flat_18_mat" texture="flat_18_tex"/>
+    <mesh name="flat_19" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_19.obj"/>
+    <texture type="2d" name="flat_19_tex" file="flat_19.png"/>
+    <material name="flat_19_mat" texture="flat_19_tex"/>
+    <mesh name="flat_20" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_20.obj"/>
+    <texture type="2d" name="flat_20_tex" file="flat_20.png"/>
+    <material name="flat_20_mat" texture="flat_20_tex"/>
+    <mesh name="flat_21" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_21.obj"/>
+    <texture type="2d" name="flat_21_tex" file="flat_21.png"/>
+    <material name="flat_21_mat" texture="flat_21_tex"/>
+    <mesh name="flat_22" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_22.obj"/>
+    <texture type="2d" name="flat_22_tex" file="flat_22.png"/>
+    <material name="flat_22_mat" texture="flat_22_tex"/>
+    <mesh name="flat_23" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_23.obj"/>
+    <texture type="2d" name="flat_23_tex" file="flat_23.png"/>
+    <material name="flat_23_mat" texture="flat_23_tex"/>
+    <mesh name="flat_24" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_24.obj"/>
+    <texture type="2d" name="flat_24_tex" file="flat_24.png"/>
+    <material name="flat_24_mat" texture="flat_24_tex"/>
+    <mesh name="flat_25" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_25.obj"/>
+    <texture type="2d" name="flat_25_tex" file="flat_25.png"/>
+    <material name="flat_25_mat" texture="flat_25_tex"/>
+    <mesh name="flat_26" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_26.obj"/>
+    <texture type="2d" name="flat_26_tex" file="flat_26.png"/>
+    <material name="flat_26_mat" texture="flat_26_tex"/>
+    <mesh name="flat_27" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_27.obj"/>
+    <texture type="2d" name="flat_27_tex" file="flat_27.png"/>
+    <material name="flat_27_mat" texture="flat_27_tex"/>
+    <mesh name="flat_28" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_28.obj"/>
+    <texture type="2d" name="flat_28_tex" file="flat_28.png"/>
+    <material name="flat_28_mat" texture="flat_28_tex"/>
+    <mesh name="flat_29" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_29.obj"/>
+    <texture type="2d" name="flat_29_tex" file="flat_29.png"/>
+    <material name="flat_29_mat" texture="flat_29_tex"/>
+    <mesh name="flat_30" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_30.obj"/>
+    <texture type="2d" name="flat_30_tex" file="flat_30.png"/>
+    <material name="flat_30_mat" texture="flat_30_tex"/>
+    <mesh name="flat_31" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_31.obj"/>
+    <texture type="2d" name="flat_31_tex" file="flat_31.png"/>
+    <material name="flat_31_mat" texture="flat_31_tex"/>
+    <mesh name="flat_32" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_32.obj"/>
+    <texture type="2d" name="flat_32_tex" file="flat_32.png"/>
+    <material name="flat_32_mat" texture="flat_32_tex"/>
+    <mesh name="flat_33" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_33.obj"/>
+    <texture type="2d" name="flat_33_tex" file="flat_33.png"/>
+    <material name="flat_33_mat" texture="flat_33_tex"/>
+    <mesh name="flat_34" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_34.obj"/>
+    <texture type="2d" name="flat_34_tex" file="flat_34.png"/>
+    <material name="flat_34_mat" texture="flat_34_tex"/>
+    <mesh name="flat_35" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_35.obj"/>
+    <texture type="2d" name="flat_35_tex" file="flat_35.png"/>
+    <material name="flat_35_mat" texture="flat_35_tex"/>
+    <mesh name="flat_36" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_36.obj"/>
+    <texture type="2d" name="flat_36_tex" file="flat_36.png"/>
+    <material name="flat_36_mat" texture="flat_36_tex"/>
+    <mesh name="flat_37" inertia="shell" file="../../../../training/assets/scenes/flat/processed/visual/flat_37.obj"/>
+    <texture type="2d" name="flat_37_tex" file="flat_37.png"/>
+    <material name="flat_37_mat" texture="flat_37_tex"/>
+  </asset>
+  <worldbody>
+    <geom name="floor" type="plane" size="0 0 0.01" condim="3" conaffinity="15" group="3"/>
+    <light directional="true" pos="0 0 3" dir="0 0 -1" diffuse="0.5 0.5 0.5"/>
+    <camera name="track" mode="trackcom" pos="0.9 -1.3 0.5" xyaxes="0.83 0.55 0 -0.15 0.23 0.96"/>
+    <body name="room" pos="0.000 0.000 0" euler="0 0 0.0">
+      <geom name="flat_0_visual" type="mesh" mesh="flat_0" material="flat_0_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_1_visual" type="mesh" mesh="flat_1" material="flat_1_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_2_visual" type="mesh" mesh="flat_2" material="flat_2_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_3_visual" type="mesh" mesh="flat_3" material="flat_3_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_4_visual" type="mesh" mesh="flat_4" material="flat_4_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_5_visual" type="mesh" mesh="flat_5" material="flat_5_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_6_visual" type="mesh" mesh="flat_6" material="flat_6_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_7_visual" type="mesh" mesh="flat_7" material="flat_7_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_8_visual" type="mesh" mesh="flat_8" material="flat_8_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_9_visual" type="mesh" mesh="flat_9" material="flat_9_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_10_visual" type="mesh" mesh="flat_10" material="flat_10_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_11_visual" type="mesh" mesh="flat_11" material="flat_11_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_12_visual" type="mesh" mesh="flat_12" material="flat_12_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_13_visual" type="mesh" mesh="flat_13" material="flat_13_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_14_visual" type="mesh" mesh="flat_14" material="flat_14_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_15_visual" type="mesh" mesh="flat_15" material="flat_15_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_16_visual" type="mesh" mesh="flat_16" material="flat_16_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_17_visual" type="mesh" mesh="flat_17" material="flat_17_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_18_visual" type="mesh" mesh="flat_18" material="flat_18_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_19_visual" type="mesh" mesh="flat_19" material="flat_19_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_20_visual" type="mesh" mesh="flat_20" material="flat_20_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_21_visual" type="mesh" mesh="flat_21" material="flat_21_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_22_visual" type="mesh" mesh="flat_22" material="flat_22_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_23_visual" type="mesh" mesh="flat_23" material="flat_23_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_24_visual" type="mesh" mesh="flat_24" material="flat_24_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_25_visual" type="mesh" mesh="flat_25" material="flat_25_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_26_visual" type="mesh" mesh="flat_26" material="flat_26_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_27_visual" type="mesh" mesh="flat_27" material="flat_27_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_28_visual" type="mesh" mesh="flat_28" material="flat_28_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_29_visual" type="mesh" mesh="flat_29" material="flat_29_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_30_visual" type="mesh" mesh="flat_30" material="flat_30_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_31_visual" type="mesh" mesh="flat_31" material="flat_31_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_32_visual" type="mesh" mesh="flat_32" material="flat_32_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_33_visual" type="mesh" mesh="flat_33" material="flat_33_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_34_visual" type="mesh" mesh="flat_34" material="flat_34_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_35_visual" type="mesh" mesh="flat_35" material="flat_35_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_36_visual" type="mesh" mesh="flat_36" material="flat_36_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_37_visual" type="mesh" mesh="flat_37" material="flat_37_mat" contype="0" conaffinity="0" group="2"/>
+    </body>
+  </worldbody>
+</mujoco>

@@ -206,8 +206,21 @@ def test_transcriber_lazy_loads_and_joins_segments(fake_faster_whisper):
     assert model.compute_type == "int8"
     call = model.transcribe_calls[0]
     assert call["beam_size"] == 2
-    assert call["language"] == "en"
+    assert call["language"] == "en"  # the eval battery's default
     assert call["vad_filter"] is False
+
+
+def test_transcriber_language_is_configurable(fake_faster_whisper):
+    """The live demo speaks Polish; the eval battery stays English."""
+    t = Transcriber(language="pl")
+    t.transcribe(Path("/fake/a.wav"))
+    assert t._model.transcribe_calls[0]["language"] == "pl"
+
+
+def test_transcriber_language_none_autodetects(fake_faster_whisper):
+    t = Transcriber(language=None)
+    t.transcribe(Path("/fake/a.wav"))
+    assert t._model.transcribe_calls[0]["language"] is None
 
 
 def test_transcriber_reuses_loaded_model(fake_faster_whisper):

@@ -79,10 +79,22 @@ class Transcriber:
     without it installed.
     """
 
-    def __init__(self, model_size: str = "small", device: str = "cpu", compute_type: str = "int8"):
+    def __init__(
+        self,
+        model_size: str = "small",
+        device: str = "cpu",
+        compute_type: str = "int8",
+        language: str | None = "en",
+    ):
         self.model_size = model_size
         self.device = device
         self.compute_type = compute_type
+        # Whisper decodes far better when told the language, and the eval
+        # battery is English by construction -- hence the default. Pass "pl"
+        # (or None to auto-detect) for the live demo; "small" int8 on CPU is
+        # noticeably weaker outside English, so a Polish deployment wants
+        # medium/large-v3, ideally on the GPU.
+        self.language = language
         self._lock = threading.Lock()
         self._model = None
 
@@ -101,7 +113,7 @@ class Transcriber:
     def transcribe(self, wav_path: Path) -> str:
         model = self._ensure_loaded()
         segments, _info = model.transcribe(
-            str(wav_path), beam_size=2, language="en", vad_filter=False
+            str(wav_path), beam_size=2, language=self.language, vad_filter=False
         )
         return " ".join(seg.text.strip() for seg in segments).strip()
 

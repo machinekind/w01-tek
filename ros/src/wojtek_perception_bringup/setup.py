@@ -23,6 +23,7 @@ setup(
     entry_points={
         "console_scripts": [
             "cloud_reduce_node = wojtek_perception_bringup.cloud_reduce_node:main",
+            "cloud_accumulate_node = wojtek_perception_bringup.cloud_accumulate_node:main",
         ],
     },
 )

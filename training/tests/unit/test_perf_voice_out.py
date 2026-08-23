@@ -518,3 +518,60 @@ def test_a_broken_compile_still_serves_audio():
     client, model, _ = ref_server(ref="", compile_backbone=True)
     r = client.post("/synthesize", json={"text": "Hau!"})   # stub has no .t3
     assert r.status_code == 200 and len(r.content) > 44
+
+
+# ---- tail-noise trim ---------------------------------------------------------
+
+
+def synth_speech_with_junk_tail(rate=24000):
+    """1 s of loud 'speech', then 0.8 s of quiet junk -- the shape of every
+    reply in the 2026-08-22 takes."""
+    t = np.linspace(0, 1, rate, dtype=np.float32)
+    speech = (np.sin(2 * np.pi * 220 * t) * 12000).astype(np.int16)
+    junk = (np.random.default_rng(0).normal(0, 300, int(rate * 0.8))).astype(np.int16)
+    return np.concatenate([speech, junk])
+
+
+def test_trailing_junk_is_trimmed():
+    from wojtek_rl.agent.tts_server import trim_tail_noise
+
+    rate = 24000
+    pcm = synth_speech_with_junk_tail(rate)
+    out = trim_tail_noise(pcm, rate)
+    # Junk gone (within the kept release window), speech intact.
+    assert rate <= len(out) <= rate + int(rate * 0.2)
+    assert np.array_equal(out[: rate // 2], pcm[: rate // 2])
+    # Fade: the very end is silent, no click.
+    assert abs(int(out[-1])) < 200
+
+
+def test_trim_never_eats_speech_or_short_clips():
+    from wojtek_rl.agent.tts_server import trim_tail_noise
+
+    rate = 24000
+    t = np.linspace(0, 1.5, int(rate * 1.5), dtype=np.float32)
+    all_speech = (np.sin(2 * np.pi * 220 * t) * 12000).astype(np.int16)
+    assert len(trim_tail_noise(all_speech, rate)) >= len(all_speech) - int(rate * 0.05)
+    tiny = all_speech[: rate // 20]                       # 50 ms
+    assert np.array_equal(trim_tail_noise(tiny, rate), tiny)
+    silence = np.zeros(rate, np.int16)                    # nothing to anchor on
+    assert np.array_equal(trim_tail_noise(silence, rate), silence)
+
+
+def test_trim_is_bounded():
+    """Even a mostly-junk clip loses at most TRIM_MAX_S from the end."""
+    from wojtek_rl.agent.tts_server import TRIM_MAX_S, trim_tail_noise
+
+    rate = 24000
+    t = np.linspace(0, 0.3, int(rate * 0.3), dtype=np.float32)
+    speech = (np.sin(2 * np.pi * 220 * t) * 12000).astype(np.int16)
+    junk = (np.random.default_rng(1).normal(0, 250, rate * 3)).astype(np.int16)
+    pcm = np.concatenate([speech, junk])
+    out = trim_tail_noise(pcm, rate)
+    assert len(out) >= len(pcm) - int(rate * TRIM_MAX_S)
+
+
+def test_chunking_toggle_speaks_in_one_piece(bound, monkeypatch):
+    monkeypatch.setenv("WOJTEK_TTS_CHUNKING", "off")
+    speak(TWO_CHUNKS)
+    assert spans(bound, "tts.first_audio")[0]["chunks"] == 1

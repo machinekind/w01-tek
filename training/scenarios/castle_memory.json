@@ -1,4 +1,25 @@
-[{"wav": "scenarios/wavs/q_trasa.wav", "wait": 45},
- {"wav": "scenarios/wavs/q_historia.wav", "wait": 16},
- {"wav": "scenarios/wavs/q_mapa.wav", "wait": 18},
- {"wav": "scenarios/wavs/q_stop.wav", "wait": 8}]
+[
+ {
+  "wav": "scenarios/wavs/q_trasa.wav",
+  "quiet": 2.5,
+  "wait": 60
+ },
+ {
+  "pause": 25
+ },
+ {
+  "wav": "scenarios/wavs/q_historia.wav",
+  "quiet": 2.5,
+  "wait": 45
+ },
+ {
+  "wav": "scenarios/wavs/q_mapa.wav",
+  "quiet": 2.5,
+  "wait": 45
+ },
+ {
+  "wav": "scenarios/wavs/q_stop.wav",
+  "quiet": 2.5,
+  "wait": 30
+ }
+]

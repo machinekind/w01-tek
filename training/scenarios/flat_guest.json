@@ -1,22 +1,33 @@
 [
  {
   "wav": "scenarios/wavs/q_widzisz.wav",
-  "wait": 12
+  "quiet": 2.5,
+  "wait": 45
  },
  {
   "wav": "scenarios/wavs/q_lodowka.wav",
-  "wait": 70
+  "quiet": 2.5,
+  "wait": 45
+ },
+ {
+  "pause": 45
  },
  {
   "wav": "scenarios/wavs/q_gdzie.wav",
-  "wait": 12
+  "quiet": 2.5,
+  "wait": 45
  },
  {
   "wav": "scenarios/wavs/q_kanapa.wav",
-  "wait": 75
+  "quiet": 2.5,
+  "wait": 45
+ },
+ {
+  "pause": 50
  },
  {
   "wav": "scenarios/wavs/q_stop.wav",
-  "wait": 8
+  "quiet": 2.5,
+  "wait": 30
  }
 ]

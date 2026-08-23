@@ -87,6 +87,45 @@ def split_for_stream(text: str, min_chars: int = STREAM_MIN_CHARS,
     return pieces
 
 
+# Tail cleanup. Chatterbox routinely generates junk after the speech ends --
+# breath, clicks, a synthetic smear (the alignment analyzer's "long_tail"
+# warnings are the same phenomenon seen from inside). Every reply in the
+# 2026-08-22 takes ended with audible noise. Trim from the END: find the
+# last 20 ms frame that still looks like speech, keep a short natural
+# release after it, fade out. Conservative on purpose: never cut more than
+# TRIM_MAX_S, never below MIN_KEEP_S, and a quiet-throughout clip is left
+# alone (it is probably all "release").
+TRIM_FRAME_S = 0.02
+TRIM_KEEP_S = 0.15       # natural release kept after the last speech frame
+TRIM_FADE_S = 0.03
+TRIM_MAX_S = 1.5
+MIN_KEEP_S = 0.2
+TRIM_REL_THRESHOLD = 0.05  # frame RMS below this fraction of peak = not speech
+
+
+def trim_tail_noise(pcm: np.ndarray, rate: int = SAMPLE_RATE) -> np.ndarray:
+    n = int(rate * TRIM_FRAME_S)
+    if len(pcm) < 4 * n:
+        return pcm
+    frames = pcm[: len(pcm) - len(pcm) % n].reshape(-1, n).astype(np.float32)
+    rms = np.sqrt((frames**2).mean(axis=1))
+    peak = float(rms.max())
+    if peak < 1.0:
+        return pcm
+    speech = rms >= peak * TRIM_REL_THRESHOLD
+    if not speech.any():
+        return pcm
+    last = int(np.nonzero(speech)[0][-1])
+    end = min(len(pcm), (last + 1) * n + int(rate * TRIM_KEEP_S))
+    end = max(end, int(rate * MIN_KEEP_S), len(pcm) - int(rate * TRIM_MAX_S))
+    out = pcm[:end].copy()
+    fade = min(int(rate * TRIM_FADE_S), len(out))
+    if fade > 1:
+        out[-fade:] = (out[-fade:].astype(np.float32)
+                       * np.linspace(1.0, 0.0, fade)).astype(np.int16)
+    return out
+
+
 def pcm_to_wav_bytes(pcm: np.ndarray, rate: int = SAMPLE_RATE) -> bytes:
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
@@ -252,7 +291,7 @@ def build_app(ref_wav: str, language: str, device: str, cache_size: int = CACHE_
                 gpu_ms = (time.monotonic() - t_gpu) * 1000.0
             queue_ms = (t_gpu - t_in) * 1000.0
             pcm = np.clip(pcm_f * 32767.0, -32768, 32767).astype(np.int16)
-            pcm = resample_linear(pcm, m.sr, SAMPLE_RATE)
+            pcm = trim_tail_noise(resample_linear(pcm, m.sr, SAMPLE_RATE))
             remember(text, pcm)
         headers = {
             "x-synth-ms": f"{gpu_ms:.1f}",
@@ -280,7 +319,14 @@ def build_app(ref_wav: str, language: str, device: str, cache_size: int = CACHE_
 
         payload = await request.json()
         text = (payload.get("text") or "").strip()
-        pieces = split_for_stream(text)
+        # TTS_STREAM_SPLIT=off: one piece per reply. Piece-level streaming
+        # only sounds continuous when piece N+1 is generated before piece N
+        # finishes playing; on a contended GPU it is not, and the seams are
+        # worse than one longer initial wait (user verdict on the takes).
+        if os.environ.get("TTS_STREAM_SPLIT", "on") == "off":
+            pieces = [text] if text else []
+        else:
+            pieces = split_for_stream(text)
 
         def gen():
             for piece in pieces:
@@ -293,7 +339,7 @@ def build_app(ref_wav: str, language: str, device: str, cache_size: int = CACHE_
                     ensure_conditionals()
                     pcm_f = m.generate(piece, **gen_kwargs()).detach().cpu().numpy().squeeze()
                 pcm = np.clip(pcm_f * 32767.0, -32768, 32767).astype(np.int16)
-                pcm = resample_linear(pcm, m.sr, SAMPLE_RATE)
+                pcm = trim_tail_noise(resample_linear(pcm, m.sr, SAMPLE_RATE))
                 remember(piece, pcm)
                 yield pcm.tobytes()
 

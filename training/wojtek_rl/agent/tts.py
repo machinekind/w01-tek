@@ -425,7 +425,13 @@ class Speaker:
         answer starts playing after one sentence has been made, while the
         rest is synthesised behind it.
         """
-        chunks = speech_chunks(text) or [text]
+        # WOJTEK_TTS_CHUNKING=off speaks the reply as ONE synthesis: on a
+        # contended GPU the inter-chunk gaps are worse than a longer single
+        # wait (measured take verdict, 2026-08-22).
+        if os.environ.get("WOJTEK_TTS_CHUNKING", "on") == "off":
+            chunks = [text]
+        else:
+            chunks = speech_chunks(text) or [text]
         # Three clocks, because "why is it slow to speak" has three different
         # answers: `tts.first_audio` is this reply's time-to-sound,
         # `reply.text_to_sound` is the gap a person sees between the answer

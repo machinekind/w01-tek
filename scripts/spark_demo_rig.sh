@@ -86,6 +86,18 @@ serve)
 set -euo pipefail
 cd ${REMOTE_DIR}/training
 sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+# CUDA MPS: without it, kernels from vllm / whisper / chatterbox / the sim
+# renderer TIME-SLICE on the one GPU, and every stage degraded 3-10x in the
+# 2026-08-22 takes (18 s median mic-to-voice vs ~3-4 s from isolated parts).
+# MPS lets the processes' kernels genuinely overlap. Harmless if absent.
+if command -v nvidia-cuda-mps-control >/dev/null 2>&1; then
+  export CUDA_MPS_PIPE_DIRECTORY=/tmp/mps CUDA_MPS_LOG_DIRECTORY=/tmp/mps-log
+  mkdir -p /tmp/mps /tmp/mps-log
+  pgrep -f nvidia-cuda-mps-control >/dev/null || nvidia-cuda-mps-control -d \
+    && echo "MPS control daemon up" || echo "MPS unavailable; running time-sliced"
+else
+  echo "no nvidia-cuda-mps-control on this image; running time-sliced"
+fi
 [ -f ~/.hf_token ] && export HF_TOKEN="\$(cat ~/.hf_token)"
 mkdir -p /root/logs /root/takes
 if ! curl -sf localhost:8090/v1/models >/dev/null 2>&1; then
@@ -105,7 +117,7 @@ if ! curl -sf localhost:8120/health >/dev/null 2>&1; then
   # tts_server runs from ITS OWN venv: chatterbox pins transformers 4.46 /
   # tokenizers 0.20 while vllm needs 5.x / 0.23, and one shared env cannot
   # hold both (cost a serve cycle to learn). deploy builds /root/venv_tts.
-  setsid nohup env TTS_LANGUAGE=pl TQDM_DISABLE=1 \
+  setsid nohup env TTS_LANGUAGE=pl TQDM_DISABLE=1 TTS_STREAM_SPLIT=off \
     /root/venv_tts/bin/python -m wojtek_rl.agent.tts_server --port 8120 \
     > /root/logs/tts.log 2>&1 &
   echo "tts starting (warmup inside)"

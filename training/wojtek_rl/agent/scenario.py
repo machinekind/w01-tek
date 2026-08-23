@@ -78,8 +78,37 @@ def lay_track(events: list[tuple[str, float, np.ndarray]], total_s: float,
     return audio
 
 
+async def _wait_for_reply(events, t0: float, quiet_s: float, cap_s: float) -> None:
+    """Wait until the dog has ANSWERED, not until a stopwatch runs out.
+
+    Fixed waits produced the worst artefacts in the 2026-08-22 takes: on the
+    contended GPU replies arrived late, so the next scripted question landed
+    mid-answer and cancelled it (preemption working exactly as designed, on
+    exactly the wrong input). Done = some reply audio has arrived AND none
+    has arrived for quiet_s; cap_s bounds a turn that produces no audio at
+    all (failed TTS must not hang the take).
+    """
+    asked_at = time.monotonic() - t0
+    deadline = asked_at + cap_s
+    while True:
+        await asyncio.sleep(0.25)
+        now = time.monotonic() - t0
+        if now >= deadline:
+            print(f"[wait] cap {cap_s:g}s reached with no settled reply", flush=True)
+            return
+        heard = [at for kind, at, _ in events if kind == "a" and at > asked_at]
+        if heard and (now - max(heard)) >= quiet_s:
+            return
+
+
 async def _drive(ws, script: list[dict], events, t0: float) -> None:
-    """Send the scripted questions/commands; record question timestamps."""
+    """Send the scripted questions/commands; record question timestamps.
+
+    Step waits: `{"quiet": 2.5, "wait": 60}` waits for the reply to finish
+    (no dog audio for `quiet` seconds, capped by `wait`); a bare `{"wait": N}`
+    is the old fixed sleep -- used deliberately when a step MUST interrupt
+    the previous answer (the barge-in take).
+    """
     await ws.send(json.dumps({"type": "voice", "on": True}))
     await asyncio.sleep(1)
     for step in script:
@@ -100,7 +129,11 @@ async def _drive(ws, script: list[dict], events, t0: float) -> None:
         for _ in range(10):  # trailing silence closes the utterance
             await ws.send(np.zeros(FRAME, np.int16).tobytes())
             await asyncio.sleep(0.1)
-        await asyncio.sleep(step.get("wait", 15))
+        if "quiet" in step:
+            await _wait_for_reply(events, t0, float(step["quiet"]),
+                                  float(step.get("wait", 90)))
+        else:
+            await asyncio.sleep(step.get("wait", 15))
 
 
 async def run_video(url: str, script: list[dict], out: Path,

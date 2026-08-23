@@ -1,5 +1,27 @@
-[{"wav": "scenarios/wavs/q_imie.wav", "wait": 9},
- {"wav": "scenarios/wavs/q_umiesz.wav", "wait": 11},
- {"wav": "scenarios/wavs/q_widzisz.wav", "wait": 12},
- {"wav": "scenarios/wavs/q_kolor.wav", "wait": 10},
- {"wav": "scenarios/wavs/q_dokad.wav", "wait": 12}]
+[
+ {
+  "wav": "scenarios/wavs/q_imie.wav",
+  "quiet": 2.5,
+  "wait": 45
+ },
+ {
+  "wav": "scenarios/wavs/q_umiesz.wav",
+  "quiet": 2.5,
+  "wait": 45
+ },
+ {
+  "wav": "scenarios/wavs/q_widzisz.wav",
+  "quiet": 2.5,
+  "wait": 45
+ },
+ {
+  "wav": "scenarios/wavs/q_kolor.wav",
+  "quiet": 2.5,
+  "wait": 45
+ },
+ {
+  "wav": "scenarios/wavs/q_dokad.wav",
+  "quiet": 2.5,
+  "wait": 45
+ }
+]

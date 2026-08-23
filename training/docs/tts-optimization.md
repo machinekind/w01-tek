@@ -221,6 +221,26 @@ package source was read rather than recalled.
 | L11 | Different engine entirely (Piper, Kokoro, XTTS-v2, F5) | **10× measured** | low | Loses the cloned voice — that is the whole trade. Much less pressing now that Blackwell puts Chatterbox under RTF 1.0. |
 | L12 | **Brisker reference clip** so the model paces speech faster | proportional to audio length | trivial | Untested and the cheapest experiment left: 19 chars generated 4.32 s of audio, and cost tracks generated duration. Chatterbox copies the reference's pace, so a quick-speaking reference should cut GPU time by the same factor. Changes how the dog sounds. |
 
+## Contention: the number that invalidates every isolated benchmark here
+
+2026-08-22, first integrated takes on GB10: median mic-to-first-sound
+**18 s**, against ~3–4.5 s summed from the same components benchmarked
+alone on the same GPU (ASR 0.4→2.8 s, chat ~2→6.8 s, TTS first audio
+~1→9 s). Cause: four CUDA processes (vLLM, whisper, Chatterbox, the sim
+renderer at 25 fps) TIME-SLICE one GPU — no MPS, no MIG on GB10 — while
+sharing 273 GB/s of unified memory with the CPU-side sim, inside one
+CPU+GPU power envelope. Batch-1 latency-bound decode suffers worst.
+
+Consequences already applied:
+- Chunked/streamed speech is OFF by default in the rig
+  (`WOJTEK_TTS_CHUNKING=off`, `TTS_STREAM_SPLIT=off`): streaming pays only
+  at RTF < 1, and the CONTENDED RTF is what counts. The user heard the
+  seams; one longer wait sounds better than three gaps.
+- The rig starts CUDA MPS before the servers when available — the next
+  session's A/B is MPS on/off over the same take.
+- Remaining contention levers, in order: drop RENDER_EVERY/MAP_EVERY while
+  the dog speaks; whisper int8; pause nav-prefetch during TTS.
+
 ## The plan
 
 Status of every lever. Tick a box only when a number backs it; write the

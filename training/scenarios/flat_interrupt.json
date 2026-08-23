@@ -1,4 +1,24 @@
-[{"wav": "scenarios/wavs/q_opowiedz.wav", "wait": 4},
- {"wav": "scenarios/wavs/q_kuchnia.wav", "wait": 30},
- {"wav": "scenarios/wavs/q_gdzie.wav", "wait": 14},
- {"wav": "scenarios/wavs/q_stop.wav", "wait": 8}]
+[
+ {
+  "wav": "scenarios/wavs/q_opowiedz.wav",
+  "wait": 6
+ },
+ {
+  "wav": "scenarios/wavs/q_kuchnia.wav",
+  "quiet": 2.5,
+  "wait": 45
+ },
+ {
+  "pause": 30
+ },
+ {
+  "wav": "scenarios/wavs/q_gdzie.wav",
+  "quiet": 2.5,
+  "wait": 45
+ },
+ {
+  "wav": "scenarios/wavs/q_stop.wav",
+  "quiet": 2.5,
+  "wait": 30
+ }
+]

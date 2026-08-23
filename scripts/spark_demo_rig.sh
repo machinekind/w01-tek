@@ -46,7 +46,8 @@ deploy)
     --exclude 'assets/room' --exclude tests --exclude jobs \
     "$REPO/training" "$(ssh_host):${REMOTE_DIR}/"
   rsync -rlptz -e "ssh -p $(ssh_port)" \
-    "$REPO/ros/src/wojtek_description" "$(ssh_host):${REMOTE_DIR}/ros/src/"
+    "$REPO/ros/src/wojtek_description" "$REPO/ros/src/wojtek_policy" \
+    "$(ssh_host):${REMOTE_DIR}/ros/src/"
   if [[ -n "${HF_TOKEN:-}" ]]; then
     printf '%s' "$HF_TOKEN" | rsh "cat > ~/.hf_token && chmod 600 ~/.hf_token"
     echo ">> HF token shipped (private policy repo)"
@@ -55,7 +56,7 @@ deploy)
 set -euo pipefail
 apt-get update -qq >/dev/null
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-  python3-pip libegl1 libgles2 libglvnd0 ffmpeg >/dev/null
+  python3-pip python3.12-venv libegl1 libgles2 libglvnd0 ffmpeg >/dev/null
 PIP="pip3 install -q --break-system-packages"
 # torch FIRST, from the cu130 index; everything after must not move it.
 $PIP torch --index-url https://download.pytorch.org/whl/cu130
@@ -71,6 +72,7 @@ python3 -m venv /root/venv_tts
 /root/venv_tts/bin/pip install -q 'numpy<2' 'transformers==4.46.3' 'librosa==0.11.0' \
   s3tokenizer 'diffusers==0.29.0' resemble-perth 'conformer==0.3.2' \
   safetensors omegaconf pyloudnorm fastapi uvicorn
+pip3 install -q --break-system-packages -e ~/wojtek/ros/src/wojtek_policy 2>&1 | tail -1
 python3 - <<'PY'
 import torch, platform
 assert "cu13" in torch.__version__, f"pip moved torch to {torch.__version__}!"

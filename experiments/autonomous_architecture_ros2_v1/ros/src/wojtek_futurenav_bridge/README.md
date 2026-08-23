@@ -51,10 +51,19 @@ where `ros/src` may not.
    (The published keeper's `policy_meta.json` carries a wrong `action_scale`
    — use a locally corrected artifact until a fixed keeper lands; see
    `training/docs/scan-planner.md`.)
-4. **Build and start the bridge** in a second container shell (`./ros/dev.sh`):
+4. **Build and start the bridge.** The dev container mounts only `ros/src`
+   (experiment isolation), so start a second shell from the same image with
+   the repo mounted; host networking puts it on the sim's DDS domain:
 
    ```bash
-   cd /ros2_ws/../w01-tek/experiments/autonomous_architecture_ros2_v1
+   cd ros/docker
+   docker compose run --rm --no-deps --name wojtek_exp \
+       -v "$(cd ../.. && pwd)":/repo wojtek_robot bash
+
+   # inside:
+   source /opt/ros/${ROS_DISTRO:-jazzy}/setup.bash
+   pip3 install --break-system-packages pillow   # frames.py; not in the image
+   cd /repo/experiments/autonomous_architecture_ros2_v1
    ./run.sh build            # colcon build of the experiment packages
    source install/setup.bash
    # wojtek_rl must be importable next to the overlay:

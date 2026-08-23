@@ -62,7 +62,7 @@ PIP="pip3 install -q --break-system-packages"
 $PIP torch --index-url https://download.pytorch.org/whl/cu130
 $PIP 'numpy<2' mujoco 'transformers==5.2.0' soundfile accelerate \
   fastapi uvicorn websockets httpx loguru pillow scipy \
-  imageio imageio-ffmpeg huggingface_hub
+  imageio imageio-ffmpeg huggingface_hub wsproto
 $PIP --ignore-installed PyJWT vllm 2>&1 | tail -1
 # Chatterbox lives in its OWN venv: its transformers/tokenizers pins are
 # incompatible with vllm's, and a shared env ends up half-upgraded.
@@ -71,8 +71,9 @@ python3 -m venv /root/venv_tts
 /root/venv_tts/bin/pip install -q --no-deps chatterbox-tts
 /root/venv_tts/bin/pip install -q 'numpy<2' 'transformers==4.46.3' 'librosa==0.11.0' \
   s3tokenizer 'diffusers==0.29.0' resemble-perth 'conformer==0.3.2' \
-  safetensors omegaconf pyloudnorm fastapi uvicorn
-pip3 install -q --break-system-packages -e ~/wojtek/ros/src/wojtek_policy 2>&1 | tail -1
+  safetensors omegaconf pyloudnorm fastapi uvicorn loguru httpx pillow
+# plain install, not -e: the editable build fails on these boxes' setuptools
+pip3 install -q --break-system-packages ~/wojtek/ros/src/wojtek_policy 2>&1 | tail -1
 python3 - <<'PY'
 import torch, platform
 assert "cu13" in torch.__version__, f"pip moved torch to {torch.__version__}!"

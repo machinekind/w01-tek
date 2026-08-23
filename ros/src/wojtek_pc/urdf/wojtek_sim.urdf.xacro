@@ -28,6 +28,12 @@
   <xacro:arg name="kp" default="40.0" />
   <xacro:arg name="kd" default="1.6" />
   <xacro:arg name="max_torque" default="9.0" />
+  <!-- Feed-forward torque channel, wired from the policy contract like the
+       real xacro's tau_ff. max_torque is the DRIVE cap (pd max_torque +
+       tau_ff_scale, see launch_common); the plugin clamps the servo and the
+       head separately, as the training sim does. -->
+  <xacro:arg name="tau_ff" default="false" />
+  <xacro:arg name="tau_ff_scale" default="0.0" />
   <xacro:arg name="hw" default="mock" />
   <!-- Physics scene for hw:=mujoco. The launch resolves this from this
        package's share; the default here is for running the xacro by hand. -->
@@ -54,9 +60,12 @@
        command (impedance target) and position/velocity/effort states. The
        gains travel as params so the mujoco plugin can write them into the
        actuators; the mock ignores them. -->
-  <xacro:macro name="wojtek_sim_joint" params="name kp kd max_torque">
+  <xacro:macro name="wojtek_sim_joint" params="name kp kd max_torque tau_ff:=false tau_ff_scale:=0.0">
     <joint name="${name}">
       <command_interface name="position" />
+      <xacro:if value="${tau_ff}">
+        <command_interface name="effort" />
+      </xacro:if>
       <state_interface name="position">
         <param name="initial_value">0.0</param>
       </state_interface>
@@ -69,6 +78,7 @@
       <param name="ddq_kp">${kp}</param>
       <param name="ddq_kd">${kd}</param>
       <param name="max_torque">${max_torque}</param>
+      <param name="tau_ff_scale">${tau_ff_scale}</param>
     </joint>
   </xacro:macro>
 
@@ -100,21 +110,21 @@
       </xacro:unless>
     </hardware>
 
-    <xacro:wojtek_sim_joint name="front_left_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
-    <xacro:wojtek_sim_joint name="front_left_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
-    <xacro:wojtek_sim_joint name="front_left_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
+    <xacro:wojtek_sim_joint name="front_left_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" tau_ff_scale="$(arg tau_ff_scale)" />
+    <xacro:wojtek_sim_joint name="front_left_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" tau_ff_scale="$(arg tau_ff_scale)" />
+    <xacro:wojtek_sim_joint name="front_left_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" tau_ff_scale="$(arg tau_ff_scale)" />
 
-    <xacro:wojtek_sim_joint name="front_right_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
-    <xacro:wojtek_sim_joint name="front_right_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
-    <xacro:wojtek_sim_joint name="front_right_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
+    <xacro:wojtek_sim_joint name="front_right_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" tau_ff_scale="$(arg tau_ff_scale)" />
+    <xacro:wojtek_sim_joint name="front_right_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" tau_ff_scale="$(arg tau_ff_scale)" />
+    <xacro:wojtek_sim_joint name="front_right_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" tau_ff_scale="$(arg tau_ff_scale)" />
 
-    <xacro:wojtek_sim_joint name="rear_right_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
-    <xacro:wojtek_sim_joint name="rear_right_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
-    <xacro:wojtek_sim_joint name="rear_right_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
+    <xacro:wojtek_sim_joint name="rear_right_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" tau_ff_scale="$(arg tau_ff_scale)" />
+    <xacro:wojtek_sim_joint name="rear_right_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" tau_ff_scale="$(arg tau_ff_scale)" />
+    <xacro:wojtek_sim_joint name="rear_right_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" tau_ff_scale="$(arg tau_ff_scale)" />
 
-    <xacro:wojtek_sim_joint name="rear_left_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
-    <xacro:wojtek_sim_joint name="rear_left_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
-    <xacro:wojtek_sim_joint name="rear_left_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
+    <xacro:wojtek_sim_joint name="rear_left_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" tau_ff_scale="$(arg tau_ff_scale)" />
+    <xacro:wojtek_sim_joint name="rear_left_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" tau_ff_scale="$(arg tau_ff_scale)" />
+    <xacro:wojtek_sim_joint name="rear_left_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" tau_ff_scale="$(arg tau_ff_scale)" />
 
     <!-- One component carries both the joints and the IMU, unlike the real
          robot where they are separate drivers on separate buses: the plugin

@@ -70,6 +70,10 @@ def test_base_box_is_a_chessboard_inside_the_original_footprint():
         assert g.contype == 1 and g.conaffinity == 15
         assert abs(g.pos[0]) + g.size[0] <= hx + 1e-9
         assert abs(g.pos[1]) + g.size[1] <= hy + 1e-9
+        # Bottom face flush with the belly plate (body z=0): centered at the
+        # origin the box used to stick 5 cm below the mesh and a lying robot
+        # hovered on it.
+        assert np.isclose(g.pos[2] - g.size[2], 0.0)
     # Corner cell (row 0, col 0) touches both outer faces up to the shrink.
     corner = m.geom(names[0])
     assert np.isclose(corner.pos[0] - corner.size[0], -hx + shrink)

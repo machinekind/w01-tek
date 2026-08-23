@@ -109,6 +109,11 @@ public:
 
   /// Command in MuJoCo convention, relative to the activation pose.
   void setCommand(int actuator, double q_relative);
+  /// Feed-forward torque on the actuator's joint, on top of the servo --
+  /// the training sim's qfrc_applied channel (tau = kp*e - kd*dq + tau_ff,
+  /// servo and head clamped separately). Frame-free, so no activation
+  /// offset. Persists until rewritten, like MuJoCo's qfrc_applied itself.
+  void setFeedForward(int actuator, double tau);
   /// Bench mode: physics runs, no actuator force is applied.
   void setDryRun(bool dry_run) {dry_run_ = dry_run;}
 

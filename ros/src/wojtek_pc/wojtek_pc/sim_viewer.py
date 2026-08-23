@@ -48,6 +48,12 @@ def main(args=None):
 
     try:
         with mujoco.viewer.launch_passive(model, data) as viewer:
+            # Pin the view to the training-video look instead of trusting the
+            # viewer's defaults: groups 0-2 only (3 holds the collision
+            # primitives -- boxes over the meshes) and no island coloring
+            # (it repaints whole bodies red/yellow by contact island).
+            viewer.opt.geomgroup[:] = [1, 1, 1, 0, 0, 0]
+            viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_ISLAND] = 0
             while viewer.is_running() and rclpy.ok():
                 rclpy.spin_once(node, timeout_sec=0.02)
                 if node.qpos is not None and node.qpos.size == model.nq:

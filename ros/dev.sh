@@ -39,12 +39,25 @@ else
   echo "!! no SSH agent ($SSH_AUTH_SOCK) -- SSH to the RPi will prompt for a password"
 fi
 
+# A running container means someone's session may be inside: attach straight
+# away. `compose up` on a running container is NOT a no-op when the compose
+# stack differs from the one that started it (e.g. GPU overlay here vs a
+# plain start elsewhere) -- it RECREATES the container, killing the session
+# and discarding the build overlay.
+if [ "$(docker inspect -f '{{.State.Running}}' wojtek_robot 2>/dev/null)" = "true" ]; then
+  exec docker exec -it wojtek_robot bash
+fi
+
 # Compose file stack: macOS needs bridge networking + the published Foxglove
 # port (compose.mac.yaml), an NVIDIA runtime gets hardware GL (compose.gpu.yaml).
+# The runtime being registered is not enough -- with the kernel driver not
+# loaded the GPU stack fails at container create ("Driver Not Loaded"), so
+# require a working nvidia-smi too.
 COMPOSE=(docker compose)
 if [ "$(uname -s)" = "Darwin" ]; then
   COMPOSE+=(-f compose.yaml -f compose.mac.yaml)
-elif docker info 2>/dev/null | grep -q 'Runtimes:.*nvidia'; then
+elif docker info 2>/dev/null | grep -q 'Runtimes:.*nvidia' \
+  && nvidia-smi -L >/dev/null 2>&1; then
   COMPOSE+=(-f compose.yaml -f compose.gpu.yaml)
 fi
 

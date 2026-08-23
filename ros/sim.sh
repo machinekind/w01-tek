@@ -111,10 +111,13 @@ fi
 # Compose file stack, same choice ./dev.sh makes: macOS needs bridge
 # networking + published Foxglove/console ports, an NVIDIA runtime gets
 # hardware GL/EGL (RViz + the sim camera) instead of the llvmpipe fallback.
+# A registered runtime with the kernel driver not loaded fails at container
+# create ("Driver Not Loaded"), hence the nvidia-smi check.
 COMPOSE=(docker compose)
 if $MAC; then
   COMPOSE+=(-f compose.yaml -f compose.mac.yaml)
-elif docker info 2>/dev/null | grep -q 'Runtimes:.*nvidia'; then
+elif docker info 2>/dev/null | grep -q 'Runtimes:.*nvidia' \
+  && nvidia-smi -L >/dev/null 2>&1; then
   COMPOSE+=(-f compose.yaml -f compose.gpu.yaml)
 fi
 
@@ -182,7 +185,13 @@ case "$VIZ" in
 esac
 if $PLOTJUGGLER; then CMD+=(--plotjuggler); fi
 
-"${COMPOSE[@]}" up -d --remove-orphans
+# Same guard as dev.sh: a running container is reused as-is. `up` on a
+# compose stack differing from the one that started it would RECREATE the
+# container mid-session, killing whatever runs inside and dropping the
+# build overlay.
+if [ "$(docker inspect -f '{{.State.Running}}' wojtek_robot 2>/dev/null)" != "true" ]; then
+  "${COMPOSE[@]}" up -d --remove-orphans
+fi
 
 # ---- workspace freshness (the "it should just work" pass) -------------------
 # The bind mount brings new source in, nothing rebuilds it: prune installs

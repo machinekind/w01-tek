@@ -138,20 +138,30 @@ hardware_interface::CallbackReturn MujocoHardwareInterface::on_init(
   ground_truth_period_ = gt_hz > 0.0 ? 1.0 / gt_hz : 0.0;
 
   for (const auto & joint : info_.joints) {
-    if (joint.command_interfaces.size() != 1 ||
-      joint.command_interfaces[0].name != hardware_interface::HW_IF_POSITION)
-    {
+    // Same contract as the MD80 driver: [position] is the plain impedance
+    // servo, [position, effort] adds the feed-forward torque channel
+    // (tau_ff policies; wojtek_sim.urdf.xacro tau_ff:=true).
+    const auto & cmd_ifaces = joint.command_interfaces;
+    const bool plain = cmd_ifaces.size() == 1 &&
+      cmd_ifaces[0].name == hardware_interface::HW_IF_POSITION;
+    const bool with_ff = cmd_ifaces.size() == 2 &&
+      cmd_ifaces[0].name == hardware_interface::HW_IF_POSITION &&
+      cmd_ifaces[1].name == hardware_interface::HW_IF_EFFORT;
+    if (!plain && !with_ff) {
       RCLCPP_FATAL(
-        logger_, "joint '%s' needs exactly one position command interface",
+        logger_,
+        "joint '%s' needs [position] or [position, effort] command interfaces",
         joint.name.c_str());
       return hardware_interface::CallbackReturn::ERROR;
     }
     joint_names_.push_back(joint.name);
+    has_tau_ff_.push_back(with_ff);
   }
   position_.assign(joint_names_.size(), 0.0);
   velocity_.assign(joint_names_.size(), 0.0);
   effort_.assign(joint_names_.size(), 0.0);
   command_.assign(joint_names_.size(), 0.0);
+  effort_command_.assign(joint_names_.size(), 0.0);
 
   if (info_.sensors.size() > 1) {
     RCLCPP_FATAL(logger_, "at most one sensor (the IMU) is supported");
@@ -194,6 +204,11 @@ hardware_interface::CallbackReturn MujocoHardwareInterface::on_configure(
 
     // The servo contract travels with the policy (policy_meta.json pd block)
     // and reaches us through the xacro, exactly as it reaches the MD80s.
+    // max_torque arrives as the DRIVE cap (pd max_torque + tau_ff.scale, see
+    // launch_common), while the training sim clamps the PD servo and the
+    // feed-forward head separately -- take the scale back off the servo and
+    // keep it as the head's own hard bound.
+    tau_ff_scale_.assign(joint_names_.size(), 0.0);
     for (std::size_t i = 0; i < joint_names_.size(); ++i) {
       const auto & params = info_.joints[i].parameters;
       const auto kp = params.find("ddq_kp");
@@ -205,9 +220,22 @@ hardware_interface::CallbackReturn MujocoHardwareInterface::on_configure(
           joint_names_[i].c_str());
         return hardware_interface::CallbackReturn::ERROR;
       }
+      double scale = 0.0;
+      if (has_tau_ff_[i]) {
+        const auto it = params.find("tau_ff_scale");
+        if (it == params.end()) {
+          RCLCPP_FATAL(
+            logger_, "joint '%s' has an effort channel but no tau_ff_scale",
+            joint_names_[i].c_str());
+          return hardware_interface::CallbackReturn::ERROR;
+        }
+        scale = std::stod(it->second);
+      }
+      tau_ff_scale_[i] = scale;
       plant_.applyServoSettings(
         joint_names_[i],
-        {std::stod(kp->second), std::stod(kd->second), std::stod(max_torque->second)});
+        {std::stod(kp->second), std::stod(kd->second),
+          std::stod(max_torque->second) - scale});
     }
     plant_.reset(initial_pose_);
   } catch (const std::exception & e) {
@@ -262,6 +290,10 @@ MujocoHardwareInterface::export_command_interfaces()
   for (std::size_t i = 0; i < joint_names_.size(); ++i) {
     interfaces.emplace_back(
       joint_names_[i], hardware_interface::HW_IF_POSITION, &command_[i]);
+    if (has_tau_ff_[i]) {
+      interfaces.emplace_back(
+        joint_names_[i], hardware_interface::HW_IF_EFFORT, &effort_command_[i]);
+    }
   }
   return interfaces;
 }
@@ -277,6 +309,7 @@ hardware_interface::CallbackReturn MujocoHardwareInterface::on_activate(
   std::fill(velocity_.begin(), velocity_.end(), 0.0);
   std::fill(effort_.begin(), effort_.end(), 0.0);
   std::fill(command_.begin(), command_.end(), 0.0);
+  std::fill(effort_command_.begin(), effort_command_.end(), 0.0);
   RCLCPP_INFO(logger_, "activated: current pose is the zero for joint states");
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -332,6 +365,20 @@ hardware_interface::return_type MujocoHardwareInterface::write(
     // back to the model's, where the activation pose is added.
     plant_.setCommand(
       actuator_of_joint_[i], command / joint_map_->sign(joint_names_[i]));
+  }
+  for (std::size_t i = 0; i < joint_names_.size(); ++i) {
+    if (!has_tau_ff_[i]) {
+      continue;
+    }
+    // Feed-forward torque on top of the servo. A non-finite command (a
+    // controller activated before its first message) must never reach the
+    // plant; the clamp is the head's hard authority bound, the same clip
+    // the training env applies before qfrc_applied.
+    double tau = effort_command_[i];
+    tau = std::isfinite(tau) ?
+      std::clamp(tau, -tau_ff_scale_[i], tau_ff_scale_[i]) : 0.0;
+    plant_.setFeedForward(
+      actuator_of_joint_[i], tau / joint_map_->sign(joint_names_[i]));
   }
   return hardware_interface::return_type::OK;
 }

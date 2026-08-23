@@ -95,6 +95,10 @@ def _launch_setup(context, with_rviz, hardware):
         # The plant starts in the pose real_io_node is told the robot is in;
         # anything else and zeroing would start from a lie.
         xacro_args += [
+            # The sim plant clamps the servo and the head separately (as the
+            # training sim does), so it needs the scale next to the summed
+            # drive cap; the real drive takes only the sum.
+            f" tau_ff_scale:={tau_ff_scale if tau_ff_on else 0.0}",
             " hw:=", LaunchConfiguration("hw"),
             " boot_pose:=", LaunchConfiguration("boot_pose"),
             " model_xml:=" + (

@@ -37,6 +37,11 @@ DEFAULT_TOTAL_MASS = 14.0
 FORCERANGE = 9.0
 # Base collision box half-sizes, eyeballed from the mesh footprint.
 BASE_BOX_HALFSIZE = (0.17, 0.08, 0.05)
+# The base mesh's belly plate sits AT the body origin (measured z-range
+# 0..0.12 in the body frame), so the box must sit on top of z=0. Centered
+# at the origin it stuck 5 cm below the belly: lying down, the robot
+# rested on the phantom box and hovered above the floor.
+BASE_BOX_Z_CENTER = BASE_BOX_HALFSIZE[2]
 # The base collides as a chessboard of small boxes over the original box's
 # footprint, not as one box. MJWarp caps a heightfield collision at
 # mjMAXCONPAIR = 50 contacts per geom pair and drops the rest without an
@@ -227,7 +232,7 @@ def build_spec(
             name=name,
             type=mujoco.mjtGeom.mjGEOM_BOX,
             size=list(size),
-            pos=[x, y, 0],
+            pos=[x, y, BASE_BOX_Z_CENTER],
             contype=1,
             conaffinity=15,
             group=3,

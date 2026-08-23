@@ -80,6 +80,12 @@ private:
   /// Actuator index in the model per exported joint.
   std::vector<int> actuator_of_joint_;
   std::vector<double> position_, velocity_, effort_, command_;
+  /// Feed-forward torque channel, per joint (tau_ff policies): whether the
+  /// URDF declared the effort command interface, its buffer, and the head's
+  /// hard bound (the training env's clip).
+  std::vector<bool> has_tau_ff_;
+  std::vector<double> effort_command_;
+  std::vector<double> tau_ff_scale_;
 
   /// IMU states in the driver's layout: magnetometer xyz (0-2), gyro xyz
   /// (3-5), accel xyz (6-8), orientation xyzw (9-12).

@@ -35,6 +35,10 @@ The boot_pose parameter names the reference pose (the robot's position 0):
   services    /wojtek/arm      (std_srvs/SetBool)  -- gate actually sending commands
               /wojtek/stand_up (std_srvs/Trigger)  -- slow ramp current -> home
               /wojtek/lie_down (std_srvs/Trigger)  -- slow ramp current -> folded
+              /wojtek/trick_{bow,sit,paw_wave,shake} (std_srvs/Trigger) --
+              play a scripted show clip (wojtek_policy.tricks); DISARMED
+              only, and only from (near) the home standing pose, since
+              every clip starts and ends there
               /wojtek/zero     (std_srvs/Trigger)  -- re-zero: declare that the
               robot is physically in the boot_pose RIGHT NOW and recompute
               the offset from the current measurement. Lets you power and
@@ -67,7 +71,7 @@ from std_srvs.srv import SetBool, Trigger
 
 from wojtek_policy.joint_map import JointMap
 
-from wojtek_policy import poses
+from wojtek_policy import poses, tricks
 
 
 class RealIoNode(Node):
@@ -138,6 +142,12 @@ class RealIoNode(Node):
             )
         )
         self.create_service(Trigger, "wojtek/zero", self._srv_zero)
+        self.declare_parameter("trick_start_tolerance_rad", 0.3)
+        for trick in tricks.TRICKS:
+            self.create_service(
+                Trigger, f"wojtek/trick_{trick}",
+                lambda req, res, t=trick: self._srv_trick(res, t),
+            )
         self.get_logger().info(
             f"real io up, DISARMED, boot_pose={boot_pose}. Assuming the robot "
             f"was in the {boot_pose} pose at activation; if not, pose it there "
@@ -254,6 +264,55 @@ class RealIoNode(Node):
             self.destroy_timer(self._ramp_timer)
             self._ramp_timer = None
             self.get_logger().info(f"{self._ramp_name}: ramp complete")
+
+    def _srv_trick(self, res, name):
+        """Play a scripted show clip through the ramp machinery.
+
+        Same mutual exclusion as stand_up/lie_down (the shared
+        _ramp_timer slot: arming refuses while a clip runs and vice
+        versa), plus a start-pose check: clips are authored from the
+        home stand and end there, so anything else is refused rather
+        than lurched out of.
+        """
+        if self._armed:
+            res.success, res.message = False, "armed -- disarm before a trick"
+            return res
+        if self._ramp_timer is not None:
+            res.success, res.message = False, "a ramp/trick is already running"
+            return res
+        if self._q_rel is None:
+            res.success, res.message = False, "no joint states yet"
+            return res
+        away = np.abs(self._q_rel + self._offset_urdf - self.home_urdf)
+        tol = self.get_parameter("trick_start_tolerance_rad").value
+        if np.max(away) > tol:
+            res.success = False
+            res.message = (
+                f"joint displacement from home pose up to {np.max(away):.3f} "
+                f"rad > {tol} -- tricks start from the home stand "
+                "(run /wojtek/stand_up first)"
+            )
+            return res
+        self._trick_name = name
+        self._ramp_name = f"trick {name}"
+        self._ramp_t0 = self.get_clock().now()
+        period = 1.0 / self.get_parameter("ramp_rate_hz").value
+        self._ramp_timer = self.create_timer(period, self._trick_tick)
+        self.get_logger().info(
+            f"trick {name}: playing ({tricks.duration(name):.1f} s)"
+        )
+        res.success, res.message = True, f"trick {name} started"
+        return res
+
+    def _trick_tick(self):
+        t = (self.get_clock().now() - self._ramp_t0).nanoseconds * 1e-9
+        ctrl = tricks.sample(self._trick_name, t)
+        q_urdf = self.jmap.to_urdf(self.joint_names, ctrl)
+        self._send_cmd(np.asarray(q_urdf) - self._offset_urdf)
+        if t >= tricks.duration(self._trick_name):
+            self.destroy_timer(self._ramp_timer)
+            self._ramp_timer = None
+            self.get_logger().info(f"trick {self._trick_name}: complete")
 
     def _srv_zero(self, req, res):
         if self._armed:

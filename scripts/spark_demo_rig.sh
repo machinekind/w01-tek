@@ -103,13 +103,6 @@ else
 fi
 [ -f ~/.hf_token ] && export HF_TOKEN="\$(cat ~/.hf_token)"
 mkdir -p /root/logs /root/takes
-if ! curl -sf localhost:8090/v1/models >/dev/null 2>&1; then
-  setsid nohup env VLLM_USE_DEEP_GEMM=0 HF_TOKEN="\${HF_TOKEN:-}" \
-    vllm serve ${AGENT_MODEL} --port 8090 --max-model-len 8192 \
-    --gpu-memory-utilization 0.22 --enforce-eager \
-    > /root/logs/vllm.log 2>&1 &
-  echo "vllm starting"
-fi
 if ! curl -sf localhost:8110/health >/dev/null 2>&1; then
   setsid nohup env ASR_BACKEND=transformers HF_TOKEN="\${HF_TOKEN:-}" \
     python3 -m wojtek_rl.agent.asr_server --port 8110 --model large-v3 \
@@ -123,11 +116,25 @@ if ! curl -sf localhost:8120/health >/dev/null 2>&1; then
   # --temperature 0.6: cooler sampling measurably reduces chatterbox's
   # hallucinated tails and language slips (the "foreign babble" from the v2
   # takes). A/B'd against default 0.8 by ear before being made the default.
-  setsid nohup env TTS_LANGUAGE=pl TQDM_DISABLE=1 TTS_STREAM_SPLIT=off \
+  setsid nohup env TTS_LANGUAGE=pl TQDM_DISABLE=1 TTS_STREAM_SPLIT=on \
     /root/venv_tts/bin/python -m wojtek_rl.agent.tts_server --port 8120 \
     --temperature 0.6 \
     > /root/logs/tts.log 2>&1 &
   echo "tts starting (warmup inside)"
+fi
+for i in \$(seq 1 60); do
+  curl -sf localhost:8110/health >/dev/null 2>&1 && \
+  curl -sf localhost:8120/health >/dev/null 2>&1 && break
+  sleep 10
+done
+# vllm LAST: its memory profiler asserts when free memory shifts under it,
+# which is exactly what concurrent model loads do on unified memory.
+if ! curl -sf localhost:8090/v1/models >/dev/null 2>&1; then
+  setsid nohup env VLLM_USE_DEEP_GEMM=0 HF_TOKEN="\${HF_TOKEN:-}" \
+    vllm serve ${AGENT_MODEL} --port 8090 --max-model-len 8192 \
+    --gpu-memory-utilization 0.22 --enforce-eager \
+    > /root/logs/vllm.log 2>&1 &
+  echo "vllm starting"
 fi
 for i in \$(seq 1 120); do
   curl -sf localhost:8090/v1/models >/dev/null 2>&1 && \

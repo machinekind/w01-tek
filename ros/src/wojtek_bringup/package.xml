@@ -29,6 +29,10 @@
        exec_depend is what pulls it into deploy.sh's "packages-up-to
        wojtek_bringup" build, so the RPi has it at all. -->
   <exec_depend>wojtek_perception_bringup</exec_depend>
+  <!-- Leg-kinematics + IMU odometry: runs on the robot (autonomy needs no
+       PC in the loop) and owns the odom->base_link TF there. Same
+       exec_depend trick as above to reach the RPi build. -->
+  <exec_depend>wojtek_odometry</exec_depend>
   <!-- Hardware plugins and the sensor broadcaster: pluginlib loads them at
        runtime from the name in the URDF, and this package is ament_python, so
        it compiles nothing against them. Exec, not build: a build dependency

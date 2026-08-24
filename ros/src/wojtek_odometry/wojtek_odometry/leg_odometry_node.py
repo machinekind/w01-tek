@@ -113,6 +113,14 @@ class LegOdometryNode(Node):
         # at ~0.031 m (0.046 over-corrects to +7 %, 0 under-reads -16 %).
         # A calibration constant in the joint_map tradition, not a guess.
         self.declare_parameter("rolling_radius", 0.031)
+        # Process every Nth joint_states_abs message. The per-message numpy
+        # kinematics (4 Jacobians) cannot keep 200 Hz on the Pi 4's A72 --
+        # measured: the executor floods and the 50 Hz publish starves to
+        # ~6 Hz. The integrator is stride-safe by construction (velocity is
+        # sampled at the processed instant and integrated over the actual
+        # stamp dt), so 50 Hz processing (stride 4) loses nothing at gait
+        # timescales. 1 = every message (PC-class hosts).
+        self.declare_parameter("input_stride", 1)
 
         self._odom_frame = self.get_parameter("odom_frame").value
         self._base_frame = self.get_parameter("base_frame").value
@@ -120,6 +128,8 @@ class LegOdometryNode(Node):
         self._tau_floor = self.get_parameter("contact_tau_floor").value
         self._lp_hz = self.get_parameter("velocity_lowpass_hz").value
         self._roll_r = self.get_parameter("rolling_radius").value
+        self._input_stride = max(1, int(self.get_parameter("input_stride").value))
+        self._input_count = 0
 
         self._legs = None  # built when robot_description arrives
         self._actuated = None  # flat joint-name list, LEGS order
@@ -195,6 +205,9 @@ class LegOdometryNode(Node):
             return
         if len(msg.velocity) != len(msg.name):
             return  # the passive-joint helper message has no velocities
+        self._input_count += 1
+        if self._input_count % self._input_stride:
+            return  # deliberate decimation -- see the input_stride parameter
         idx = {n: i for i, n in enumerate(msg.name)}
         if not all(n in idx for n in self._actuated):
             return
@@ -209,9 +222,8 @@ class LegOdometryNode(Node):
         for kin in self._legs:
             q = np.array([msg.position[idx[n]] for n in kin.actuated])
             qd = np.array([msg.velocity[idx[n]] for n in kin.actuated])
-            r_foot = kin.foot_position(q)
-            feet.append((r_foot, kin.jacobian(q) @ qd,
-                         kin.shank_angular_velocity(q, qd)))
+            r_foot, jac, omega_leg = kin.foot_state(q, qd)
+            feet.append((r_foot, jac @ qd, omega_leg))
 
         # Stance = levelled foot height within z_delta of the lowest foot,
         # and the knee actually loaded. Yaw does not move z, so the raw IMU
@@ -313,8 +325,23 @@ class LegOdometryNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = LegOdometryNode()
+    # The wait-set executor rebuilds its wait set on EVERY wake, and this
+    # node wakes ~200x/s (4 subscriptions) -- profiled on the Pi 4 that
+    # plumbing alone ate ~40% of the node's CPU. Jazzy's (experimental)
+    # EventsExecutor drives callbacks from listener events instead and
+    # skips that entirely; fall back to the classic spin where it is
+    # missing so nothing breaks on older distros.
     try:
-        rclpy.spin(node)
+        from rclpy.experimental import EventsExecutor
+        executor = EventsExecutor()
+    except ImportError:
+        executor = None
+    try:
+        if executor is None:
+            rclpy.spin(node)
+        else:
+            executor.add_node(node)
+            executor.spin()
     except KeyboardInterrupt:
         pass
     finally:

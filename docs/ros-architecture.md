@@ -105,8 +105,6 @@ flowchart LR
     TXT["text_commander\n(wojtek_teleop, #92)"]
     WEB["web_console\n(przeglądarka :8080)"]
 
-    PERC["cloud_reduce\n(wojtek_perception_bringup)"]
-
     SIM -- "/joint_states (aktuowane + pasywne)" --> POL
     SIM -- "/imu/data (ground truth)" --> POL
     POL -- "/wojtek/joint_targets" --> SIM
@@ -116,8 +114,7 @@ flowchart LR
     SIM -- "/camera/camera/color/image_raw" --> WEB
     SIM -- "TF odom→base_link" --> RVIZ
     SIM -- "/joint_states" --> RSP
-    SIM -- "/camera/camera/depth/* (wirtualny D435)" --> PERC
-    PERC -- "/cloud_reduce/terrain_points (8x8)" --> RVIZ
+    SIM -- "/camera/camera/depth/* (wirtualny D435)" --> RVIZ
     RSP --> RVIZ
 ```
 
@@ -210,7 +207,7 @@ wirtualną kamerę.
 | pub | `/camera/camera/color/camera_info` | `sensor_msgs/CameraInfo` |
 | srv | `/sim/reset` | `std_srvs/Trigger` |
 
-Wirtualna kamera D435 (#91): tematy, kodowanie i frame'y identyczne z realnym stosem `wojtek_perception_bringup`, więc `cloud_reduce`/planner/VLM działają w symulacji bez zmian. Render offscreen (MuJoCo `Renderer`, EGL) na osobnym wątku z prywatną `MjData` — fizyka nie zwalnia; stemple obrazów = stemple TF `odom→base_link` z tego samego ticku fizyki. Kamera jest wstrzykiwana do modelu przy starcie przez `MjSpec` (pozycja/FOV z `wojtek_pc/camera_spec.py`, jedno źródło prawdy dla MJCF, URDF i CameraInfo; patrz #93 dla docelowego przeniesienia do `build_model.py`). TF `base_link→camera_link→camera_depth_optical_frame` daje URDF (`with_camera` w `body.urdf.xacro`), nie plik konfiguracyjny. Bez działającego backendu GL kamera degraduje się do off z warningiem — fizyka działa dalej. QoS: sensor data (best effort). Głębia: 0 = brak zwrotu (jak RealSense), okno 0.3–3.0 m.
+Wirtualna kamera D435 (#91): tematy, kodowanie i frame'y identyczne z realnym stosem `wojtek_perception_bringup`, więc konsumenci głębi/VLM działają w symulacji bez zmian (redukcja do siatki 8x8 usunięta 2026-08 razem ze ścieżką SCAN-plannera). Render offscreen (MuJoCo `Renderer`, EGL) na osobnym wątku z prywatną `MjData` — fizyka nie zwalnia; stemple obrazów = stemple TF `odom→base_link` z tego samego ticku fizyki. Kamera jest wstrzykiwana do modelu przy starcie przez `MjSpec` (pozycja/FOV z `wojtek_pc/camera_spec.py`, jedno źródło prawdy dla MJCF, URDF i CameraInfo; patrz #93 dla docelowego przeniesienia do `build_model.py`). TF `base_link→camera_link→camera_depth_optical_frame` daje URDF (`with_camera` w `body.urdf.xacro`), nie plik konfiguracyjny. Bez działającego backendu GL kamera degraduje się do off z warningiem — fizyka działa dalej. QoS: sensor data (best effort). Głębia: 0 = brak zwrotu (jak RealSense), okno 0.3–3.0 m.
 
 Parametry: `model_xml` (puste = przygotuj MJX z share z przepisaniem meshdir), `joint_map_yaml`, `publish_rate_hz` (100), `realtime_factor`, `initial_pose` (`home`/`folded` — folded uzyskiwane przez fizyczne "osiadanie" z home, żeby domknięcie czworoboku było spójne), `folded_knee_rad`, `camera` (true; wyłącznik dla słabszych maszyn), `camera_depth_hz` (15), `camera_color_hz` (5), `depth_min_m`/`depth_max_m` (0.3/3.0).
 

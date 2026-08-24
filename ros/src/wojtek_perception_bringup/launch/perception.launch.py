@@ -1,11 +1,10 @@
-"""Perception pipeline: RealSense D435 depth -> coarse terrain reference cloud.
+"""Perception pipeline: RealSense D435 depth (+ colour/RGBD for the VLM).
 
     ros2 launch wojtek_perception_bringup perception.launch.py
     ros2 launch wojtek_perception_bringup perception.launch.py depth_profile:=848x480x30
-    ros2 launch wojtek_perception_bringup perception.launch.py reduce:=false
 
-Runs standalone (the line above brings up the camera, its settings and the
-reduction, nothing else) and is meant to be included by the robot bringup:
+Runs standalone (the line above brings up the camera and its settings,
+nothing else) and is meant to be included by the robot bringup:
 
     IncludeLaunchDescription(
         PythonLaunchDescriptionSource(".../perception.launch.py"),
@@ -14,19 +13,25 @@ reduction, nothing else) and is meant to be included by the robot bringup:
 
 The only singleton in here is the camera->body static transform, which is
 why it is opt-out (`extrinsics:=false`) for the case where the robot bringup
-already owns that TF edge. The reduction works in the camera's own frame and
-needs nothing from the rest of the graph.
+already owns that TF edge.
+
+(The depth->grid reduction that used to live here fed only the SCAN-planner
+and cost ~0.8 of a Pi 4 core; it was removed 2026-08 when that path was
+dropped.)
+
+cloud_accumulate_node -- the odom-frame accumulated cloud -- runs here too
+(`accumulate:=false` drops it): the robot is meant to be autonomous, so the
+map lives on the robot, fed by the raw depth topic and /wojtek/odom from
+leg_odometry. It is stride-limited (every 3rd frame, every 2nd pixel) and
+shares the camera's CPU pin.
 
 NOTE ON COMPOSITION: the driver runs as a plain node, deliberately. Loading
 it into a component container would buy intra-process zero-copy only if it
 shared that process with another C++ node -- and it would not: the RPi hosts
 no container (nothing else in this workspace creates one, and ros2_control
-runs as a standalone process), and the only consumer of the depth image is
-this package's rclpy reduction, which cannot be composed at all. The depth
-therefore crosses DDS on loopback: decimation halves each dimension before
-publishing, so that is 424x240x16 bit at 15 Hz, ~3 MB/s, which is
-affordable. If the reduction is ever rewritten in C++ for a higher frame
-rate, that is the moment to introduce a container -- not before.
+runs as a standalone process). The depth therefore crosses DDS on loopback:
+decimation halves each dimension before publishing, so that is 424x240x16
+bit at 15 Hz, ~3 MB/s, which is affordable.
 
 (The colour stream is the heavier one -- 848x480 rgb8 at 6 fps is ~7 MB/s
 uncompressed -- but nothing on the robot subscribes to it yet, and DDS does
@@ -56,8 +61,8 @@ def _setup(context, *args, **kwargs):
 
     # Optional CPU affinity. On the robot this matters: the bringup runs the
     # whole tree under `taskset -c 2,3` (the isolcpus RT cores), and without
-    # this the camera driver and the reduction land on the cores the 400 Hz
-    # control loop owns exclusively.
+    # this the camera driver lands on the cores the 400 Hz control loop owns
+    # exclusively.
     cpus = arg("cpus")
     prefix = [f"taskset -c {cpus}"] if cpus else None
 
@@ -84,18 +89,24 @@ def _setup(context, *args, **kwargs):
         )
     ]
 
-    if arg("reduce").lower() in ("true", "1"):
-        depth_topic = f"/{camera_ns}/{camera_name}/depth/image_rect_raw"
-        info_topic = f"/{camera_ns}/{camera_name}/depth/camera_info"
+    if arg("accumulate").lower() in ("true", "1"):
         actions.append(
             Node(
                 package=PKG,
-                executable="cloud_reduce_node",
-                name="cloud_reduce",
-                parameters=[arg("reduce_params_file")],
+                executable="cloud_accumulate_node",
+                name="cloud_accumulate",
+                # Pi 4 budget: the node's defaults saturated the machine
+                # (deserializing every 15 fps depth frame plus deprojection
+                # cost ~0.7 of a core). The robot bringup feeds 6 fps depth;
+                # stride 3 keeps ~2 processed frames/s at a coarser pixel
+                # grid -- plenty for a walking-speed map (the 2 cm voxel
+                # thins it anyway).
+                parameters=[{"frame_stride": 3, "pixel_stride": 3}],
                 remappings=[
-                    ("depth/image", depth_topic),
-                    ("depth/camera_info", info_topic),
+                    ("depth/image",
+                     f"/{camera_ns}/{camera_name}/depth/image_rect_raw"),
+                    ("depth/camera_info",
+                     f"/{camera_ns}/{camera_name}/depth/camera_info"),
                 ],
                 prefix=prefix,
                 output="screen",
@@ -137,11 +148,6 @@ def generate_launch_description():
                             "the file's own commentary.",
             ),
             DeclareLaunchArgument(
-                "reduce_params_file",
-                default_value=f"{share}/config/cloud_reduce.yaml",
-                description="Grid reduction settings.",
-            ),
-            DeclareLaunchArgument(
                 "extrinsics_file", default_value=f"{share}/config/extrinsics.yaml",
                 description="Camera->body static transform. PLACEHOLDER "
                             "values until the mount is measured.",
@@ -152,9 +158,10 @@ def generate_launch_description():
                             "when the robot bringup already owns that edge.",
             ),
             DeclareLaunchArgument(
-                "reduce", default_value="true",
-                description="Run the depth->grid reduction. Off to look at "
-                            "raw depth in RViz.",
+                "accumulate", default_value="true",
+                description="Run the odom-frame accumulated cloud "
+                            "(cloud_accumulate_node). Needs /wojtek/odom "
+                            "(leg_odometry) and the camera TF chain.",
             ),
             DeclareLaunchArgument(
                 "depth_profile", default_value="",
@@ -178,11 +185,11 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "cpus", default_value="",
-                description="CPU affinity for the camera driver and the "
-                            "reduction (comma list, e.g. \"0,1\"); empty = "
-                            "inherit. The robot bringup pins them to the "
-                            "non-isolated cores so they cannot steal time "
-                            "from the 400 Hz control loop.",
+                description="CPU affinity for the camera driver (comma "
+                            "list, e.g. \"0,1\"); empty = inherit. The "
+                            "robot bringup pins it to the non-isolated "
+                            "cores so it cannot steal time from the 400 Hz "
+                            "control loop.",
             ),
             DeclareLaunchArgument(
                 "camera_name", default_value="camera",

@@ -25,7 +25,7 @@ can SEE that drift as the pasted walls shearing away from where the
 (ground-truth-posed) robot model stands. Only the static base->camera
 extrinsics chain is taken from TF, which is the URDF on both sides.
 
-Deprojection is from the depth IMAGE, like cloud_reduce and for the same
+Deprojection is from the depth IMAGE (not the driver's cloud) for the same
 reason: a full PointCloud2 would serialise ~100k points a frame before
 we kept one in fifty.
 """

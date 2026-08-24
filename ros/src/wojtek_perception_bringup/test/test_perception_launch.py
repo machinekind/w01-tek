@@ -37,10 +37,9 @@ def _context(**overrides):
     ctx = LaunchContext()
     defaults = {
         "camera_params_file": str(CONFIG / "d435.yaml"),
-        "reduce_params_file": str(CONFIG / "cloud_reduce.yaml"),
         "extrinsics_file": str(CONFIG / "extrinsics.yaml"),
         "extrinsics": "true",
-        "reduce": "true",
+        "accumulate": "true",
         "depth_profile": "",
         "color_profile": "",
         "enable_color": "true",
@@ -66,7 +65,7 @@ def _params(node, ctx):
     return evaluate_parameters(ctx, node._Node__parameters)
 
 
-def test_default_setup_is_driver_reduction_extrinsics(launch_mod):
+def test_default_setup_is_driver_accumulate_extrinsics(launch_mod):
     actions = launch_mod._setup(_context())
     assert [type(a) for a in actions] == [Node, Node, Node]
     assert len(actions) == 3
@@ -83,9 +82,22 @@ def test_driver_is_a_plain_node_not_a_composable_one(launch_mod):
 
 
 def test_optional_pieces_can_be_turned_off(launch_mod):
-    actions = launch_mod._setup(_context(reduce="false", extrinsics="false"))
+    actions = launch_mod._setup(
+        _context(accumulate="false", extrinsics="false"))
     assert len(actions) == 1
     assert actions[0]._Node__package == "realsense2_camera"
+
+
+def test_accumulate_gets_the_depth_topics(launch_mod):
+    ctx = _context()
+    acc = launch_mod._setup(ctx)[1]
+    assert "cloud_accumulate" in str(acc._Node__node_executable)
+    remaps = {
+        perform_substitutions(ctx, src): perform_substitutions(ctx, dst)
+        for src, dst in acc._Node__remappings
+    }
+    assert remaps["depth/image"] == "/camera/camera/depth/image_rect_raw"
+    assert remaps["depth/camera_info"] == "/camera/camera/depth/camera_info"
 
 
 def test_driver_loads_the_camera_parameter_file(launch_mod):
@@ -116,18 +128,6 @@ def test_enable_color_argument_overrides_the_file(launch_mod):
     assert _params(launch_mod._setup(off_ctx)[0], off_ctx)[1]["enable_color"] is False
 
 
-def test_reduction_loads_its_own_parameter_file_and_gets_the_depth_topics(launch_mod):
-    ctx = _context()
-    reduce_node = launch_mod._setup(ctx)[1]
-    assert str(_params(reduce_node, ctx)[0]).endswith("cloud_reduce.yaml")
-    remaps = {
-        perform_substitutions(ctx, src): perform_substitutions(ctx, dst)
-        for src, dst in reduce_node._Node__remappings
-    }
-    assert remaps["depth/image"] == "/camera/camera/depth/image_rect_raw"
-    assert remaps["depth/camera_info"] == "/camera/camera/depth/camera_info"
-
-
 def _ros_params(path):
     """The parameters out of a ROS parameter file, wildcard node key."""
     loaded = yaml.safe_load(path.read_text())
@@ -141,14 +141,6 @@ def test_config_keeps_the_measured_depth_settings():
     params = _ros_params(CONFIG / "d435.yaml")
     assert params["depth_module"]["visual_preset"] == 3          # HIGH_ACCURACY
     assert params["temporal_filter"]["filter_smooth_delta"] == 100
-
-
-def test_reduce_config_is_a_ros_parameter_file():
-    params = _ros_params(CONFIG / "cloud_reduce.yaml")
-    assert params["grid_w"] == 8 and params["grid_h"] == 8
-    # The reduction must not pass returns the camera settings already threw
-    # away, or the grid reports obstacles built from noise past 3 m.
-    assert params["max_range"] == _ros_params(CONFIG / "d435.yaml")["clip_distance"]
 
 
 def test_extrinsics_publisher_gets_the_configured_frames(launch_mod):
@@ -175,14 +167,14 @@ def test_stream_rates_are_ones_the_sensor_offers():
     assert color_fps <= 15
 
 
-def test_cpus_argument_pins_the_camera_nodes(launch_mod):
+def test_cpus_argument_pins_the_camera_driver(launch_mod):
     """On the robot the bringup starts everything under `taskset -c 2,3` (the
-    isolcpus RT cores) and children inherit that mask. Both camera nodes must
-    be re-affinitized off those cores or they compete with the 400 Hz control
-    loop; measured on hardware they want ~26% of a core between them."""
+    isolcpus RT cores) and children inherit that mask. The driver must be
+    re-affinitized off those cores or it competes with the 400 Hz control
+    loop; measured on the Pi 4 it wants ~0.7 of a core with colour+RGBD on."""
     ctx = _context(cpus="0,1")
-    driver, reduce_node, _tf = launch_mod._setup(ctx)
-    for node in (driver, reduce_node):
+    driver, acc, _tf = launch_mod._setup(ctx)
+    for node in (driver, acc):
         assert perform_substitutions(ctx, _prefix(node)) == "taskset -c 0,1"
 
 
@@ -208,13 +200,13 @@ def test_rgbd_has_its_two_prerequisites():
             params["depth_module"]["depth_profile"].rsplit("x", 1)[1]
 
 
-def test_reduction_does_not_feed_off_the_drivers_cloud():
-    """The driver's XYZRGB cloud is on for viewing, but the reduction must
-    keep reading the depth IMAGE: reducing a 400k-point cloud that was
+def test_accumulate_does_not_feed_off_the_drivers_cloud():
+    """The driver's XYZRGB cloud is on for viewing, but the accumulator must
+    keep reading the depth IMAGE: consuming a 100k-point cloud that was
     serialised first is the expensive way round, and that is the whole reason
-    cloud_reduce subscribes to an Image."""
-    from wojtek_perception_bringup.cloud_reduce_node import CloudReduce
+    cloud_accumulate subscribes to an Image."""
+    from wojtek_perception_bringup.cloud_accumulate_node import CloudAccumulateNode
     import inspect
-    src = inspect.getsource(CloudReduce)
+    src = inspect.getsource(CloudAccumulateNode)
     assert "PointCloud2, \"depth" not in src
     assert 'Image, "depth/image"' in src

@@ -19,6 +19,7 @@ sits at FOOT_IN_SIXTH in sixth_link's frame, the constant the MJX model
 uses for its foot_link body.
 """
 
+import math
 import xml.etree.ElementTree as ET
 
 import numpy as np
@@ -48,11 +49,34 @@ def _rpy_matrix(rpy):
 
 
 def _axis_rotation(axis, angle):
-    """Rodrigues rotation about a unit axis."""
+    """Rodrigues rotation about a unit axis.
+
+    The expanded closed form, one array construction. The textbook
+    I + sK + (1-c)K^2 costs seven numpy dispatches on 3x3 matrices, and at
+    ~600 calls/s on the Pi 4 that dispatch overhead (not the flops) was a
+    visible slice of the odometry profile. Verified equal to 1e-15.
+    """
     x, y, z = axis
-    c, s = np.cos(angle), np.sin(angle)
-    k = np.array([[0, -z, y], [z, 0, -x], [-y, x, 0]])
-    return np.eye(3) + s * k + (1 - c) * (k @ k)
+    c, s = math.cos(angle), math.sin(angle)
+    t = 1.0 - c
+    return np.array([
+        [c + x * x * t, x * y * t - z * s, x * z * t + y * s],
+        [y * x * t + z * s, c + y * y * t, y * z * t - x * s],
+        [z * x * t - y * s, z * y * t + x * s, c + z * z * t],
+    ])
+
+
+def _horner(coeffs, x):
+    """np.polyval semantics in plain Python.
+
+    The passive polynomials are 3rd/4th degree; np.polyval spends ~10 us of
+    numpy machinery per call to do four multiply-adds. This is the same
+    Horner scheme without the dispatch.
+    """
+    acc = 0.0
+    for c in coeffs:
+        acc = acc * x + c
+    return acc
 
 
 class _Joint:
@@ -109,12 +133,21 @@ class LegKinematics:
         }
         if len(self._passive) != 2:
             raise ValueError(f"expected 2 passive joints for {leg}")
+        # For the single-pass foot_state(): actuated joint -> Jacobian
+        # column, and the passive polynomials' derivatives (np.polyder, so
+        # still nothing hand-differentiated).
+        self._actuated_col = {name: i for i, name in enumerate(self.actuated)}
+        self._dpassive = {
+            name: tuple(float(c) for c in np.polyder(coeffs))
+            for name, coeffs in self._passive.items()
+        }
 
     def _angles(self, q):
         """Map (q1, q2, q3) to every revolute joint in the chain."""
         angles = dict(zip(self.actuated, q))
+        knee = float(q[2])
         for name, coeffs in self._passive.items():
-            angles[name] = float(np.polyval(coeffs, q[2]))
+            angles[name] = _horner(coeffs, knee)
         return angles
 
     def foot_position(self, q):
@@ -159,6 +192,11 @@ class LegKinematics:
         Numeric on purpose: the knee column must include the passive
         four-bar coupling, and differentiating the polynomial chain by
         hand is exactly the kind of duplication that drifts.
+
+        Kept as the reference implementation: foot_state() below computes
+        the same matrix geometrically in one chain walk and is what the
+        odometry node runs; a unit test holds the two equal, so the fast
+        path cannot drift from this definition.
         """
         jac = np.empty((3, 3))
         q = np.asarray(q, dtype=float)
@@ -169,3 +207,51 @@ class LegKinematics:
                 self.foot_position(q + dq) - self.foot_position(q - dq)
             ) / (2 * eps)
         return jac
+
+    def foot_state(self, q, qd):
+        """(foot position, 3x3 Jacobian, shank angular velocity) in ONE
+        chain walk.
+
+        Numerically identical to foot_position() + jacobian() +
+        shank_angular_velocity() (a unit test enforces it), ~8x cheaper:
+        the numeric Jacobian alone walks the chain six times, which at the
+        Pi 4's per-numpy-call overhead dominated the whole odometry node
+        (~25 ms/sample, 63% of a core).
+
+        Geometry: a revolute joint's contribution to the foot velocity is
+        z x (p_foot - p_joint) per radian, with z and p_joint taken from
+        the same forward pass that produces the foot position. Actuated
+        joints map straight to their column; the passive four-bar joints
+        fold into the knee column through d(poly)/dq3 -- np.polyder again,
+        so the "no hand-derived polynomial" rule from jacobian() holds
+        here too.
+        """
+        angles = self._angles(q)
+        knee = float(q[2])
+        dknee = {
+            name: _horner(dcoeffs, knee)
+            for name, dcoeffs in self._dpassive.items()
+        }
+        rot = np.eye(3)
+        pos = np.zeros(3)
+        revolute = []  # (world axis, world joint origin, name)
+        for joint in self.chain:
+            pos = pos + rot @ joint.xyz
+            rot = rot @ joint.rot
+            if joint.type == "revolute":
+                revolute.append((rot @ joint.axis, pos, joint.name))
+                rot = rot @ _axis_rotation(joint.axis, angles[joint.name])
+        p_foot = pos + rot @ FOOT_IN_SIXTH
+
+        jac = np.zeros((3, 3))
+        omega = np.zeros(3)
+        for z, p_j, name in revolute:
+            col = np.cross(z, p_foot - p_j)
+            if name in self._actuated_col:
+                jac[:, self._actuated_col[name]] += col
+                rate = qd[self._actuated_col[name]]
+            else:
+                jac[:, 2] += col * dknee[name]
+                rate = dknee[name] * qd[2]
+            omega = omega + z * rate
+        return p_foot, jac, omega

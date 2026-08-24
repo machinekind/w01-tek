@@ -119,6 +119,23 @@ def _launch_setup(context, with_rviz, hardware):
         [LaunchConfiguration("bag_dir"), TextSubstitution(text=f"run_{bag_stamp}")]
     )
 
+    # Deterministic placement on the robot. isolcpus turns OFF load
+    # balancing between the isolated cores, so under the service's plain
+    # {2,3} mask every child stays wherever fork put it -- observed on the
+    # Pi 4 as the whole Python stack piling onto CPU2 (99% busy, policy
+    # down to ~44 Hz) while the RT loop's CPU3 idled. Measured budget that
+    # fits (2026-08-24, with perception + odometry + the on-robot map):
+    #   core 3: ros2_control (RT loop) + real_io        ~65%
+    #   core 2: policy + leg_odometry                   ~65%
+    #   cores 0,1 (with the OS): camera driver, the accumulated map,
+    #     pad/joy/robot_state_publisher -- UI-rate, none of it
+    #     control-critical, all fine sharing with the system.
+    # SCHED_FIFO keeps the control loop preemptive over its core-mate
+    # either way. The sim runs unpinned -- no isolcpus on a PC.
+    ctrl_prefix = "taskset -c 3" if hardware == "real" else None
+    aux_prefix = "taskset -c 2" if hardware == "real" else None
+    ui_prefix = "taskset -c 0,1" if hardware == "real" else None
+
     nodes = [
         Node(
             package="controller_manager",
@@ -127,6 +144,7 @@ def _launch_setup(context, with_rviz, hardware):
                 {"robot_description": robot_description},
                 os.path.join(share, "config", "real_controllers.yaml"),
             ],
+            prefix=ctrl_prefix,
             output="screen",
         ),
         Node(
@@ -155,23 +173,42 @@ def _launch_setup(context, with_rviz, hardware):
             executable="robot_state_publisher",
             parameters=[{"robot_description": robot_description}],
             remappings=[("joint_states", "wojtek/joint_states_abs")],
+            prefix=ui_prefix,
         ),
-        # The RViz views use odom as the fixed frame; there is no odometry on
-        # the real robot yet, so pin base_link at the origin for visualization.
-        # A physics-backed simulation knows the true base pose and publishes
-        # that transform itself, so there the static one would fight it.
+        # The odom->base_link edge. On the real robot leg_odometry owns it
+        # (below); the static identity stays only as the no-IMU fallback so
+        # bench runs still render in RViz. A physics-backed simulation knows
+        # the true base pose and publishes the transform itself, so there
+        # the static one would fight it.
         Node(
             package="tf2_ros",
             executable="static_transform_publisher",
             arguments=["--frame-id", "odom", "--child-frame-id", "base_link"],
             condition=IfCondition(
                 PythonExpression(["'", LaunchConfiguration("hw"), "' != 'mujoco'"])
-            ) if hardware == "sim" else None,
+            ) if hardware == "sim" else UnlessCondition(use_imu),
         ),
+        # Leg-kinematics + IMU odometry, on the robot itself: autonomy keeps
+        # no PC in the loop, and cloud_accumulate/nav consume wojtek/odom
+        # locally. Publishes the odom->base_link TF (deliberately replacing
+        # the static identity above). Needs the IMU, hence the gate.
+        Node(
+            package="wojtek_odometry",
+            executable="leg_odometry_node",
+            output="screen",
+            prefix=aux_prefix,
+            # input_stride 2: the abs joint stream arrives at ~50 Hz on the
+            # robot (joint_state_broadcaster's rate), and the per-message
+            # kinematics costs ~6 ms on the A72 -- 25 Hz processing fits
+            # the core budget; full rate does not (see the node).
+            parameters=[{"publish_tf": True, "input_stride": 2}],
+            condition=IfCondition(use_imu),
+        ) if hardware == "real" else None,
         Node(
             package="wojtek_bringup",
             executable="real_io_node",
             output="screen",
+            prefix=ctrl_prefix,
             parameters=[
                 {
                     "dry_run": LaunchConfiguration("dry_run"),
@@ -183,6 +220,7 @@ def _launch_setup(context, with_rviz, hardware):
             package="wojtek_policy",
             executable="policy_node",
             output="screen",
+            prefix=aux_prefix,
             parameters=[
                 {
                     # Already-resolved local dir + its provenance, so the node
@@ -209,6 +247,9 @@ def _launch_setup(context, with_rviz, hardware):
             ],
         ),
     ]
+    # Sim-only entries resolve to None on the other hardware (and vice
+    # versa); drop them instead of handing launch a None action.
+    nodes = [n for n in nodes if n is not None]
 
     if with_rviz:
         nodes.append(
@@ -371,6 +412,12 @@ def common_launch_description(
                         "gamepad.launch.py",
                     ]
                 ),
+                # UI-rate nodes: on the robot they go to the system cores
+                # (see the placement note in _launch_setup); in the sim they
+                # inherit (empty = no taskset).
+                launch_arguments={
+                    "cpus": "0,1" if hardware == "real" else "",
+                }.items(),
                 condition=IfCondition(LaunchConfiguration("gamepad")),
             ),
         ]
@@ -383,9 +430,12 @@ def common_launch_description(
         DeclareLaunchArgument("perception", default_value="false"),
         # The camera pipeline must not run on the isolated RT cores: the
         # service starts this whole tree under `taskset -c 2,3`, and children
-        # inherit that mask, so without re-affinitizing them the driver and
-        # the reduction (~26% of a core together, measured) compete with the
-        # 400 Hz control loop. Same treatment the bag recorder gets.
+        # inherit that mask, so without re-affinitizing it the driver
+        # (~0.7 of a Pi 4 core measured with colour+RGBD on) competes with
+        # the 400 Hz control loop. Same treatment the bag recorder gets.
+        # Even off the RT cores the camera is not free for the loop: its USB
+        # traffic and the IMU's i2c completion share CPU0's interrupt path
+        # (see the I2C_TIMEOUT note in imu_i2c.cpp).
         DeclareLaunchArgument("perception_cpus", default_value="0,1"),
         IncludeLaunchDescription(
             PathJoinSubstitution(
@@ -397,6 +447,15 @@ def common_launch_description(
             ),
             launch_arguments={
                 "cpus": LaunchConfiguration("perception_cpus"),
+                # 6 fps on both streams: the only depth consumer left is
+                # the accumulated map (~2 processed frames/s), and rclpy
+                # pays a fixed per-message deserialization cost for every
+                # frame it receives -- at 15 fps that alone saturated a
+                # Pi 4 core together with the driver. Colour rides along:
+                # the RGBD product pairs depth with colour, so their rates
+                # must match, and the VLM decides at ~0.3-0.5 Hz anyway.
+                "depth_profile": "848x480x6",
+                "color_profile": "1280x720x6",
             }.items(),
             condition=IfCondition(LaunchConfiguration("perception")),
         ),

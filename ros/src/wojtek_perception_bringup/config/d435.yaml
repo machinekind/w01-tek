@@ -10,10 +10,10 @@
 #
 #   visual_preset 3 (HIGH_ACCURACY)  temporal noise at 3-4 m drops 97 -> 33 mm
 #                                    versus the DEFAULT preset (3x). Costs
-#                                    fill rate (95% -> 65%), which the grid
-#                                    reduction gets back for free (patch
-#                                    medians over thousands of pixels bring
-#                                    the reduced grid to ~100% fill).
+#                                    fill rate (95% -> 65%), which patch
+#                                    medians over thousands of pixels win
+#                                    back downstream (measured on the since-
+#                                    removed grid reduction: ~100% fill).
 #   temporal filter_smooth_delta 100 The librealsense default of 20 (mm) is
 #                                    below the frame-to-frame jump at range,
 #                                    so the filter treats real noise as
@@ -79,11 +79,10 @@
     # image as geometry nor the RGBD message (realsense2_camera_msgs/RGBD has
     # no RViz plugin at all).
     #
-    # It is NOT what the planner path uses, and that reasoning has not
-    # changed: cloud_reduce still reduces from the depth image, because
-    # reducing a 400k-point cloud that was serialised first is the expensive
-    # way round. This is a second, parallel product for a human looking at
-    # the robot. It is built from the POST-decimation depth (424x240), so
+    # Depth consumers (cloud_accumulate on the PC) keep reading the depth
+    # IMAGE, because consuming a 400k-point cloud that was serialised first
+    # is the expensive way round. This is a second, parallel product for a
+    # human looking at the robot. It is built from the POST-decimation depth (424x240), so
     # ~102k points, ~1.6 MB a frame, ~24 MB/s at 15 Hz -- affordable on the
     # cable, and the first thing to turn off if the link is the bottleneck.
     # NAME TRAP, and the exact one this file warns about at the top. The

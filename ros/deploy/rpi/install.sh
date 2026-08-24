@@ -224,6 +224,15 @@ provision_tuning() {
         run "sudo systemctl enable cpu-performance.service"
     fi
 
+    # The IMU i2c IRQ must be serviced on the RT core, not on the loaded
+    # CPU0 -- see wojtek-i2c-irq.sh for the why and the measurements.
+    info "installing wojtek-i2c-irq.service (i2c IRQ -> RT core)"
+    run "sudo install -m755 '${HERE}/wojtek-i2c-irq.sh' /usr/local/sbin/wojtek-i2c-irq.sh"
+    run "sudo install -m644 '${HERE}/wojtek-i2c-irq.service' /etc/systemd/system/wojtek-i2c-irq.service"
+    run "sudo systemctl daemon-reload"
+    run "sudo systemctl enable wojtek-i2c-irq.service"
+    run "sudo systemctl start wojtek-i2c-irq.service || true"
+
     # Pi 3 only: isolcpus disables load balancing on the isolated cores, so
     # the whole taskset-2,3 stack piles onto core 2 while core 3 idles. The
     # A53 cannot hide that (122/200 Hz loop, 20 Hz policy tick); a loop

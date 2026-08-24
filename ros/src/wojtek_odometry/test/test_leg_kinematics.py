@@ -94,3 +94,22 @@ def test_knee_column_includes_fourbar(urdf, home_urdf):
     without = kin.jacobian(q)[:, 2]
     kin._passive = frozen
     assert np.linalg.norm(with_fourbar - without) > 1e-3
+
+
+def test_foot_state_matches_the_reference_implementations(urdf, home_urdf):
+    """foot_state() is the single-pass fast path the odometry node runs;
+    the numeric jacobian() stays the definition. Holding them equal is what
+    makes the fast path safe -- the four-bar coupling cannot silently drop
+    out of the geometric version."""
+    rng = np.random.default_rng(11)
+    for leg in LEGS:
+        kin = LegKinematics(urdf, leg)
+        q0 = _home_q(home_urdf, leg)
+        for _ in range(5):
+            q = q0 + rng.uniform(-0.4, 0.4, 3)
+            qd = rng.uniform(-3.0, 3.0, 3)
+            pos, jac, omega = kin.foot_state(q, qd)
+            np.testing.assert_allclose(pos, kin.foot_position(q), atol=1e-12)
+            np.testing.assert_allclose(jac, kin.jacobian(q), atol=1e-6)
+            np.testing.assert_allclose(
+                omega, kin.shank_angular_velocity(q, qd), atol=1e-9)

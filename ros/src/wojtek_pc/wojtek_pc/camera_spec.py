@@ -34,7 +34,7 @@ COLOR_ENCODING = "rgb8"
 # Vertical FOV the render must use so that fy comes out at DEPTH_FY.
 FOVY_DEG = math.degrees(2.0 * math.atan(DEPTH_HEIGHT / (2.0 * DEPTH_FY)))
 
-# -- depth validity window (matches config/cloud_reduce.yaml on the robot) ---
+# -- depth validity window (the D435 pipeline's usable range) ----------------
 DEPTH_MIN_M = 0.3
 DEPTH_MAX_M = 3.0
 
@@ -76,7 +76,7 @@ def depth_to_mm(depth_m, min_m=DEPTH_MIN_M, max_m=DEPTH_MAX_M):
 
     Anything outside [min_m, max_m] -- including the renderer's far-plane
     value for sky pixels and any non-finite garbage -- becomes 0, the
-    RealSense "no return" convention that cloud_reduce already filters.
+    RealSense "no return" convention that depth consumers already filter.
     """
     depth_m = np.asarray(depth_m)
     valid = np.isfinite(depth_m) & (depth_m >= min_m) & (depth_m <= max_m)

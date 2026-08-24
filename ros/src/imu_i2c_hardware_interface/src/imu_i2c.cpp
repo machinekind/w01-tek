@@ -144,6 +144,22 @@ bool ImuI2C::initialize()
     return false;
   }
 
+  // The kernel's default I2C transfer timeout is 1 s, and this read runs
+  // inside ros2_control's RT loop: one stuck transaction then costs ~200
+  // cycles at 400 Hz (seen on the robot whenever CPU0 -- where the i2c IRQ
+  // is serviced -- is loaded). 50 ms caps that damage at ~20 cycles, and a
+  // timed-out read already degrades to "hold the last sample" upstream.
+  // I2C_TIMEOUT takes units of 10 ms and sets the ADAPTER timeout (bus-wide,
+  // not per-fd) -- acceptable, this bus carries only the IMU.
+  if (ioctl(fd_, I2C_TIMEOUT, 5UL) < 0) {
+    // Not fatal: the transfer path works either way, just with the slow
+    // default timeout. Record it so the hardware interface can log it.
+    char buf[192];
+    std::snprintf(buf, sizeof(buf), "I2C_TIMEOUT: %s (keeping kernel default)",
+                  strerror(errno));
+    last_error_ = buf;
+  }
+
   uint8_t who = 0;
   if (!read_regs(addr_ag_, LSM6_WHO_AM_I, &who, 1)) {
     return false;

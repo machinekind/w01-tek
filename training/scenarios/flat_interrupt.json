@@ -4,7 +4,7 @@
   "wait": 6
  },
  {
-  "wav": "scenarios/wavs/q_kuchnia.wav",
+  "wav": "scenarios/wavs/q_schody_szybko.wav",
   "quiet": 2.5,
   "wait": 45
  },
@@ -14,7 +14,7 @@
  {
   "wav": "scenarios/wavs/q_gdzie.wav",
   "quiet": 2.5,
-  "wait": 45
+  "wait": 40
  },
  {
   "wav": "scenarios/wavs/q_stop.wav",

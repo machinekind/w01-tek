@@ -103,7 +103,29 @@ MIN_KEEP_S = 0.2
 TRIM_REL_THRESHOLD = 0.05  # frame RMS below this fraction of peak = not speech
 
 
+# The v2 takes showed quiet-tail trimming is not enough: chatterbox's junk is
+# often LOUD (a synthetic smear or foreign-language babble), so an RMS floor
+# keeps it. Second pass: junk almost always sits AFTER the last long silence
+# gap, and real final words do not -- Polish sentence-final words follow
+# their sentence within ~0.3 s. So cut everything after a trailing gap of
+# GAP_MIN_S when what follows is short; a long segment after a gap is treated
+# as speech (a genuine dramatic pause) and kept.
+GAP_MIN_S = 0.40
+GAP_SEGMENT_MAX_S = 1.2
+
+
+def _fade_out(pcm: np.ndarray, rate: int) -> np.ndarray:
+    out = pcm.copy()
+    fade = min(int(rate * TRIM_FADE_S), len(out))
+    if fade > 1:
+        out[-fade:] = (out[-fade:].astype(np.float32)
+                       * np.linspace(1.0, 0.0, fade)).astype(np.int16)
+    return out
+
+
 def trim_tail_noise(pcm: np.ndarray, rate: int = SAMPLE_RATE) -> np.ndarray:
+    if os.environ.get("TTS_TAIL_TRIM", "on") == "off":
+        return pcm
     n = int(rate * TRIM_FRAME_S)
     if len(pcm) < 4 * n:
         return pcm
@@ -115,15 +137,34 @@ def trim_tail_noise(pcm: np.ndarray, rate: int = SAMPLE_RATE) -> np.ndarray:
     speech = rms >= peak * TRIM_REL_THRESHOLD
     if not speech.any():
         return pcm
+    # Pass 1: drop the quiet tail after the last speech-like frame.
     last = int(np.nonzero(speech)[0][-1])
     end = min(len(pcm), (last + 1) * n + int(rate * TRIM_KEEP_S))
     end = max(end, int(rate * MIN_KEEP_S), len(pcm) - int(rate * TRIM_MAX_S))
-    out = pcm[:end].copy()
-    fade = min(int(rate * TRIM_FADE_S), len(out))
-    if fade > 1:
-        out[-fade:] = (out[-fade:].astype(np.float32)
-                       * np.linspace(1.0, 0.0, fade)).astype(np.int16)
-    return out
+    # Pass 2: loud junk after a trailing silence gap. Walk the speech mask up
+    # to `end`, find the last gap of >= GAP_MIN_S; if the speech after it is
+    # a short blob, cut at the gap instead.
+    gap_frames = int(GAP_MIN_S / TRIM_FRAME_S)
+    upto = min(len(speech), end // n)
+    run = 0
+    last_gap_end = None
+    for i in range(upto):
+        if speech[i]:
+            if run >= gap_frames:
+                last_gap_end = i          # first speech frame after a long gap
+            run = 0
+        else:
+            run += 1
+    if last_gap_end is not None:
+        tail_s = (upto - last_gap_end) * TRIM_FRAME_S
+        if tail_s <= GAP_SEGMENT_MAX_S:
+            cut = max((last_gap_end - run) * n, int(rate * MIN_KEEP_S))
+            gap_start = last_gap_end
+            while gap_start > 0 and not speech[gap_start - 1]:
+                gap_start -= 1
+            cut = max(gap_start * n + int(rate * TRIM_KEEP_S), int(rate * MIN_KEEP_S))
+            end = min(end, cut)
+    return _fade_out(pcm[:end], rate)
 
 
 def pcm_to_wav_bytes(pcm: np.ndarray, rate: int = SAMPLE_RATE) -> bytes:

@@ -575,3 +575,41 @@ def test_chunking_toggle_speaks_in_one_piece(bound, monkeypatch):
     monkeypatch.setenv("WOJTEK_TTS_CHUNKING", "off")
     speak(TWO_CHUNKS)
     assert spans(bound, "tts.first_audio")[0]["chunks"] == 1
+
+
+def test_loud_junk_after_a_gap_is_cut():
+    """v2 takes: the tail artifact is often LOUD (smear / foreign babble), so
+    an RMS floor keeps it. It sits after the last long silence gap; a real
+    final word does not."""
+    from wojtek_rl.agent.tts_server import trim_tail_noise
+
+    rate = 24000
+    t = np.linspace(0, 1, rate, dtype=np.float32)
+    speech = (np.sin(2 * np.pi * 220 * t) * 12000).astype(np.int16)
+    gap = np.zeros(int(rate * 0.5), np.int16)
+    loud_junk = (np.sin(2 * np.pi * 950 * t[: int(rate * 0.6)]) * 10000).astype(np.int16)
+    out = trim_tail_noise(np.concatenate([speech, gap, loud_junk]), rate)
+    assert len(out) <= rate + int(rate * 0.25)          # junk and most of the gap gone
+    assert np.array_equal(out[: rate // 2], speech[: rate // 2])
+
+
+def test_a_long_segment_after_a_pause_is_kept():
+    """A genuine dramatic pause mid-reply must not lose the second half."""
+    from wojtek_rl.agent.tts_server import trim_tail_noise
+
+    rate = 24000
+    t = np.linspace(0, 1, rate, dtype=np.float32)
+    part = (np.sin(2 * np.pi * 220 * t) * 12000).astype(np.int16)
+    gap = np.zeros(int(rate * 0.5), np.int16)
+    pcm = np.concatenate([part, gap, part, part])        # 2 s of speech after the pause
+    out = trim_tail_noise(pcm, rate)
+    assert len(out) >= len(pcm) - int(rate * 0.3)
+
+
+def test_tail_trim_can_be_disabled(monkeypatch):
+    from wojtek_rl.agent.tts_server import trim_tail_noise
+
+    monkeypatch.setenv("TTS_TAIL_TRIM", "off")
+    rate = 24000
+    pcm = synth_speech_with_junk_tail(rate)
+    assert np.array_equal(trim_tail_noise(pcm, rate), pcm)

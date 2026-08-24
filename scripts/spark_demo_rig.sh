@@ -120,8 +120,12 @@ if ! curl -sf localhost:8120/health >/dev/null 2>&1; then
   # tts_server runs from ITS OWN venv: chatterbox pins transformers 4.46 /
   # tokenizers 0.20 while vllm needs 5.x / 0.23, and one shared env cannot
   # hold both (cost a serve cycle to learn). deploy builds /root/venv_tts.
+  # --temperature 0.6: cooler sampling measurably reduces chatterbox's
+  # hallucinated tails and language slips (the "foreign babble" from the v2
+  # takes). A/B'd against default 0.8 by ear before being made the default.
   setsid nohup env TTS_LANGUAGE=pl TQDM_DISABLE=1 TTS_STREAM_SPLIT=off \
     /root/venv_tts/bin/python -m wojtek_rl.agent.tts_server --port 8120 \
+    --temperature 0.6 \
     > /root/logs/tts.log 2>&1 &
   echo "tts starting (warmup inside)"
 fi
@@ -170,7 +174,7 @@ sleep 2
 [ -f ~/.hf_token ] && export HF_TOKEN="\$(cat ~/.hf_token)"
 setsid nohup env SCENE=${scene} ${spawn} MUJOCO_GL=egl \
   HF_TOKEN="\${HF_TOKEN:-}" HF_ORGANIZATION=hvsr-robotics TQDM_DISABLE=1 \
-  VLM_BACKEND=openai AGENT_URL=http://127.0.0.1:8090 \
+  VLM_BACKEND=openai AGENT_URL=http://127.0.0.1:8090 WOJTEK_NAV_FORWARD_SCALE=2 \
   ASR_URL=http://127.0.0.1:8110 TTS_ENGINE=remote TTS_URL=http://127.0.0.1:8120 \
   AGENT_TRACE=/root/takes/${scene}_trace.jsonl \
   python3 -m wojtek_rl.room_app --port 8010 --agent-model "${AGENT_MODEL}" \

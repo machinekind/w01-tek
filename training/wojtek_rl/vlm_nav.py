@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import math
+import os
 import re
 from dataclasses import dataclass
 from typing import Protocol
@@ -117,6 +118,18 @@ def decision_to_command(decision: VlmDecision) -> str | None:
     if amount is None or not math.isfinite(amount):
         raise ValueError(f"{action} needs a finite amount, got {amount!r}")
     if action == "forward":
+        # WOJTEK_NAV_FORWARD_SCALE stretches forward legs (user call from the
+        # castle takes: FutureNav's VLN-CE grid of 0.25 m steps crosses a big
+        # hall glacially, and the prompt-based backends are timid too). Scale
+        # BEFORE the clamp, so the ceiling still holds; turns are untouched
+        # because scaling a rotation changes where the robot looks, not just
+        # how fast it gets there.
+        try:
+            scale = float(os.environ.get("WOJTEK_NAV_FORWARD_SCALE", "1"))
+        except ValueError:
+            scale = 1.0
+        if scale > 0:
+            amount *= scale
         amount = min(MAX_FORWARD_M, max(MIN_FORWARD_M, amount))
     elif action == "backward":
         amount = min(MAX_BACKWARD_M, max(MIN_FORWARD_M, amount))

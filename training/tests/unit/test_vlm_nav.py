@@ -394,3 +394,19 @@ def test_situation_text_omits_the_budget_when_uncapped():
     uncapped = situation_text("go", [], 3, None, POSE)
     assert "Step 3 of 20." in capped
     assert "Step 3." in uncapped and " of " not in uncapped.splitlines()[1]
+
+
+def test_forward_scale_env(monkeypatch):
+    """WOJTEK_NAV_FORWARD_SCALE stretches forward legs (castle-take verdict:
+    0.25 m VLN-CE steps cross a big hall glacially) but never past the safety
+    clamp, and never touches turns."""
+    from wojtek_rl.vlm_nav import VlmDecision, decision_to_command
+
+    monkeypatch.setenv("WOJTEK_NAV_FORWARD_SCALE", "2")
+    assert decision_to_command(VlmDecision("forward", 0.25, "")) == "forward 0.5"
+    assert decision_to_command(VlmDecision("forward", 1.5, "")) == "forward 2"
+    assert decision_to_command(VlmDecision("turn_left", 45, "")) == "turn_left 45"
+    monkeypatch.setenv("WOJTEK_NAV_FORWARD_SCALE", "not-a-number")
+    assert decision_to_command(VlmDecision("forward", 0.5, "")) == "forward 0.5"
+    monkeypatch.delenv("WOJTEK_NAV_FORWARD_SCALE")
+    assert decision_to_command(VlmDecision("forward", 0.5, "")) == "forward 0.5"

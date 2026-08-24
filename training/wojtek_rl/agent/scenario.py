@@ -90,14 +90,25 @@ async def _wait_for_reply(events, t0: float, quiet_s: float, cap_s: float) -> No
     """
     asked_at = time.monotonic() - t0
     deadline = asked_at + cap_s
+    rate = SAMPLE_RATE
     while True:
         await asyncio.sleep(0.25)
         now = time.monotonic() - t0
         if now >= deadline:
             print(f"[wait] cap {cap_s:g}s reached with no settled reply", flush=True)
             return
-        heard = [at for kind, at, _ in events if kind == "a" and at > asked_at]
-        if heard and (now - max(heard)) >= quiet_s:
+        # PLAYBACK head, not arrival time: the server pushes a reply's frames
+        # in a burst far faster than real time, so "no frames for 2.5 s" can
+        # be true while the browser still has seconds of audio queued -- the
+        # v2 rapid-fire take asked its next question straight over the
+        # previous answer. Same accumulation rule as lay_track().
+        head = None
+        for kind, at, pcm in events:
+            if kind != "a" or at <= asked_at:
+                continue
+            start = at if head is None else max(at, head)
+            head = start + len(pcm) / rate
+        if head is not None and now >= head + quiet_s:
             return
 
 

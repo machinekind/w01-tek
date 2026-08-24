@@ -29,6 +29,21 @@ dr:
   # back under the body, not a symmetric strength spread.
   motor_strength: { enable: false, range: [0.5, 1.1] }
 
+# Random Network Distillation exploration bonus, off by default. Enabled,
+# training runs the vendored trainer fork (wojtek_rl/ppo_rnd.py): a frozen
+# random target MLP + a trained predictor over `obs_key`; the predictor's
+# per-transition MSE, RMS-normalized, times `coef`, is added to the env
+# reward before GAE. `coef` is in units of the RMS-normalized bonus (~1.0
+# early), so weigh it against the per-step extrinsic reward (~0.1-0.3 on
+# the flat task) — 0.01-0.05 is gentle pressure, 0.5 would dominate.
+rnd:
+  enable: false
+  coef: 0.02
+  learning_rate: 1e-4
+  out_dim: 128
+  hidden: [256, 256]
+  obs_key: privileged_state # novelty in true-state space, not actor obs
+
 wandb:
   enable: true
   project: fbb-locomotion

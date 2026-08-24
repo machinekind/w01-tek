@@ -294,8 +294,37 @@ def main(cfg: DictConfig) -> None:
     else:
         wrap_env_fn = wrapper.wrap_for_brax_training
 
+    # RND exploration bonus (cfg.rnd): the vendored trainer fork with the
+    # intrinsic-reward plumbing. Disabled runs stay on stock brax ppo.train.
+    rnd_cfg = OmegaConf.to_container(cfg.get("rnd", {}), resolve=True) or {}
+    rnd_kwargs = {}
+    trainer = ppo.train
+    if rnd_cfg.get("enable"):
+        from wojtek_rl import ppo_rnd
+
+        trainer = ppo_rnd.train
+        rnd_kwargs["rnd_config"] = rnd_cfg
+        print(
+            f"rnd: intrinsic bonus on {rnd_cfg['obs_key']} "
+            f"(coef {rnd_cfg['coef']}, lr {rnd_cfg['learning_rate']})"
+        )
+    # LCP gradient penalty (cfg.lcp.coef, arXiv 2410.11825) rides the same
+    # vendored fork; requires it even when RND is off.
+    lcp_coef = float((cfg.get("lcp", {}) or {}).get("coef", 0.0) or 0.0)
+    if lcp_coef > 0.0:
+        from wojtek_rl import ppo_rnd
+
+        if trainer is not ppo_rnd.train:
+            raise SystemExit(
+                "lcp.coef > 0 requires the vendored fork; enable rnd or "
+                "extend the wiring"
+            )
+        rnd_kwargs["lcp_coefficient"] = lcp_coef
+        print(f"lcp: observation-gradient penalty coef {lcp_coef}")
+
     train_fn = functools.partial(
-        ppo.train,
+        trainer,
+        **rnd_kwargs,
         **training_params,
         network_factory=network_factory,
         seed=cfg.seed,

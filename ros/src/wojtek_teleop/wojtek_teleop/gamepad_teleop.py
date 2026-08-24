@@ -20,7 +20,15 @@ another driver enumerates differently):
   A                        toggle /wojtek/arm
   Y                        /wojtek/stand_up (ramp to standing pose)
   B                        /wojtek/lie_down (ramp down to folded)
-  D-pad up/down            standing height +- height_step (held set-point)
+  LB / RB                  standing height -/+ height_step (held set-point)
+  D-pad up                 /wojtek/trick_paw_wave (offer + shake a paw)
+  D-pad left               /wojtek/trick_bow
+  D-pad right              /wojtek/trick_sit
+  D-pad down               /wojtek/trick_shake (shake-off)
+
+Tricks are real_io_node's scripted clips: like the Y/B ramps they are
+refused while ARMED and (additionally) unless the robot stands near the
+home pose, so a mid-walk D-pad press is rejected server-side.
 
 The Y/B ramps mirror the operator consoles' Stand up / Lie down buttons --
 same services, same rule that real_io_node refuses them while ARMED, so a
@@ -63,10 +71,13 @@ class GamepadTeleop(Node):
         self._ax_vx = self.declare_parameter("vx_axis", 1).value
         self._ax_yaw = self.declare_parameter("yaw_axis", 0).value
         self._ax_vy = self.declare_parameter("vy_axis", 3).value
+        self._ax_dpad_x = self.declare_parameter("dpad_x_axis", 6).value
         self._ax_dpad_y = self.declare_parameter("dpad_y_axis", 7).value
         self._btn_arm = self.declare_parameter("arm_button", 0).value
         self._btn_stand = self.declare_parameter("stand_button", 3).value  # Y
         self._btn_lie = self.declare_parameter("lie_button", 1).value      # B
+        self._btn_height_dn = self.declare_parameter("height_down_button", 4).value  # LB
+        self._btn_height_up = self.declare_parameter("height_up_button", 5).value    # RB
         # Extra deadzone on top of the joy driver's own, rescaled so full
         # deflection still reaches the box edge (bluetooth pads idle off-center).
         self._deadzone = self.declare_parameter("deadzone", 0.1).value
@@ -85,20 +96,33 @@ class GamepadTeleop(Node):
         self._arm_btn_prev = 0
         self._stand_btn_prev = 0
         self._lie_btn_prev = 0
-        self._dpad_y_prev = 0.0
+        self._height_btn_prev = (0, 0)
+        self._dpad_prev = (0.0, 0.0)
         self._armed = False           # last state we successfully commanded
 
         self._arm_cli = self.create_client(SetBool, "wojtek/arm")
         self._stand_cli = self.create_client(Trigger, "wojtek/stand_up")
         self._lie_cli = self.create_client(Trigger, "wojtek/lie_down")
+        # D-pad direction -> real_io_node's scripted show clips.
+        self._trick_clis = {
+            "up": (self.create_client(Trigger, "wojtek/trick_paw_wave"),
+                   "trick_paw_wave"),
+            "left": (self.create_client(Trigger, "wojtek/trick_bow"),
+                     "trick_bow"),
+            "right": (self.create_client(Trigger, "wojtek/trick_sit"),
+                      "trick_sit"),
+            "down": (self.create_client(Trigger, "wojtek/trick_shake"),
+                     "trick_shake"),
+        }
         self._pub_cmd = self.create_publisher(Twist, "cmd_vel", 10)
         self.create_subscription(Joy, "joy", self._on_joy, 10)
         self.create_timer(1.0 / DRIVE_TICK_HZ, self._tick)
         self.get_logger().info(
             "gamepad teleop up -- left stick vx/yaw, right stick strafe, "
             "A toggles arm, Y stand up, B lie down, "
-            f"D-pad height +-{self._height_step * 1000:.0f} mm "
-            f"({self.height_range[0]:.3f}..{self.height_range[1]:.3f} m)"
+            f"LB/RB height +-{self._height_step * 1000:.0f} mm "
+            f"({self.height_range[0]:.3f}..{self.height_range[1]:.3f} m), "
+            "D-pad tricks: up=paw_wave left=bow right=sit down=shake"
         )
 
     def _load_meta(self):
@@ -166,15 +190,31 @@ class GamepadTeleop(Node):
             self._call_trigger(self._lie_cli, "lie_down")
         self._lie_btn_prev = btn
 
-        # D-pad up/down: step the held height set-point on the press edge
-        # (the hat reports -1/0/+1, +1 = up).
-        dpad = self._axis(msg, self._ax_dpad_y)
-        if abs(self._dpad_y_prev) < 0.5 and abs(dpad) >= 0.5:
+        # LB/RB: step the held height set-point on the press edge.
+        h_dn = msg.buttons[self._btn_height_dn] if self._btn_height_dn < len(msg.buttons) else 0
+        h_up = msg.buttons[self._btn_height_up] if self._btn_height_up < len(msg.buttons) else 0
+        if (h_dn and not self._height_btn_prev[0]) or (
+                h_up and not self._height_btn_prev[1]):
             lo, hi = self.height_range
-            step = self._height_step if dpad > 0 else -self._height_step
+            step = self._height_step if h_up else -self._height_step
             self._height = min(max(self._height + step, lo), hi)
             self.get_logger().info(f"height set-point {self._height:.3f} m")
-        self._dpad_y_prev = dpad
+        self._height_btn_prev = (h_dn, h_up)
+
+        # D-pad: one trick per direction, on the press edge (the hat
+        # reports -1/0/+1 per axis; +1 = up on y, +1 = left on x).
+        dx = self._axis(msg, self._ax_dpad_x)
+        dy = self._axis(msg, self._ax_dpad_y)
+        px, py = self._dpad_prev
+        direction = None
+        if abs(py) < 0.5 and abs(dy) >= 0.5:
+            direction = "up" if dy > 0 else "down"
+        elif abs(px) < 0.5 and abs(dx) >= 0.5:
+            direction = "left" if dx > 0 else "right"
+        if direction is not None:
+            cli, name = self._trick_clis[direction]
+            self._call_trigger(cli, name)
+        self._dpad_prev = (dx, dy)
 
     def _toggle_arm(self):
         if not self._arm_cli.service_is_ready():
@@ -192,8 +232,16 @@ class GamepadTeleop(Node):
                 return
             if resp.success:
                 self._armed = target
-            level = self.get_logger().info if resp.success else self.get_logger().error
-            level(f"arm({target}): {resp.message}")
+            # Two distinct call sites on purpose: rclpy caches the severity
+            # per call site, so routing success and failure through ONE
+            # logger call raises "Logger severity cannot be changed between
+            # calls" on the first refusal after a success -- which killed
+            # this node the first time real_io refused to re-arm
+            # (2026-08-10, robot out of the home-pose arming envelope).
+            if resp.success:
+                self.get_logger().info(f"arm({target}): {resp.message}")
+            else:
+                self.get_logger().error(f"arm({target}): {resp.message}")
         fut.add_done_callback(done)
 
     def _call_trigger(self, client, name):
@@ -210,8 +258,11 @@ class GamepadTeleop(Node):
             except Exception as e:  # noqa: BLE001 -- surface any RPC failure
                 self.get_logger().error(f"{name} call failed: {e}")
                 return
-            level = self.get_logger().info if resp.success else self.get_logger().error
-            level(f"{name}: {resp.message}")
+            # Distinct call sites; see the arm callback above.
+            if resp.success:
+                self.get_logger().info(f"{name}: {resp.message}")
+            else:
+                self.get_logger().error(f"{name}: {resp.message}")
         fut.add_done_callback(done)
 
     # ---- drive tick ------------------------------------------------------------

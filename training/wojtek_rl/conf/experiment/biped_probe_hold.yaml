@@ -1,0 +1,34 @@
+# @package _global_
+# BIPED HOLD CAPABILITY PROBE (2026-08-20): v3-v5 all cap at ~1 s of
+# active balance regardless of reward shape.  Hypothesis: PPO's
+# exploration noise (std ~0.19 x action_scale 0.5 = +-0.1 rad kicks at
+# 50 Hz, pendulum time constant ~0.2 s) keeps the stochastic policy
+# from ever holding during training, so the value function writes the
+# stand off as "falls anyway".  This probe dedicates the whole run to
+# the hold: every reset starts reared (alpha in [0.9, 1]), and
+# action_scale 0.5 -> 0.25 halves the injected noise in radians.
+# Verdict: >50% clean-reared from stand init => balance is learnable
+# and the blocker is the curriculum mix; ~0% => physics/control-level
+# blocker (PD gains, control rate, foot geometry).
+# Usage: ./training/run.sh train +experiment=biped_probe_hold seed=0
+defaults:
+  - override /task: biped
+
+
+run_name: wojtek_biped_probe_hold
+
+task:
+  env:
+    biped_init_prob: 1.0
+    biped_alpha_min: 0.9
+    action_scale: 0.25
+  ppo:
+    num_timesteps: 500000000
+    # Balance is a long-horizon survival problem: at the Go1 default
+    # gamma=0.97 the value horizon is ~0.66 s, which is exactly the hold
+    # ceiling v3-v5 and the first probe all hit — beyond it, holding and
+    # falling have near-equal discounted returns.  0.99 -> ~2 s.
+    # (0.995 exploded to NaN by 111M steps: larger value targets with the
+    # brax default max_grad_norm=None, i.e. no gradient clipping.)
+    discounting: 0.99
+    max_grad_norm: 1.0

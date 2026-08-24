@@ -6,10 +6,12 @@
 # Phases (skip any with the matching flag):
 #   1 base packages : ROS 2 Jazzy + AP tools            (--skip-packages)
 #   2 RT kernel     : Ubuntu Pro realtime-kernel        (--skip-kernel)
-#   3 RT tuning     : cmdline isolcpus, rtprio limits, cpu governor (--skip-tuning)
+#   3 RT tuning     : cmdline isolcpus, rtprio limits, cpu governor, (--skip-tuning)
+#                     Pi 3: wojtek-affinity core-partition daemon
 #   4 network       : hostapd/dnsmasq/netplan + failover switch      (--skip-network)
-#   5 robot service : install wojtek-robot.service (boot autostart   (--skip-service)
-#                     only with --enable-robot)
+#   5 robot service : install wojtek-robot.service + the local       (--skip-service)
+#                     drop-in (folded boot, bag off, /home/rpi/policy
+#                     symlink); boot autostart only with --enable-robot
 #   6 shell env     : ROS env in ~/.bashrc (domain 42 + CycloneDDS)  (--skip-shell-env)
 #
 # Needs the token for phase 2 (RT kernel), passed by deploy.sh from .env:
@@ -143,6 +145,19 @@ provision_kernel() {
         info "already running a PREEMPT_RT kernel ($(uname -r)) -- skipping"
         return
     fi
+    # Ubuntu Pro's realtime-kernel raspi variant supports Pi 4 / Pi 5 only.
+    # On older boards (Pi 3) `pro enable` fails hard, so skip with a warning
+    # instead of aborting the whole provision run.
+    local model
+    model="$(tr -d '\0' </proc/device-tree/model 2>/dev/null || true)"
+    case "${model}" in
+        *"Raspberry Pi 4"*|*"Raspberry Pi 5"*) ;;
+        *)
+            info "WARN: '${model:-unknown board}' is not supported by the Pro"
+            info "      realtime-kernel (Pi 4/5 only) -- skipping. The stack"
+            info "      runs on the stock kernel without RT guarantees."
+            return ;;
+    esac
     if ! command -v pro >/dev/null 2>&1; then
         run "sudo apt-get install -y ubuntu-advantage-tools"
     fi
@@ -208,6 +223,24 @@ provision_tuning() {
         run "sudo cp '${HERE}/cpu-performance.service' /etc/systemd/system/cpu-performance.service"
         run "sudo systemctl enable cpu-performance.service"
     fi
+
+    # Pi 3 only: isolcpus disables load balancing on the isolated cores, so
+    # the whole taskset-2,3 stack piles onto core 2 while core 3 idles. The
+    # A53 cannot hide that (122/200 Hz loop, 20 Hz policy tick); a loop
+    # daemon re-partitions the nodes -- see wojtek-affinity.sh. Pi 4/5 cores
+    # are fast enough that the pileup never showed, keep them stock.
+    local model
+    model="$(tr -d '\0' </proc/device-tree/model 2>/dev/null || true)"
+    case "${model}" in
+        *"Raspberry Pi 3"*)
+            info "Pi 3: installing the core-partition daemon (wojtek-affinity)"
+            run "sudo install -m755 '${HERE}/wojtek-affinity.sh' /usr/local/sbin/wojtek-affinity.sh"
+            run "sudo install -m644 '${HERE}/wojtek-affinity.service' /etc/systemd/system/wojtek-affinity.service"
+            run "sudo systemctl daemon-reload"
+            run "sudo systemctl enable wojtek-affinity.service"
+            ;;
+        *) info "not a Pi 3 -- skipping the core-partition daemon" ;;
+    esac
 }
 
 # ---------------------------------------------------------------- phase 4
@@ -266,6 +299,12 @@ provision_network() {
 provision_service() {
     say "Phase 5: robot control service"
     run "sudo install -m644 '${HERE}/../wojtek-robot.service' /etc/systemd/system/wojtek-robot.service"
+    # Robot-local overrides (folded boot pose, bag off, /home/rpi/policy
+    # symlink as the policy reference) -- see wojtek-robot-local.conf.
+    # The hand-written 10-policy.conf from the pre-repo era is retired.
+    run "sudo mkdir -p /etc/systemd/system/wojtek-robot.service.d"
+    run "sudo install -m644 '${HERE}/wojtek-robot-local.conf' /etc/systemd/system/wojtek-robot.service.d/10-local.conf"
+    run "sudo rm -f /etc/systemd/system/wojtek-robot.service.d/10-policy.conf"
     run "sudo systemctl daemon-reload"
     # The unit is always installed/refreshed; --enable-robot decides whether it
     # runs at power-on, and this phase enforces that state either way. Running

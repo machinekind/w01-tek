@@ -47,6 +47,40 @@ GATE_STRIP_X = (0.17, 0.33, 0.5)
 GATE_STRIP_Y = (-0.2, 0.0, 0.2)
 
 
+def target_sag_cost(
+    qpos_act: jax.Array, motor_targets: jax.Array, contact: jax.Array
+) -> jax.Array:
+    """Squared gap between commanded motor targets and measured joint
+    positions, summed over the legs whose foot is in ground contact.
+
+    On a soft plant (low kp) gravity makes the loaded joints sag below
+    their targets by tau/kp; offsetting the targets upward cannot close
+    this gap (the offset IS a target != position). The only way the policy
+    can zero it is feed-forward torque carrying the weight — which makes
+    this term, paired with the tau_ff head, a learned gravity
+    compensation. Stance legs only: swing legs are unloaded (no sag) and
+    their target lead is how motion happens; charging them would fight
+    the gait and the tau_ff_swing penalty. Module-level and model-free so
+    tests/unit can exercise it.
+    """
+    err = jp.square(qpos_act - motor_targets).reshape(4, 3)
+    return jp.sum(jp.sum(err, axis=-1) * contact.astype(jp.float32))
+
+
+def tau_ff_swing_cost(tau_ff: jax.Array, contact: jax.Array) -> jax.Array:
+    """Feed-forward torque spent on airborne legs.
+
+    Sum over legs of the leg's |tau_ff| (3 joints per leg, paths.LEGS
+    order), counted only when that leg's foot is NOT in ground contact.
+    A swing leg has nothing to push against, so feed-forward torque there
+    is at best wasted and at worst a flail; the stance legs are where
+    force control belongs. Module-level and model-free so tests/unit can
+    exercise it.
+    """
+    per_leg = jp.sum(jp.abs(tau_ff).reshape(4, 3), axis=-1)
+    return jp.sum(per_leg * (1.0 - contact.astype(jp.float32)))
+
+
 def default_config() -> config_dict.ConfigDict:
     return config_dict.create(
         ctrl_dt=0.02,
@@ -135,6 +169,12 @@ def default_config() -> config_dict.ConfigDict:
         # the critic. Changing either changes obs sizes, so checkpoints
         # don't transfer across obs configs.
         obs=config_dict.create(
+            # Steps of proprio history behind the proprio_history component
+            # (joint_pos+joint_vel+last_act per step, newest last). 0 = the
+            # component does not exist and no buffer is kept — bit-exact
+            # legacy behavior. Robot-available by construction (the deploy
+            # runtime can rebuild it from its own observation stream).
+            history_len=0,
             include=(),  # obs presets whitelist actor sensors; () = all
             state=(
                 "gyro",
@@ -372,6 +412,25 @@ def default_config() -> config_dict.ConfigDict:
         # noise-driven standing limit cycle structurally; mirror the same
         # one-liner on the robot when deploying a policy trained with it.
         action_filter=0.0,
+        # Feed-forward torque head (off by default; nothing changes while
+        # disabled, down to the byte). Enabled, the policy's action grows
+        # from 12 to 24: the first half stays the PD position targets, the
+        # second half, times `scale` (N*m, and clipped to +-scale), is
+        # applied as joint torque on top of the PD servo via qfrc_applied —
+        # the same tau = kp*e - kd*qd + tau_ff sum the MAB driver runs on
+        # the robot. It follows the action-delay/latency switching of the
+        # position targets. NOTE the sim clamps the PD force and tau_ff
+        # SEPARATELY (forcerange on the servo, `scale` here), so the total
+        # joint torque can transiently reach max_torque + scale; the
+        # deployed driver must clamp the same way, not clamp the sum.
+        # rate_weight scales the tau_ff half inside the action_rate
+        # penalty, so smoothness pressure on the torque head — whose job
+        # is transient force — is tunable separately from the targets'.
+        tau_ff=config_dict.create(
+            enable=False,
+            scale=3.0,
+            rate_weight=1.0,
+        ),
         # Left/right mirror augmentation: with mirror_prob, an env presents
         # the policy a laterally mirrored world (obs mirrored on the way
         # out, actions un-mirrored on the way in; physics, rewards and
@@ -581,6 +640,35 @@ def default_config() -> config_dict.ConfigDict:
                 # nothing; a flat-scene run has the gate open everywhere.
                 flat_pitch=0.0,
                 energy=-2e-3,
+                # Positive, exp-shaped, command-normalized energy reward
+                # (see energy_cmd in the reward dict). 0 = off.
+                energy_cmd=0.0,
+                # Positive, exp-shaped, command-normalized SLIP reward (the
+                # energy_cmd construction applied to contact-foot slip):
+                # what makes friction adaptation worth learning — RMA's
+                # reward prices foot slip, and the mu-teacher probe showed
+                # an unpriced mu input goes unused. 0 = off.
+                slip_cmd=0.0,
+                # SELF-IDENT PROBE terms (positive, 0 = off): rewards for
+                # deliberately visiting the excitations that make model
+                # parameters observable. The stage-1 identifiability study
+                # (2026-08-16) measured that motor strength is INVISIBLE in
+                # any passive data (the forcerange cap never binds), kd
+                # needs free-leg transients, mu needs slip events. A probe
+                # policy maximizes these under a fall penalty; they are
+                # NEVER enabled on a locomotion policy.
+                probe_sat=0.0,
+                probe_slip=0.0,
+                probe_transient=0.0,
+                probe_free_transient=0.0,
+                # Finite-difference BASE acceleration penalty (Sony
+                # 2502.10983 prices base angular acceleration; QuietWalk
+                # 2604.23702 identifies foot-ground force as the driver of
+                # structural vibration): squared vertical accel of the base
+                # plus base_accel_ang_weight x squared roll/pitch angular
+                # accel. The direct instrument behind the az_p99 and
+                # vibration metrics. 0 = off.
+                base_accel=0.0,
                 pose=-0.5,
                 feet_air_time=2.0,
                 feet_slip=-0.25,
@@ -616,7 +704,65 @@ def default_config() -> config_dict.ConfigDict:
                 # above torque_limit_frac of it. Complements the max_torque
                 # clamp (the model's absolute ceiling) with a soft margin.
                 torque_limit=0.0,
+                # Feed-forward torque on airborne legs (see tau_ff and
+                # tau_ff_swing_cost): per-leg |tau_ff| gated by no-contact.
+                # Both terms read zero while tau_ff.enable is false.
+                tau_ff_swing=0.0,
+                # Quadratic effort on the feed-forward head. The `torques`
+                # term reads actuator_force, which is the PD servo only —
+                # without this, stance-leg feed-forward torque would be
+                # free energy.
+                tau_ff=0.0,
+                # Stance-leg gap between commanded targets and measured
+                # joint positions (see target_sag_cost): with the tau_ff
+                # head on, a learned gravity compensation.
+                target_sag=0.0,
             ),
+            # Fade the target_sag charge out with the commanded |wz|,
+            # reaching zero at this rate (rad/s; 0 = no fade, full charge
+            # everywhere). Pivoting loads the stance joints LATERALLY —
+            # that gap is commanded twist, not gravity sag, and charging
+            # it made pure spins an exploration-time deadlock (measured
+            # 2026-08-09: wz 1.0 -> 0.29 achieved at scale -5, 0.25 at
+            # -10, vs 0.83 uncharged). The factor is
+            # clip(1 - |cmd_wz|/fade, 0, 1) on the whole term.
+            target_sag_wz_fade=0.0,
+            # energy_cmd normalizers: motor watts per unit of commanded
+            # speed at which the exp argument reads 1.0. Calibrated from
+            # the v4 keeper (walk 0.5 = 16 W -> lin 32; a non-jumping
+            # step-turn budgeted ~30 W at 1 rad/s -> ang 30).
+            energy_cmd_sigma_lin=32.0,
+            energy_cmd_sigma_ang=30.0,
+            # slip_cmd normalizers: (m/s)^2 of summed contact-foot slip at
+            # which the exp argument reads 1.0, per unit of commanded speed.
+            # Speed-scaling is the recorded fix for the flat feet_slip
+            # collapse (-1.0 froze the policy into fast lines): slow careful
+            # motion pays proportionally less.
+            slip_cmd_sigma_lin=0.8,
+            slip_cmd_sigma_ang=0.5,
+            # Relative weight of the base ANGULAR acceleration inside the
+            # base_accel penalty (rad/s^2 spikes run ~5x the m/s^2 ones;
+            # 0.02 puts the two families on comparable footing).
+            base_accel_ang_weight=0.02,
+            # wz fade+floor for the base_accel charge (the feet_landing
+            # construction; fade 0 = full charge everywhere).
+            base_accel_wz_fade=0.0,
+            base_accel_wz_floor=0.0,
+            # Same fade for the feet_landing charge (rad/s; 0 = no fade).
+            # Pivoting has the hardest touchdowns, so a landing penalty
+            # makes spins the most expensive skill a fine-tune can shed:
+            # measured 2026-08-12, keeper restore at feet_landing -15 kept
+            # every linear skill stepping (slow td_p90 0.15 m/s, 6x quieter
+            # than the keeper) but achieved wz collapsed 0.96 -> 0.05. The
+            # sag experiment already proved only a near-binary fade (0.1)
+            # protects spins; linear fades and scale cuts do not.
+            feet_landing_wz_fade=0.0,
+            # Bottom of the feet_landing fade: the charge fraction a
+            # commanded spin still pays (0 = fully exempt, the v4
+            # behavior; 1 = no exemption). The middle ground between
+            # "spins stay loud" (v4, td_p90 0.87 in a spin) and "spins
+            # erode" (v2b, achieved wz 0.96 -> 0.05 at full charge).
+            feet_landing_wz_floor=0.0,
         ),
     )
 
@@ -624,6 +770,13 @@ def default_config() -> config_dict.ConfigDict:
 class WojtekJoystick(WojtekEnv):
     def __init__(self, config=None, config_overrides=None):
         super().__init__(config or default_config(), config_overrides)
+        # Feed-forward torque head (see tau_ff in default_config). Resolved
+        # first: action_size and the symmetry maps below depend on it.
+        _tff = self._config.get("tau_ff", None)
+        self._tau_ff_enabled = bool(_tff is not None and _tff.enable)
+        # Proprio-history buffer length (see obs.history_len). Static at
+        # trace time; 0 keeps the info tree and obs catalog unchanged.
+        self._history_len = int(self._config.obs.get("history_len", 0))
         # latency.min/max_substeps and n_substeps are static Python ints at
         # this point (config, not traced arrays), so plain Python checks are
         # safe here and run once outside jit.
@@ -772,6 +925,14 @@ class WojtekJoystick(WojtekEnv):
             from wojtek_rl import symmetry
 
             act_perm, act_sign = symmetry.joint_mirror()
+            if self._tau_ff_enabled:
+                # The torque head mirrors like the joints it drives.
+                act_perm = np.concatenate(
+                    [np.asarray(act_perm), np.asarray(act_perm) + 12]
+                )
+                act_sign = np.concatenate(
+                    [np.asarray(act_sign), np.asarray(act_sign)]
+                )
             self._act_perm = jp.array(act_perm)
             self._act_sign = jp.array(act_sign)
             state_perm, state_sign = symmetry.obs_mirror(self.actor_obs_names)
@@ -803,6 +964,13 @@ class WojtekJoystick(WojtekEnv):
             m.actuator_ctrlrange[idx, 1] = np.minimum(
                 m.actuator_ctrlrange[idx, 1], limit
             )
+
+    @property
+    def action_size(self) -> int:
+        # The feed-forward torque head doubles the policy output; the model
+        # keeps nu=12 actuators either way (the extra 12 go in as
+        # qfrc_applied, not through an actuator).
+        return self._mj_model.nu + (12 if self._tau_ff_enabled else 0)
 
     def _sample_command(self, rng, on_flat=None):
         """(vx, vy, wz, height). Zeroing (stand training) keeps the height.
@@ -1210,14 +1378,20 @@ class WojtekJoystick(WojtekEnv):
             "mirror": mirror,
             "rng": rng,
             "command": command,
+            # last_act stays 12-wide with the tau_ff head on: it feeds the
+            # actor's `last_act` observation, which keeps the position-target
+            # half only (the deployment obs contract does not grow).
             "last_act": jp.zeros(12),
             "last_last_act": jp.zeros(12),
-            "filtered_act": jp.zeros(12),
+            "filtered_act": jp.zeros(self.action_size),
             "steps_since_cmd": jp.array(0),
             "feet_air_time": jp.zeros(4),
             "swing_apex": jp.zeros(4),
             "last_contact": jp.zeros(4, dtype=bool),
             "last_torque": jp.zeros(12),
+            "last_base_vz": jp.zeros(()),
+            "last_gyro_xy": jp.zeros(2),
+            "last_qvel_probe": jp.zeros(12),
             "motor_targets": anchor,
             "step_count": jp.array(0),
             "phase": jp.array(0.0),  # master clock; per-leg via _leg_phases
@@ -1238,6 +1412,16 @@ class WojtekJoystick(WojtekEnv):
                 self._config.obs_noise.get("gyro_vib", 0.0)
             ),
         }
+        if self._history_len:
+            # Newest frame last; zeros read as "at home, at rest" which is
+            # what reset poses approximate. 36 = joint_pos + joint_vel +
+            # last_act.
+            info["proprio_hist"] = jp.zeros(self._history_len * 36)
+        if self._tau_ff_enabled:
+            # Raw (unit) torque half of the last action, for the rate
+            # penalty; and the last PHYSICAL tau_ff, for the delay paths.
+            info["last_tau_ff_act"] = jp.zeros(12)
+            info["tau_ff_prev"] = jp.zeros(12)
         metrics = {f"reward/{k}": jp.zeros(()) for k in self._config.reward.scales}
         # Posture and command-mix telemetry, written every step; declared on
         # every run (terrain on or off) so reset/step metrics keys agree.
@@ -1330,10 +1514,20 @@ class WojtekJoystick(WojtekEnv):
         af = self._config.action_filter
         filt = af * info["filtered_act"] + (1.0 - af) * action
         info["filtered_act"] = filt
+        # With the tau_ff head on, the first 12 outputs stay the position
+        # targets and the second 12 become feed-forward torque (N*m after
+        # the tau_ff.scale gain; the clip is a hard bound on the head's
+        # authority). Disabled, tau_ff is a zeros vector nothing reads.
+        pos_act = filt[:12] if self._tau_ff_enabled else filt
+        if self._tau_ff_enabled:
+            tff_scale = self._config.tau_ff.scale
+            tau_ff = jp.clip(filt[12:] * tff_scale, -tff_scale, tff_scale)
+        else:
+            tau_ff = jp.zeros(12)
         scale = jp.asarray(self._config.action_scale)
         scale = jp.tile(scale, 4) if scale.ndim > 0 and scale.size == 3 else scale
         motor_targets = jp.clip(
-            self._height_ctrl(info["command"][3]) + filt * scale,
+            self._height_ctrl(info["command"][3]) + pos_act * scale,
             self._target_lo,
             self._target_hi,
         )
@@ -1351,20 +1545,37 @@ class WojtekJoystick(WojtekEnv):
         # Subtract the encoder offset from the written targets, matching the
         # real driver's error against q~ = q + epsilon. Zero when disabled.
         eps = info["encoder_offset"]
+        # The tau_ff head rides the same delay switching as the position
+        # targets: what the driver would apply, the sim applies. qfrc_applied
+        # persists on mjx.Data across steps, so once enabled it is rewritten
+        # every step; disabled it is never touched.
+        if self._tau_ff_enabled:
+            nv = self._mj_model.nv
+            qfrc_prev = jp.zeros(nv).at[self._vadr].set(info["tau_ff_prev"])
+            qfrc_new = jp.zeros(nv).at[self._vadr].set(tau_ff)
         if self._config.latency.enable:
             # Substeps before ctrl_delay use the previous targets, the rest
             # the new ones.
             data = self._step_with_latency(
-                data, info["motor_targets"] - eps, motor_targets - eps, info["ctrl_delay"]
+                data, info["motor_targets"] - eps, motor_targets - eps,
+                info["ctrl_delay"],
+                **(
+                    {"qfrc_prev": qfrc_prev, "qfrc_new": qfrc_new}
+                    if self._tau_ff_enabled else {}
+                ),
             )
         else:
             # Default path: one ctrl for the whole period. Kept on the stock
             # mjx_env.step so the trajectory is unchanged; the where-scan
             # above shifts the float output by a few ULPs.
+            delayed = self._config.action_delay > 0
             applied_targets = (
-                info["motor_targets"] if self._config.action_delay > 0
-                else motor_targets
+                info["motor_targets"] if delayed else motor_targets
             )
+            if self._tau_ff_enabled:
+                data = data.replace(
+                    qfrc_applied=qfrc_prev if delayed else qfrc_new
+                )
             data = mjx_env.step(
                 self._mjx_model, data, applied_targets - eps, self.n_substeps
             )
@@ -1381,7 +1592,7 @@ class WojtekJoystick(WojtekEnv):
             info["swing_apex"],
         )
         rewards, done = self._get_reward(
-            data, info, action, motor_targets, first_contact, contact
+            data, info, action, motor_targets, first_contact, contact, tau_ff
         )
         # Spawn grace: a fall this early is the spawn's fault, not the
         # policy's -- feature spawns land on stair edges mid four-bar
@@ -1408,7 +1619,12 @@ class WojtekJoystick(WojtekEnv):
         )
         info["last_contact"] = contact
         info["last_last_act"] = info["last_act"]
-        info["last_act"] = action
+        if self._tau_ff_enabled:
+            info["last_act"] = action[:12]
+            info["last_tau_ff_act"] = action[12:]
+            info["tau_ff_prev"] = tau_ff
+        else:
+            info["last_act"] = action
         # Advance the gyro-vib resonator on this step's torque change.
         # This has to run before last_torque is overwritten below, or the
         # change would always read as zero. The recurrence runs on every
@@ -1423,6 +1639,9 @@ class WojtekJoystick(WojtekEnv):
             self._config.obs_noise.get("gyro_vib_decay", 0.9),
         )
         info["last_torque"] = data.actuator_force
+        info["last_base_vz"] = data.qvel[2]
+        info["last_gyro_xy"] = self._gyro(data)[:2]
+        info["last_qvel_probe"] = data.qvel[self._vadr]
         info["motor_targets"] = motor_targets
         # For the curriculum wrapper: where the base is, and how far the
         # commands asked to go so far. The resample below has not run yet,
@@ -1572,6 +1791,8 @@ class WojtekJoystick(WojtekEnv):
         # epsilon). Zero when disabled.
         catalog["joint_pos"] = catalog["joint_pos"] + info["encoder_offset"]
         catalog["command"] = info["command"]
+        if self._history_len:
+            catalog["proprio_history"] = info["proprio_hist"]
         leg_phase = self._leg_phases(info)
         catalog["phase"] = jp.concatenate([jp.cos(leg_phase), jp.sin(leg_phase)])
         if self._scan_enabled:
@@ -1589,6 +1810,21 @@ class WojtekJoystick(WojtekEnv):
         return catalog
 
     def _get_obs(self, data, info, rng=None):
+        if self._history_len:
+            # Push the CURRENT step's actor-visible proprio (encoder offset
+            # included, like the joint_pos component) before the obs is
+            # built, so the newest frame in the history is this step's.
+            # Deployment mirror: the runtime appends what it just observed.
+            frame = jp.concatenate([
+                data.qpos[self._qadr]
+                - self._home_ctrl
+                + info["encoder_offset"],
+                data.qvel[self._vadr],
+                info["last_act"],
+            ])
+            info["proprio_hist"] = jp.concatenate(
+                [info["proprio_hist"][frame.shape[0]:], frame]
+            )
         obs = self._build_obs(data, info, rng)
         if self._config.symmetry.enable:
             m = info["mirror"]
@@ -1606,7 +1842,12 @@ class WojtekJoystick(WojtekEnv):
         return obs
 
     # -- rewards ------------------------------------------------------------
-    def _get_reward(self, data, info, action, motor_targets, first_contact, contact):
+    def _get_reward(
+        self, data, info, action, motor_targets, first_contact, contact,
+        tau_ff=None,
+    ):
+        if tau_ff is None:
+            tau_ff = jp.zeros(12)
         cmd = info["command"]
         linvel = self._local_linvel(data)
         gyro = self._gyro(data)
@@ -1679,6 +1920,28 @@ class WojtekJoystick(WojtekEnv):
         )
 
         qvel = data.qvel[self._vadr]
+
+        # Action smoothness, split when the tau_ff head is on: the position
+        # half keeps the legacy expression against last_act (12-wide); the
+        # torque half is weighted by tau_ff.rate_weight so smoothness
+        # pressure on a head whose job is transient force stays tunable.
+        # Disabled, both are the legacy full-action expressions unchanged.
+        if self._tau_ff_enabled:
+            action_rate = jp.sum(
+                jp.square(action[:12] - info["last_act"])
+            ) + self._config.tau_ff.rate_weight * jp.sum(
+                jp.square(action[12:] - info["last_tau_ff_act"])
+            )
+            action_accel = jp.sum(
+                jp.square(
+                    action[:12] - 2 * info["last_act"] + info["last_last_act"]
+                )
+            )
+        else:
+            action_rate = jp.sum(jp.square(action - info["last_act"]))
+            action_accel = jp.sum(
+                jp.square(action - 2 * info["last_act"] + info["last_last_act"])
+            )
 
         # Velocity tracking kernels (absolute or relative), optionally
         # blended with a wider far-field exponential so far-off-command
@@ -1822,11 +2085,110 @@ class WojtekJoystick(WojtekEnv):
             "torque_rate": jp.sum(
                 jp.square(data.actuator_force - info["last_torque"])
             ),
-            "action_rate": jp.sum(jp.square(action - info["last_act"])),
-            "action_accel": jp.sum(
-                jp.square(action - 2 * info["last_act"] + info["last_last_act"])
-            ),
+            "action_rate": action_rate,
+            "action_accel": action_accel,
             "energy": jp.sum(jp.abs(qvel) * jp.abs(data.actuator_force)),
+            # Command-normalized energy reward (arXiv 2403.20001): motor
+            # power per unit of COMMANDED motion, exp-shaped, so a spin is
+            # not charged for existing (big command = big denominator) —
+            # only for being wasteful. The paper reports that without this
+            # term the policy bounces at every speed; measured here
+            # 2026-08-12: the jump-turn burns 64 W vs 16 W walking. Total
+            # torque includes the tau_ff head — free stance force would
+            # otherwise not count as energy. Gated by BOTH tracking
+            # kernels: ignoring the command is always the cheapest gait,
+            # and ungated at scale 2.5 the income beat tracking_ang_vel
+            # and the policy stood still under spin commands (measured:
+            # achieved wz 0.00, 1.2 W, near-full energy income). Gated,
+            # efficiency only pays where the command is being served.
+            "energy_cmd": jp.exp(
+                -jp.sum(jp.abs(qvel * (data.actuator_force + tau_ff)))
+                / (
+                    self._config.reward.energy_cmd_sigma_lin
+                    * jp.linalg.norm(cmd[:2])
+                    + self._config.reward.energy_cmd_sigma_ang
+                    * jp.abs(cmd[2])
+                    + 1e-6
+                )
+            )
+            * k_lin
+            * k_ang
+            * moving,
+            # Slip per unit of commanded motion, same construction and the
+            # same gates as energy_cmd (see the scales entry): efficiency-
+            # style income for keeping stance feet planted, priced fairly
+            # across speeds so slow careful gaits are not over-charged.
+            "slip_cmd": jp.exp(
+                -slip
+                / (
+                    self._config.reward.get("slip_cmd_sigma_lin", 0.8)
+                    * jp.linalg.norm(cmd[:2])
+                    + self._config.reward.get("slip_cmd_sigma_ang", 0.5)
+                    * jp.abs(cmd[2])
+                    + 1e-6
+                )
+            )
+            * k_lin
+            * k_ang
+            * moving,
+            # Self-ident probe income (see the scales entries): fraction of
+            # the torque cap actually used (motor-strength observability),
+            # raw contact slip (mu), and joint-velocity change (kd/kp).
+            # Deliberately NOT gated by moving/tracking — the probe runs on
+            # a zero command and pays for excitation itself.
+            "probe_sat": jp.mean(
+                jp.abs(data.actuator_force)
+                / (self._torque_cap + 1e-6)
+            ),
+            "probe_slip": slip,
+            "probe_transient": jp.mean(
+                jp.abs(qvel - info["last_qvel_probe"]) / self.dt
+            ),
+            # Free-leg transients specifically: the identifiability map
+            # showed kd is readable ONLY from unloaded-leg motion, and a
+            # four-feet-planted probe never produces any. Per-leg |dqvel|
+            # gated by that leg's foot being airborne.
+            # Capped at 40 rad/s^2 per joint: above that it is jerk noise,
+            # not information, and an uncapped version is a reward
+            # explosion (measured: 5794/step — an airborne leg can shake
+            # at arbitrary jerk for free).
+            "probe_free_transient": jp.mean(
+                jp.minimum(
+                    jp.abs(qvel - info["last_qvel_probe"]) / self.dt, 40.0
+                ).reshape(4, 3).mean(axis=1)
+                * (1.0 - contact.astype(jp.float32))
+            ),
+            # Base shock: how hard THIS step jerked the body (see the
+            # scales entry). Finite differences against the previous
+            # step's values carried in info; both terms are per-step
+            # accelerations in SI units.
+            "base_accel": (
+                jp.square((data.qvel[2] - info["last_base_vz"]) / self.dt)
+                + self._config.reward.get("base_accel_ang_weight", 0.02)
+                * jp.sum(
+                    jp.square((gyro[:2] - info["last_gyro_xy"]) / self.dt)
+                )
+            )
+            # Commanded-|wz| fade with a floor, the feet_landing
+            # construction: a pivot generates lateral accelerations by
+            # physics, and charging them fully sells spin rate (measured:
+            # dose -0.02 -> wz 0.75/0.69, -0.032 -> 0.74/0.59). The floor
+            # is the fraction a spin still pays; fade 0 disables (full
+            # charge everywhere, bit-exact with the pre-fade term).
+            * (
+                jp.maximum(
+                    jp.clip(
+                        1.0
+                        - jp.abs(cmd[2])
+                        / self._config.reward.get("base_accel_wz_fade", 0.0),
+                        0.0,
+                        1.0,
+                    ),
+                    self._config.reward.get("base_accel_wz_floor", 0.0),
+                )
+                if self._config.reward.get("base_accel_wz_fade", 0.0)
+                else 1.0
+            ),
             "pose": jp.sum(pose_w * jp.square(data.qpos[self._qadr] - anchor)),
             "feet_air_time": jp.sum(
                 (
@@ -1875,7 +2237,26 @@ class WojtekJoystick(WojtekEnv):
                 )
             )
             * moving
-            * landing_soften,
+            * landing_soften
+            # Commanded-|wz| fade (see reward.feet_landing_wz_fade): same
+            # construction as the target_sag fade below, except the fade
+            # bottoms out at feet_landing_wz_floor instead of 0 — a spin
+            # pays that fraction of the charge rather than nothing (floor
+            # 0 reproduces the pure fade bit-exactly).
+            * (
+                jp.maximum(
+                    jp.clip(
+                        1.0
+                        - jp.abs(cmd[2])
+                        / self._config.reward.get("feet_landing_wz_fade", 0.0),
+                        0.0,
+                        1.0,
+                    ),
+                    self._config.reward.get("feet_landing_wz_floor", 0.0),
+                )
+                if self._config.reward.get("feet_landing_wz_fade", 0.0)
+                else 1.0
+            ),
             "feet_phase": jp.exp(-phase_err / self._config.reward.phase_sigma)
             * moving,
             "high_step": high_step * moving * shape_gate * gate,
@@ -1896,6 +2277,32 @@ class WojtekJoystick(WojtekEnv):
                     - self._config.reward.torque_limit_frac * self._torque_cap,
                     0.0,
                 )
+            ),
+            # Feed-forward torque terms (zero while tau_ff.enable is off).
+            # tau_ff_swing charges |tau_ff| on legs without ground contact;
+            # tau_ff is the quadratic effort the `torques` term cannot see
+            # (actuator_force is the PD servo only).
+            "tau_ff_swing": tau_ff_swing_cost(tau_ff, contact),
+            "tau_ff": jp.sum(jp.square(tau_ff)),
+            # Measured against the target that DROVE this step: under
+            # action_delay/latency that is the previous step's target,
+            # which info still holds here (it is rewritten after rewards).
+            # The yaw fade (see reward.target_sag_wz_fade) exempts
+            # commanded pivoting; the static 0.0 default keeps the factor
+            # a Python 1.0.
+            "target_sag": target_sag_cost(
+                data.qpos[self._qadr], info["motor_targets"], contact
+            )
+            * (
+                jp.clip(
+                    1.0
+                    - jp.abs(cmd[2])
+                    / self._config.reward.get("target_sag_wz_fade", 0.0),
+                    0.0,
+                    1.0,
+                )
+                if self._config.reward.get("target_sag_wz_fade", 0.0)
+                else 1.0
             ),
         }
         return rewards, fall

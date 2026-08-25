@@ -300,6 +300,15 @@ Remaining fixes, ranked:
    verification layer for 1+2.
 4. Spectral-flatness gate on the tail; clean-ending reference clip (L12).
 
+### A/B verdict 2026-08-26: what fluent Polish actually costs
+
+Same stack, same take, three configurations: Bielik resident-but-unused
+3.26 s median mic-to-voice; Bielik rendering the Polish 4.39 s (worst 4.74,
+zero failures); v4's ~10 s did not reproduce and is attributed to that
+session's zombie-engine aftermath. Conclusions: an idle resident engine is
+~free (the bandwidth and busy-poll theories are withdrawn), the Bielik hop
+costs ~1.1 s/turn, and the architecture is sound.
+
 ### Open, in priority order
 
 - [x] **Verify RTF on the actual target (GB10)** — Result: **0.44**, first

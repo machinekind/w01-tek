@@ -221,6 +221,9 @@ fetch)
   out="${1:-$HOME/Desktop/wojtek_takes}"
   mkdir -p "$out"
   rsync -rtz -e "ssh -p $(ssh_port)" "$(ssh_host):/root/takes/" "$out/"
+  # Server logs travel with the takes: the v4 TTS failures could not be
+  # autopsied because tts.log stayed on a destroyed box.
+  rsync -rtz -e "ssh -p $(ssh_port)" "$(ssh_host):/root/logs/" "$out/logs/" 2>/dev/null || true
   ls -la "$out"
   ;;
 

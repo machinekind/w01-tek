@@ -72,6 +72,19 @@ restart, done.
   is still an open question for the commercial fork.  Full audit table in
   the architecture doc.
 
+## Settled 2026-08-25: ROS is the boundary
+
+Everything that will live on the robot runs and communicates via ROS 2 (user
+decision). The demo/training stack keeps only what never ships: the MuJoCo
+sim, the browser UI, the recording harness. Consequences:
+
+- W3 (wrap the Qwen agent + sim bridge + ui bridge as ROS nodes) is the
+  convergence path, not an option among several.
+- Until W3 lands, any behaviour added to the demo must mirror the ROS
+  topology so it ports 1:1 -- e.g. the demo's Polish mouth is Bielik
+  rendering the agent's English via a second vLLM (:8091), exactly the ROS
+  bielik node's /wojtek/say_en contract, wired in-process.
+
 ## Next (in order)
 
 1. **W3**: wrap the Qwen agent + room sim + demo UI as ROS nodes

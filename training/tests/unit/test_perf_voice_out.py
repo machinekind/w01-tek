@@ -613,3 +613,57 @@ def test_tail_trim_can_be_disabled(monkeypatch):
     rate = 24000
     pcm = synth_speech_with_junk_tail(rate)
     assert np.array_equal(trim_tail_noise(pcm, rate), pcm)
+
+
+# ---- the token budget: junk is prevented, not trimmed ------------------------
+
+
+class BudgetModel(RefModel):
+    """Stub with a t3 whose inference records the max_new_tokens it got."""
+
+    def __init__(self):
+        super().__init__()
+
+        class T3:
+            def __init__(self):
+                self.budgets = []
+
+            def inference(self, *a, **kw):
+                self.budgets.append(kw.get("max_new_tokens", 1000))
+
+        self.t3 = T3()
+
+    def generate(self, text, **kwargs):
+        self.t3.inference(max_new_tokens=1000)      # what chatterbox hardcodes
+        return super().generate(text, **kwargs)
+
+
+def test_token_budget_scales_with_text():
+    """~2.1 speech tokens per char + margin: the LM cannot ramble past the
+    text, so the tail junk is never generated instead of being trimmed."""
+    from fastapi.testclient import TestClient
+
+    from wojtek_rl.agent import tts_server
+
+    model = BudgetModel()
+    app = tts_server.build_app("", "pl", "cpu", model_factory=lambda: model)
+    client = TestClient(app)
+    client.post("/synthesize", json={"text": "Hau hau."})
+    short = model.t3.budgets[-1]
+    client.post("/synthesize", json={"text": "Jestem teraz przy stole w kuchni, patrzę w stronę okna i czekam."})
+    longer = model.t3.budgets[-1]
+    assert short == int(len("Hau hau.") * 2.1) + 25
+    assert longer > short
+    assert longer <= 1000
+
+
+def test_token_budget_can_be_disabled(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from wojtek_rl.agent import tts_server
+
+    monkeypatch.setenv("TTS_TOKEN_CAP", "off")
+    model = BudgetModel()
+    app = tts_server.build_app("", "pl", "cpu", model_factory=lambda: model)
+    TestClient(app).post("/synthesize", json={"text": "Hau."})
+    assert model.t3.budgets[-1] == 1000

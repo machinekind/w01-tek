@@ -25,6 +25,8 @@ set -euo pipefail
 
 REMOTE_DIR="${REMOTE_DIR:-/root/wojtek}"
 AGENT_MODEL="${AGENT_MODEL:-Qwen/Qwen3-VL-4B-Instruct-FP8}"
+# The Polish mouth. Empty BIELIK_MODEL skips it (agent speaks directly).
+BIELIK_MODEL="${BIELIK_MODEL:-speakleash/Bielik-4.5B-v3.0-Instruct-FP8-Dynamic}"
 SCENE_LIST="${SCENE_LIST:-flat castle}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
@@ -129,6 +131,14 @@ for i in \$(seq 1 60); do
 done
 # vllm LAST: its memory profiler asserts when free memory shifts under it,
 # which is exactly what concurrent model loads do on unified memory.
+if [ -n "${BIELIK_MODEL}" ] && ! curl -sf localhost:8091/v1/models >/dev/null 2>&1; then
+  setsid nohup env VLLM_USE_DEEP_GEMM=0 HF_TOKEN="\${HF_TOKEN:-}" \
+    vllm serve ${BIELIK_MODEL} --port 8091 --max-model-len 4096 \
+    --gpu-memory-utilization 0.18 --enforce-eager \
+    > /root/logs/bielik.log 2>&1 &
+  echo "bielik starting"
+  sleep 20   # stagger the two vllm loads: same profiler trap as above
+fi
 if ! curl -sf localhost:8090/v1/models >/dev/null 2>&1; then
   setsid nohup env VLLM_USE_DEEP_GEMM=0 HF_TOKEN="\${HF_TOKEN:-}" \
     vllm serve ${AGENT_MODEL} --port 8090 --max-model-len 8192 \
@@ -182,6 +192,7 @@ sleep 2
 setsid nohup env SCENE=${scene} ${spawn} MUJOCO_GL=egl \
   HF_TOKEN="\${HF_TOKEN:-}" HF_ORGANIZATION=hvsr-robotics TQDM_DISABLE=1 \
   VLM_BACKEND=openai AGENT_URL=http://127.0.0.1:8090 WOJTEK_NAV_FORWARD_SCALE=2 \
+  BIELIK_URL=http://127.0.0.1:8091 \
   ASR_URL=http://127.0.0.1:8110 TTS_ENGINE=remote TTS_URL=http://127.0.0.1:8120 \
   AGENT_TRACE=/root/takes/${scene}_trace.jsonl \
   python3 -m wojtek_rl.room_app --port 8010 --agent-model "${AGENT_MODEL}" \
@@ -214,7 +225,7 @@ fetch)
   ;;
 
 logs) rsh "tail -30 /root/logs/${1:-vllm}.log" ;;
-status) rsh "nvidia-smi --query-gpu=memory.used --format=csv,noheader; for p in 8090 8110 8120 8010; do curl -sf -m 3 localhost:\$p/health >/dev/null 2>&1 || curl -sf -m 3 localhost:\$p/v1/models >/dev/null 2>&1 || curl -sf -m 3 localhost:\$p/api/info >/dev/null 2>&1 && echo \"\$p UP\" || echo \"\$p down\"; done" ;;
+status) rsh "nvidia-smi --query-gpu=memory.used --format=csv,noheader; for p in 8090 8091 8110 8120 8010; do curl -sf -m 3 localhost:\$p/health >/dev/null 2>&1 || curl -sf -m 3 localhost:\$p/v1/models >/dev/null 2>&1 || curl -sf -m 3 localhost:\$p/api/info >/dev/null 2>&1 && echo \"\$p UP\" || echo \"\$p down\"; done" ;;
 stop) rsh "pkill -f 'vllm serve|asr_server|tts_server|room_app' || true; echo stopped" ;;
 *) echo "usage: $0 {deploy|serve|room <scene>|record <name> [gates]|fetch [dir]|logs <svc>|status|stop}" >&2; exit 1 ;;
 esac

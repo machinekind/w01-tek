@@ -50,7 +50,7 @@ from loguru import logger
 
 from wojtek_rl import paths, perf
 from wojtek_rl.agent.goals import TERMINAL_STATES, outcome_phrase
-from wojtek_rl.agent.llm import DEFAULT_AGENT_MODEL, DEFAULT_AGENT_URL
+from wojtek_rl.agent.llm import AgentLLM, DEFAULT_AGENT_MODEL, DEFAULT_AGENT_URL
 from wojtek_rl.agent.nav import TracedVlmNavigator
 from wojtek_rl.agent.spatial import PoseHistory
 from wojtek_rl.agent.voice import SAMPLE_RATE as VOICE_SAMPLE_RATE
@@ -532,6 +532,16 @@ _tts_engine = None
 # has the model write that sentence itself; `translate` adds a rendering call
 # (slower and worse on a 4B, see docs/polish-voice.md).
 _lang_mode = os.environ.get("AGENT_LANG_MODE", "direct")
+# The Polish mouth: when set, spoken lines are rendered by THIS model
+# (Bielik) instead of the agent model -- lang_mode flips to translate so the
+# agent thinks/says in English and Bielik writes the Polish. Mirrors the ROS
+# stack's bielik node (/wojtek/say_en), per the robot-runs-ROS rule: both
+# stacks share one topology, the demo just wires it in-process.
+_bielik_url = os.environ.get("BIELIK_URL")
+_bielik_model = os.environ.get("BIELIK_MODEL",
+                               "speakleash/Bielik-4.5B-v3.0-Instruct-FP8-Dynamic")
+if _bielik_url:
+    _lang_mode = "translate"
 _agent = None
 _agent_llm = None
 _goals = None
@@ -713,6 +723,8 @@ def get_agent():
         _agent = WojtekAgent(
             get_agent_llm(), tools, trace=get_trace(), turn_context=turn_context,
             lang_mode=_lang_mode, reply_language=_asr_language,
+            speak_llm=(AgentLLM(base_url=_bielik_url, model=_bielik_model)
+                       if _bielik_url else None),
         )
         logger.info(f"agent language: mode={_lang_mode} reply={_asr_language}")
     return _agent

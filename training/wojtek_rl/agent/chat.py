@@ -147,12 +147,18 @@ class WojtekAgent:
         turn_context: dict | None = None,
         lang_mode: str = "direct",
         reply_language: str = "pl",
+        speak_llm=None,
     ):
         if lang_mode not in LANG_MODES:
             raise ValueError(f"lang_mode must be one of {LANG_MODES}, got {lang_mode!r}")
         self.lang_mode = lang_mode
         self.reply_language = reply_language
         self.llm = llm
+        # The mouth may be a DIFFERENT model than the brain: the settled
+        # topology is Qwen thinking/tooling in English and Bielik rendering
+        # the spoken Polish -- the same split the ROS stack's bielik node
+        # implements on /wojtek/say_en. None = same model does both.
+        self.speak_llm = speak_llm or llm
         self.tools = tools
         self.max_tool_steps = max_tool_steps
         self.keep_exchanges = keep_exchanges
@@ -192,7 +198,7 @@ class WojtekAgent:
         )
         try:
             with perf.span("llm.translate", chars=len(text)):
-                out = await self.llm.chat([user_message(prompt)], max_tokens=200)
+                out = await self.speak_llm.chat([user_message(prompt)], max_tokens=200)
         except Exception as e:
             logger.warning(f"translation failed, sending the source line: {_safe_err(e)}")
             return text

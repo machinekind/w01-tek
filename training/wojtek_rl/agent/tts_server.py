@@ -274,6 +274,37 @@ def build_app(ref_wav: str, language: str, device: str, cache_size: int = CACHE_
         state["conds_ready"] = True
         return (time.monotonic() - t0) * 1000.0
 
+    def cap_tokens(m, text: str) -> None:
+        """Cap T3's speech-token budget from the TEXT length.
+
+        The tail junk exists because nothing forces the LM to stop when the
+        text runs out: it keeps sampling plausible speech tokens until the
+        alignment watchdog force-stops it, and the junk is already rendered
+        by then. Polish speech runs ~12-14 chars/s and speech tokens are
+        25/s, so ~2.1 tokens/char plus a fixed margin bounds every legit
+        utterance -- the model CANNOT ramble past it. chatterbox hardcodes
+        max_new_tokens=1000 in generate(), so the cap is injected by wrapping
+        t3.inference once and reading the per-call budget from state.
+        """
+        if os.environ.get("TTS_TOKEN_CAP", "on") == "off":
+            state["token_budget"] = None
+            return
+        state["token_budget"] = min(1000, int(len(text) * 2.1) + 25)
+        t3 = getattr(m, "t3", None)
+        if t3 is None:          # engines without a T3 (tests, future backends)
+            return
+        if not state.get("t3_wrapped"):
+            orig = t3.inference
+
+            def inference(*a, **kw):
+                budget = state.get("token_budget")
+                if budget:
+                    kw["max_new_tokens"] = min(kw.get("max_new_tokens", 1000), budget)
+                return orig(*a, **kw)
+
+            t3.inference = inference
+            state["t3_wrapped"] = True
+
     def gen_kwargs() -> dict:
         """Generation arguments. audio_prompt_path is deliberately absent:
         the conditionals are already loaded (see ensure_conditionals)."""
@@ -328,6 +359,7 @@ def build_app(ref_wav: str, language: str, device: str, cache_size: int = CACHE_
                 t_gpu = time.monotonic()
                 m = model()
                 cond_ms = ensure_conditionals()
+                cap_tokens(m, text)
                 pcm_f = m.generate(text, **gen_kwargs()).detach().cpu().numpy().squeeze()
                 gpu_ms = (time.monotonic() - t_gpu) * 1000.0
             queue_ms = (t_gpu - t_in) * 1000.0
@@ -378,6 +410,7 @@ def build_app(ref_wav: str, language: str, device: str, cache_size: int = CACHE_
                 with lock:
                     m = model()
                     ensure_conditionals()
+                    cap_tokens(m, piece)
                     pcm_f = m.generate(piece, **gen_kwargs()).detach().cpu().numpy().squeeze()
                 pcm = np.clip(pcm_f * 32767.0, -32768, 32767).astype(np.int16)
                 pcm = trim_tail_noise(resample_linear(pcm, m.sr, SAMPLE_RATE))

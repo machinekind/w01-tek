@@ -715,3 +715,18 @@ def test_search_target_phrase_strips_the_verb():
     assert search_target_phrase("Znajdź rower.") == "rower"
     assert search_target_phrase("Poszukaj mi kanapy!") == "kanapy"
     assert search_target_phrase("find the door") == "the door"
+
+
+def test_the_mouth_may_be_a_different_model():
+    """Settled topology: Qwen thinks and uses tools in English, Bielik
+    renders the spoken Polish -- the same split the ROS bielik node does on
+    /wojtek/say_en. speak_llm carries the mouth; the brain never sees the
+    translation call."""
+    brain = FakeLLM(['{"thought": "ok", "say": "I am by the stairs."}'])
+    mouth = FakeLLM(["Jestem przy schodach."])
+    agent = WojtekAgent(brain, {}, lang_mode="translate", reply_language="pl",
+                        speak_llm=mouth)
+    result = asyncio.run(agent.ask("gdzie jesteś?", voice=True))
+    assert result["say"] == "Jestem przy schodach."
+    assert len(mouth.calls) == 1              # exactly one render call
+    assert len(brain.calls) == 1              # the brain did not translate

@@ -139,7 +139,12 @@ def test_describe_lines():
 def test_success_phrases_name_the_goal():
     from wojtek_rl.agent.goals import outcome_phrase
 
-    assert outcome_phrase("search", "found", "piłka", language="pl") == "Znalazłem: piłka! Hau hau!"
+    # No noun in the Polish line: the goal string carries the CASE of the
+    # user's sentence ("do telewizora" -> genitive), and interpolating it
+    # produced "Znalazłem: telewizora" on camera (v3 take, 2026-08-24).
+    phrase = outcome_phrase("search", "found", "telewizora", language="pl")
+    assert phrase == "Hau hau! Znalazłem to, czego szukałem!"
+    assert "telewizora" not in phrase
     assert "there" in outcome_phrase("navigate", "done", "the bed", language="en")
 
 
@@ -160,7 +165,8 @@ def test_failed_search_is_announced_too():
     from wojtek_rl.agent.goals import outcome_phrase
 
     said = outcome_phrase("search", "not_found", "kanapa", language="pl")
-    assert "Nie udało mi się znaleźć" in said and "kanapa" in said
+    assert "Nie znalazłem" in said
+    assert "kanapa" not in said        # no noun -> no case errors
 
 
 def test_running_states_say_nothing():

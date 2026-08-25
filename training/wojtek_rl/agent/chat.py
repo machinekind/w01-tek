@@ -40,6 +40,25 @@ NAV_HINT_RE = re.compile(
     r"oddal się|go to|walk (to|around)|come (here|back)|head to)\b",
     re.IGNORECASE,
 )
+# Search imperatives: "Znajdź rower" narrated as "szukam roweru..." with NO
+# tool call left the previous search running -- it later announced finding
+# the OLD target while the user thought they had switched (v3 take,
+# 2026-08-24). Same guard family as navigate/stop.
+SEARCH_HINT_RE = re.compile(
+    r"\b(znajdź|poszukaj|wyszukaj|odszukaj|find|search for|look for)\b",
+    re.IGNORECASE,
+)
+_SEARCH_PREFIX_RE = re.compile(
+    r"^(znajdź|poszukaj|wyszukaj|odszukaj|find|search for|look for)\s*(mi\s+)?",
+    re.IGNORECASE,
+)
+
+
+def search_target_phrase(text: str) -> str:
+    """'Znajdź rower.' -> 'rower': the object the search should look for."""
+    return _SEARCH_PREFIX_RE.sub("", text.strip()).strip(" .!?") or text.strip()
+
+
 STOP_HINT_RE = re.compile(
     r"\b(stop|stój|przestań|zatrzymaj|dosyć|wystarczy|nie idź|zostań|"
     r"stand still|halt)\b",
@@ -330,6 +349,20 @@ class WojtekAgent:
                     say = "Już się zatrzymuję!"
             except Exception as e:
                 logger.warning(f"stop guard failed: {_safe_err(e)}")
+        if (not steps and "search" in self.tools and SEARCH_HINT_RE.search(text)
+                and not NAV_HINT_RE.search(text)):
+            target = search_target_phrase(text)
+            try:
+                with perf.span("tool.search", guard=True):
+                    result = await self.tools["search"].fn({"object": target})
+                steps.append({"tool": "search", "args": {"object": target},
+                              "result": result.text})
+                llm_calls.append({"kind": "search_guard", "args": {"object": target}})
+                self._trace("chat.search_guard", target=target, result=result.text)
+                if said_fallback:
+                    say = "Jasne, już szukam!"
+            except Exception as e:
+                logger.warning(f"search guard failed: {_safe_err(e)}")
         if not steps and "navigate" in self.tools and NAV_HINT_RE.search(text):
             try:
                 with perf.span("tool.navigate", guard=True):

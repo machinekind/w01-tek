@@ -277,6 +277,29 @@ win on another, which is the lesson of this whole file.
   batch is duplicated unconditionally in 0.1.7, so the flag only changes
   quality. Exposed as `--cfg-weight` for voice A/B, not for latency.
 
+### Tail junk: why it happens, and the remaining plan (2026-08-25)
+
+Mechanism: T3 must EMIT its stop token; at the end of the text it faces high
+uncertainty (Polish is weak for it, sampling, CFG) and often keeps producing
+plausible speech tokens -- breath, hum, babble -- until the alignment
+watchdog notices the text attention stopped advancing and FORCES EOS. By
+then the junk tokens exist, and s3gen renders them faithfully. The gap-trim
+only catches junk separated by silence; junk fused to the last word
+survives (heard in the v3 takes).
+
+Remaining fixes, ranked:
+1. **Token budget from text length**: speech is ~13 chars/s and tokens are
+   25/s, so cap max_new_tokens ≈ 2×chars + margin -- the model cannot
+   ramble past the text. Needs a small vendored patch (the 1000 cap is
+   hardcoded in T3.inference).
+2. **Crop at the analyzer's position**: the watchdog knows where the text
+   completed; cut the token sequence there instead of merely forcing EOS
+   after the junk. Same patch site as 1 -- do both together.
+3. **ASR-verified trim**: whisper-tiny on the output (~60 ms), cut at last
+   word end +200 ms. Catches everything incl. loud fused junk; good
+   verification layer for 1+2.
+4. Spectral-flatness gate on the tail; clean-ending reference clip (L12).
+
 ### Open, in priority order
 
 - [x] **Verify RTF on the actual target (GB10)** — Result: **0.44**, first

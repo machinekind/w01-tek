@@ -160,6 +160,10 @@ def build_tools(
 
     async def navigate(args: dict) -> ToolResult:
         instruction = str(args.get("instruction") or args.get("goal") or "").strip()
+        # Simple English imperative for the WALKER (FutureNav speaks English
+        # VLN-CE; the prompt navigators steer better in English too). The
+        # user's wording stays verbatim for display, speech and search.
+        instruction_en = str(args.get("instruction_en") or "").strip()
         spoken = str(turn_context.get("user_text", "") or "").strip()
         if not instruction or keep_full_instruction(instruction, spoken):
             instruction = spoken or instruction
@@ -185,7 +189,7 @@ def build_tools(
                     "started instead of walking blind; tell the user you are "
                     "looking for it (runs in the background)"
                 )
-        ack = goals.set_goal(instruction, kind="navigate")
+        ack = goals.set_goal(instruction, kind="navigate", nav_text=instruction_en)
         if not ack.get("ok"):
             return ToolResult(text=f"navigation NOT started: {ack.get('error')}")
         return ToolResult(
@@ -245,13 +249,17 @@ def build_tools(
         ),
         Tool(
             "navigate",
-            'navigate {"instruction": "<the user\'s route instruction, VERBATIM>"}',
+            'navigate {"instruction": "<the user\'s route instruction, '
+            'VERBATIM>", "instruction_en": "<the same route as a dead-simple '
+            'English imperative>"}',
             "Walk somewhere, or follow a route. COPY THE USER'S WHOLE "
             "INSTRUCTION into `instruction` word for word -- every step, "
             "direction and landmark ('walk around the table, then stop by the "
             "door'). Never shorten it to a single object name: the walking "
-            "model follows the instruction itself, step by step. Starts in "
-            "the background.",
+            "model follows the instruction itself, step by step. ALSO fill "
+            "`instruction_en`: the same route in plain English, short "
+            "imperative ('go to the stairs'), because the walking model was "
+            "trained on English. Starts in the background.",
             navigate,
         ),
         Tool(

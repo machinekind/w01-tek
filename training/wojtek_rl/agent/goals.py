@@ -25,8 +25,14 @@ KINDS = ("navigate", "search")
 # generated sentence would land the confirmation after the moment has passed.
 OUTCOMES = {
     "pl": {
-        ("search", "found"): "Znalazłem: {goal}! Hau hau!",
-        ("search", "not_found"): "Nie udało mi się znaleźć: {goal}. Przeszukałem wszystko.",
+        # No noun interpolation in Polish success/failure lines: the goal
+        # string arrives in whatever case the user's sentence put it in
+        # ("idź do telewizorA" -> target "telewizora"), and gluing a genitive
+        # into a nominative slot produced "Znalazłem: telewizora" on camera.
+        # Templates that need no inflection are always grammatical; the goal
+        # itself is visible on screen and in the trace.
+        ("search", "found"): "Hau hau! Znalazłem to, czego szukałem!",
+        ("search", "not_found"): "Nie znalazłem tego, przeszukałem wszystko.",
         ("search", "error"): "Coś poszło nie tak podczas szukania.",
         ("navigate", "done"): "Jestem na miejscu! Hau!",
         ("navigate", "stuck"): "Utknąłem, nie mogę tam dojść.",
@@ -128,7 +134,14 @@ class GoalManager:
 
     # -- get/set ----------------------------------------------------------------
 
-    def set_goal(self, text: str, kind: str = "navigate") -> dict:
+    def set_goal(self, text: str, kind: str = "navigate",
+                 nav_text: str | None = None) -> dict:
+        """`text` is the user's wording VERBATIM (displayed, spoken about,
+        used for search); `nav_text` optionally carries a dead-simple English
+        imperative for the walking backend -- FutureNav is trained on English
+        VLN-CE and the prompt navigators steer better in English too (both
+        v3 castle/flat takes walked away from Polish-worded goals).
+        """
         text = text.strip()
         if not text:
             return {"ok": False, "error": "empty goal"}
@@ -144,7 +157,7 @@ class GoalManager:
         self.cancel("new goal")
         try:
             ack = (
-                self.navigator().start(text)
+                self.navigator().start((nav_text or "").strip() or text)
                 if kind == "navigate"
                 else self.search().start(text)
             )

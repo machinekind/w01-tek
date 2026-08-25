@@ -287,7 +287,8 @@ class RecordingGoals:
     def __init__(self):
         self.set = []
 
-    def set_goal(self, text, kind="navigate"):
+    def set_goal(self, text, kind="navigate", nav_text=None):
+        self.nav_text = nav_text
         self.set.append((kind, text))
         return {"ok": True, "goal": text}
 
@@ -665,3 +666,52 @@ def test_search_bounces_questions_back():
     tools = build_tools(NavSim(), goals, None, turn_context={"user_text": "x"})
     out = asyncio.run(tools["search"].fn({"object": "gdzie jest rower?"}))
     assert goals.set == [] and "QUESTION" in out.text
+
+
+def test_navigate_hands_the_walker_english():
+    """The walker is trained on English (FutureNav = VLN-CE) and the prompt
+    navigators steer better in it too -- v3 takes walked AWAY from goals
+    worded in Polish. The user's wording stays verbatim for display and
+    search; instruction_en drives the walking backend only."""
+    from wojtek_rl.agent.tools import build_tools
+
+    goals = RecordingGoals()
+    tools = build_tools(NavSim(), goals, None)
+
+    async def scenario():
+        return await tools["navigate"].fn(
+            {"instruction": "idź szybko do schodów",
+             "instruction_en": "go to the stairs quickly"})
+
+    asyncio.run(scenario())
+    assert goals.set == [("navigate", "idź szybko do schodów")]   # verbatim kept
+    assert goals.nav_text == "go to the stairs quickly"           # walker gets EN
+
+
+def test_search_guard_fires_when_the_model_only_narrates():
+    """'Znajdź rower' answered with words and no tool left the PREVIOUS
+    search running; it later announced finding the old target while the user
+    believed they had switched (v3 take). A heard search imperative that
+    produced no action forces the search tool, target extracted."""
+    from wojtek_rl.agent.tools import Tool, ToolResult
+
+    calls = []
+
+    async def search(args):
+        calls.append(args)
+        return ToolResult(text="search started")
+
+    agent, llm, _ = make_agent(
+        ['{"thought": "narrating", "say": "Szukam roweru!"}'])
+    agent.tools["search"] = Tool("search", "search {}", "find things", search)
+    result = asyncio.run(agent.ask("Znajdź rower."))
+    assert calls == [{"object": "rower"}]
+    assert result["steps"][0]["tool"] == "search"
+
+
+def test_search_target_phrase_strips_the_verb():
+    from wojtek_rl.agent.chat import search_target_phrase
+
+    assert search_target_phrase("Znajdź rower.") == "rower"
+    assert search_target_phrase("Poszukaj mi kanapy!") == "kanapy"
+    assert search_target_phrase("find the door") == "the door"

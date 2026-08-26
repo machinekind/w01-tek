@@ -97,7 +97,7 @@ models' GPU. At 0.6 ms the 50 Hz policy loop could also cross this wire.
 This is the W3 deployment shape, validated before W3 is written: the
 boundary becomes ROS topics instead of tunneled HTTP, the split stays.
 
-## W3 landed 2026-08-26 (code complete, live E2E pending)
+## W3 landed 2026-08-26 — and verified LIVE the same day
 
 The agent is a ROS node and the sim is another. The cut is a **proxy, not a
 rewrite**: the whole demo agent stack (WojtekAgent, GoalManager,
@@ -130,17 +130,41 @@ topics -- one source of truth for agent logic in both stacks.
 - Launch: `agent_stack.launch.py` (brain box: voice stack + vlm_agent, no
   audio_bridge) and `world.launch.py` (world box: sim bridge).
 
-Not done yet, in order: deployment payload for the two-box split (DDS
-across boxes needs unicast peer config on vast -- multicast does not cross
-their NAT), live E2E on a GB10 + cheap-GPU pair (same host, see the split
-recipe above), browser UI static serving on the bridge (scenario/recorder
-path works; a live human viewer still uses room_app for now).
+**Live E2E on a rented GB10 (2026-08-26, `spark_ros_rig.sh`)**: the whole
+graph ran -- spoken Polish -> vad -> asr -> router -> vlm_agent (look /
+navigate / search tools) -> say_en -> bielik -> tts -> audio out through
+the bridge. `ros_castle_tour` walked **5.76 m** on a spoken route
+(gate-checked take), planner `goto` and midlevel forward/turn verified to
+completion over the service, and the probe measured **voice.reply median
+4.69 s** -- the demo rig's band (4.39 one-box / 3.94 split), so the ROS hop
+tax is ~zero on healthy hardware.
+
+Two traps the live run found, both now baked into code:
+
+- **The stale-active race**: controllers polled `executor.active` from a
+  25 Hz snapshot predating their own command and machine-gunned commands
+  3 ms apart (the robot "searched" a flat while moving 6 cm). WorldCommand
+  acks carry `cmd_seq`, ExecStatus reports the seq its snapshot reflects,
+  and the proxy holds `active` high until status catches up.
+- **The GB10 clock lottery**: vast machine 51319 is platform power-capped
+  at 942 of 3003 MHz (TTS RTF 3.5 vs 0.44) and nothing unlocks it; deploy
+  now asserts clocks under load and names the machine a lemon before any
+  model downloads. Machines 45282 (Texas) and 45819 (Spain, $0.335/h)
+  boost fine.
+
+Not done yet, in order: two-box split of the ROS stack (DDS across boxes
+needs unicast peer config on vast -- multicast does not cross their NAT;
+zenoh-bridge-ros2dds over the measured 0.6 ms TCP is the likely shape),
+flat_guest stagecraft (targets visible from spawn -> a 0 m take; pick
+unseen targets or script a turn first, the #131 lesson resurfacing),
+browser UI static serving on the bridge (scenario/recorder path works; a
+live human viewer still uses room_app for now).
 
 ## Next (in order)
 
-1. **W3 live E2E**: rent the GB10 + RTX 3060 same-host pair, run
-   `agent_stack` on the brain box and `world` on the sim box, record the
-   scenario battery, compare the probe's stage table to the demo rig's.
+1. **W3 two-box**: brain GB10 + cheapest same-host GPU as the world
+   (RTX 3060 at $0.06/h on the Texas host), zenoh bridge across, compare
+   the probe table to the one-box run.
 2. Router fine-tune: `ros/src/wojtek_brain/tools/gen_router_dataset.py` →
    `train_router.py` (HerBERT default; compare mmBERT/ModernBERT on the same
    Polish set), then set the router node's `model_path`.

@@ -160,6 +160,25 @@ unseen targets or script a turn first, the #131 lesson resurfacing),
 browser UI static serving on the bridge (scenario/recorder path works; a
 live human viewer still uses room_app for now).
 
+## Added 2026-08-26 evening: authorship, canned voice, show tricks
+
+- **Bielik never authors** when the agent runs: chat routes to the VLM agent
+  (Qwen writes English, Bielik renders Polish -- restoring the demo's ear-
+  approved pipeline after Bielik-authored replies produced garbled echoes
+  and an invented garden on camera). Pose/status questions route visual.
+- **Canned Polish phrase bank** (wojtek_brain/prompts/bielik/phrases/):
+  acks, progress heartbeats, outcomes, switch and trick lines, sampled
+  without repeats, pre-synthesized into the TTS cache at stack start --
+  a canned line costs ~0.1 s instead of a 2-4 s synthesis. Onomatopoeia
+  banned across the voice path (TTS renders hau/woof as fault-like noises).
+- **Voice-triggered show tricks**: main's wojtek_policy.tricks (bow, sit,
+  paw_wave, shake) plus a new MuJoCo-validated "pee" clip (rear-left leg
+  9.8 cm up, peak torque 7.7 of 9 N*m). Router trick lane (siad / daj łapę /
+  ukłoń się / otrząśnij się / siku / sztuczka), WorldCommand kind=trick,
+  RoomSim plays the clip with executor and policy benched. Validated take:
+  flat_intro_pee -- introduce yourself, find the bike, pee on it (chat +
+  search + walk + trick in one recording).
+
 ## Next (in order)
 
 1. **W3 two-box**: brain GB10 + cheapest same-host GPU as the world

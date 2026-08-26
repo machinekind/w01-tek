@@ -48,6 +48,7 @@ from wojtek_agent_msgs.msg import ExecStatus, RoutedIntent, Sentence, WorldMap
 from wojtek_agent_msgs.srv import WorldCommand
 
 from wojtek_brain import phrases
+from wojtek_brain.routing import trick_name
 from wojtek_brain.sentences import speakable, split_sentences
 from wojtek_brain.world_proxy import WorldProxy
 
@@ -142,7 +143,7 @@ class VlmAgentNode(Node):
     def on_intent(self, msg: RoutedIntent):
         if self.loop is None:
             return
-        if msg.intent in ("nav", "visual", "chat", "cancel"):
+        if msg.intent in ("nav", "visual", "chat", "cancel", "trick"):
             self.loop.call_soon_threadsafe(self._dispatch, msg.intent,
                                            msg.text, msg.utterance_id)
 
@@ -156,8 +157,26 @@ class VlmAgentNode(Node):
             if self._goals is not None:
                 self._goals.cancel("user")
             return
+        if intent == "trick":
+            self._do_trick(text, utterance_id)
+            return
         self._chat_task = self.loop.create_task(
             self._chat_turn(intent, text, utterance_id))
+
+    def _do_trick(self, text: str, utterance_id: str):
+        import random
+
+        name = trick_name(text)
+        if not name:  # "zrób sztuczkę" -- surprise them
+            name = random.choice(("bow", "sit", "paw_wave", "shake", "pee"))
+        ack = self.world_command("trick", name, [])
+        if ack.get("ok"):
+            self.publish_canned("trick_ack", utterance_id)
+            if self._trace is not None:
+                self._trace.add("trick.play", name=name)
+        else:
+            self.get_logger().warning(f"trick {name!r} refused: {ack.get('error')}")
+            self.publish_canned("goal_error", utterance_id)
 
     async def _chat_turn(self, intent: str, text: str, utterance_id: str):
         from wojtek_rl import perf

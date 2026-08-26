@@ -81,6 +81,11 @@ def world_command_result(kind: str, text: str, args: list[float],
         x, y, _yaw = sim.pose()
         goto(float(args[0]), float(args[1]), (x, y))
         return {"ok": True, "command": f"goto {args[0]:g} {args[1]:g}"}
+    if kind == "trick":
+        submit = getattr(sim, "submit_trick", None)
+        if submit is None:
+            return {"ok": False, "error": "this world has no trick player"}
+        return submit(text)
     if kind == "reset":
         sim.reset()
         return {"ok": True, "command": "reset"}

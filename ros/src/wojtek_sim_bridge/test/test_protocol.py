@@ -94,3 +94,20 @@ def test_world_command_reset_and_unknown():
     assert world_command_result("reset", "", [], sim)["ok"]
     assert sim.resets_called == 1
     assert not world_command_result("teleport", "", [], sim)["ok"]
+
+
+def test_world_command_trick_dispatch():
+    class TrickSim(FakeSim):
+        def __init__(self):
+            super().__init__()
+            self.tricks = []
+
+        def submit_trick(self, name):
+            self.tricks.append(name)
+            return {"ok": True, "command": f"trick {name}"}
+
+    sim = TrickSim()
+    out = world_command_result("trick", "pee", [], sim)
+    assert out["ok"] and sim.tricks == ["pee"]
+    # A world without a trick player refuses instead of crashing.
+    assert not world_command_result("trick", "sit", [], FakeSim())["ok"]

@@ -153,6 +153,7 @@ class RoomSim:
         # online map: the robot's history didn't un-happen because it fell.
         self.sim_time = 0.0
         self.pose_history = PoseHistory()
+        self._trick = None  # (name, start_sim_time) while a show clip plays
         # Planner footprint cylinders on the chase cam: debug aid, off by
         # default (a UI toggle turns them on).
         self.show_overlay = False
@@ -276,8 +277,23 @@ class RoomSim:
             if clr < MIN_FORWARD_CLEARANCE_M:
                 return {"ok": False, "error": f"obstacle {clr:.2f} m ahead (too close to move forward)"}
         self.target = None
+        self._trick = None
         self.executor.submit(cmd)
         return {"ok": True, "command": text.strip()}
+
+    def submit_trick(self, name: str) -> dict:
+        """Play a scripted show clip (wojtek_policy.tricks): the sim analog
+        of real_io_node's DISARMED-only player. The clip owns ctrl for its
+        duration -- executor and policy are benched, exactly like the robot
+        where a trick and the policy never fight over the command topic."""
+        from wojtek_policy import tricks
+
+        if name not in tricks.TRICKS:
+            return {"ok": False, "error": f"unknown trick {name!r}"}
+        self.target = None
+        self.executor.clear()
+        self._trick = (name, self.sim_time)
+        return {"ok": True, "command": f"trick {name}"}
 
     def _forward_clearance_m(self) -> float:
         """Nearest depth (m) in a central forward cone from the onboard ego cam."""
@@ -311,6 +327,31 @@ class RoomSim:
         x, y, yaw = self.pose()
         reached = False
         dist = 0.0
+        if self._trick is not None:
+            from wojtek_policy import tricks
+
+            name, t0 = self._trick
+            t = self.sim_time - t0
+            if t >= tricks.duration(name):
+                self._trick = None  # clips end at the home stand
+            else:
+                self.data.ctrl[:] = tricks.sample(name, t)
+                for _ in range(self._substeps):
+                    self._mujoco.mj_step(self.model, self.data)
+                if self._fallen():
+                    logger.warning("robot fell during trick -- auto reset")
+                    self.reset()
+                    self._trick = None
+                nx, ny, nyaw = self.pose()
+                self.omap.mark_pose(nx, ny)
+                self.sim_time += 1.0 / CONTROL_HZ
+                self.pose_history.add(self.sim_time, nx, ny, nyaw)
+                return {
+                    "type": "state", "x": nx, "y": ny, "yaw": nyaw,
+                    "tx": None, "ty": None, "reached": False, "dist": 0.0,
+                    "cmd": [0.0, 0.0, 0.0], "mode": f"trick:{name}",
+                    "exec": self.executor.status(),
+                }
         if self.scan is not None:
             self._tick += 1
             if self._tick % SENSE_EVERY == 0:

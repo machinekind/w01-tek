@@ -1,0 +1,12 @@
+[
+  {"wav": "wavs/q_siad.wav", "quiet": 2.0, "wait": 20},
+  {"pause": 6},
+  {"wav": "wavs/q_lapa.wav", "quiet": 2.0, "wait": 20},
+  {"pause": 11},
+  {"wav": "wavs/q_uklon.wav", "quiet": 2.0, "wait": 20},
+  {"pause": 6},
+  {"wav": "wavs/q_siku.wav", "quiet": 2.0, "wait": 20},
+  {"pause": 11},
+  {"wav": "wavs/q_sztuczka.wav", "quiet": 2.0, "wait": 20},
+  {"pause": 12}
+]

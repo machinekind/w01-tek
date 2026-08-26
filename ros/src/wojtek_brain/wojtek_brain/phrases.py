@@ -25,7 +25,7 @@ _DIR = Path(__file__).parent / "prompts" / "bielik" / "phrases"
 
 KINDS = ("nav_ack", "cancel_ack", "search_ack", "search_progress",
          "nav_progress", "search_found", "search_not_found", "nav_done",
-         "nav_stuck", "goal_error", "switch")
+         "nav_stuck", "goal_error", "switch", "trick_ack")
 
 _cache: dict[str, list[str]] = {}
 

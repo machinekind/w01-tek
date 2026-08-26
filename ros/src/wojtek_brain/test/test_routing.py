@@ -96,3 +96,32 @@ def test_status_questions_route_to_the_agent_not_the_blind_persona():
     ):
         intent, conf = r.classify(text)
         assert intent == "visual", (text, intent)
+
+
+def test_trick_asks_route_to_the_trick_lane():
+    from wojtek_brain.routing import trick_name
+    r = RuleRouter()
+    for text, expect in (
+        ("Siad!", "sit"),
+        ("Wojtek, usiądź proszę", "sit"),
+        ("daj łapę", "paw_wave"),
+        ("ukłoń się", "bow"),
+        ("otrząśnij się", "shake"),
+        ("zrób siku pod drzewem", "pee"),
+        ("pokaż jakąś sztuczkę", ""),
+    ):
+        intent, conf = r.classify(text)
+        assert intent == "trick", (text, intent)
+        assert trick_name(text) == expect, text
+
+
+def test_trick_wins_over_nav_in_compound_asks():
+    r = RuleRouter()
+    assert r.classify("podejdź do drzewa i zrób siku")[0] == "trick"
+
+
+def test_plain_nav_is_not_a_trick():
+    from wojtek_brain.routing import trick_name
+    assert trick_name("idź do okna") is None
+    r = RuleRouter()
+    assert r.classify("idź do okna")[0] == "nav"

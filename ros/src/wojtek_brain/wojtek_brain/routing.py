@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 
-INTENTS = ("chat", "nav", "visual", "cancel", "system")
+INTENTS = ("chat", "nav", "visual", "trick", "cancel", "system")
 
 _CANCEL_RE = re.compile(
     r"\b(stop|stój|przestań|anuluj|zatrzymaj się|zatrzymaj|dosyć|wystarczy|"
@@ -46,6 +46,27 @@ _VISUAL_RE = re.compile(
     r"(dokąd|gdzie|którędy) (teraz )?(idziesz|zmierzasz|biegniesz))",
     re.IGNORECASE,
 )
+# Show tricks (wojtek_policy.tricks). Ordered before nav so "podejdź do
+# drzewa i zrób siku" performs the trick where the dog stands -- v1 keeps
+# the funny half of a compound ask rather than the walk.
+_TRICK_NAME_RES = (
+    ("sit", re.compile(r"\b(siad|siadaj|usiądź)\b", re.IGNORECASE)),
+    ("paw_wave", re.compile(r"\b(daj|podaj)\s+łap\w*", re.IGNORECASE)),
+    ("bow", re.compile(r"\bukło[nń]\w*", re.IGNORECASE)),
+    ("shake", re.compile(r"\b(otrząśnij|otrzep|otrząsaj)\w*", re.IGNORECASE)),
+    ("pee", re.compile(r"\b(siku|sikaj|nasikaj|posikaj)\b", re.IGNORECASE)),
+    ("", re.compile(r"\bsztuczk\w*", re.IGNORECASE)),  # any trick -> caller picks
+)
+
+
+def trick_name(text: str) -> str | None:
+    """Trick asked for in `text`: a clip name, "" for 'any trick', or None."""
+    for name, rx in _TRICK_NAME_RES:
+        if rx.search(text or ""):
+            return name
+    return None
+
+
 _NAV_RE = re.compile(
     r"\b(idź|pójdź|podejdź|chodź|zaprowadź|zawieź|znajdź|poszukaj|szukaj|"
     r"odszukaj|obróć się|obróć|skręć|zawróć|cofnij|wróć|omiń|okrąż|obejdź|"
@@ -66,6 +87,8 @@ class RuleRouter:
             return ("cancel", 0.95)
         if _SYSTEM_RE.search(t):
             return ("system", 0.9)
+        if trick_name(t) is not None:
+            return ("trick", 0.9)
         if _VISUAL_RE.search(t):
             return ("visual", 0.85)
         if _NAV_RE.search(t):

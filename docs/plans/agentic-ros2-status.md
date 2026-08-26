@@ -85,6 +85,18 @@ sim, the browser UI, the recording harness. Consequences:
   rendering the agent's English via a second vLLM (:8091), exactly the ROS
   bielik node's /wojtek/say_en contract, wired in-process.
 
+## Measured 2026-08-26: the two-box split works, and it is FASTER
+
+Two GB10 instances at the same vast site (0.6 ms TCP between them): box A =
+the robot brain (Qwen, Bielik, whisper, Chatterbox), box B = the world
+(MuJoCo sim, renderer, recorder), wired over ssh tunnels at the service
+boundary. Median mic-to-first-sound **3.94 s** (worst 4.04) against 4.39 s
+(worst 4.74) with everything on one box — hardware isolation beats
+colocation because the sim's 25 fps renderer stops competing with the
+models' GPU. At 0.6 ms the 50 Hz policy loop could also cross this wire.
+This is the W3 deployment shape, validated before W3 is written: the
+boundary becomes ROS topics instead of tunneled HTTP, the split stays.
+
 ## Next (in order)
 
 1. **W3**: wrap the Qwen agent + room sim + demo UI as ROS nodes

@@ -166,6 +166,10 @@ class VlmAgentNode(Node):
     def _do_trick(self, text: str, utterance_id: str):
         import random
 
+        # A clip owns the body for its whole duration; a still-running goal
+        # would queue commands that fire the moment it ends. Stop it first.
+        if self._goals is not None:
+            self._goals.cancel("trick")
         name = trick_name(text)
         if not name:  # "zrób sztuczkę" -- surprise them
             name = random.choice(("bow", "sit", "paw_wave", "shake", "pee"))

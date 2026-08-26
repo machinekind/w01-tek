@@ -16,8 +16,8 @@ interleave.
 
 from __future__ import annotations
 
-import itertools
 import queue
+import re
 import threading
 from pathlib import Path
 
@@ -31,7 +31,7 @@ from .llm_client import ChatClient
 from .sentences import SentenceAssembler, speakable
 
 # All prompt text is editable without touching code: prompts/bielik/*.txt
-# (persona, translate, nav_acks, cancel_acks — acks one line per variant).
+# (persona, translate; canned acks live in the phrases bank).
 # Everything in there lands on Bielik and stays POLISH; the English Qwen
 # prompts live in training/wojtek_rl/agent/prompts/qwen/.
 _PROMPTS = Path(__file__).resolve().parent / "prompts" / "bielik"
@@ -41,14 +41,14 @@ def _prompt(name: str) -> str:
     return (_PROMPTS / f"{name}.txt").read_text(encoding="utf-8").strip()
 
 
-def _lines(name: str) -> list[str]:
-    return [ln for ln in _prompt(name).splitlines() if ln.strip()]
-
 
 PERSONA = _prompt("persona")
 TRANSLATE_PROMPT = _prompt("translate")
-NAV_ACKS = _lines("nav_acks")
-CANCEL_ACKS = _lines("cancel_acks")
+
+# The router lumps "go to X" and "find X" into one nav intent; the ack
+# should not promise walking when the ask was a search.
+_SEARCH_ASK_RE = re.compile(r"\b(znajdź|poszukaj|szukaj|odszukaj|wyszukaj)\b",
+                            re.IGNORECASE)
 HISTORY_TURNS = 6  # rolling text-only chat memory
 
 
@@ -79,8 +79,6 @@ class BielikNode(Node):
         self.create_subscription(Transcript, "/wojtek/asr/final", self.on_heard, 10)
 
         self.history: list[dict] = []
-        self._acks = itertools.cycle(NAV_ACKS)
-        self._cancel_acks = itertools.cycle(CANCEL_ACKS)
         self._cancel = threading.Event()
         self._author_chat = bool(self.get_parameter("author_chat").value)
         self._q: queue.Queue = queue.Queue()
@@ -96,10 +94,12 @@ class BielikNode(Node):
             if self._author_chat:
                 self._q.put(("chat", msg.utterance_id, msg.text))
         elif msg.intent == "nav":
-            self._speak_now(msg.utterance_id, next(self._acks))
+            kind = ("search_ack" if _SEARCH_ASK_RE.search(msg.text or "")
+                    else "nav_ack")
+            self._speak_now(msg.utterance_id, phrases.sample(kind))
         elif msg.intent == "cancel":
             self._cancel.set()
-            self._speak_now(msg.utterance_id, next(self._cancel_acks))
+            self._speak_now(msg.utterance_id, phrases.sample('cancel_ack'))
         # visual: the VLM agent answers; its sentences arrive on /wojtek/say_en.
         # system: v1 ignores (volume/reset live elsewhere).
 

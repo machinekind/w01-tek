@@ -146,7 +146,7 @@ cd ${REMOTE_DIR}/training
 if ! curl -sf localhost:8120/health >/dev/null 2>&1; then
   setsid nohup env TTS_LANGUAGE=pl TQDM_DISABLE=1 TTS_STREAM_SPLIT=on \
     /root/venv_tts/bin/python -m wojtek_rl.agent.tts_server --port 8120 \
-    --temperature 0.6 \
+    --temperature 0.6 --cache 256 \
     > /root/logs/tts.log 2>&1 &
   echo "tts starting (warmup inside)"
 fi

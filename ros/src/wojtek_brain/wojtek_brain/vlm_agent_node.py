@@ -47,12 +47,15 @@ from std_msgs.msg import Empty, String
 from wojtek_agent_msgs.msg import ExecStatus, RoutedIntent, Sentence, WorldMap
 from wojtek_agent_msgs.srv import WorldCommand
 
+from wojtek_brain import phrases
 from wojtek_brain.sentences import speakable, split_sentences
 from wojtek_brain.world_proxy import WorldProxy
 
 CHAT_TURN_TIMEOUT_S = 90.0
 SERVICE_TIMEOUT_S = 10.0
 GOAL_POLL_S = 0.2
+PROGRESS_AFTER_S = 20.0   # let the ack land and the behaviour visibly start
+PROGRESS_EVERY_S = 25.0
 
 
 class VlmAgentNode(Node):
@@ -67,6 +70,9 @@ class VlmAgentNode(Node):
         self.declare_parameter("forward_scale", 0.0)
 
         self.pub_say = self.create_publisher(Sentence, "/wojtek/say_en", 10)
+        # Canned Polish goes straight to the mouth: no Qwen, no Bielik, and
+        # the TTS cache was prewarmed with these exact lines at startup.
+        self.pub_say_pl = self.create_publisher(Sentence, "/wojtek/say", 10)
         self.pub_trace = self.create_publisher(String, "/wojtek/trace", 10)
         self.cli_world = self.create_client(WorldCommand, "/wojtek/world/command")
 
@@ -90,6 +96,7 @@ class VlmAgentNode(Node):
         self._agent = None
         self._goals = None
         self._trace = None
+        self._last_canned = None
 
     # -- world command service (blocking, called from the agent thread) -------
 
@@ -175,6 +182,17 @@ class VlmAgentNode(Node):
         if intent != "nav" and result.get("ok"):
             self.publish_say(result.get("say", ""), utterance_id)
 
+    def publish_canned(self, kind: str, utterance_id: str):
+        text = phrases.sample(kind, avoid=self._last_canned)
+        self._last_canned = text
+        self._say_seq += 1
+        msg = Sentence(utterance_id=utterance_id, seq=self._say_seq,
+                       text=text, final=True, source="system")
+        msg.header.stamp = self.get_clock().now().to_msg()
+        self.pub_say_pl.publish(msg)
+        if self._trace is not None:
+            self._trace.add("goal.announce", text=text, canned=kind)
+
     def publish_say(self, text: str, utterance_id: str):
         text = speakable(text or "")
         if not text:
@@ -193,35 +211,58 @@ class VlmAgentNode(Node):
     # -- goal outcome watcher ---------------------------------------------------
 
     async def watch_goals(self):
-        """Announce terminal goal states; silence looks like a hung robot."""
-        from wojtek_rl.agent.goals import TERMINAL_STATES, outcome_phrase
+        """Announce terminal goal states and keep long behaviours audibly
+        alive; silence looks like a hung robot. Everything spoken here is a
+        canned phrase from the bank -- instant, prewarmed, grammatical."""
+        from wojtek_rl.agent.goals import NAV_FAILURE_REASONS, TERMINAL_STATES
 
         rev, announced = -1, None
+        active_since, last_progress = None, 0.0
         # rclpy.ok() gate: SIGTERM lands in rclpy's signal handler, which
         # shuts the context down but kills no loop -- without this check the
         # process survives pkill and doubles on the next launch (seen live).
         while rclpy.ok():
             await asyncio.sleep(GOAL_POLL_S)
             goals = self._goals
-            if goals is None or goals.rev == rev:
+            if goals is None:
+                continue
+            status = goals.status()
+            state = status.get("state") or ""
+            kind = status.get("kind") or ""
+            now = self.loop.time()
+            # Progress heartbeat: a behaviour past PROGRESS_AFTER_S gets a
+            # "still on it" line every PROGRESS_EVERY_S until it ends.
+            if state and state not in TERMINAL_STATES and state != "idle":
+                if active_since is None:
+                    active_since, last_progress = now, now
+                elif (now - active_since > PROGRESS_AFTER_S
+                      and now - last_progress > PROGRESS_EVERY_S):
+                    last_progress = now
+                    self.publish_canned(
+                        "search_progress" if kind == "search" else "nav_progress",
+                        self._last_utterance)
+            else:
+                active_since = None
+            if goals.rev == rev:
                 continue
             rev = goals.rev
-            status = goals.status()
-            key = (status.get("kind"), status.get("state"), status.get("goal"))
-            if status.get("state") in TERMINAL_STATES and key != announced:
+            key = (kind, state, status.get("goal"))
+            if state in TERMINAL_STATES and key != announced:
                 announced = key
-                phrase = outcome_phrase(
-                    status.get("kind") or "", status.get("state") or "",
-                    status.get("goal") or "",
-                    reason=(status.get("detail") or {}).get("reason"),
-                    language="en",
-                )
-                if phrase:
-                    self.get_logger().info(f"announcing outcome: {phrase!r}")
-                    if self._trace is not None:
-                        self._trace.add("goal.announce", text=phrase,
-                                        goal_state=status.get("state"))
-                    self.publish_say(phrase, self._last_utterance)
+                reason = (status.get("detail") or {}).get("reason")
+                canned = {
+                    ("search", "found"): "search_found",
+                    ("search", "not_found"): "search_not_found",
+                    ("search", "error"): "goal_error",
+                    ("navigate", "done"): "nav_done",
+                    ("navigate", "stuck"): "nav_stuck",
+                    ("navigate", "error"): "goal_error",
+                }.get((kind, "stuck" if (kind == "navigate" and state == "done"
+                                         and reason in NAV_FAILURE_REASONS)
+                       else state))
+                if canned:
+                    self.get_logger().info(f"announcing outcome: {canned}")
+                    self.publish_canned(canned, self._last_utterance)
 
     # -- lazy construction (heavy imports on first intent, like room_app) ------
 
@@ -255,10 +296,12 @@ class VlmAgentNode(Node):
             msg = String(data=json.dumps(event, ensure_ascii=False))
             self.pub_trace.publish(msg)
             # Speak the goal switch immediately, before the model's reply:
-            # the robot is already turning away from the old target.
-            if event.get("kind") == "goal.switch" and event.get("text"):
+            # the robot is already turning away from the old target. Canned:
+            # switch phrases with goal nouns glued in broke Polish case
+            # endings on camera.
+            if event.get("kind") == "goal.switch":
                 self.loop.call_soon_threadsafe(
-                    self.publish_say, event["text"], self._last_utterance)
+                    self.publish_canned, "switch", self._last_utterance)
 
         trace.subscribe(on_trace)
 

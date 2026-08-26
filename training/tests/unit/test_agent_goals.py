@@ -143,7 +143,7 @@ def test_success_phrases_name_the_goal():
     # user's sentence ("do telewizora" -> genitive), and interpolating it
     # produced "Znalazłem: telewizora" on camera (v3 take, 2026-08-24).
     phrase = outcome_phrase("search", "found", "telewizora", language="pl")
-    assert phrase == "Hau hau! Znalazłem to, czego szukałem!"
+    assert phrase == "Znalazłem to, czego szukałem!"
     assert "telewizora" not in phrase
     assert "there" in outcome_phrase("navigate", "done", "the bed", language="en")
 
@@ -156,7 +156,7 @@ def test_navigation_giving_up_is_not_announced_as_arrival():
     arrived = outcome_phrase("navigate", "done", "łóżko", reason="vlm_done", language="pl")
     gave_up = outcome_phrase("navigate", "done", "łóżko", reason="max_rotation", language="pl")
     stuck = outcome_phrase("navigate", "done", "łóżko", reason="stuck", language="pl")
-    assert arrived == "Jestem na miejscu! Hau!"
+    assert arrived == "Jestem na miejscu!"
     assert gave_up == "Utknąłem, nie mogę tam dojść."
     assert stuck == gave_up
 

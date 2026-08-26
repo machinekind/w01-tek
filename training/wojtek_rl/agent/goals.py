@@ -31,18 +31,18 @@ OUTCOMES = {
         # into a nominative slot produced "Znalazłem: telewizora" on camera.
         # Templates that need no inflection are always grammatical; the goal
         # itself is visible on screen and in the trace.
-        ("search", "found"): "Hau hau! Znalazłem to, czego szukałem!",
+        ("search", "found"): "Znalazłem to, czego szukałem!",
         ("search", "not_found"): "Nie znalazłem tego, przeszukałem wszystko.",
         ("search", "error"): "Coś poszło nie tak podczas szukania.",
-        ("navigate", "done"): "Jestem na miejscu! Hau!",
+        ("navigate", "done"): "Jestem na miejscu!",
         ("navigate", "stuck"): "Utknąłem, nie mogę tam dojść.",
         ("navigate", "error"): "Nie dałem rady tam dojść.",
     },
     "en": {
-        ("search", "found"): "Found it: {goal}! Woof woof!",
+        ("search", "found"): "Found it: {goal}!",
         ("search", "not_found"): "I could not find {goal}. I searched everywhere.",
         ("search", "error"): "Something went wrong while searching.",
-        ("navigate", "done"): "I am there! Woof!",
+        ("navigate", "done"): "I am there!",
         ("navigate", "stuck"): "I am stuck, I cannot get there.",
         ("navigate", "error"): "I could not get there.",
     },

@@ -79,7 +79,7 @@ PIP="pip3 install -q --break-system-packages"
 # (docs/plans/spark-port.md).
 \$PIP --ignore-installed typing_extensions
 \$PIP torch --index-url https://download.pytorch.org/whl/cu130
-\$PIP 'numpy<2' mujoco 'transformers==5.2.0' soundfile accelerate \
+\$PIP 'numpy<2' mujoco 'transformers==5.16.0' 'tokenizers>=0.23.1,<0.24' soundfile accelerate \
   fastapi uvicorn websockets httpx loguru pillow scipy \
   imageio imageio-ffmpeg huggingface_hub wsproto
 # typing_extensions: this image ships it via apt (no RECORD file);

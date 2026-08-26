@@ -7,9 +7,10 @@ this side of the wire; the world -- sim today, hardware later -- is reached
 only through topics and one command service.
 
 Wiring (see docs/plans/agentic-ros2.md):
-  in : /wojtek/intent            RoutedIntent   nav/visual are ours; cancel
-                                                aborts; chat/system are
-                                                Bielik's and ignored here
+  in : /wojtek/intent            RoutedIntent   nav/visual/chat are ours
+                                                (Qwen authors, Bielik only
+                                                translates); cancel aborts;
+                                                system is ignored in v1
   in : /wojtek/audio/speech_started  Empty      barge-in: stop publishing the
                                                 rest of the current reply
   in : /wojtek/exec/status       ExecStatus     pose + executor + resets
@@ -134,7 +135,7 @@ class VlmAgentNode(Node):
     def on_intent(self, msg: RoutedIntent):
         if self.loop is None:
             return
-        if msg.intent in ("nav", "visual", "cancel"):
+        if msg.intent in ("nav", "visual", "chat", "cancel"):
             self.loop.call_soon_threadsafe(self._dispatch, msg.intent,
                                            msg.text, msg.utterance_id)
 

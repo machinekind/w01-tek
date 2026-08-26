@@ -34,9 +34,16 @@ _SYSTEM_RE = re.compile(
     re.IGNORECASE,
 )
 _VISUAL_RE = re.compile(
+    # Perception AND self-status questions both go to the VLM agent: it has
+    # the camera and the pose, Bielik has neither.  "Gdzie teraz jesteś i co
+    # robisz?" routed to chat produced a confident story about a garden on
+    # camera (2026-08-26) -- a blind persona answers anything.
     r"(co (teraz )?widzisz|co masz przed (sobą|oczami)|opisz (co widzisz|"
     r"otoczenie|pokój|widok)|rozejrzyj się|co jest (przed tobą|obok|dookoła|"
-    r"wokół)|widzisz (jakiś|jakieś|gdzieś|coś|tu|tam))",
+    r"wokół)|widzisz (jakiś|jakieś|gdzieś|coś|tu|tam)|"
+    r"gdzie (teraz )?(jesteś|stoisz|się znajdujesz)|"
+    r"co (teraz )?(robisz|porabiasz)|"
+    r"(dokąd|gdzie|którędy) (teraz )?(idziesz|zmierzasz|biegniesz))",
     re.IGNORECASE,
 )
 _NAV_RE = re.compile(

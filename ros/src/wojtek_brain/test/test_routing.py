@@ -80,3 +80,19 @@ class TestConfidenceFloor:
 
     def test_chat_never_downgrades(self):
         assert apply_confidence_floor("chat", 0.1, 0.55) == ("chat", 0.1)
+
+
+def test_status_questions_route_to_the_agent_not_the_blind_persona():
+    """'Gdzie teraz jesteś i co robisz?' answered by Bielik produced a
+    confident story about a garden on camera -- pose/status questions belong
+    to the VLM agent, which has the camera and the pose."""
+    r = RuleRouter()
+    for text in (
+        "Gdzie teraz jesteś i co robisz?",
+        "gdzie jesteś?",
+        "Gdzie się znajdujesz?",
+        "co teraz robisz?",
+        "Dokąd idziesz?",
+    ):
+        intent, conf = r.classify(text)
+        assert intent == "visual", (text, intent)

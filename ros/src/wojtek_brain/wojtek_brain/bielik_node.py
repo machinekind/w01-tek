@@ -55,6 +55,7 @@ HISTORY_TURNS = 6  # rolling text-only chat memory
 class BielikNode(Node):
     def __init__(self):
         super().__init__("wojtek_bielik")
+        self.declare_parameter("author_chat", True)  # false when vlm_agent runs
         self.declare_parameter("url", "http://127.0.0.1:8091")
         self.declare_parameter("model", "speakleash/Bielik-4.5B-v3.0-Instruct-FP8-Dynamic")
         self.declare_parameter("temperature", 0.7)
@@ -81,13 +82,19 @@ class BielikNode(Node):
         self._acks = itertools.cycle(NAV_ACKS)
         self._cancel_acks = itertools.cycle(CANCEL_ACKS)
         self._cancel = threading.Event()
+        self._author_chat = bool(self.get_parameter("author_chat").value)
         self._q: queue.Queue = queue.Queue()
         threading.Thread(target=self._work, daemon=True).start()
 
     # -- subscriptions ------------------------------------------------------
     def on_intent(self, msg: RoutedIntent):
         if msg.intent == "chat":
-            self._q.put(("chat", msg.utterance_id, msg.text))
+            # With the VLM agent in the graph, Bielik never AUTHORS -- it
+            # only translates /wojtek/say_en. A 4.5B authoring blind produced
+            # garbled echoes and stage-direction prose on camera (2026-08-26,
+            # "rzucam radosne spojrzenie Elo! Masz na imię? Wojtek!").
+            if self._author_chat:
+                self._q.put(("chat", msg.utterance_id, msg.text))
         elif msg.intent == "nav":
             self._speak_now(msg.utterance_id, next(self._acks))
         elif msg.intent == "cancel":

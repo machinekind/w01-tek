@@ -78,6 +78,8 @@ def generate_launch_description():
              parameters=[{
                  "url": cfg["bielik_url"],
                  "model": cfg["bielik_model"],
+                 # Qwen authors every reply here; Bielik only renders Polish.
+                 "author_chat": False,
              }]),
         Node(package="wojtek_brain", executable="vlm_agent",
              parameters=[{

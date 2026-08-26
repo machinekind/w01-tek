@@ -9,6 +9,7 @@ single node's hot path: subtract consecutive stamps of one utterance.
     /wojtek/audio/speech (end_of_utterance)   the human stopped talking
     /wojtek/asr/final                         text exists
     /wojtek/intent                            routed
+    /wojtek/say_en (first sentence)           the VLM agent answered (nav/visual)
     /wojtek/say (first sentence)              the brain has something to say
     /wojtek/tts/audio (first frame)           the human hears it
 
@@ -36,6 +37,10 @@ from datetime import datetime, timezone
 STAGES: tuple[tuple[str, str, str], ...] = (
     ("asr.transcribe", "speech_end", "asr_final"),
     ("brain.route", "asr_final", "intent"),
+    # Only present on turns the VLM agent answered (nav/visual): the agent's
+    # whole tool loop, then the Bielik hop that renders it in Polish.
+    ("agent.turn", "intent", "say_en_first"),
+    ("brain.translate", "say_en_first", "say_first"),
     ("llm.first_sentence", "intent", "say_first"),
     ("llm.reply", "intent", "say_final"),
     ("tts.first_audio", "say_first", "audio_first"),
@@ -44,7 +49,8 @@ STAGES: tuple[tuple[str, str, str], ...] = (
     ("voice.reply", "speech_end", "audio_first"),
 )
 
-EVENTS = ("speech_end", "asr_final", "intent", "say_first", "say_final", "audio_first")
+EVENTS = ("speech_end", "asr_final", "intent", "say_en_first", "say_first",
+          "say_final", "audio_first")
 
 
 def stamp_to_s(stamp) -> float:

@@ -52,6 +52,7 @@ class ProbeNode(Node):
         self.create_subscription(AudioChunk, "/wojtek/audio/speech", self.on_speech, 10)
         self.create_subscription(Transcript, "/wojtek/asr/final", self.on_final, 10)
         self.create_subscription(RoutedIntent, "/wojtek/intent", self.on_intent, 10)
+        self.create_subscription(Sentence, "/wojtek/say_en", self.on_say_en, 10)
         self.create_subscription(Sentence, "/wojtek/say", self.on_say, 10)
         self.create_subscription(AudioChunk, "/wojtek/tts/audio", self.on_audio, 50)
 
@@ -68,6 +69,9 @@ class ProbeNode(Node):
 
     def on_intent(self, msg: RoutedIntent):
         self._observe("intent", msg.utterance_id, msg.header.stamp)
+
+    def on_say_en(self, msg: Sentence):
+        self._observe("say_en_first", msg.utterance_id, msg.header.stamp)
 
     def on_say(self, msg: Sentence):
         self._observe("say_first", msg.utterance_id, msg.header.stamp)

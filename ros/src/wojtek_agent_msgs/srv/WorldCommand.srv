@@ -1,0 +1,11 @@
+# The one door into the world's motion stack, mirroring the demo's
+# RoomSim.submit_command / ScanExecutor.goto / reset. A service, not a topic:
+# the navigator and search controllers consume the {ok, error} ack
+# synchronously to distinguish a rejected command from a slow one.
+string kind      # "midlevel" | "goto" | "reset"
+string text      # midlevel command string, e.g. "forward 0.6" / "turn_left 45"
+float64[] args   # goto only: [x, y]
+---
+bool ok
+string error     # set when ok is false, e.g. the forward-clearance veto
+string command   # normalized command echo for the trace

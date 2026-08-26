@@ -10,6 +10,9 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Transcript.msg"
   "msg/RoutedIntent.msg"
   "msg/Sentence.msg"
+  "msg/ExecStatus.msg"
+  "msg/WorldMap.msg"
+  "srv/WorldCommand.srv"
   DEPENDENCIES std_msgs
 )
 

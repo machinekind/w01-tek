@@ -1,28 +1,25 @@
 from setuptools import setup
 
-package_name = "wojtek_brain"
+package_name = "wojtek_sim_bridge"
 
 setup(
     name=package_name,
     version="0.1.0",
     packages=[package_name],
-    package_data={package_name: ["prompts/bielik/*.txt"]},
-    include_package_data=True,
     data_files=[
         ("share/ament_index/resource_index/packages", [f"resource/{package_name}"]),
         (f"share/{package_name}", ["package.xml"]),
+        (f"share/{package_name}/launch", ["launch/world.launch.py"]),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
     maintainer="Maciej Gruszczynski",
     maintainer_email="maciejgruszczynski@surferseo.com",
-    description="Brain nodes: intent router, Bielik conversational node, VLM agent.",
+    description="World-side sim + websocket bridge for the agent stack.",
     license="Apache-2.0",
     entry_points={
         "console_scripts": [
-            "router = wojtek_brain.router_node:main",
-            "bielik = wojtek_brain.bielik_node:main",
-            "vlm_agent = wojtek_brain.vlm_agent_node:main",
+            "sim_bridge = wojtek_sim_bridge.bridge_node:main",
         ],
     },
 )

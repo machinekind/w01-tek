@@ -10,13 +10,16 @@ class FakeStamp:
         self.sec, self.nanosec = sec, nanosec
 
 
-def run_turn(probe, uid, t0=100.0, asr=0.6, route=0.05, first=1.9, final=2.6,
-             audio=0.9):
-    """One complete turn, stamps in pipeline order."""
+def run_turn(probe, uid, t0=100.0, asr=0.6, route=0.05, agent=1.4, first=1.9,
+             final=2.6, audio=0.9):
+    """One complete VLM-agent turn, stamps in pipeline order. Bielik-direct
+    turns simply never emit say_en_first, so agent.turn/brain.translate stay
+    silent for them (a missing stage means the boundary was not crossed)."""
     records = []
     records += probe.observe("speech_end", uid, t0)
     records += probe.observe("asr_final", uid, t0 + asr, text="gdzie jest kanapa")
     records += probe.observe("intent", uid, t0 + asr + route)
+    records += probe.observe("say_en_first", uid, t0 + asr + route + agent)
     records += probe.observe("say_first", uid, t0 + asr + route + first)
     records += probe.observe("say_final", uid, t0 + asr + route + final)
     records += probe.observe("audio_first", uid, t0 + asr + route + first + audio)

@@ -97,11 +97,50 @@ models' GPU. At 0.6 ms the 50 Hz policy loop could also cross this wire.
 This is the W3 deployment shape, validated before W3 is written: the
 boundary becomes ROS topics instead of tunneled HTTP, the split stays.
 
+## W3 landed 2026-08-26 (code complete, live E2E pending)
+
+The agent is a ROS node and the sim is another. The cut is a **proxy, not a
+rewrite**: the whole demo agent stack (WojtekAgent, GoalManager,
+VlmNavigator, SearchController) imports from `wojtek_rl` unmodified and
+talks to a `WorldProxy` that reconstructs RoomSim's nine-member surface from
+topics -- one source of truth for agent logic in both stacks.
+
+- `wojtek_brain/vlm_agent_node.py` -- subscribes `/wojtek/intent` (nav and
+  visual are its lanes; cancel aborts; chat stays Bielik's), camera and
+  `/wojtek/exec/status` + `/wojtek/map`; publishes English to
+  `/wojtek/say_en` (first publisher of that topic -- Bielik renders the
+  Polish) and `/wojtek/trace`. Nav intents get no reply text (Bielik's
+  canned ack already played); the goal watcher announces terminal outcomes
+  in English via the same mouth.
+- `wojtek_agent_msgs`: `ExecStatus` (pose + executor + resets heartbeat,
+  one snapshot so the pollers never read torn state), `WorldMap` (the
+  OnlineMap grid on the wire; the proxy rebuilds a real OnlineMap so
+  frontier math and `map_image()` run agent-side unchanged), and the
+  `WorldCommand` service (midlevel / goto / reset -- a service because the
+  controllers consume the `{ok, error}` ack synchronously).
+- `wojtek_sim_bridge/bridge_node.py` -- self-stepping 50 Hz headless sim
+  node (fixes the #131 freeze-without-browser defect), HUD-free VLM frames
+  (fixes the second), SCAN + walking policy world-side as the body
+  emulator, and the browser/scenario websocket on :8010 speaking the
+  room_app protocol so `scenario.py` records takes against it unchanged.
+  It replaces `audio_bridge` in a sim world (mic and reply audio ride the
+  same socket).
+- Probe extended: `say_en_first` event, `agent.turn` and `brain.translate`
+  stages -- the Bielik hop is now measured per turn in the ROS stack too.
+- Launch: `agent_stack.launch.py` (brain box: voice stack + vlm_agent, no
+  audio_bridge) and `world.launch.py` (world box: sim bridge).
+
+Not done yet, in order: deployment payload for the two-box split (DDS
+across boxes needs unicast peer config on vast -- multicast does not cross
+their NAT), live E2E on a GB10 + cheap-GPU pair (same host, see the split
+recipe above), browser UI static serving on the bridge (scenario/recorder
+path works; a live human viewer still uses room_app for now).
+
 ## Next (in order)
 
-1. **W3**: wrap the Qwen agent + room sim + demo UI as ROS nodes
-   (`vlm_agent`, sim bridge, ui bridge) so the ROS stack walks, not just
-   talks.
+1. **W3 live E2E**: rent the GB10 + RTX 3060 same-host pair, run
+   `agent_stack` on the brain box and `world` on the sim box, record the
+   scenario battery, compare the probe's stage table to the demo rig's.
 2. Router fine-tune: `ros/src/wojtek_brain/tools/gen_router_dataset.py` →
    `train_router.py` (HerBERT default; compare mmBERT/ModernBERT on the same
    Polish set), then set the router node's `model_path`.

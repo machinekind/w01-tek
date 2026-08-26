@@ -9,3 +9,4 @@ float64[] args   # goto only: [x, y]
 bool ok
 string error     # set when ok is false, e.g. the forward-clearance veto
 string command   # normalized command echo for the trace
+uint64 cmd_seq   # sequence number of this accepted command (0 if rejected)

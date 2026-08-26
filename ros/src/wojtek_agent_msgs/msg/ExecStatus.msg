@@ -10,3 +10,7 @@ uint32 blocked       # monotonic no-progress counter (midlevel stall aborts)
 uint32 resets        # monotonic fall-reset counter
 float64 sim_time     # world clock, seconds; feeds PoseHistory timestamps
 string exec_json     # executor.status() dict as JSON, for the status tool
+uint64 cmd_seq       # highest accepted WorldCommand seq REFLECTED in this
+                     # snapshot -- the proxy holds executor.active high until
+                     # status catches up with its last ack (in-process code
+                     # saw submit() flip active synchronously; topics don't)

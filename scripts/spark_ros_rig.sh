@@ -77,11 +77,14 @@ fi
 PIP="pip3 install -q --break-system-packages"
 # torch FIRST, from the cu130 index; everything after must not move it
 # (docs/plans/spark-port.md).
+\$PIP --ignore-installed typing_extensions
 \$PIP torch --index-url https://download.pytorch.org/whl/cu130
 \$PIP 'numpy<2' mujoco 'transformers==5.2.0' soundfile accelerate \
   fastapi uvicorn websockets httpx loguru pillow scipy \
   imageio imageio-ffmpeg huggingface_hub wsproto
-\$PIP --ignore-installed PyJWT vllm 2>&1 | tail -1
+# typing_extensions: this image ships it via apt (no RECORD file);
+# pip must overlay it, not uninstall it.
+\$PIP --ignore-installed PyJWT typing_extensions vllm 2>&1 | tail -1
 # Chatterbox in its OWN venv: its transformers pin fights vllm's (spark rig).
 python3 -m venv /root/venv_tts
 /root/venv_tts/bin/pip install -q torch --index-url https://download.pytorch.org/whl/cu130
@@ -102,6 +105,25 @@ import torch, platform
 assert "cu13" in torch.__version__, f"pip moved torch to {torch.__version__}!"
 print("deploy ok:", platform.machine(), "torch", torch.__version__,
       "cap", torch.cuda.get_device_capability(0))
+# Clock sanity: some vast GB10 machines are platform power-capped to
+# ~940 MHz of 3003 and never boost (machine 51319, 2026-08-26) -- every
+# latency number from such a box is a fiction. Load the GPU and look.
+import subprocess, threading
+a = torch.randn(4096, 4096, device="cuda", dtype=torch.float16)
+stop = False
+def burn():
+    global a
+    while not stop: a = a @ a * 0.001
+t = threading.Thread(target=burn); t.start()
+import time; time.sleep(5)
+out = subprocess.run(["nvidia-smi", "--query-gpu=clocks.sm,clocks.max.sm",
+                      "--format=csv,noheader"], capture_output=True, text=True).stdout
+stop = True; t.join(); torch.cuda.synchronize()
+cur, mx = [int(x.split()[0]) for x in out.strip().split(",")]
+print(f"clock under load: {cur} / {mx} MHz")
+assert cur > mx * 0.6, (
+    f"GPU stuck at {cur} MHz of {mx} -- power-capped host, DESTROY this "
+    "instance and rent a different machine; latency here is meaningless")
 PY
 EOF
   ;;
@@ -183,7 +205,7 @@ stack)
   [[ "$scene" == castle ]] && spawn='WOJTEK_SPAWN=2.5,-3.0'
   rsh "bash -s" <<EOF
 set -euo pipefail
-pkill -f 'agent_stack.launch|world.launch|sim_bridge|vlm_agent' 2>/dev/null || true
+pkill -f 'agent_stack.launch|world.launch|install/wojtek' 2>/dev/null || true
 sleep 2
 [ -f ~/.hf_token ] && export HF_TOKEN="\$(cat ~/.hf_token)"
 set +u; source /opt/ros/${ROS_DISTRO}/setup.bash; source ${REMOTE_DIR}/ws/install/setup.bash; set -u
@@ -193,7 +215,7 @@ export HF_ORGANIZATION=hvsr-robotics TQDM_DISABLE=1
 # navigation from the same served model, as in the recorded demo takes.
 setsid nohup ros2 launch wojtek_agent_bringup agent_stack.launch.py \
   agent_url:=http://127.0.0.1:8090 agent_model:=${AGENT_MODEL} \
-  vlm_backend:=openai forward_scale:=2 \
+  vlm_backend:=openai forward_scale:=2.0 \
   bielik_url:=http://127.0.0.1:8091 bielik_model:=${BIELIK_MODEL} \
   asr_backend:=transformers asr_model:=large-v3 \
   tts_engine:=remote tts_url:=http://127.0.0.1:8120 \
@@ -212,7 +234,7 @@ for i in \$(seq 1 60); do
 done
 python3 -c "import socket; socket.create_connection(('127.0.0.1', 8010), 2).close()" \
   && echo "world(${scene}) UP on :8010" \
-  || { echo "world(${scene}) DOWN -- log tails:"; tail -15 /root/logs/world.log /root/logs/agent_stack.log; exit 1; }
+  || { echo "world(${scene}) DOWN -- log tails:"; tail -15 /root/logs/world.log; tail -15 /root/logs/agent_stack.log; exit 1; }
 EOF
   ;;
 
@@ -240,6 +262,6 @@ fetch)
 
 logs) rsh "tail -40 /root/logs/${1:-agent_stack}.log" ;;
 status) rsh "nvidia-smi --query-gpu=memory.used --format=csv,noheader; for p in 8090 8091 8120 8010; do curl -sf -m 3 localhost:\$p/health >/dev/null 2>&1 || curl -sf -m 3 localhost:\$p/v1/models >/dev/null 2>&1 || python3 -c \"import socket; socket.create_connection(('127.0.0.1', \$p), 2).close()\" 2>/dev/null && echo \"\$p UP\" || echo \"\$p down\"; done; pgrep -fc 'vllm serve' | sed 's/^/vllm engines: /'" ;;
-stop) rsh "pkill -f 'vllm serve|tts_server|agent_stack.launch|world.launch|sim_bridge|vlm_agent|audio_bridge|asr_node|tts_node|vad_node|router_node|bielik_node' || true; echo stopped" ;;
+stop) rsh "pkill -f 'vllm serve|tts_server|agent_stack.launch|world.launch|install/wojtek' || true; echo stopped" ;;
 *) echo "usage: $0 {deploy|serve|stack <scene>|record <name> [gates]|fetch [dir]|logs <svc>|status|stop}" >&2; exit 1 ;;
 esac

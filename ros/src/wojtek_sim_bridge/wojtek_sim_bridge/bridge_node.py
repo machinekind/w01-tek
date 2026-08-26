@@ -102,6 +102,7 @@ class SimBridgeNode(Node):
         self._client_gen = 0
         self._voice_on = False
         self._mic_seq = 0
+        self._cmd_seq = 0        # accepted WorldCommands; fences proxy polls
         self._events: list[dict] = []
         self._audio_out: list[bytes] = []
 
@@ -120,10 +121,17 @@ class SimBridgeNode(Node):
         res.ok = bool(out.get("ok"))
         res.error = str(out.get("error") or "")
         res.command = str(out.get("command") or "")
+        res.cmd_seq = int(out.get("cmd_seq") or 0)
         return res
 
     async def _apply_command(self, kind: str, text: str, args: list[float]):
-        return world_command_result(kind, text, args, self.sim)
+        out = world_command_result(kind, text, args, self.sim)
+        if out.get("ok"):
+            # Stamped on the sim thread, so the NEXT sim.step() -- and the
+            # status message it produces -- already reflects this command.
+            self._cmd_seq += 1
+            out["cmd_seq"] = self._cmd_seq
+        return out
 
     # -- agent -> browser fan-out (rclpy thread) --------------------------------
 
@@ -267,6 +275,7 @@ class SimBridgeNode(Node):
         msg.resets = int(self.sim.resets)
         msg.sim_time = float(self.sim.sim_time)
         msg.exec_json = json.dumps(exec_status)
+        msg.cmd_seq = self._cmd_seq
         self.pub_status.publish(msg)
 
     def _publish_jpeg(self, pub, b64: str):

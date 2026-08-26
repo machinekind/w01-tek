@@ -31,13 +31,32 @@ FRAME_WAIT_S = 5.0  # first-frame grace at startup; afterwards reads are instant
 
 
 class ExecutorView:
-    """The executor the controllers poll, reconstructed from ExecStatus."""
+    """The executor the controllers poll, reconstructed from ExecStatus.
+
+    `active` is sequence-fenced: an accepted command returns a cmd_seq, and
+    until a status snapshot stamped with that seq (or later) arrives, the
+    command counts as running no matter what the snapshot says. Without the
+    fence a controller polls a pre-command snapshot, concludes the command
+    already finished, and machine-guns the next one 3 ms later (seen live,
+    2026-08-26: the robot 'searched' a flat while moving 6 cm).
+    """
 
     def __init__(self, command_fn: CommandFn):
         self._command_fn = command_fn
-        self.active = False
+        self._raw_active = False
+        self._status_seq = 0
+        self._acked_seq = 0
         self.blocked = 0
         self._status_json = "{}"
+
+    @property
+    def active(self) -> bool:
+        return self._raw_active or self._status_seq < self._acked_seq
+
+    def note_ack(self, ack: dict) -> None:
+        seq = int(ack.get("cmd_seq") or 0)
+        if ack.get("ok") and seq:
+            self._acked_seq = max(self._acked_seq, seq)
 
     def status(self) -> dict:
         try:
@@ -48,7 +67,7 @@ class ExecutorView:
     def goto(self, x: float, y: float, from_xy: tuple[float, float]) -> None:
         # from_xy is ignored on the wire: the world knows its own pose better
         # than a snapshot the agent took a status message ago.
-        self._command_fn("goto", "", [float(x), float(y)])
+        self.note_ack(self._command_fn("goto", "", [float(x), float(y)]))
 
 
 class WorldProxy:
@@ -79,7 +98,9 @@ class WorldProxy:
         return self._pose
 
     def submit_command(self, text: str) -> dict:
-        return self._command_fn("midlevel", text, [])
+        ack = self._command_fn("midlevel", text, [])
+        self.executor.note_ack(ack)
+        return ack
 
     def ego_jpeg(self, hud: bool = True) -> str:
         # The HUD flag is accepted for drop-in compatibility but every frame
@@ -98,9 +119,10 @@ class WorldProxy:
 
     def on_status(self, x: float, y: float, yaw: float, active: bool,
                   blocked: int, resets: int, sim_time: float,
-                  exec_json: str) -> None:
+                  exec_json: str, cmd_seq: int = 0) -> None:
         self._pose = (float(x), float(y), float(yaw))
-        self.executor.active = bool(active)
+        self.executor._raw_active = bool(active)
+        self.executor._status_seq = max(self.executor._status_seq, int(cmd_seq))
         self.executor.blocked = int(blocked)
         self.executor._status_json = exec_json
         self.resets = int(resets)

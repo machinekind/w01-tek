@@ -31,7 +31,8 @@ class FakeMap:
 def make_proxy(calls):
     def command_fn(kind, text, args):
         calls.append((kind, text, args))
-        return {"ok": True, "command": text or kind}
+        return {"ok": True, "command": text or kind,
+                "cmd_seq": len(calls)}
 
     return WorldProxy(command_fn, pose_history=FakeHistory(),
                       map_factory=FakeMap)
@@ -92,3 +93,32 @@ def test_frames_wait_then_serve_base64(monkeypatch):
         proxy.vlm_frame_jpeg()
     proxy.on_vln_jpeg(b"vln")
     assert base64.b64decode(proxy.vlm_frame_jpeg()) == b"vln"
+
+
+def test_active_is_sequence_fenced():
+    """An accepted command counts as running until a status snapshot that
+    already reflects it arrives -- the race that machine-gunned commands."""
+    proxy = make_proxy([])
+    proxy.on_status(0, 0, 0, False, 0, 0, 1.0, "{}", cmd_seq=0)
+    assert proxy.executor.active is False
+    proxy.submit_command("forward 0.6")            # ack seq 1
+    assert proxy.executor.active is True           # despite raw False
+    proxy.on_status(0, 0, 0, True, 0, 0, 1.1, "{}", cmd_seq=1)
+    assert proxy.executor.active is True           # genuinely running
+    proxy.on_status(0.6, 0, 0, False, 0, 0, 2.5, "{}", cmd_seq=1)
+    assert proxy.executor.active is False          # done, snapshot is current
+
+
+def test_rejected_command_does_not_fence():
+    calls = []
+
+    def command_fn(kind, text, args):
+        calls.append(kind)
+        return {"ok": False, "error": "blocked", "cmd_seq": 0}
+
+    from wojtek_brain.world_proxy import WorldProxy
+    proxy = WorldProxy(command_fn, pose_history=FakeHistory(),
+                       map_factory=FakeMap)
+    proxy.on_status(0, 0, 0, False, 0, 0, 1.0, "{}", cmd_seq=0)
+    proxy.submit_command("forward 9")
+    assert proxy.executor.active is False

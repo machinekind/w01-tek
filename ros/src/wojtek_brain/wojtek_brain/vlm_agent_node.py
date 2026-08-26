@@ -102,7 +102,7 @@ class VlmAgentNode(Node):
         if not done.wait(SERVICE_TIMEOUT_S):
             return {"ok": False, "error": "world command timed out"}
         res = future.result()
-        out = {"ok": bool(res.ok)}
+        out = {"ok": bool(res.ok), "cmd_seq": int(res.cmd_seq)}
         if res.error:
             out["error"] = res.error
         if res.command:
@@ -113,7 +113,8 @@ class VlmAgentNode(Node):
 
     def on_exec_status(self, msg: ExecStatus):
         self.proxy.on_status(msg.x, msg.y, msg.yaw, msg.active, msg.blocked,
-                             msg.resets, msg.sim_time, msg.exec_json)
+                             msg.resets, msg.sim_time, msg.exec_json,
+                             msg.cmd_seq)
 
     def on_map(self, msg: WorldMap):
         self.proxy.on_map(msg.res, tuple(msg.origin), tuple(msg.shape),
@@ -195,7 +196,10 @@ class VlmAgentNode(Node):
         from wojtek_rl.agent.goals import TERMINAL_STATES, outcome_phrase
 
         rev, announced = -1, None
-        while True:
+        # rclpy.ok() gate: SIGTERM lands in rclpy's signal handler, which
+        # shuts the context down but kills no loop -- without this check the
+        # process survives pkill and doubles on the next launch (seen live).
+        while rclpy.ok():
             await asyncio.sleep(GOAL_POLL_S)
             goals = self._goals
             if goals is None or goals.rev == rev:

@@ -1,9 +1,9 @@
 [
-  {"wav": "wavs/q_przedstaw.wav", "quiet": 2.5, "wait": 30},
+  {"wav": "scenarios/wavs/q_przedstaw.wav", "quiet": 2.5, "wait": 30},
   {"pause": 2},
   {"cmd": "turn_left 150", "wait": 8},
-  {"wav": "wavs/q_rower.wav", "quiet": 2.5, "wait": 30},
+  {"wav": "scenarios/wavs/q_rower.wav", "quiet": 2.5, "wait": 30},
   {"pause": 95},
-  {"wav": "wavs/q_nasik.wav", "quiet": 2.5, "wait": 25},
+  {"wav": "scenarios/wavs/q_nasik.wav", "quiet": 2.5, "wait": 25},
   {"pause": 12}
 ]

@@ -76,6 +76,68 @@ class ChatterboxEngine:
             yield (_to_int16(wav.detach().cpu().numpy()), model.sr)
 
 
+class RemoteEngine:
+    """Thin client for wojtek_rl's tts_server.py over HTTP.
+
+    The server owns the model AND every optimization the demo shipped --
+    voice conditionals encoded once, the token cap, tail-noise trimming,
+    clause streaming -- so this engine inherits them instead of porting
+    them. It is also the process-isolation move: chatterbox pins an old
+    transformers, the ASR node wants a new one, and on the GB10 the proven
+    layout is chatterbox alone in its own venv behind this exact server.
+
+    Streaming: /synthesize_stream flushes raw PCM16 clause by clause; a 404
+    (older server) falls back to the one-shot WAV endpoint. int16 frames are
+    reassembled across chunk boundaries, same as the demo client.
+    """
+
+    RATE = 24000  # the server resamples to the pipeline rate
+
+    def __init__(self, url: str = "", **_ignored):
+        self.url = (url or os.environ.get("TTS_URL",
+                                          "http://127.0.0.1:8120")).rstrip("/")
+        self.timeout_s = 60.0
+
+    def _one_shot(self, text: str) -> Chunk:
+        import io
+        import wave
+
+        import httpx
+
+        r = httpx.post(f"{self.url}/synthesize", json={"text": text},
+                       timeout=self.timeout_s)
+        r.raise_for_status()
+        with wave.open(io.BytesIO(r.content)) as w:
+            rate = w.getframerate()
+            pcm = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
+        return (pcm, rate)
+
+    def synth_stream(self, text: str) -> Iterator[Chunk]:
+        import httpx
+
+        try:
+            with httpx.stream("POST", f"{self.url}/synthesize_stream",
+                              json={"text": text},
+                              timeout=self.timeout_s) as r:
+                if r.status_code == 404:
+                    r.read()
+                    yield self._one_shot(text)
+                    return
+                r.raise_for_status()
+                tail = b""
+                for raw in r.iter_bytes():
+                    if not raw:
+                        continue
+                    buf = tail + raw
+                    usable = len(buf) - (len(buf) % 2)
+                    tail = buf[usable:]
+                    if usable:
+                        yield (np.frombuffer(buf[:usable], dtype=np.int16),
+                               self.RATE)
+        except httpx.HTTPError:
+            yield self._one_shot(text)
+
+
 class F5ForkEngine:
     """F5-TTS Gregniuki Polish fork (CC-BY-NC — non-commercial contexts
     only).  The pip `f5-tts` package is WRONG for this checkpoint (char
@@ -188,6 +250,8 @@ def build_engine(kind: str, **kwargs) -> TtsEngine:
         return ChatterboxEngine(**kwargs)
     if kind == "f5":
         return F5ForkEngine(**kwargs)
+    if kind == "remote":
+        return RemoteEngine(**kwargs)
     if kind == "silent":
         return SilentTts()
-    raise ValueError(f"unknown TTS engine {kind!r} (chatterbox|f5|silent)")
+    raise ValueError(f"unknown TTS engine {kind!r} (chatterbox|f5|remote|silent)")

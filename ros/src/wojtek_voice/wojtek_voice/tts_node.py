@@ -27,6 +27,7 @@ class TtsNode(Node):
         self.declare_parameter("device", "cuda")
         self.declare_parameter("ref_wav", "")     # voice clone reference
         self.declare_parameter("ref_text", "")    # its exact transcript (F5)
+        self.declare_parameter("url", "")          # remote engine: tts_server
 
         kind = self.get_parameter("engine").value
         kwargs = {}
@@ -38,6 +39,8 @@ class TtsNode(Node):
             )
             if kind == "f5":
                 kwargs["ref_text"] = self.get_parameter("ref_text").value
+            if kind == "remote":
+                kwargs = {"url": self.get_parameter("url").value}
         engine = build_engine(kind, **kwargs)
         self.get_logger().info(f"TTS engine: {kind}")
 

@@ -41,7 +41,8 @@ ARGS = [
     ("trace_path", "", "agent trace JSONL; empty = wojtek_rl default"),
     ("forward_scale", "0.0", "multiply FutureNav forward steps (rig used 2); "
      "0 = leave WOJTEK_NAV_FORWARD_SCALE alone"),
-    ("tts_engine", "chatterbox", "chatterbox | f5 | silent"),
+    ("tts_engine", "chatterbox", "chatterbox | f5 | remote | silent"),
+    ("tts_url", "", "remote engine: the wojtek_rl tts_server URL"),
     ("tts_ref_wav", "", "voice-clone reference wav (denoised)"),
     ("tts_ref_text", "", "exact transcript of the reference (F5 only)"),
     ("device", "cuda", "device for ASR/TTS models"),
@@ -93,6 +94,7 @@ def generate_launch_description():
                  "ref_wav": cfg["tts_ref_wav"],
                  "ref_text": cfg["tts_ref_text"],
                  "device": cfg["device"],
+                 "url": cfg["tts_url"],
              }]),
         Node(package="wojtek_agent_perf", executable="probe",
              condition=IfCondition(cfg["perf"]),

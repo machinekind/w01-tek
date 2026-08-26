@@ -29,7 +29,8 @@ ARGS = [
     ("bielik_url", "http://127.0.0.1:8091", "OpenAI-compatible Bielik server"),
     ("bielik_model", "speakleash/Bielik-4.5B-v3.0-Instruct-FP8-Dynamic",
      "served model name (FP8 wants Ada+; use the bf16 repo on Ampere)"),
-    ("tts_engine", "chatterbox", "chatterbox | f5 | silent"),
+    ("tts_engine", "chatterbox", "chatterbox | f5 | remote | silent"),
+    ("tts_url", "", "remote engine: the wojtek_rl tts_server URL"),
     ("tts_ref_wav", "", "voice-clone reference wav (denoised)"),
     ("tts_ref_text", "", "exact transcript of the reference (F5 only)"),
     ("device", "cuda", "device for ASR/TTS models"),
@@ -71,6 +72,7 @@ def generate_launch_description():
                  "ref_wav": cfg["tts_ref_wav"],
                  "ref_text": cfg["tts_ref_text"],
                  "device": cfg["device"],
+                 "url": cfg["tts_url"],
              }]),
         # Passive: it only subscribes, so leaving it on costs nothing but a
         # few subscriptions -- and a session nobody measured is a session

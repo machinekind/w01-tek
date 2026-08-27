@@ -62,10 +62,11 @@ _PEE_LEAN = _pose(rl=(0.25, -0.2, 3.1), rr=(0.25, -0.2, 3.1),
                   fr=(0.25, -0.2, 3.1), fl=(0.25, -0.2, 3.1))
 _PEE_UP = _pose(rl=(-1.1, 0.6, 0.45), rr=(0.25, -0.2, 3.1),
                 fr=(0.25, -0.2, 3.1), fl=(0.25, -0.2, 3.1))
-# Two-stage descent: swinging the folded leg straight back down brakes the
-# abduction motor at 8.6 N*m; un-swinging first, then unfolding, keeps the
-# whole return under the envelope.
-_PEE_DOWN = _pose(rl=(-0.4, 0.2, 1.6), rr=(0.25, -0.2, 3.1),
+# Fold-then-swing, both directions: folding in place lifts the foot
+# straight OFF the ground before any sideways motion (swinging a part-
+# folded leg dragged the foot on camera), and un-swinging before unfolding
+# keeps the abduction brake under the envelope on the way back.
+_PEE_FOLD = _pose(rl=(0.25, 0.75, 0.45), rr=(0.25, -0.2, 3.1),
                   fr=(0.25, -0.2, 3.1), fl=(0.25, -0.2, 3.1))
 
 # name -> (duration_s, keyframes [(t, pose)], osc layers
@@ -91,11 +92,11 @@ TRICKS = {
         [([10], 0.25, 2.0, 4.7, 6.8, [0.0])],  # front-left hip shake
     ),
     "pee": (
-        12.0,
+        15.6,
         [
-            (0.5, HOME_CTRL), (2.0, _PEE_LEAN), (4.6, _PEE_UP),
-            (7.4, _PEE_UP), (9.2, _PEE_DOWN), (10.6, _PEE_LEAN),
-            (11.8, HOME_CTRL),
+            (0.5, HOME_CTRL), (2.0, _PEE_LEAN), (3.8, _PEE_FOLD),
+            (5.6, _PEE_UP), (10.4, _PEE_UP), (12.6, _PEE_FOLD),
+            (14.0, _PEE_LEAN), (15.2, HOME_CTRL),
         ],
         [],
     ),

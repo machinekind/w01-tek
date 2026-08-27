@@ -44,30 +44,22 @@ _PAW_UP = _pose(
 )
 _BOW = _pose(fr=(0, -1.0, 1.2), fl=(0, -1.0, 1.2))
 
-# Weight onto the other three legs, then the rear-left swings out and up
-# like a dog at a tree ("siku pod drzewem", user request 2026-08-26).
-# Designed by LOOKING at rendered hold frames (v1 passed every numeric
-# gate and still sagged onto the lifted corner on camera). Hip +0.7 with
-# the knee folded to 0.5 raises the foot ~12 cm at a 3.6 N*m hold torque;
-# hip targets past ~0.85 sit unreachably far and pin the actuator at the
-# 9 N*m clamp for the whole hold. The other three legs lean 0.35 so the
-# body stays level instead of sagging onto the lifted corner.
-# Three feet planted, one leg HIGH (user spec, v6). The lift rides the
-# ABDUCTION axis with the leg folded flat (knee on the 0.45 stop): rotating
-# a folded leg sideways-up costs 3.9 N*m where holding an extended leg out
-# via the hip pinned the actuator at the 9 N*m clamp. Foot 16 cm clear --
-# above the body line, unambiguous on camera; the body stands tall and
-# leans naturally over the stance legs.
-_PEE_LEAN = _pose(rl=(0.25, -0.2, 3.1), rr=(0.25, -0.2, 3.1),
-                  fr=(0.25, -0.2, 3.1), fl=(0.25, -0.2, 3.1))
-_PEE_UP = _pose(rl=(-1.1, 0.6, 0.45), rr=(0.25, -0.2, 3.1),
-                fr=(0.25, -0.2, 3.1), fl=(0.25, -0.2, 3.1))
-# Fold-then-swing, both directions: folding in place lifts the foot
-# straight OFF the ground before any sideways motion (swinging a part-
-# folded leg dragged the foot on camera), and un-swinging before unfolding
-# keeps the abduction brake under the envelope on the way back.
-_PEE_FOLD = _pose(rl=(0.25, 0.75, 0.45), rr=(0.25, -0.2, 3.1),
-                  fr=(0.25, -0.2, 3.1), fl=(0.25, -0.2, 3.1))
+# Three feet planted, one leg HIGH, and the BODY stays off the floor
+# (v9 -- it took the user three reviews to teach the right criteria). The
+# statics: with the rear-left leg up, the COM lies outside the rear-right /
+# front-left support diagonal, so the rear-left trunk corner MUST tip onto
+# the ground no matter the gains -- unless the rear-right foot first steps
+# UNDER the body midline so the support triangle contains the COM. That is
+# also what a real dog does. Lift rides the abduction axis with the leg
+# folded (3.9 N*m hold vs the 9 N*m clamp an extended hip lift cost).
+# Validated: zero trunk-floor contacts through the hold, rear-left trunk
+# corner 4 cm clear, foot 20 cm up, 0/20 falls from perturbed entries.
+_PEE_BRACE = _pose(rl=(0.0, -0.2, 3.1), rr=(-0.6, -0.2, 3.15),
+                   fr=(0.1, -0.2, 3.1), fl=(0.1, -0.2, 3.1))
+_PEE_FOLD = _pose(rl=(0.0, 0.9, 0.45), rr=(-0.6, -0.2, 3.15),
+                  fr=(0.1, -0.2, 3.1), fl=(0.1, -0.2, 3.1))
+_PEE_UP = _pose(rl=(-0.3, 1.0, 0.45), rr=(-0.6, -0.2, 3.15),
+                fr=(0.1, -0.2, 3.1), fl=(0.1, -0.2, 3.1))
 
 # name -> (duration_s, keyframes [(t, pose)], osc layers
 #          [(channel_idxs, amp_rad, hz, t0, t1, phases)])
@@ -94,9 +86,9 @@ TRICKS = {
     "pee": (
         15.6,
         [
-            (0.5, HOME_CTRL), (2.0, _PEE_LEAN), (3.8, _PEE_FOLD),
-            (5.6, _PEE_UP), (10.4, _PEE_UP), (12.6, _PEE_FOLD),
-            (14.0, _PEE_LEAN), (15.2, HOME_CTRL),
+            (0.5, HOME_CTRL), (2.4, _PEE_BRACE), (4.0, _PEE_FOLD),
+            (5.6, _PEE_UP), (10.4, _PEE_UP), (12.0, _PEE_FOLD),
+            (13.6, _PEE_BRACE), (15.2, HOME_CTRL),
         ],
         [],
     ),

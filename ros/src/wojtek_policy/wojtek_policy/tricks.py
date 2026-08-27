@@ -46,15 +46,16 @@ _BOW = _pose(fr=(0, -1.0, 1.2), fl=(0, -1.0, 1.2))
 
 # Weight onto the other three legs, then the rear-left swings out and up
 # like a dog at a tree ("siku pod drzewem", user request 2026-08-26).
-# Swept and validated in MuJoCo like the clips above: rear-left foot
-# clearance 9.8 cm through the hold, peak |actuator_force| 8.3 of the
-# 9 N*m envelope, body upright (up_z 1.00), base height held. Positive hip
-# LIFTS a rear leg (it folds it on a front leg -- the conventions mirror),
-# negative abduction swings it away from the body.
-_PEE_LEAN = _pose(rl=(0.18, -0.2, 3.1), rr=(0.18, -0.2, 3.1),
-                  fr=(0.18, -0.2, 3.1), fl=(0.18, -0.2, 3.1))
-_PEE_UP = _pose(rl=(-0.5, 0.5, 1.0), rr=(0.18, -0.2, 3.1),
-                fr=(0.18, -0.2, 3.1), fl=(0.18, -0.2, 3.1))
+# Designed by LOOKING at rendered hold frames (v1 passed every numeric
+# gate and still sagged onto the lifted corner on camera). Hip +0.7 with
+# the knee folded to 0.5 raises the foot ~12 cm at a 3.6 N*m hold torque;
+# hip targets past ~0.85 sit unreachably far and pin the actuator at the
+# 9 N*m clamp for the whole hold. The other three legs lean 0.35 so the
+# body stays level instead of sagging onto the lifted corner.
+_PEE_LEAN = _pose(rl=(0.35, -0.2, 3.1), rr=(0.35, -0.2, 3.1),
+                  fr=(0.35, -0.2, 3.1), fl=(0.35, -0.2, 3.1))
+_PEE_UP = _pose(rl=(-0.4, 0.7, 0.5), rr=(0.35, -0.2, 3.1),
+                fr=(0.35, -0.2, 3.1), fl=(0.35, -0.2, 3.1))
 
 # name -> (duration_s, keyframes [(t, pose)], osc layers
 #          [(channel_idxs, amp_rad, hz, t0, t1, phases)])
@@ -79,10 +80,10 @@ TRICKS = {
         [([10], 0.25, 2.0, 4.7, 6.8, [0.0])],  # front-left hip shake
     ),
     "pee": (
-        10.0,
+        12.0,
         [
-            (0.5, HOME_CTRL), (2.0, _PEE_LEAN), (3.4, _PEE_UP),
-            (5.9, _PEE_UP), (8.1, _PEE_LEAN), (9.8, HOME_CTRL),
+            (0.5, HOME_CTRL), (2.0, _PEE_LEAN), (4.0, _PEE_UP),
+            (6.8, _PEE_UP), (9.6, _PEE_LEAN), (11.6, HOME_CTRL),
         ],
         [],
     ),

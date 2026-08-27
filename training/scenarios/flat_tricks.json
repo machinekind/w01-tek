@@ -1,12 +1,37 @@
 [
-  {"wav": "scenarios/wavs/q_siad.wav", "quiet": 2.0, "wait": 20},
-  {"pause": 6},
-  {"wav": "scenarios/wavs/q_lapa.wav", "quiet": 2.0, "wait": 20},
-  {"pause": 11},
-  {"wav": "scenarios/wavs/q_uklon.wav", "quiet": 2.0, "wait": 20},
-  {"pause": 6},
-  {"wav": "scenarios/wavs/q_siku.wav", "quiet": 2.0, "wait": 20},
-  {"pause": 11},
-  {"wav": "scenarios/wavs/q_sztuczka.wav", "quiet": 2.0, "wait": 20},
-  {"pause": 12}
+  {
+    "wav": "scenarios/wavs/q_siad.wav",
+    "quiet": 2.0,
+    "wait": 20
+  },
+  {
+    "pause": 6
+  },
+  {
+    "wav": "scenarios/wavs/q_lapa.wav",
+    "quiet": 2.0,
+    "wait": 20
+  },
+  {
+    "pause": 11
+  },
+  {
+    "wav": "scenarios/wavs/q_uklon.wav",
+    "quiet": 2.0,
+    "wait": 20
+  },
+  {
+    "pause": 6
+  },
+  {
+    "wav": "scenarios/wavs/q_siku.wav",
+    "quiet": 2.0,
+    "wait": 20
+  },
+  {
+    "pause": 11
+  },
+  {
+    "pause": 12
+  }
 ]

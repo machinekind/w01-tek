@@ -55,8 +55,8 @@ from wojtek_brain.world_proxy import WorldProxy
 CHAT_TURN_TIMEOUT_S = 90.0
 SERVICE_TIMEOUT_S = 10.0
 GOAL_POLL_S = 0.2
-PROGRESS_AFTER_S = 20.0   # let the ack land and the behaviour visibly start
-PROGRESS_EVERY_S = 25.0
+PROGRESS_AFTER_S = 30.0   # let the ack land and the behaviour visibly start
+PROGRESS_EVERY_S = 45.0  # v3 review: every 25 s read as nagging
 
 
 class VlmAgentNode(Node):
@@ -98,6 +98,7 @@ class VlmAgentNode(Node):
         self._goals = None
         self._trace = None
         self._last_canned = None
+        self._last_trick = None
 
     # -- world command service (blocking, called from the agent thread) -------
 
@@ -171,8 +172,11 @@ class VlmAgentNode(Node):
         if self._goals is not None:
             self._goals.cancel("trick")
         name = trick_name(text)
-        if not name:  # "zrób sztuczkę" -- surprise them
-            name = random.choice(("bow", "sit", "paw_wave", "shake", "pee"))
+        if not name:  # "zrób sztuczkę" -- surprise them, but never a rerun
+            pool = [t for t in ("bow", "sit", "paw_wave", "shake", "pee")
+                    if t != self._last_trick]
+            name = random.choice(pool)
+        self._last_trick = name
         ack = self.world_command("trick", name, [])
         if ack.get("ok"):
             self.publish_canned("trick_ack", utterance_id)
@@ -397,8 +401,32 @@ class VlmAgentNode(Node):
         self.get_logger().info("agent built: reply_language=en via Bielik")
         return self._agent
 
+    async def _warm(self):
+        """Pay the cold-start bills before anyone speaks: build the agent
+        (heavy imports), then push one tiny vision request through the LLM.
+        The first image turn otherwise costs tens of seconds of prefill and
+        lands mid-conversation (the intro answer 'took years', 2026-08-27)."""
+        import base64
+        import io
+
+        try:
+            agent = await asyncio.to_thread(self._build_agent)
+            from PIL import Image
+
+            buf = io.BytesIO()
+            Image.new("RGB", (64, 64), (90, 90, 90)).save(buf, format="JPEG")
+            b64 = base64.b64encode(buf.getvalue()).decode()
+            from wojtek_rl.agent.llm import user_message
+            await agent.llm.chat(
+                [user_message("One word: what colour is this?", images=(b64,))],
+                max_tokens=4)
+            self.get_logger().info("agent warmed")
+        except Exception as e:
+            self.get_logger().warning(f"agent warmup failed: {e}")
+
     async def run(self):
         self.loop = asyncio.get_running_loop()
+        self.loop.create_task(self._warm())
         await self.watch_goals()
 
 

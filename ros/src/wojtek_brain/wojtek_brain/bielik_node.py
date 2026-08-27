@@ -121,6 +121,7 @@ class BielikNode(Node):
 
     # -- worker -------------------------------------------------------------
     def _work(self):
+        self.warm()
         while True:
             kind, uid, text = self._q.get()
             self._cancel.clear()
@@ -142,6 +143,20 @@ class BielikNode(Node):
         if reply:
             self.history.append({"role": "user", "content": user_text})
             self.history.append({"role": "assistant", "content": reply})
+
+    def warm(self):
+        """One throwaway completion at startup: the first real translate
+        otherwise pays connection setup + prefill mid-conversation."""
+        try:
+            cancel = threading.Event()
+            for _tok in self.client.stream(
+                    [{"role": "system", "content": TRANSLATE_PROMPT},
+                     {"role": "user", "content": "Tekst: Ready."}],
+                    cancel=cancel, temperature=0.0, max_tokens=8):
+                pass
+            self.get_logger().info("bielik warmed")
+        except Exception as e:
+            self.get_logger().warning(f"bielik warmup failed: {e}")
 
     def _generate_translation(self, uid: str, english: str):
         user = english

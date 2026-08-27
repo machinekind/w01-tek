@@ -179,11 +179,19 @@ live human viewer still uses room_app for now).
   flat_intro_pee -- introduce yourself, find the bike, pee on it (chat +
   search + walk + trick in one recording).
 
-## Next (in order)
+## Two-box ROS split VERIFIED 2026-08-27 (the W3 endgame shape)
 
-1. **W3 two-box**: brain GB10 + cheapest same-host GPU as the world
-   (RTX 3060 at $0.06/h on the Texas host), zenoh bridge across, compare
-   the probe table to the one-box run.
+Two same-site GB10s, brain (models + voice + vlm_agent) and world (sim
+bridge), the ROS graph bridged by zenoh-bridge-ros2dds over one ssh -L
+tunnel. Camera streams cross-box at full rate; the ONE thing zenoh did not
+carry was service REPLIES (double-router hop), so the world command channel
+became the WorldCmd/WorldAck topic pair correlated by req_seq -- the
+service remains for one-box debugging. World zenoh listens on 7448 (its
+default bind collided with the tunnel). Validated take: ros_flat_grand --
+prerecorded intro, sit, paw_wave, bike search with approach, and the pee
+trick, every lane crossing the wire (gates green, 0.59 m walked).
+
+## Next (in order)
 2. Router fine-tune: `ros/src/wojtek_brain/tools/gen_router_dataset.py` →
    `train_router.py` (HerBERT default; compare mmBERT/ModernBERT on the same
    Polish set), then set the router node's `model_path`.

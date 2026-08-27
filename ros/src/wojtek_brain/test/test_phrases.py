@@ -14,12 +14,22 @@ def test_every_kind_has_variants():
         assert all(ln.strip() == ln and ln for ln in lines)
 
 
-def test_sample_avoids_immediate_repeat():
+def test_shuffle_bag_plays_everything_before_any_repeat():
     for kind in phrases.KINDS:
-        last = phrases.sample(kind)
-        for _ in range(20):
+        phrases._bags.pop(kind, None)
+        n = len(phrases.variants(kind))
+        drawn = [phrases.sample(kind) for _ in range(n)]
+        assert sorted(drawn) == sorted(phrases.variants(kind))
+
+
+def test_shuffle_bag_never_repeats_across_the_reshuffle():
+    for kind in phrases.KINDS:
+        phrases._bags.pop(kind, None)
+        last = None
+        for _ in range(len(phrases.variants(kind)) * 5):
             nxt = phrases.sample(kind, avoid=last)
-            assert nxt != last
+            if len(phrases.variants(kind)) > 1:
+                assert nxt != last
             last = nxt
 
 

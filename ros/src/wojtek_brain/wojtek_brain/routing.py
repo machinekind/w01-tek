@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 
-INTENTS = ("chat", "nav", "visual", "trick", "cancel", "system")
+INTENTS = ("chat", "nav", "visual", "trick", "intro", "cancel", "system")
 
 _CANCEL_RE = re.compile(
     r"\b(stop|stój|przestań|anuluj|zatrzymaj się|zatrzymaj|dosyć|wystarczy|"
@@ -68,6 +68,15 @@ def trick_name(text: str) -> str | None:
     return None
 
 
+# Self-introduction gets a prerecorded answer: the same three facts every
+# time, instantly, instead of a fresh two-model paraphrase.
+_INTRO_RE = re.compile(
+    r"(przedstaw się|kim jesteś|jak masz na imię|jak się nazywasz|"
+    r"co potrafisz|opowiedz (mi )?o sobie)",
+    re.IGNORECASE,
+)
+
+
 _NAV_RE = re.compile(
     r"\b(idź|pójdź|podejdź|chodź|zaprowadź|zawieź|znajdź|poszukaj|szukaj|"
     r"odszukaj|obróć się|obróć|skręć|zawróć|cofnij|wróć|omiń|okrąż|obejdź|"
@@ -90,6 +99,8 @@ class RuleRouter:
             return ("system", 0.9)
         if trick_name(t) is not None:
             return ("trick", 0.9)
+        if _INTRO_RE.search(t):
+            return ("intro", 0.9)
         if _VISUAL_RE.search(t):
             return ("visual", 0.85)
         if _NAV_RE.search(t):

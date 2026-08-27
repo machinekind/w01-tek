@@ -23,11 +23,12 @@ from pathlib import Path
 
 _DIR = Path(__file__).parent / "prompts" / "bielik" / "phrases"
 
-KINDS = ("nav_ack", "cancel_ack", "search_ack", "search_progress",
+KINDS = ("intro", "nav_ack", "cancel_ack", "search_ack", "search_progress",
          "nav_progress", "search_found", "search_not_found", "nav_done",
          "nav_stuck", "goal_error", "switch", "trick_ack")
 
 _cache: dict[str, list[str]] = {}
+_bags: dict[str, list[str]] = {}
 
 
 def variants(kind: str) -> list[str]:
@@ -41,10 +42,21 @@ def variants(kind: str) -> list[str]:
 
 
 def sample(kind: str, avoid: str | None = None) -> str:
-    """One random variant; avoids immediate repetition when possible."""
-    lines = variants(kind)
-    pool = [ln for ln in lines if ln != avoid] or lines
-    return random.choice(pool)
+    """Shuffle-bag sampling: every variant plays once before any repeats.
+
+    Plain random.choice said "moj popisowy numer" two times out of four on
+    camera; a bag guarantees maximum spacing between reruns. `avoid` guards
+    the reshuffle boundary (the new bag must not open with the line the old
+    one closed on).
+    """
+    bag = _bags.get(kind)
+    if not bag:
+        bag = variants(kind).copy()
+        random.shuffle(bag)
+        if avoid and len(bag) > 1 and bag[-1] == avoid:
+            bag[0], bag[-1] = bag[-1], bag[0]
+        _bags[kind] = bag
+    return bag.pop()
 
 
 def all_phrases() -> list[str]:

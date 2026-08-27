@@ -97,7 +97,6 @@ class VlmAgentNode(Node):
         self._agent = None
         self._goals = None
         self._trace = None
-        self._last_canned = None
         self._last_trick = None
 
     # -- world command service (blocking, called from the agent thread) -------
@@ -144,7 +143,7 @@ class VlmAgentNode(Node):
     def on_intent(self, msg: RoutedIntent):
         if self.loop is None:
             return
-        if msg.intent in ("nav", "visual", "chat", "cancel", "trick"):
+        if msg.intent in ("nav", "visual", "chat", "cancel", "trick", "intro"):
             self.loop.call_soon_threadsafe(self._dispatch, msg.intent,
                                            msg.text, msg.utterance_id)
 
@@ -160,6 +159,9 @@ class VlmAgentNode(Node):
             return
         if intent == "trick":
             self._do_trick(text, utterance_id)
+            return
+        if intent == "intro":
+            self.publish_canned("intro", utterance_id)
             return
         self._chat_task = self.loop.create_task(
             self._chat_turn(intent, text, utterance_id))
@@ -210,8 +212,7 @@ class VlmAgentNode(Node):
             self.publish_say(result.get("say", ""), utterance_id)
 
     def publish_canned(self, kind: str, utterance_id: str):
-        text = phrases.sample(kind, avoid=self._last_canned)
-        self._last_canned = text
+        text = phrases.sample(kind)
         self._say_seq += 1
         msg = Sentence(utterance_id=utterance_id, seq=self._say_seq,
                        text=text, final=True, source="system")

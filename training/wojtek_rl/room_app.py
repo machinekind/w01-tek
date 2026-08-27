@@ -67,7 +67,8 @@ VIEW = dict(lookat_z=0.14, distance=0.85, elevation=-15.0, azimuth=135.0)
 NAV = dict(vx_max=0.4, vy_max=0.25, yaw_max=0.7, stop_radius=0.12)
 
 CONTROL_HZ = 50.0
-RENDER_EVERY = 2           # ~25 fps per view
+RENDER_EVERY = 2
+TRICK_SETTLE_S = 1.2  # ramp to the home stand before a show clip           # ~25 fps per view
 FALLEN_HEIGHT = 0.05       # base z below this -> fell into a weird pose
 FALLEN_GRAVITY_Z = -0.5    # body-frame gravity z above this -> tipped over
 MIN_FORWARD_CLEARANCE_M = 0.45  # refuse a forward step when an object is closer
@@ -292,7 +293,10 @@ class RoomSim:
             return {"ok": False, "error": f"unknown trick {name!r}"}
         self.target = None
         self.executor.clear()
-        self._trick = (name, self.sim_time)
+        # Clips assume the home stand (real_io refuses otherwise). A trick
+        # asked for mid-walk starts from whatever pose the policy left, so
+        # ramp there first -- v4's pee fell over exactly because of this.
+        self._trick = (name, self.sim_time, self.data.ctrl.copy())
         return {"ok": True, "command": f"trick {name}"}
 
     def _forward_clearance_m(self) -> float:
@@ -328,14 +332,23 @@ class RoomSim:
         reached = False
         dist = 0.0
         if self._trick is not None:
-            from wojtek_policy import tricks
+            import numpy as _np
 
-            name, t0 = self._trick
+            from wojtek_policy import tricks
+            from wojtek_policy.poses import HOME_CTRL as _HOME
+
+            name, t0, entry = self._trick
             t = self.sim_time - t0
-            if t >= tricks.duration(name):
+            if t < TRICK_SETTLE_S:
+                s_ = 0.5 - 0.5 * _np.cos(_np.pi * t / TRICK_SETTLE_S)
+                self.data.ctrl[:] = entry + s_ * (_HOME - entry)
+                t = -1.0  # still settling; the clip clock starts below
+            elif t - TRICK_SETTLE_S >= tricks.duration(name):
                 self._trick = None  # clips end at the home stand
-            else:
-                self.data.ctrl[:] = tricks.sample(name, t)
+                t = None
+            if self._trick is not None and t is not None:
+                if t >= 0:
+                    self.data.ctrl[:] = tricks.sample(name, t - TRICK_SETTLE_S)
                 for _ in range(self._substeps):
                     self._mujoco.mj_step(self.model, self.data)
                 if self._fallen():

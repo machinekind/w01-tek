@@ -20,6 +20,7 @@ class TestSpeechSynthesizer:
     def test_sentences_become_frames_in_order(self):
         frames = []
         synth = SpeechSynthesizer(SilentTts(), frames.append)
+        synth.pace = False  # tests assert on totals, not on wall-clock pacing
         synth.start()
         synth.say("jedno zdanie")
         synth.say("drugie zdanie")
@@ -39,6 +40,7 @@ class TestSpeechSynthesizer:
                     yield (np.zeros(2400, np.int16), 24000)
 
         synth = SpeechSynthesizer(SlowEngine(), emitted.append)
+        synth.pace = False  # tests assert on totals, not on wall-clock pacing
         synth.start()
         synth.say("długie zdanie do przerwania")
         synth.say("nigdy nie zagra")
@@ -60,6 +62,7 @@ class TestSpeechSynthesizer:
         synth = SpeechSynthesizer(
             BrokenEngine(), lambda f: None, on_error=lambda t, e: errors.append(t)
         )
+        synth.pace = False  # tests assert on totals, not on wall-clock pacing
         synth.start()
         synth.say("pierwsze")
         synth.say("drugie")
@@ -74,6 +77,7 @@ class TestSpeechSynthesizer:
                 yield (np.zeros(16000, np.int16), 16000)  # 1 s
 
         synth = SpeechSynthesizer(Rate16k(), frames.append, out_rate=24000)
+        synth.pace = False  # tests assert on totals, not on wall-clock pacing
         synth.start()
         synth.say("sekunda ciszy")
         drain(synth)

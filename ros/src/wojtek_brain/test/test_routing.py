@@ -12,7 +12,6 @@ def router():
 
 @pytest.mark.parametrize("text", [
     "cześć wojtek jak się masz",
-    "kim jesteś",
     "opowiedz mi coś o sobie",
     "ile masz lat",
     "jaka jest stolica francji",
@@ -130,3 +129,10 @@ def test_plain_nav_is_not_a_trick():
 def test_trick_lane_tolerates_whisper_spellings():
     from wojtek_brain.routing import trick_name
     assert trick_name("Wojtek, zrób siat.") == "sit"
+
+
+def test_intro_asks_get_the_prerecorded_answer():
+    r = RuleRouter()
+    for text in ("Przedstaw się, kim jesteś?", "jak masz na imię, piesku?",
+                 "Opowiedz o sobie", "co potrafisz robić?"):
+        assert r.classify(text)[0] == "intro", text

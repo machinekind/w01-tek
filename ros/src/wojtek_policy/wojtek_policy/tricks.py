@@ -52,10 +52,14 @@ _BOW = _pose(fr=(0, -1.0, 1.2), fl=(0, -1.0, 1.2))
 # hip targets past ~0.85 sit unreachably far and pin the actuator at the
 # 9 N*m clamp for the whole hold. The other three legs lean 0.35 so the
 # body stays level instead of sagging onto the lifted corner.
-_PEE_LEAN = _pose(rl=(0.35, -0.2, 3.1), rr=(0.35, -0.2, 3.1),
-                  fr=(0.35, -0.2, 3.1), fl=(0.35, -0.2, 3.1))
-_PEE_UP = _pose(rl=(-0.4, 0.7, 0.5), rr=(0.35, -0.2, 3.1),
-                fr=(0.35, -0.2, 3.1), fl=(0.35, -0.2, 3.1))
+# Level squat, not a rear collapse: on three legs the back end sags ~4 cm
+# no matter the stance (single rear leg, fixed PD gains -- swept), so the
+# front crouches to match and the body stays level (pitch -4 deg) instead
+# of butt-down (-8.5 deg reads as falling on camera, v5 review).
+_PEE_LEAN = _pose(rl=(0.3, -0.25, 3.15), rr=(0.3, -0.25, 3.15),
+                  fr=(0.2, -0.2, 2.4), fl=(0.2, -0.2, 2.4))
+_PEE_UP = _pose(rl=(-0.4, 0.7, 0.5), rr=(0.3, -0.25, 3.15),
+                fr=(0.2, -0.2, 2.4), fl=(0.2, -0.2, 2.4))
 
 # name -> (duration_s, keyframes [(t, pose)], osc layers
 #          [(channel_idxs, amp_rad, hz, t0, t1, phases)])

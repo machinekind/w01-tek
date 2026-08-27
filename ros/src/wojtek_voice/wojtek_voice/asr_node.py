@@ -57,6 +57,17 @@ class AsrNode(Node):
         self._q.put((msg.utterance_id, pcm, msg.sample_rate))
 
     def _work(self):
+        # Warm the engine before serving: the first decode pays model load
+        # and kernel autotune (tens of seconds cold), and an utterance that
+        # eats it answers so late it lands after the NEXT command -- on
+        # camera, "Siad!" executed after "Daj łapę" was already heard
+        # (2026-08-26). One second of silence absorbs it here instead.
+        try:
+            warm = np.zeros(24000, dtype=np.int16)
+            self.engine.transcribe(warm, 24000)
+            self.get_logger().info("ASR warmed")
+        except Exception as e:
+            self.get_logger().warning(f"ASR warmup failed: {e}")
         while True:
             uid, pcm, rate = self._q.get()
             try:

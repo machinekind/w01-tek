@@ -50,7 +50,8 @@ _VISUAL_RE = re.compile(
 # drzewa i zrób siku" performs the trick where the dog stands -- v1 keeps
 # the funny half of a compound ask rather than the walk.
 _TRICK_NAME_RES = (
-    ("sit", re.compile(r"\b(siad|siadaj|usiądź)\b", re.IGNORECASE)),
+    # "siat": whisper's favourite spelling of a spoken "siad" (heard live).
+    ("sit", re.compile(r"\b(siad|siat|siadaj|usiądź|usiadź)\b", re.IGNORECASE)),
     ("paw_wave", re.compile(r"\b(daj|podaj)\s+łap\w*", re.IGNORECASE)),
     ("bow", re.compile(r"\bukło[nń]\w*", re.IGNORECASE)),
     ("shake", re.compile(r"\b(otrząśnij|otrzep|otrząsaj)\w*", re.IGNORECASE)),

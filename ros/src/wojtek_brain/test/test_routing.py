@@ -125,3 +125,8 @@ def test_plain_nav_is_not_a_trick():
     assert trick_name("idź do okna") is None
     r = RuleRouter()
     assert r.classify("idź do okna")[0] == "nav"
+
+
+def test_trick_lane_tolerates_whisper_spellings():
+    from wojtek_brain.routing import trick_name
+    assert trick_name("Wojtek, zrób siat.") == "sit"

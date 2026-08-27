@@ -27,6 +27,20 @@ Writing rules (each learned on camera):
 - Keep each line under ~180 chars; longer lines synthesize fine but the
   whole line plays as one piece.
 
+## Where the actual audio lives
+
+With `--cache-dir` (the rig passes `/root/tts_lines`) every synthesized
+line is ALSO a plain 24 kHz mono WAV on disk, named
+`<voice-hash>_<text-hash>.wav`. Those files ARE the prerecorded tracks:
+
+- a restart or robot boot serves them with zero GPU work (the prewarm loop
+  finds every line already on disk and finishes in a second);
+- changing the voice reference or a line's text changes the hash, so stale
+  audio can never play -- only the changed lines re-record;
+- they are generated artifacts, deliberately NOT in the repo (a cloned
+  voice must not be committed publicly). Back the directory up alongside
+  the voice reference if you want to keep a take-perfect set.
+
 ## How the "recording" happens
 
 1. `tts_server.py` runs with `--cache 256` (an LRU keyed by EXACT text).

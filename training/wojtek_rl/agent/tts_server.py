@@ -179,7 +179,7 @@ def pcm_to_wav_bytes(pcm: np.ndarray, rate: int = SAMPLE_RATE) -> bytes:
 
 def build_app(ref_wav: str, language: str, device: str, cache_size: int = CACHE_SIZE,
               model_factory=None, tuning: dict | None = None,
-              compile_backbone: bool = False):
+              compile_backbone: bool = False, cache_dir: str = ""):
     """`model_factory` overrides how the voice is loaded (tests inject a stub;
     the server itself loads Chatterbox lazily on first use). `tuning` carries
     generation knobs (exaggeration, cfg_weight, temperature) so a quality/
@@ -198,19 +198,57 @@ def build_app(ref_wav: str, language: str, device: str, cache_size: int = CACHE_
     # saying one twice should cost the GPU once.
     cache: "OrderedDict[str, np.ndarray]" = OrderedDict()
 
+    # Disk layer under the RAM cache (--cache-dir): each synthesized line is
+    # also a plain 24 kHz mono WAV on disk, named by a hash of (voice ref,
+    # text). These ARE the prerecorded tracks -- they survive restarts, a
+    # robot boot plays them with zero GPU work, and changing the voice or a
+    # line's text changes the hash, so stale audio can never play. Kept as
+    # files rather than repo assets because a cloned voice must not be
+    # committed to a public repository.
+    import hashlib
+    import pathlib
+    import wave as _wave
+
+    _disk = pathlib.Path(cache_dir).expanduser() if cache_dir else None
+    if _disk is not None:
+        _disk.mkdir(parents=True, exist_ok=True)
+    _voice_key = hashlib.sha1(
+        (ref_wav and pathlib.Path(ref_wav).read_bytes() or b"stock")
+    ).hexdigest()[:12]
+
+    def _disk_path(text: str) -> "pathlib.Path":
+        h = hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+        return _disk / f"{_voice_key}_{h}.wav"
+
     def cached(text: str):
         pcm = cache.get(text)
         if pcm is not None:
             cache.move_to_end(text)
-        return pcm
+            return pcm
+        if _disk is not None:
+            f = _disk_path(text)
+            if f.exists():
+                with _wave.open(str(f)) as w:
+                    pcm = np.frombuffer(w.readframes(w.getnframes()), np.int16)
+                remember(text, pcm, to_disk=False)
+                return pcm
+        return None
 
-    def remember(text: str, pcm) -> None:
+    def remember(text: str, pcm, to_disk: bool = True) -> None:
         if cache_size <= 0:
             return
         cache[text] = pcm
         cache.move_to_end(text)
         while len(cache) > cache_size:
             cache.popitem(last=False)
+        if to_disk and _disk is not None:
+            f = _disk_path(text)
+            if not f.exists():
+                with _wave.open(str(f), "wb") as w:
+                    w.setnchannels(1)
+                    w.setsampwidth(2)
+                    w.setframerate(SAMPLE_RATE)
+                    w.writeframes(np.asarray(pcm, np.int16).tobytes())
 
     def compile_model(m):
         """Opt-in torch.compile of the AR backbone.
@@ -440,6 +478,9 @@ def main():
     p.add_argument("--device", default=os.environ.get("TTS_DEVICE", "cuda"))
     p.add_argument("--cache", type=int, default=int(os.environ.get("TTS_CACHE", CACHE_SIZE)),
                    help="lines kept as ready-made audio (0 disables)")
+    p.add_argument("--cache-dir", default=os.environ.get("TTS_CACHE_DIR", ""),
+                   help="persist synthesized lines as WAV files here; a boot "
+                        "then plays prerecorded tracks with no GPU work")
     p.add_argument(
         "--no-warmup",
         action="store_true",
@@ -475,6 +516,7 @@ def main():
                                 ("cfg_weight", args.cfg_weight),
                                 ("temperature", args.temperature)) if v is not None}
     app = build_app(args.ref, args.language, args.device, cache_size=args.cache,
+                    cache_dir=args.cache_dir,
                     tuning=tuning, compile_backbone=args.compile)
     if not args.no_warmup:
         app.router.on_startup.append(app.state.warmup)

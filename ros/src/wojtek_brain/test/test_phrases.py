@@ -27,3 +27,26 @@ def test_no_onomatopoeia_and_no_interpolation():
     for line in phrases.all_phrases():
         assert not re.search(r"\b(hau|woof|wrrr)\b", line, re.I), line
         assert "{" not in line and "}" not in line, line
+
+
+def test_every_node_module_that_uses_phrases_imports_it():
+    """bielik crashed live on its first nav ack: `phrases.sample` was added
+    by a patch whose import anchor silently missed. Static check: any module
+    referencing `phrases.` must import it (nodes import rclpy, so they
+    cannot be imported here -- parse instead)."""
+    import ast
+    from pathlib import Path
+
+    pkg = Path(__file__).parents[1] / "wojtek_brain"
+    for py in pkg.glob("*.py"):
+        src = py.read_text()
+        if "phrases." not in src or py.name == "phrases.py":
+            continue
+        tree = ast.parse(src)
+        imported = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                imported |= {a.asname or a.name for a in node.names}
+            elif isinstance(node, ast.Import):
+                imported |= {(a.asname or a.name).split(".")[0] for a in node.names}
+        assert "phrases" in imported, f"{py.name} uses phrases without importing it"

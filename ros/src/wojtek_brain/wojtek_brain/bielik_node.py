@@ -27,6 +27,7 @@ from std_msgs.msg import Empty
 
 from wojtek_agent_msgs.msg import RoutedIntent, Sentence, Transcript
 
+from . import phrases
 from .llm_client import ChatClient
 from .sentences import SentenceAssembler, speakable
 

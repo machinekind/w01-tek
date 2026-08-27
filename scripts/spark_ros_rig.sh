@@ -243,8 +243,11 @@ python3 -c "import socket; socket.create_connection(('127.0.0.1', 8010), 2).clos
 # A take must not start while the ASR engine is still warming: its first
 # question would queue behind the warmup decode and answer a turn late
 # ("Siad!" executed after "Daj łapę", 2026-08-26).
-for i in \$(seq 1 30); do
-  grep -q "ASR warmed" /root/logs/agent_stack.log 2>/dev/null && { echo "ASR warmed"; break; }
+for i in \$(seq 1 40); do
+  grep -q "ASR warmed" /root/logs/agent_stack.log 2>/dev/null && \
+  grep -q "bielik warmed" /root/logs/agent_stack.log 2>/dev/null && \
+  grep -q "agent warmed" /root/logs/agent_stack.log 2>/dev/null && \
+    { echo "ASR + bielik + agent warmed"; break; }
   sleep 5
 done
 # Prerecord the canned phrase bank into the TTS cache: a canned ack then

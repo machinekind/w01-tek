@@ -62,3 +62,7 @@ metrics alone have lied twice (frozen-clip bug, narrated-navigation bug).
   braver rotation, fewer observer calls, and every leg collision-checked.
   Investigate the chair miss in the map first (thin legs may sit below the
   depth map's resolution — if so, waypoints help and bigger turns do not).
+
+- Single-word commands ("Siad!") decode as garbage -- whisper heard
+  '7.' from a 0.7 s clip on camera (2026-08-27). Give every scripted
+  line a full short sentence ("Wojtek, zrób siad!").

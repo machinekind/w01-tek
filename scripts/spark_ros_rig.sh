@@ -235,6 +235,25 @@ done
 python3 -c "import socket; socket.create_connection(('127.0.0.1', 8010), 2).close()" \
   && echo "world(${scene}) UP on :8010" \
   || { echo "world(${scene}) DOWN -- log tails:"; tail -15 /root/logs/world.log; tail -15 /root/logs/agent_stack.log; exit 1; }
+# A take must not start while the ASR engine is still warming: its first
+# question would queue behind the warmup decode and answer a turn late
+# ("Siad!" executed after "Daj łapę", 2026-08-26).
+for i in \$(seq 1 30); do
+  grep -q "ASR warmed" /root/logs/agent_stack.log 2>/dev/null && { echo "ASR warmed"; break; }
+  sleep 5
+done
+# Prerecord the canned phrase bank into the TTS cache: a canned ack then
+# costs a cache hit (~0.1 s) instead of a first-time synthesis (2-4 s).
+PYTHONPATH="${REMOTE_DIR}/ws/src/wojtek_brain" python3 - <<'PREWARM'
+import subprocess, sys
+sys.path.insert(0, "${REMOTE_DIR}/ws/src/wojtek_brain")
+import httpx
+from wojtek_brain.phrases import all_phrases
+lines = all_phrases()
+for line in lines:
+    httpx.post("http://127.0.0.1:8120/synthesize", json={"text": line}, timeout=120)
+print(f"prewarmed {len(lines)} canned phrases into the TTS cache")
+PREWARM
 EOF
   ;;
 

@@ -396,7 +396,14 @@ def build_app(ref_wav: str, language: str, device: str, cache_size: int = CACHE_
         # only sounds continuous when piece N+1 is generated before piece N
         # finishes playing; on a contended GPU it is not, and the seams are
         # worse than one longer initial wait (user verdict on the takes).
-        if os.environ.get("TTS_STREAM_SPLIT", "on") == "off":
+        # Whole-line cache first: prerecorded (prewarmed) lines are keyed by
+        # the FULL text via /synthesize, while the pieces below have their
+        # own keys -- without this check every canned line missed the cache
+        # and paid a full synthesis on stage (8.8 s intro, 2026-08-27).
+        whole = cached(text) if text else None
+        if whole is not None:
+            pieces = [text]
+        elif os.environ.get("TTS_STREAM_SPLIT", "on") == "off":
             pieces = [text] if text else []
         else:
             pieces = split_for_stream(text)

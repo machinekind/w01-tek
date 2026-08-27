@@ -287,6 +287,159 @@ fetch)
   ls -la "$out"
   ;;
 
+# ---- two-box split: brain = models + agent stack, world = sim + bridge ----
+# DDS multicast does not cross vast's NAT; zenoh-bridge-ros2dds carries the
+# ROS graph over ONE tcp connection, which rides an ssh tunnel (the same
+# trick the HTTP split used, measured 0.6 ms same-site).
+
+zenoh)
+  # Install the zenoh ros2dds bridge binary for this box's architecture.
+  rsh "bash -s" <<'EOF'
+set -euo pipefail
+command -v /root/zenoh-bridge-ros2dds >/dev/null 2>&1 && { echo "zenoh bridge present"; exit 0; }
+arch=$(uname -m); case "$arch" in aarch64) t=aarch64-unknown-linux-gnu;; x86_64) t=x86_64-unknown-linux-gnu;; *) echo "no zenoh build for $arch"; exit 1;; esac
+url=$(curl -s https://api.github.com/repos/eclipse-zenoh/zenoh-plugin-ros2dds/releases/latest   | grep browser_download_url | grep "zenoh-bridge-ros2dds" | grep "$t" | grep -v debian | head -1 | cut -d'"' -f4)
+[ -n "$url" ] || { echo "no release asset for $t"; exit 1; }
+cd /root && curl -sL "$url" -o zb.zip && (unzip -o zb.zip >/dev/null 2>&1 || (apt-get install -y -qq unzip >/dev/null && unzip -o zb.zip >/dev/null))
+chmod +x /root/zenoh-bridge-ros2dds
+/root/zenoh-bridge-ros2dds --version | head -1
+EOF
+  ;;
+
+deploy-world)
+  # World box: sim + bridge only. No torch, no vLLM, no chatterbox -- the
+  # walking policy is numpy and the renderer is EGL.
+  need_ssh
+  rsh "mkdir -p ${REMOTE_DIR}/ros/src ${REMOTE_DIR}/ws/src"
+  rsync -rlptzL -e "ssh -p $(ssh_port)" \
+    --exclude runs --exclude .venv --exclude __pycache__ --exclude '.jax_cache' \
+    --exclude tests --exclude jobs \
+    "$REPO/training" "$(ssh_host):${REMOTE_DIR}/"
+  rsync -rlptz -e "ssh -p $(ssh_port)" \
+    "$REPO/ros/src/wojtek_description" "$REPO/ros/src/wojtek_policy" \
+    "$(ssh_host):${REMOTE_DIR}/ros/src/"
+  rsync -rlptz -e "ssh -p $(ssh_port)" --exclude __pycache__ \
+    "$REPO/ros/src/wojtek_agent_msgs" "$REPO/ros/src/wojtek_sim_bridge" \
+    "$(ssh_host):${REMOTE_DIR}/ws/src/"
+  if [[ -n "${HF_TOKEN:-}" ]]; then
+    printf '%s' "$HF_TOKEN" | rsh "cat > ~/.hf_token && chmod 600 ~/.hf_token"
+  fi
+  rsh "bash -s" <<EOF
+set -euo pipefail
+. /etc/os-release
+[ "\${VERSION_ID}" = "24.04" ] || { echo "need ubuntu 24.04, got \${VERSION_ID}"; exit 1; }
+apt-get update -qq >/dev/null
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+  curl gnupg lsb-release software-properties-common unzip \
+  python3-pip libegl1 libgles2 libglvnd0 ffmpeg >/dev/null
+if [ ! -d /opt/ros/${ROS_DISTRO} ]; then
+  add-apt-repository -y universe >/dev/null
+  curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+    -o /usr/share/keyrings/ros-archive-keyring.gpg
+  echo "deb [arch=\$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu \$UBUNTU_CODENAME main" \
+    > /etc/apt/sources.list.d/ros2.list
+  apt-get update -qq >/dev/null
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    ros-${ROS_DISTRO}-ros-base ros-dev-tools >/dev/null
+fi
+PIP="pip3 install -q --break-system-packages"
+\$PIP --ignore-installed typing_extensions
+\$PIP 'numpy<2' mujoco scipy fastapi uvicorn websockets httpx pillow \
+  imageio imageio-ffmpeg huggingface_hub wsproto
+pip3 install -q --break-system-packages ${REMOTE_DIR}/ros/src/wojtek_policy 2>&1 | tail -1
+set +u; source /opt/ros/${ROS_DISTRO}/setup.bash; set -u
+cd ${REMOTE_DIR}/ws && colcon build --symlink-install \
+  --packages-select wojtek_agent_msgs wojtek_sim_bridge 2>&1 | tail -1
+python3 -c "import mujoco; print('world deploy ok:', mujoco.__version__)"
+EOF
+  ;;
+
+stack-brain)
+  # Brain box: voice + agent (no sim bridge) + zenoh listener on :7447.
+  need_ssh
+  rsh "bash -s" <<EOF
+set -euo pipefail
+pkill -f 'agent_stack.launch|world.launch|install/wojtek|zenoh-bridge' 2>/dev/null || true
+sleep 2
+[ -f ~/.hf_token ] && export HF_TOKEN="\$(cat ~/.hf_token)"
+export CUDA_MPS_PIPE_DIRECTORY=/tmp/mps CUDA_MPS_LOG_DIRECTORY=/tmp/mps-log
+set +u; source /opt/ros/${ROS_DISTRO}/setup.bash; set -u
+(cd ${REMOTE_DIR}/ws && colcon build --symlink-install \
+  --packages-select wojtek_agent_msgs wojtek_voice wojtek_brain \
+                    wojtek_agent_bringup wojtek_agent_perf 2>&1 | tail -1)
+set +u; source ${REMOTE_DIR}/ws/install/setup.bash; set -u
+export PYTHONPATH="${REMOTE_DIR}/training:\${PYTHONPATH:-}"
+export HF_ORGANIZATION=hvsr-robotics TQDM_DISABLE=1
+setsid nohup env ROS_DISTRO=${ROS_DISTRO} /root/zenoh-bridge-ros2dds \
+  -l tcp/0.0.0.0:7447 --no-multicast-scouting \
+  >> /root/logs/zenoh.log 2>&1 &
+setsid nohup ros2 launch wojtek_agent_bringup agent_stack.launch.py \
+  agent_url:=http://127.0.0.1:8090 agent_model:=${AGENT_MODEL} \
+  vlm_backend:=openai forward_scale:=2.0 \
+  bielik_url:=http://127.0.0.1:8091 bielik_model:=${BIELIK_MODEL} \
+  asr_backend:=transformers asr_model:=large-v3 \
+  tts_engine:=remote tts_url:=http://127.0.0.1:8120 \
+  trace_path:=/root/takes/ros_split_trace.jsonl \
+  perf:=true perf_out:=/root/takes/ros_split_perf.jsonl \
+  >> /root/logs/agent_stack.log 2>&1 &
+for i in \$(seq 1 40); do
+  grep -q "ASR warmed" /root/logs/agent_stack.log 2>/dev/null && \
+  grep -q "bielik warmed" /root/logs/agent_stack.log 2>/dev/null && \
+  grep -q "agent warmed" /root/logs/agent_stack.log 2>/dev/null && \
+    { echo "brain warmed"; break; }
+  sleep 5
+done
+PYTHONPATH="${REMOTE_DIR}/ws/src/wojtek_brain" python3 -m wojtek_brain.phrases | \
+  python3 -c "
+import sys, httpx
+lines = [l.strip() for l in sys.stdin if l.strip()]
+for l in lines:
+    httpx.post('http://127.0.0.1:8120/synthesize', json={'text': l}, timeout=120)
+print(f'prewarmed {len(lines)} canned phrases')"
+echo "brain stack UP"
+EOF
+  ;;
+
+stack-world)
+  # World box: sim bridge + zenoh connecting THROUGH an ssh tunnel to the
+  # brain. Needs BRAIN_SSH='ssh -p PORT root@IP' reachable from the world
+  # box (attach the world box's key to the brain instance first).
+  need_ssh
+  scene="\${1:?usage: stack-world flat|castle}"
+  : "\${BRAIN_SSH:?set BRAIN_SSH='-p PORT root@IP' (world->brain tunnel)}"
+  spawn=""
+  [[ "\$scene" == castle ]] && spawn='WOJTEK_SPAWN=2.5,-3.0'
+  rsh "bash -s" <<EOF
+set -euo pipefail
+pkill -f 'world.launch|install/wojtek|zenoh-bridge|ssh.*7447' 2>/dev/null || true
+sleep 2
+mkdir -p /root/logs /root/takes
+[ -f ~/.hf_token ] && export HF_TOKEN="\$(cat ~/.hf_token)"
+setsid nohup ssh -o StrictHostKeyChecking=no -N -L 7447:127.0.0.1:7447 ${BRAIN_SSH} \
+  >> /root/logs/tunnel.log 2>&1 &
+sleep 3
+set +u; source /opt/ros/${ROS_DISTRO}/setup.bash; set -u
+(cd ${REMOTE_DIR}/ws && colcon build --symlink-install \
+  --packages-select wojtek_agent_msgs wojtek_sim_bridge 2>&1 | tail -1)
+set +u; source ${REMOTE_DIR}/ws/install/setup.bash; set -u
+setsid nohup env ROS_DISTRO=${ROS_DISTRO} /root/zenoh-bridge-ros2dds \
+  -e tcp/127.0.0.1:7447 --no-multicast-scouting \
+  >> /root/logs/zenoh.log 2>&1 &
+setsid nohup env SCENE=\${scene} \${spawn} MUJOCO_GL=egl \
+  HF_TOKEN="\\${HF_TOKEN:-}" HF_ORGANIZATION=hvsr-robotics TQDM_DISABLE=1 \
+  PYTHONPATH="${REMOTE_DIR}/training:\\${PYTHONPATH:-}" \
+  ros2 launch wojtek_sim_bridge world.launch.py \
+  >> /root/logs/world.log 2>&1 &
+for i in \$(seq 1 40); do
+  python3 -c "import socket; socket.create_connection(('127.0.0.1', 8010), 2).close()" 2>/dev/null && break
+  sleep 5
+done
+python3 -c "import socket; socket.create_connection(('127.0.0.1', 8010), 2).close()" \
+  && echo "world(\${scene}) UP on :8010" \
+  || { echo "world DOWN"; tail -15 /root/logs/world.log; exit 1; }
+EOF
+  ;;
+
 logs) rsh "tail -40 /root/logs/${1:-agent_stack}.log" ;;
 status) rsh "nvidia-smi --query-gpu=memory.used --format=csv,noheader; for p in 8090 8091 8120 8010; do curl -sf -m 3 localhost:\$p/health >/dev/null 2>&1 || curl -sf -m 3 localhost:\$p/v1/models >/dev/null 2>&1 || python3 -c \"import socket; socket.create_connection(('127.0.0.1', \$p), 2).close()\" 2>/dev/null && echo \"\$p UP\" || echo \"\$p down\"; done; pgrep -fc 'vllm serve' | sed 's/^/vllm engines: /'" ;;
 stop) rsh "pkill -f 'vllm serve|tts_server|agent_stack.launch|world.launch|install/wojtek' || true; echo stopped" ;;

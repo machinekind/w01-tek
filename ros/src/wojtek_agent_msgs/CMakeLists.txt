@@ -12,6 +12,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Sentence.msg"
   "msg/ExecStatus.msg"
   "msg/WorldMap.msg"
+  "msg/WorldCmd.msg"
+  "msg/WorldAck.msg"
   "srv/WorldCommand.srv"
   DEPENDENCIES std_msgs
 )

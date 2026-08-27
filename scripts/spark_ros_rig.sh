@@ -344,7 +344,7 @@ fi
 PIP="pip3 install -q --break-system-packages"
 \$PIP --ignore-installed typing_extensions
 \$PIP 'numpy<2' mujoco scipy fastapi uvicorn websockets httpx pillow \
-  imageio imageio-ffmpeg huggingface_hub wsproto
+  loguru imageio imageio-ffmpeg huggingface_hub wsproto
 pip3 install -q --break-system-packages ${REMOTE_DIR}/ros/src/wojtek_policy 2>&1 | tail -1
 set +u; source /opt/ros/${ROS_DISTRO}/setup.bash; set -u
 cd ${REMOTE_DIR}/ws && colcon build --symlink-install \
@@ -401,14 +401,19 @@ EOF
 
 stack-world)
   # World box: sim bridge + zenoh connecting THROUGH an ssh tunnel to the
-  # brain. Needs BRAIN_SSH='ssh -p PORT root@IP' reachable from the world
-  # box (attach the world box's key to the brain instance first).
+  # brain. Needs BRAIN_SSH='-p PORT root@IP' reachable from the world box
+  # (attach the world box's key to the brain instance first).
+  #
+  # The remote script is generated LOCALLY into a temp file and shipped, so
+  # every variable expands exactly once -- the ssh-argv/heredoc double-
+  # escaping produced four distinct silent bugs before this.
   need_ssh
-  scene="\${1:?usage: stack-world flat|castle}"
-  : "\${BRAIN_SSH:?set BRAIN_SSH='-p PORT root@IP' (world->brain tunnel)}"
+  scene="${1:?usage: stack-world flat|castle}"
+  : "${BRAIN_SSH:?set BRAIN_SSH='-p PORT root@IP' (world->brain tunnel)}"
   spawn=""
-  [[ "\$scene" == castle ]] && spawn='WOJTEK_SPAWN=2.5,-3.0'
-  rsh "bash -s" <<EOF
+  [[ "$scene" == castle ]] && spawn='WOJTEK_SPAWN=2.5,-3.0'
+  tmp="$(mktemp)"
+  cat > "$tmp" <<EOF
 set -euo pipefail
 pkill -f 'world.launch|install/wojtek|zenoh-bridge|ssh.*7447' 2>/dev/null || true
 sleep 2
@@ -421,12 +426,15 @@ set +u; source /opt/ros/${ROS_DISTRO}/setup.bash; set -u
 (cd ${REMOTE_DIR}/ws && colcon build --symlink-install \
   --packages-select wojtek_agent_msgs wojtek_sim_bridge 2>&1 | tail -1)
 set +u; source ${REMOTE_DIR}/ws/install/setup.bash; set -u
+# -l on 7448: the bridge is a router and insists on listening somewhere;
+# its default listen port collides with the ssh tunnel's local 7447 bind.
 setsid nohup env ROS_DISTRO=${ROS_DISTRO} zenoh-bridge-ros2dds \
-  -e tcp/127.0.0.1:7447 --no-multicast-scouting \
+  -e tcp/127.0.0.1:7447 -l tcp/127.0.0.1:7448 --no-multicast-scouting \
   >> /root/logs/zenoh.log 2>&1 &
-setsid nohup env SCENE=\${scene} \${spawn} MUJOCO_GL=egl \
-  HF_TOKEN="\\${HF_TOKEN:-}" HF_ORGANIZATION=hvsr-robotics TQDM_DISABLE=1 \
-  PYTHONPATH="${REMOTE_DIR}/training:\\${PYTHONPATH:-}" \
+setsid nohup env SCENE=${scene} ${spawn} MUJOCO_GL=egl \
+  HF_TOKEN="\$(cat ~/.hf_token 2>/dev/null || true)" \
+  HF_ORGANIZATION=hvsr-robotics TQDM_DISABLE=1 \
+  PYTHONPATH="${REMOTE_DIR}/training:\$PYTHONPATH" \
   ros2 launch wojtek_sim_bridge world.launch.py \
   >> /root/logs/world.log 2>&1 &
 for i in \$(seq 1 40); do
@@ -434,11 +442,14 @@ for i in \$(seq 1 40); do
   sleep 5
 done
 python3 -c "import socket; socket.create_connection(('127.0.0.1', 8010), 2).close()" \
-  && echo "world(\${scene}) UP on :8010" \
+  && echo "world(${scene}) UP on :8010" \
   || { echo "world DOWN"; tail -15 /root/logs/world.log; exit 1; }
 EOF
+  rcp_file() { scp -q ${SPARK_SSH#ssh } /dev/null /dev/null 2>/dev/null || true; }
+  scp -q -o StrictHostKeyChecking=no -P "$(ssh_port)" "$tmp" "$(ssh_host):/root/stack_world.sh"
+  rm -f "$tmp"
+  rsh "bash /root/stack_world.sh"
   ;;
-
 logs) rsh "tail -40 /root/logs/${1:-agent_stack}.log" ;;
 status) rsh "nvidia-smi --query-gpu=memory.used --format=csv,noheader; for p in 8090 8091 8120 8010; do curl -sf -m 3 localhost:\$p/health >/dev/null 2>&1 || curl -sf -m 3 localhost:\$p/v1/models >/dev/null 2>&1 || python3 -c \"import socket; socket.create_connection(('127.0.0.1', \$p), 2).close()\" 2>/dev/null && echo \"\$p UP\" || echo \"\$p down\"; done; pgrep -fc 'vllm serve' | sed 's/^/vllm engines: /'" ;;
 stop) rsh "pkill -f 'vllm serve|tts_server|agent_stack.launch|world.launch|install/wojtek' || true; echo stopped" ;;

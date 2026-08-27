@@ -44,7 +44,14 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import Empty, String
 
-from wojtek_agent_msgs.msg import ExecStatus, RoutedIntent, Sentence, WorldMap
+from wojtek_agent_msgs.msg import (
+    ExecStatus,
+    RoutedIntent,
+    Sentence,
+    WorldAck,
+    WorldCmd,
+    WorldMap,
+)
 from wojtek_agent_msgs.srv import WorldCommand
 
 from wojtek_brain import phrases
@@ -76,6 +83,14 @@ class VlmAgentNode(Node):
         self.pub_say_pl = self.create_publisher(Sentence, "/wojtek/say", 10)
         self.pub_trace = self.create_publisher(String, "/wojtek/trace", 10)
         self.cli_world = self.create_client(WorldCommand, "/wojtek/world/command")
+        # Preferred transport in split deployments: the WorldCmd/WorldAck
+        # topic pair (zenoh does not return service replies across boxes).
+        self.pub_cmd = self.create_publisher(WorldCmd, "/wojtek/world/cmd", 10)
+        self.create_subscription(WorldAck, "/wojtek/world/ack",
+                                 self.on_world_ack, 10)
+        self._req_seq = 0
+        self._acks: dict[int, dict] = {}
+        self._ack_events: dict[int, threading.Event] = {}
 
         self.create_subscription(RoutedIntent, "/wojtek/intent", self.on_intent, 10)
         self.create_subscription(Empty, "/wojtek/audio/speech_started",
@@ -101,22 +116,33 @@ class VlmAgentNode(Node):
 
     # -- world command service (blocking, called from the agent thread) -------
 
+    def on_world_ack(self, msg: WorldAck):
+        event = self._ack_events.get(msg.req_seq)
+        if event is None:
+            return
+        out = {"ok": bool(msg.ok), "cmd_seq": int(msg.cmd_seq)}
+        if msg.error:
+            out["error"] = msg.error
+        if msg.command:
+            out["command"] = msg.command
+        self._acks[msg.req_seq] = out
+        event.set()
+
     def world_command(self, kind: str, text: str, args: list[float]) -> dict:
-        req = WorldCommand.Request(kind=kind, text=text, args=args)
-        if not self.cli_world.wait_for_service(timeout_sec=SERVICE_TIMEOUT_S):
-            return {"ok": False, "error": "world command service unavailable"}
-        future = self.cli_world.call_async(req)
-        done = threading.Event()
-        future.add_done_callback(lambda _f: done.set())
-        if not done.wait(SERVICE_TIMEOUT_S):
-            return {"ok": False, "error": "world command timed out"}
-        res = future.result()
-        out = {"ok": bool(res.ok), "cmd_seq": int(res.cmd_seq)}
-        if res.error:
-            out["error"] = res.error
-        if res.command:
-            out["command"] = res.command
-        return out
+        self._req_seq += 1
+        seq = self._req_seq
+        event = threading.Event()
+        self._ack_events[seq] = event
+        msg = WorldCmd(req_seq=seq, kind=kind, text=text, args=args)
+        msg.header.stamp = self.get_clock().now().to_msg()
+        self.pub_cmd.publish(msg)
+        try:
+            if not event.wait(SERVICE_TIMEOUT_S):
+                return {"ok": False, "error": "world command timed out"}
+            return self._acks.pop(seq)
+        finally:
+            self._ack_events.pop(seq, None)
+            self._acks.pop(seq, None)
 
     # -- subscriptions (rclpy spin thread) ------------------------------------
 

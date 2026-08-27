@@ -48,6 +48,8 @@ from wojtek_agent_msgs.msg import (
     ExecStatus,
     Sentence,
     Transcript,
+    WorldAck,
+    WorldCmd,
     WorldMap,
 )
 from wojtek_agent_msgs.srv import WorldCommand
@@ -94,6 +96,11 @@ class SimBridgeNode(Node):
 
         self.create_service(WorldCommand, "/wojtek/world/command",
                             self.on_world_command)
+        # Topic twin of the service: zenoh bridges topics across boxes but
+        # not service replies (double-router hop, measured 2026-08-27).
+        self.pub_ack = self.create_publisher(WorldAck, "/wojtek/world/ack", 10)
+        self.create_subscription(WorldCmd, "/wojtek/world/cmd",
+                                 self.on_world_cmd, 10)
 
         self.loop: asyncio.AbstractEventLoop | None = None
         self.sim = None
@@ -123,6 +130,25 @@ class SimBridgeNode(Node):
         res.command = str(out.get("command") or "")
         res.cmd_seq = int(out.get("cmd_seq") or 0)
         return res
+
+    def on_world_cmd(self, msg: WorldCmd):
+        if self.loop is None or self.sim is None:
+            out = {"ok": False, "error": "world not running yet"}
+        else:
+            fut = asyncio.run_coroutine_threadsafe(
+                self._apply_command(msg.kind, msg.text, list(msg.args)), self.loop)
+            try:
+                out = fut.result(timeout=5.0)
+            except Exception as e:
+                out = {"ok": False, "error": f"command failed: {e}"}
+        ack = WorldAck()
+        ack.header.stamp = self.get_clock().now().to_msg()
+        ack.req_seq = msg.req_seq
+        ack.ok = bool(out.get("ok"))
+        ack.error = str(out.get("error") or "")
+        ack.command = str(out.get("command") or "")
+        ack.cmd_seq = int(out.get("cmd_seq") or 0)
+        self.pub_ack.publish(ack)
 
     async def _apply_command(self, kind: str, text: str, args: list[float]):
         out = world_command_result(kind, text, args, self.sim)

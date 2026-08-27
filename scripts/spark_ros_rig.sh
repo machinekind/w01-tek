@@ -293,16 +293,15 @@ fetch)
 # trick the HTTP split used, measured 0.6 ms same-site).
 
 zenoh)
-  # Install the zenoh ros2dds bridge binary for this box's architecture.
+  # Install the zenoh ros2dds bridge from Eclipse's Debian repo (recent
+  # GitHub releases ship only the zenohd plugin, not the standalone bridge).
   rsh "bash -s" <<'EOF'
 set -euo pipefail
-command -v /root/zenoh-bridge-ros2dds >/dev/null 2>&1 && { echo "zenoh bridge present"; exit 0; }
-arch=$(uname -m); case "$arch" in aarch64) t=aarch64-unknown-linux-gnu;; x86_64) t=x86_64-unknown-linux-gnu;; *) echo "no zenoh build for $arch"; exit 1;; esac
-url=$(curl -s https://api.github.com/repos/eclipse-zenoh/zenoh-plugin-ros2dds/releases/latest   | grep browser_download_url | grep "zenoh-bridge-ros2dds" | grep "$t" | grep -v debian | head -1 | cut -d'"' -f4)
-[ -n "$url" ] || { echo "no release asset for $t"; exit 1; }
-cd /root && curl -sL "$url" -o zb.zip && (unzip -o zb.zip >/dev/null 2>&1 || (apt-get install -y -qq unzip >/dev/null && unzip -o zb.zip >/dev/null))
-chmod +x /root/zenoh-bridge-ros2dds
-/root/zenoh-bridge-ros2dds --version | head -1
+command -v zenoh-bridge-ros2dds >/dev/null 2>&1 && { echo "zenoh bridge present"; zenoh-bridge-ros2dds --version | head -1; exit 0; }
+echo "deb [trusted=yes] https://download.eclipse.org/zenoh/debian-repo/ /" > /etc/apt/sources.list.d/zenoh.list
+apt-get update -qq >/dev/null
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq zenoh-bridge-ros2dds >/dev/null
+zenoh-bridge-ros2dds --version | head -1
 EOF
   ;;
 
@@ -370,7 +369,7 @@ set +u; source /opt/ros/${ROS_DISTRO}/setup.bash; set -u
 set +u; source ${REMOTE_DIR}/ws/install/setup.bash; set -u
 export PYTHONPATH="${REMOTE_DIR}/training:\${PYTHONPATH:-}"
 export HF_ORGANIZATION=hvsr-robotics TQDM_DISABLE=1
-setsid nohup env ROS_DISTRO=${ROS_DISTRO} /root/zenoh-bridge-ros2dds \
+setsid nohup env ROS_DISTRO=${ROS_DISTRO} zenoh-bridge-ros2dds \
   -l tcp/0.0.0.0:7447 --no-multicast-scouting \
   >> /root/logs/zenoh.log 2>&1 &
 setsid nohup ros2 launch wojtek_agent_bringup agent_stack.launch.py \
@@ -422,7 +421,7 @@ set +u; source /opt/ros/${ROS_DISTRO}/setup.bash; set -u
 (cd ${REMOTE_DIR}/ws && colcon build --symlink-install \
   --packages-select wojtek_agent_msgs wojtek_sim_bridge 2>&1 | tail -1)
 set +u; source ${REMOTE_DIR}/ws/install/setup.bash; set -u
-setsid nohup env ROS_DISTRO=${ROS_DISTRO} /root/zenoh-bridge-ros2dds \
+setsid nohup env ROS_DISTRO=${ROS_DISTRO} zenoh-bridge-ros2dds \
   -e tcp/127.0.0.1:7447 --no-multicast-scouting \
   >> /root/logs/zenoh.log 2>&1 &
 setsid nohup env SCENE=\${scene} \${spawn} MUJOCO_GL=egl \

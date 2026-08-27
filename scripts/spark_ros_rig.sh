@@ -208,7 +208,12 @@ set -euo pipefail
 pkill -f 'agent_stack.launch|world.launch|install/wojtek' 2>/dev/null || true
 sleep 2
 [ -f ~/.hf_token ] && export HF_TOKEN="\$(cat ~/.hf_token)"
-set +u; source /opt/ros/${ROS_DISTRO}/setup.bash; source ${REMOTE_DIR}/ws/install/setup.bash; set -u
+set +u; source /opt/ros/${ROS_DISTRO}/setup.bash; set -u
+(cd ${REMOTE_DIR}/ws && colcon build --symlink-install \
+  --packages-select wojtek_agent_msgs wojtek_voice wojtek_brain \
+                    wojtek_agent_bringup wojtek_agent_perf wojtek_sim_bridge \
+  2>&1 | tail -1)
+set +u; source ${REMOTE_DIR}/ws/install/setup.bash; set -u
 export PYTHONPATH="${REMOTE_DIR}/training:\${PYTHONPATH:-}"
 export HF_ORGANIZATION=hvsr-robotics TQDM_DISABLE=1
 # Brain half: voice pipeline + VLM agent. openai nav backend = Qwen drives
@@ -221,13 +226,13 @@ setsid nohup ros2 launch wojtek_agent_bringup agent_stack.launch.py \
   tts_engine:=remote tts_url:=http://127.0.0.1:8120 \
   trace_path:=/root/takes/ros_${scene}_trace.jsonl \
   perf:=true perf_out:=/root/takes/ros_${scene}_perf.jsonl \
-  > /root/logs/agent_stack.log 2>&1 &
+  >> /root/logs/agent_stack.log 2>&1 &
 # World half: the sim bridge, scene via env like the demo rig.
 setsid nohup env SCENE=${scene} ${spawn} MUJOCO_GL=egl \
   HF_TOKEN="\${HF_TOKEN:-}" HF_ORGANIZATION=hvsr-robotics TQDM_DISABLE=1 \
   PYTHONPATH="${REMOTE_DIR}/training:\${PYTHONPATH:-}" \
   ros2 launch wojtek_sim_bridge world.launch.py \
-  > /root/logs/world.log 2>&1 &
+  >> /root/logs/world.log 2>&1 &
 for i in \$(seq 1 60); do
   python3 -c "import socket; socket.create_connection(('127.0.0.1', 8010), 2).close()" 2>/dev/null && break
   sleep 5

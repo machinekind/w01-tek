@@ -288,7 +288,12 @@ class VlmAgentNode(Node):
             # "still on it" line every PROGRESS_EVERY_S until it ends.
             if state and state not in TERMINAL_STATES and state != "idle":
                 if active_since is None:
-                    active_since, last_progress = now, now
+                    active_since = now
+                    # Back-date so the FIRST line lands at PROGRESS_AFTER_S:
+                    # initializing to `now` silently gated it to EVERY_S, and
+                    # a 44 s approach walked in total silence on camera
+                    # (missed the first heartbeat by one second).
+                    last_progress = now - (PROGRESS_EVERY_S - PROGRESS_AFTER_S)
                 elif (now - active_since > PROGRESS_AFTER_S
                       and now - last_progress > PROGRESS_EVERY_S):
                     last_progress = now

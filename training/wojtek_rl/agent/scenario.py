@@ -196,10 +196,27 @@ async def run_video(url: str, script: list[dict], out: Path,
                     )
 
         async def grab(stop: asyncio.Event):
+            """Sample frames on an ABSOLUTE schedule, not sleep(period): the
+            compose cost (PIL compositing, tens of ms) otherwise stretches
+            every loop iteration, the video timeline compresses, and the
+            wall-clock-laid audio drifts visibly late -- on the split take
+            the robot moved before the question was heard. When compose
+            falls behind, the last frame is duplicated so len(frames)/FPS
+            stays equal to wall time."""
             period = 1.0 / FPS
+            loop = asyncio.get_running_loop()
+            start = loop.time()
+            n = 0
             while not stop.is_set():
                 frames.append(rec.compose())
-                await asyncio.sleep(period)
+                n += 1
+                target = start + n * period
+                now = loop.time()
+                while target <= now:
+                    frames.append(frames[-1])
+                    n += 1
+                    target = start + n * period
+                await asyncio.sleep(target - now)
 
         stop = asyncio.Event()
         pump_task = asyncio.create_task(pump())

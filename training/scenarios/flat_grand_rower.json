@@ -28,7 +28,7 @@
     "wait": 8
   },
   {
-    "wav": "scenarios/wavs/q_kanapa.wav",
+    "wav": "scenarios/wavs/q_rower.wav",
     "quiet": 2.5,
     "wait": 30
   },
@@ -36,15 +36,15 @@
     "pause": 90
   },
   {
-    "wav": "scenarios/wavs/q_kanapa_blizej.wav",
+    "wav": "scenarios/wavs/q_blizej.wav",
     "quiet": 2.5,
     "wait": 25
   },
   {
-    "pause": 40
+    "pause": 20
   },
   {
-    "wav": "scenarios/wavs/q_kanapa_siku.wav",
+    "wav": "scenarios/wavs/q_nasik.wav",
     "quiet": 2.5,
     "wait": 25
   },

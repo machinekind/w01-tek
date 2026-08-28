@@ -112,7 +112,23 @@ async def _wait_for_reply(events, t0: float, quiet_s: float, cap_s: float) -> No
             return
 
 
-async def _drive(ws, script: list[dict], events, t0: float) -> None:
+def _manifest_texts(script_dir: Path) -> dict[str, str]:
+    """wav stem -> question text, from the manifest next to the scripts.
+    Lets the recorder subtitle the question WHEN IT IS ASKED instead of
+    2-3 s later when ASR returns (the caption trailed the robot's reaction
+    on camera)."""
+    out = {}
+    manifest = script_dir / "manifest.tsv"
+    if manifest.exists():
+        for line in manifest.read_text(encoding="utf-8").splitlines():
+            if line.strip() and not line.startswith("#") and "\t" in line:
+                stem, text = line.split("\t", 1)
+                out[stem.strip()] = text.strip()
+    return out
+
+
+async def _drive(ws, script: list[dict], events, t0: float,
+                 on_ask=None) -> None:
     """Send the scripted questions/commands; record question timestamps.
 
     Step waits: `{"quiet": 2.5, "wait": 60}` waits for the reply to finish
@@ -133,6 +149,8 @@ async def _drive(ws, script: list[dict], events, t0: float) -> None:
             continue
         pcm = read_wav(step["wav"])
         print(f"=== ASKING: {Path(step['wav']).stem}", flush=True)
+        if on_ask is not None:
+            on_ask(Path(step["wav"]).stem)
         events.append(("q", time.monotonic() - t0, pcm))
         for i in range(0, len(pcm), FRAME):
             await ws.send(np.ascontiguousarray(pcm[i : i + FRAME]).tobytes())
@@ -180,7 +198,7 @@ async def run_video(url: str, script: list[dict], out: Path,
                     if m.get("x") is not None:
                         poses.append((time.monotonic() - t0, m["x"], m["y"]))
                 elif t == "heard":
-                    rec.add_line("you", m["text"])
+                    pass  # question already subtitled at ask time
                     print(f"[heard] {m['text']}", flush=True)
                 elif t == "chat_reply" and m.get("ok"):
                     rec.add_line("dog", m.get("say", ""))
@@ -221,7 +239,9 @@ async def run_video(url: str, script: list[dict], out: Path,
         stop = asyncio.Event()
         pump_task = asyncio.create_task(pump())
         grab_task = asyncio.create_task(grab(stop))
-        await _drive(ws, script, events, t0)
+        texts = _manifest_texts(Path("scenarios"))
+        await _drive(ws, script, events, t0,
+                     on_ask=lambda stem: rec.add_line("you", texts.get(stem, stem)))
         await asyncio.sleep(tail_s)  # let the last reply finish speaking
         stop.set()
         await grab_task

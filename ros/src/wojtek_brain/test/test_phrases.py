@@ -10,7 +10,10 @@ from wojtek_brain import phrases
 def test_every_kind_has_variants():
     for kind in phrases.KINDS:
         lines = phrases.variants(kind)
-        assert len(lines) >= 2, f"{kind} needs variants to sample from"
+        # The intro is deliberately ONE exact, rehearsed version (user call);
+        # everything else needs variants to sample from.
+        floor = 1 if kind == "intro" else 2
+        assert len(lines) >= floor, f"{kind} needs variants to sample from"
         assert all(ln.strip() == ln and ln for ln in lines)
 
 

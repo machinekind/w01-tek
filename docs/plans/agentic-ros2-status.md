@@ -146,11 +146,10 @@ Two traps the live run found, both now baked into code:
   3 ms apart (the robot "searched" a flat while moving 6 cm). WorldCommand
   acks carry `cmd_seq`, ExecStatus reports the seq its snapshot reflects,
   and the proxy holds `active` high until status catches up.
-- **The GB10 clock lottery**: vast machine 51319 is platform power-capped
-  at 942 of 3003 MHz (TTS RTF 3.5 vs 0.44) and nothing unlocks it; deploy
-  now asserts clocks under load and names the machine a lemon before any
-  model downloads. Machines 45282 (Texas) and 45819 (Spain, $0.335/h)
-  boost fine.
+- **The GB10 clock lottery**: vast specific marketplace machines is platform power-capped
+  at a third of its clocks (TTS RTF 3.5 vs 0.44) and nothing unlocks it;
+  deploy now asserts clocks under load and names the machine a lemon
+  before any model downloads. Healthy machines boost to ~2.5 GHz.
 
 Not done yet, in order: two-box split of the ROS stack (DDS across boxes
 needs unicast peer config on vast -- multicast does not cross their NAT;

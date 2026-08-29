@@ -122,11 +122,11 @@ beta, SPARK Hosting, and individuals on the NVIDIA developer forums), which
 is cheaper than the discrete-GPU rentals this file already quotes.
 Rentals bill until the instance is DELETED (Enverge documents no spend cap,
 no idle auto-stop, and no prepaid credits, and a "restart" keeps the meter
-running), so arm `scripts/rental_watchdog.sh` before starting one and put a
+running), so arm `experiments/spark/rental_watchdog.sh` before starting one and put a
 hard limit on the card that pays for it. The watchdog is a second line, not
 enforcement: it runs on a laptop, so a sleeping Mac protects nothing.
 
-`scripts/spark_tts_bench.sh` is the whole session in one paste: it reports
+`experiments/spark/spark_tts_bench.sh` is the whole session in one paste: it reports
 what the box actually is, installs Chatterbox **without replacing the
 vendor's aarch64 torch** (chatterbox pins `torch==2.6.0`; letting pip act on
 that would destroy the NVIDIA build), runs the benchmark, and finishes with

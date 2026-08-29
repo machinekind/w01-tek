@@ -106,7 +106,7 @@ assert "cu13" in torch.__version__, f"pip moved torch to {torch.__version__}!"
 print("deploy ok:", platform.machine(), "torch", torch.__version__,
       "cap", torch.cuda.get_device_capability(0))
 # Clock sanity: some vast GB10 machines are platform power-capped to
-# ~940 MHz of 3003 and never boost (machine 51319, 2026-08-26) -- every
+# ~940 MHz of 3003 and never boost (seen live, 2026-08) -- every
 # latency number from such a box is a fiction. Load the GPU and look.
 import subprocess, threading
 a = torch.randn(4096, 4096, device="cuda", dtype=torch.float16)
@@ -215,7 +215,7 @@ set +u; source /opt/ros/${ROS_DISTRO}/setup.bash; set -u
   2>&1 | tail -1)
 set +u; source ${REMOTE_DIR}/ws/install/setup.bash; set -u
 export PYTHONPATH="${REMOTE_DIR}/training:\${PYTHONPATH:-}"
-export HF_ORGANIZATION=hvsr-robotics TQDM_DISABLE=1
+export HF_ORGANIZATION="${HF_ORGANIZATION:?export the HF org that hosts the policy/scene repos}" TQDM_DISABLE=1
 # Brain half: voice pipeline + VLM agent. openai nav backend = Qwen drives
 # navigation from the same served model, as in the recorded demo takes.
 setsid nohup ros2 launch wojtek_agent_bringup agent_stack.launch.py \
@@ -229,7 +229,7 @@ setsid nohup ros2 launch wojtek_agent_bringup agent_stack.launch.py \
   >> /root/logs/agent_stack.log 2>&1 &
 # World half: the sim bridge, scene via env like the demo rig.
 setsid nohup env SCENE=${scene} ${spawn} MUJOCO_GL=egl \
-  HF_TOKEN="\${HF_TOKEN:-}" HF_ORGANIZATION=hvsr-robotics TQDM_DISABLE=1 \
+  HF_TOKEN="\${HF_TOKEN:-}" HF_ORGANIZATION="${HF_ORGANIZATION:?export the HF org that hosts the policy/scene repos}" TQDM_DISABLE=1 \
   PYTHONPATH="${REMOTE_DIR}/training:\${PYTHONPATH:-}" \
   ros2 launch wojtek_sim_bridge world.launch.py \
   >> /root/logs/world.log 2>&1 &
@@ -368,7 +368,7 @@ set +u; source /opt/ros/${ROS_DISTRO}/setup.bash; set -u
                     wojtek_agent_bringup wojtek_agent_perf 2>&1 | tail -1)
 set +u; source ${REMOTE_DIR}/ws/install/setup.bash; set -u
 export PYTHONPATH="${REMOTE_DIR}/training:\${PYTHONPATH:-}"
-export HF_ORGANIZATION=hvsr-robotics TQDM_DISABLE=1
+export HF_ORGANIZATION="${HF_ORGANIZATION:?export the HF org that hosts the policy/scene repos}" TQDM_DISABLE=1
 setsid nohup env ROS_DISTRO=${ROS_DISTRO} zenoh-bridge-ros2dds \
   -l tcp/0.0.0.0:7447 --no-multicast-scouting \
   >> /root/logs/zenoh.log 2>&1 &
@@ -433,7 +433,7 @@ setsid nohup env ROS_DISTRO=${ROS_DISTRO} zenoh-bridge-ros2dds \
   >> /root/logs/zenoh.log 2>&1 &
 setsid nohup env SCENE=${scene} ${spawn} MUJOCO_GL=egl \
   HF_TOKEN="\$(cat ~/.hf_token 2>/dev/null || true)" \
-  HF_ORGANIZATION=hvsr-robotics TQDM_DISABLE=1 \
+  HF_ORGANIZATION="${HF_ORGANIZATION:?export the HF org that hosts the policy/scene repos}" TQDM_DISABLE=1 \
   PYTHONPATH="${REMOTE_DIR}/training:\$PYTHONPATH" \
   ros2 launch wojtek_sim_bridge world.launch.py \
   >> /root/logs/world.log 2>&1 &

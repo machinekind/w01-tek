@@ -1,0 +1,38 @@
+[
+ {
+  "cmd": "turn_right 90",
+  "wait": 8
+ },
+ {
+  "cmd": "forward 1.5",
+  "wait": 12
+ },
+ {
+  "cmd": "turn_left 45",
+  "wait": 8
+ },
+ {
+  "cmd": "forward 1.0",
+  "wait": 10
+ },
+ {
+  "wav": "scenarios/wavs/q_historia.wav",
+  "quiet": 2.5,
+  "wait": 45
+ },
+ {
+  "wav": "scenarios/wavs/q_mapa.wav",
+  "quiet": 2.5,
+  "wait": 45
+ },
+ {
+  "wav": "scenarios/wavs/q_gdzie.wav",
+  "quiet": 2.5,
+  "wait": 40
+ },
+ {
+  "wav": "scenarios/wavs/q_stop.wav",
+  "quiet": 2.5,
+  "wait": 30
+ }
+]

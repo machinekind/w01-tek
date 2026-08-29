@@ -1,0 +1,5 @@
+Dobrze, zatrzymuję się.
+Jasne, stop.
+Okej, przerywam.
+Już stoję.
+Zatrzymane!

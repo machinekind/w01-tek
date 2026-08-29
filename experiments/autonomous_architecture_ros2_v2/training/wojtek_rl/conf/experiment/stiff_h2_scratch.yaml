@@ -1,0 +1,46 @@
+# @package _global_
+# Generation H2: stiff_h_scratch + multiplicative velocity tracking.
+# H removed the far-field floor, but additive tracking still pays a
+# deadlocked robot the FULL tracking_lin_vel (4.0/step) under a pure-spin
+# command — commanded linear velocity is 0 and standing still tracks it
+# perfectly, so ignoring rotation keeps ~63% of the ideal-spin payout
+# (owner-identified, 2026-07-26). reward.tracking_product gates both
+# tracking terms by the product of the two kernels: full pay only when
+# the whole command is tracked; a deadlocked spin now earns ~0 tracking
+# reward, standing under a zero command still earns full pay.
+# Otherwise identical to H: from scratch, symmetry on, sharp kernels (no
+# far-field), rotation defended (tracking_ang_vel 2.4, wz +-1.5, arcs),
+# slow-walk coverage, no foot-friction DR, 2B ceiling, plateau stop with
+# min_delta 1.0.
+# Gate: as stiff_g_scratch; the specific new expectation is pivot-from-
+# stand appearing (probe_spin_worlds.py) since deadlock no longer pays.
+# DEPLOYMENT: kp=40 / kd=1.6 / +-9 Nm, keeper contract.
+# Usage: ./training/run.sh train +experiment=stiff_h2_scratch \
+#   ++ppo.num_evals=40 seed=1
+defaults:
+  - locomotion_stiff_v1
+
+task:
+  env:
+    symmetry:
+      enable: true
+      mirror_prob: 0.5
+    command:
+      wz: [-1.5, 1.5]
+      arc_prob: 0.2
+      arc_vx: [0.3, 0.8]
+      pure_slow_prob: 0.15
+      slow_vx: [0.1, 0.35]
+    reward:
+      tracking_product: true
+
+early_stop:
+  enable: true
+  min_evals: 10
+  patience: 6
+  min_delta: 1.0
+
+ppo:
+  num_timesteps: 2000000000
+
+run_name: wojtek_stiff_h2_scratch

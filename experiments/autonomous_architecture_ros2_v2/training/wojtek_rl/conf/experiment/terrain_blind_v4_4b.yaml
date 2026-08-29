@@ -1,0 +1,194 @@
+# @package _global_
+# terrain_blind_v4_4b -- v4.2 recipe + flat_pitch posture hinge at w=25
+# (v4.4 arm B: the posture bracket end). Diffs vs terrain_blind_v4_2,
+# nothing else:
+#   obs.privileged: phase removed (settled by v4.3: curriculum 6.39 vs 6.28)
+#   reward.terrain_gate.flat_pitch_tol_deg 2.0, flat_pitch_rough_cut 0.15
+#     (M1 resolved 2026-08-05: backward-climb leakage 10.5% at 0.25 tripped
+#     the >5% rule; 9.9% at 0.15 clears the >10% row_only trigger)
+#   reward.scales.flat_pitch -25.0
+# Launch: same arena and flags as terrain_blind_v4_2 (FLAT_ROW=1 +
+# TERRAIN_FLAGS, no rebuild; the env refuses a mismatched arena).
+# XLA_PYTHON_CLIENT_PREALLOC=false is mandatory on terrain.
+defaults:
+  - override /task: joystick
+
+task:
+  env:
+    # Knee: window and clamp move together (raising one without the other
+    # is a no-op -- stance 2.65 + 0.5 sat exactly at the old 3.15 clamp).
+    action_scale: [0.25, 0.5, 1.35]
+    pd_kp: 40.0
+    pd_kd: 1.6
+    max_torque: 32.0
+    abduction_ctrl_limit: 0.44
+    knee_target_max: 4.0
+    latency:
+      enable: true
+    encoder:
+      enable: true
+    symmetry:
+      enable: true
+      mirror_prob: 0.5
+    no_progress:
+      enable: true
+      grace_sec: 2.0
+      ema_sec: 1.0
+      risk_below: 0.5
+      p_max: 0.02
+      terrain_grace_sec: 4.0
+      terrain_p_max_scale: 0.5
+    obs:
+      # The terrain family's frozen actor layout: the kp40 line's joint,
+      # action and command channels plus the IMU (gyro and gravity, named as
+      # in conf/obs/full.yaml). It is deliberately incompatible with every
+      # flat checkpoint. Before this family can run on the robot, the
+      # deployment side has to wire the CANdle-hat BMI into the policy node.
+      include:
+        - gyro
+        - gravity
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+      # Critic-only list; phase is out (v4.3 settled it: 6.39 vs 6.28).
+      privileged:
+        - gyro
+        - gravity
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+        - linvel
+        - foot_contact
+        - height_scan_clean
+    height_scan:
+      enable: true
+    command:
+      vx: [-0.8, 1.2]
+      vy: [-0.5, 0.5]
+      wz: [-1.5, 1.5]
+      height: [0.10, 0.18]
+      zero_prob: 0.25
+      pure_wz_prob: 0.25
+      pure_vy_prob: 0.2
+      arc_prob: 0.2
+      arc_vx: [0.3, 0.8]
+      pure_slow_prob: 0.1
+      slow_vx: [0.15, 0.35]
+      # A draw probability, not a realized share: the zero overwrite
+      # runs last, so 0.2 lands at 0.15 of commands as clean backward.
+      pure_back_prob: 0.2
+      back_vx: [-0.8, -0.2]
+      # Terrain rows lean forward; the flat row keeps the base mix above.
+      terrain_bias:
+        enable: true
+        zero_prob: 0.10
+        pure_wz_prob: 0.10
+        pure_vy_prob: 0.05
+        pure_slow_prob: 0.30
+        pure_back_prob: 0.10
+    push:
+      vel: 0.8
+    gait:
+      swing_height: 0.08
+      air_time_cap: 0.35
+    reward:
+      tracking_rel_sigma: 0.5
+      tracking_rel_floor_ang: 0.7
+      tracking_far_weight: 0.25
+      tracking_far_sigma: 2.5
+      pose_leg_weight: 0.1
+      tracking_product: true
+      tracking_relative: true
+      shaping_tracking_gate: true
+      torque_limit_frac: 0.25
+      orientation_tol_deg: 20.0
+      apex_target: 0.05
+      terrain_gate:
+        enable: true
+        floor: 0.15
+        rough_ref: 0.05
+        landing_soften: 0.5
+        # flat_pitch gate: quadratic hard-closer, zero at rough >= 0.15
+        # (7.5 mm local spread at rough_ref 0.05, the M1-tightened cut);
+        # riser-straddling climb states saturate rough and pay nothing.
+        flat_pitch_tol_deg: 2.0
+        flat_pitch_rough_cut: 0.15
+      scales:
+        tracking_lin_vel: 4.0
+        tracking_ang_vel: 2.4
+        height_tracking: 1.0
+        lin_vel_z: 0.0
+        ang_vel_xy: 0.0
+        orientation: -5.0
+        # Nose-down-only linear hinge past 2 deg; at w=25 a 6 deg lean pays
+        # ~1.74/step against tracking income ~2-4/step.
+        flat_pitch: -25.0
+        torques: -6.0e-4
+        torque_rate: -0.02
+        torque_limit: -0.2
+        action_rate: -0.25
+        action_accel: 0.0
+        energy: 0.0
+        pose: -1.0
+        feet_air_time: 4.0
+        feet_slip: -0.35
+        feet_phase: 0.0
+        contact_match: 0.0
+        feet_apex: 5.0
+        feet_landing: -0.5
+        high_step: 4.0
+        stand_still: -2.5
+        stand_feet_down: -30.0
+        termination: -1.0
+    terrain:
+      enable: true
+      arena: train
+      flat_row: true
+      spawn_mode: feature
+      spawn_grace_sec: 1.0
+      pinned_frac: 0.2
+      demote_strikes: 3
+      stair_tread_range: [0.25, 0.45]
+      pad_radius: 0.3
+      # Sized to the opened legs (~9 cm of usable lift): stairs top out at
+      # 7 cm risers, blocks at ~6.6 cm, rubble boxes at ~7 cm.
+      type_caps:
+        pyramid_stairs: 0.7
+        inverted_pyramid_stairs: 0.7
+        discrete_obstacles: 0.8
+        random_grid: 0.45
+    fall:
+      # A lying robot is the expensive simulation state and the source of
+      # every heightfield contact overflow; it carries no locomotion signal.
+      # The check is analytic (height lookup), so the chessboard gaps in the
+      # base collider cannot be rested on undetected.
+      on_base_contact: true
+    sim:
+      # Floor from the robot's collision set: 29 geoms that can pair with
+      # the heightfield (20 leg geoms + the 9-cell base chessboard), 4
+      # contacts each. A measured walking scan peaked at 12 contacts/env
+      # against the previous 88 pool with nothing tripped.
+      naconmax_per_env: 116
+      # The August 2026 clean scans measured nefc peaks of 647-681 in
+      # pile-up states, over the family's old 640 cap; rows past the cap
+      # apply no force with no warning. 1024 leaves headroom and the
+      # terrain wrapper logs the live peak (warning at 90%).
+      njmax: 1024
+
+dr:
+  motor_strength: { enable: true, range: [0.5, 1.1] }
+  joint_gains: { enable: true, gain_pct: 0.2, kd_pct: 0.2 }
+  # Per-foot-geom multiplier, and the feet take contact priority, so this
+  # draw is the contact friction the policy actually walks on.
+  foot_friction: { enable: true, range: [0.4, 1.35] }
+
+ppo:
+  # terrain_lvl_train is the curriculum signal. The eval env starts fresh at
+  # every evaluation, so its terrain_lvl never climbs (configuration.md,
+  # Terrain curriculum).
+  log_training_metrics: true
+  num_timesteps: 2000000000
+
+run_name: wojtek_terrain_blind_v4_4b

@@ -1,0 +1,26 @@
+# @package _global_
+# Iteration 5 (battery-driven). Standing tremble (qvel_rms ~1.0) survived
+# three reward-pressure attempts -> structural fix: EMA action filter 0.5
+# (the actor's joint_vel obs carries +-1.5 rad/s noise; standing policies
+# react to phantom motion). stand_still back to -1.0: v4's -2.5 made the
+# robot obey the approximate height->ctrl anchor over the actual height
+# command (standing height err 8 -> 21 mm).
+# Usage: ./run.sh train +experiment=locomotion_v5
+defaults:
+  - locomotion
+
+task:
+  env:
+    action_filter: 0.5
+    command:
+      zero_prob: 0.25
+    gait:
+      freq: [1.4, 3.6]
+    reward:
+      height_sigma: 5e-4
+      scales:
+        height_tracking: 2.0
+        stand_still: -1.0
+        tracking_lin_vel: 2.0
+
+run_name: fbb_loco_v5

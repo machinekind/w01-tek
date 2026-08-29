@@ -1,0 +1,6 @@
+# @package _global_
+# Commanded jump with soft landing. Usage: ./run.sh train +experiment=jump
+defaults:
+  - override /task: jump
+
+run_name: fbb_jump_v1

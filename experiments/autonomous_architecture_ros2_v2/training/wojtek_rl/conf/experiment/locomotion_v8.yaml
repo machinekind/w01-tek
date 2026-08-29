@@ -1,0 +1,24 @@
+# @package _global_
+# Iteration 8 (battery-driven). v6/v7 bracket a speed<->precision frontier:
+# v6 tracks speed best (0.063-0.099) but slips (0.23); v7 fixed slip
+# (0.17-0.19), heights (2-6 mm) and crouch settling but got cautious
+# (vel 0.074-0.137). v8: slip -0.35 with a stronger speed pull (2.5).
+# Usage: ./run.sh train +experiment=locomotion_v8
+defaults:
+  - locomotion
+
+task:
+  env:
+    command:
+      zero_prob: 0.25
+    gait:
+      freq: [1.4, 3.6]
+    reward:
+      height_sigma: 5e-4
+      scales:
+        height_tracking: 2.5
+        stand_still: -1.0
+        tracking_lin_vel: 2.5
+        feet_slip: -0.35
+
+run_name: fbb_loco_v8

@@ -1,0 +1,24 @@
+# @package _global_
+# Iteration 7 (battery-driven). v6 is the best all-rounder (vel 0.063-0.099,
+# walk -0.02 / trot 0.94, no falls). Two residual gaps: foot slip while
+# moving (~0.23 vs 0.15 for the gaitless v1) and an ~8 mm high bias when
+# holding the lowest stance. v7: slip penalty x2, height_tracking 2.5.
+# Usage: ./run.sh train +experiment=locomotion_v7
+defaults:
+  - locomotion
+
+task:
+  env:
+    command:
+      zero_prob: 0.25
+    gait:
+      freq: [1.4, 3.6]
+    reward:
+      height_sigma: 5e-4
+      scales:
+        height_tracking: 2.5
+        stand_still: -1.0
+        tracking_lin_vel: 2.0
+        feet_slip: -0.5
+
+run_name: fbb_loco_v7

@@ -1,0 +1,25 @@
+# @package _global_
+# Iteration 3 of the sag experiment (2026-08-09). v1 (-10) and v1b (-5)
+# both proved the gravity-compensation reward works (stance sag down
+# 25-50% across commands) and both broke pure spins the same way (wz 1.0
+# -> ~0.3 achieved): while learning, twisting charges target_sag BEFORE
+# yaw tracking pays, so spinning never gets discovered — an
+# exploration-time deadlock, not marginal economics (halving the scale
+# changed nothing). v2 keeps the strong -10 scale where the term means
+# what it says (gravity) and fades it out with commanded |wz|
+# (target_sag_wz_fade=1.0: zero charge at the wz range edge): a pivot's
+# lateral joint loading is commanded twist, not weight.
+# Usage: ./training/run.sh train +experiment=flat_tff_sag_v2
+defaults:
+  - flat_tff_rnd_v1
+
+task:
+  env:
+    command:
+      pure_slow_prob: 0.15
+    reward:
+      target_sag_wz_fade: 1.0
+      scales:
+        target_sag: -10.0
+
+run_name: wojtek_flat_tff_sag_v2

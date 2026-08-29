@@ -1,0 +1,46 @@
+# @package _global_
+# Phase F2: phase F minus the foot-friction DR. The three-run evidence
+# (wojtek_stiff_d_grip, _e_friction, _f_sym, all 2026-07-26) is that
+# dr.foot_friction [0.45, 1.4] kills pivoting outright regardless of what
+# else changes: every turning/spin course deadlocks at 0/8 while straights
+# stay strong. A world-probe on the f_sym checkpoint (plain vs
+# priority-patched physics, probe_spin_worlds.py) showed the policy
+# refuses to pivot in BOTH, i.e. this is learned conservatism, not a
+# train/eval physics mismatch: mu is unobservable (no critic signal, no
+# actor history), so the policy hedges the mu=0.4 worlds by never
+# attempting the most slip-dependent maneuver. Covering low mu properly
+# needs adaptation capacity (privileged-critic mu + actor history, or
+# teacher-student distillation) — not a blind widening.
+# F2 therefore keeps the three fixes that measured well in f_sym
+# (symmetry: spin behavior now symmetric where the keeper was +97/-4 deg;
+# straight_slow 1.03 vs keeper 0.69; speed_steps 1.13) and drops the DR
+# so turning can survive training.
+# Gate against the keeper (courses battery): every keeper-passing course
+# stays >= keeper; slalom and both pure spins improve; straight_slow >=
+# 1.0. Slippery scenarios are EXPECTED to stay at keeper level (the mu
+# axis is deferred to an adaptation-capable iteration).
+# DEPLOYMENT unchanged from the keeper: kp=40 / kd=1.6 / +-9 Nm; mirror
+# augmentation is training-only.
+# Launched with restore=<keeper checkpoint>; this preset does not set
+# restore.
+# Usage: ./training/run.sh train +experiment=stiff_phase_f2_sym_nodr \
+#   restore=runs/wojtek_stiff_b_keeper/checkpoints/000825753600
+defaults:
+  - locomotion_stiff_v1
+
+task:
+  env:
+    symmetry:
+      enable: true
+      mirror_prob: 0.5
+    command:
+      pure_slow_prob: 0.15
+      slow_vx: [0.1, 0.35]
+    reward:
+      tracking_far_weight: 0.25
+      tracking_far_sigma: 2.5
+
+ppo:
+  num_timesteps: 400000000
+
+run_name: wojtek_stiff_f2_sym_nodr

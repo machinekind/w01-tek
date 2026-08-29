@@ -1,0 +1,106 @@
+name: joystick
+
+env:
+  # Observations, in order. state = actor (real sensors), privileged =
+  # critic (sim-only extras allowed). Catalog: gyro, gravity, joint_pos,
+  # joint_vel, last_act, linvel, base_height, actuator_force, foot_contact,
+  # command, phase.
+  obs:
+    state:
+      - gyro
+      - gravity
+      - joint_pos
+      - joint_vel
+      - last_act
+      - command
+      - phase
+    privileged:
+      - gyro
+      - gravity
+      - joint_pos
+      - joint_vel
+      - last_act
+      - command
+      - phase
+      - linvel
+      - foot_contact
+
+  # Randomized control latency at substep granularity. Off by default:
+  # action_delay (see env.py default_config) drives a static
+  # ctrl_delay=n_substeps, i.e. today's fixed one-control-step latency.
+  # Enable to sample d ~ U[min_substeps, max_substeps] per env at reset;
+  # d=0 = no delay, d=n_substeps(=5 at ctrl_dt=0.02/sim_dt=0.004) = today.
+  # Under the brax training auto-reset wrapper, auto-reset restores a cached
+  # state without re-running reset, so d is fixed per env for the whole
+  # training run, not resampled per episode.
+  latency:
+    enable: false
+    min_substeps: 0
+    max_substeps: 5
+
+  # Per-joint encoder-zero offset in rad, added to the observed joint angle
+  # and subtracted from the written targets. Off by default.
+  encoder:
+    enable: false
+    range: 0.02
+
+  # Terrain training, off by default. Run `./training/run.sh build-terrain`
+  # first. With enable=false nothing changes. Details: docs/configuration.md.
+  terrain:
+    enable: false
+    arena: train # train | eval | test; build-terrain --arena <kind>
+    flat_row: false # train on the arena built with --flat-row (flat level 0)
+    spawn_yaw: true # random heading at every spawn
+    pad_jitter: 0.15 # spawn scatter around pad centre, m; keep under 0.2
+    init_level_frac: 0.5 # first spawns come from the easiest half of rows
+    spawn_level: -1 # pin every spawn to this row; -1 samples per init_level_frac
+    demote_fraction: 0.5 # drop a level if walked < this * commanded distance
+    spawn_mode: pad # pad = legacy flat-pad spawns; feature = anywhere on the tile
+    spawn_grace_sec: 0.0 # falls this soon after a spawn are curriculum-neutral
+    pinned_frac: 0.0 # fraction of envs pinned across the rungs, off the ladder
+    pinned_flat_frac: 0.0 # extra fraction pinned to the flat row (level 0)
+    demote_strikes: 1 # consecutive failed episodes before a level drop
+    stair_tread_range: null # [lo, hi] per-tile tread draws; null = legacy 0.13
+    type_caps: null # per-type difficulty caps baked into the arena build
+    pad_radius: null # arena pad radius when the build overrode the default
+
+  # Terrain-height grid ahead of the robot, off by default. Components:
+  # height_scan_clean (critic) and height_scan (actor: masked, held,
+  # corrupted). Reads zero without a terrain lookup. Details:
+  # docs/configuration.md.
+  height_scan:
+    enable: false
+    x_range: [0.65, 1.45] # body-frame forward extent, m
+    y_range: [-0.3, 0.3] # body-frame lateral extent, m
+    nx: 5 # points per axis; the obs width and mirror map assume 5x5
+    ny: 5
+    clip: 0.3 # values clipped to +-clip m around the lowest foot
+    hold_steps: 3 # control steps between captures (15 Hz camera, 50 Hz policy)
+    delay_steps: 1 # capture-to-visible delay, control steps
+    dark: false # feed the actor zeros while the critic still sees the grid
+    mask: # analytic camera visibility; cells outside read zero
+      enable: true
+      mount: [0.32, 0.0, 0.07] # body-frame camera position, m
+      pitch_deg: 15.0 # optical axis pitched down from body x
+      hfov_deg: 90.7 # D435 depth at 424x240, fx=fy=209
+      vfov_deg: 61.2
+      min_depth: 0.3 # usable depth window, m
+      max_depth: 3.0
+      occlusion: true # also hide cells behind nearer terrain
+      occlusion_samples: 8 # terrain samples per camera-to-cell ray
+      occlusion_margin: 0.02 # ground must clear the ray by this much, m
+    corrupt: # actor-side sensor model, one regime drawn per episode
+      enable: false
+      noise_prob: 0.6 # iid gaussian noise on visible cells
+      drift_prob: 0.3 # constant offset + forward tilt for the episode
+      blackout_prob: 0.1 # the whole episode reads zero
+      noise_std: 0.02 # m
+      drift_z: 0.05 # offset drawn U(+-drift_z), m
+      drift_tilt: 0.05 # tilt drawn U(+-drift_tilt), m per m of grid x
+      dropout_prob: 0.05 # per-cell dropout to zero in noise/drift episodes
+      # Camera pose error, drawn U(+-bound) per episode: moves the actor's
+      # mask, not the values it keeps.
+      pitch_jitter_deg: 0.0 # optical-axis pitch offset, deg
+      mount_jitter: 0.0 # mount offset per xyz axis, m
+
+ppo: {}

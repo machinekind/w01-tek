@@ -1,0 +1,22 @@
+# @package _global_
+# BIPEDAL STAND, iteration 3 (2026-08-20): two fixes over v2.
+# (1) v2's "stand" was a SIT — the passively-stable pose rests on the
+#     hind third-link (heel) capsules, which the metric never checked.
+#     v3 stands on the foot spheres only: new true-stand snapshot
+#     (hip -1.2, knee 3.15, base 0.41 m, shins clear), biped_height
+#     floor raised 0.206 -> 0.35, sit_contact penalty (-2 per touching
+#     hind link, attitude-gated), hind_contact/stand_still gated on
+#     clean support.
+# (2) v2 held from the reared init but never learned the quad->biped
+#     transition (0% from drop starts); v3 replaces the endpoint init
+#     with a CORRIDOR init, alpha ~ U(0,1) interpolating home -> reared
+#     (pitch alpha*90deg, joints/ctrl lerped, short settle) so the
+#     policy trains from every point along the transition.
+# Judge: clean-reared fraction (ori, height, feet-only support) from
+# quad-init seeds on the eval battery, and rendered rollouts.
+# Usage: ./training/run.sh train +experiment=biped_v3 seed=0
+defaults:
+  - override /task: biped
+
+
+run_name: wojtek_biped_v3

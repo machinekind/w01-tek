@@ -1,0 +1,25 @@
+# @package _global_
+# BIPEDAL STAND, iteration 4 (2026-08-20): v3 held a clean stand only
+# ~0.4 s from the reared init and stopped ATTEMPTING from quad starts.
+# Three fixes:
+# (1) Knee headroom — the v3 stand pinned knees at 3.11 with the target
+#     clip at 3.15 (+0.04 rad of authority); new snapshot at hip -1.4 /
+#     knee 2.71 leaves +-0.4 rad to balance with (base 0.39 m, shins
+#     5 cm clear).  biped_height floor 0.35 -> 0.32 to match.
+# (2) sit_contact gate is now BINARY near-reared (ori_err < 0.2): the
+#     smooth kernel gate taxed the crouched pass-through states of every
+#     rear-up attempt and suppressed trying (the slip-penalty lesson).
+# (3) Corridor density alpha = sqrt(U): biased toward the reared end,
+#     where balance experience is scarce.
+# Budget 500M (balance is a harder learning problem than the sit).
+# Judge: clean-reared fraction (feet-only support) per init branch.
+# Usage: ./training/run.sh train +experiment=biped_v4 seed=0
+defaults:
+  - override /task: biped
+
+
+run_name: wojtek_biped_v4
+
+task:
+  ppo:
+    num_timesteps: 500000000

@@ -44,6 +44,23 @@ _PAW_UP = _pose(
 )
 _BOW = _pose(fr=(0, -1.0, 1.2), fl=(0, -1.0, 1.2))
 
+# Three feet planted, one leg HIGH, and the BODY stays off the floor
+# (v9 -- it took the user three reviews to teach the right criteria). The
+# statics: with the rear-left leg up, the COM lies outside the rear-right /
+# front-left support diagonal, so the rear-left trunk corner MUST tip onto
+# the ground no matter the gains -- unless the rear-right foot first steps
+# UNDER the body midline so the support triangle contains the COM. That is
+# also what a real dog does. Lift rides the abduction axis with the leg
+# folded (3.9 N*m hold vs the 9 N*m clamp an extended hip lift cost).
+# Validated: zero trunk-floor contacts through the hold, rear-left trunk
+# corner 4 cm clear, foot 20 cm up, 0/20 falls from perturbed entries.
+_PEE_BRACE = _pose(rl=(0.0, -0.2, 3.1), rr=(-0.6, -0.2, 3.15),
+                   fr=(0.1, -0.2, 3.1), fl=(0.1, -0.2, 3.1))
+_PEE_FOLD = _pose(rl=(0.0, 0.9, 0.45), rr=(-0.6, -0.2, 3.15),
+                  fr=(0.1, -0.2, 3.1), fl=(0.1, -0.2, 3.1))
+_PEE_UP = _pose(rl=(-0.3, 1.0, 0.45), rr=(-0.6, -0.2, 3.15),
+                fr=(0.1, -0.2, 3.1), fl=(0.1, -0.2, 3.1))
+
 # name -> (duration_s, keyframes [(t, pose)], osc layers
 #          [(channel_idxs, amp_rad, hz, t0, t1, phases)])
 TRICKS = {
@@ -65,6 +82,15 @@ TRICKS = {
             (8.6, _SIT), (9.8, HOME_CTRL),
         ],
         [([10], 0.25, 2.0, 4.7, 6.8, [0.0])],  # front-left hip shake
+    ),
+    "pee": (
+        15.6,
+        [
+            (0.5, HOME_CTRL), (2.4, _PEE_BRACE), (4.0, _PEE_FOLD),
+            (5.6, _PEE_UP), (10.4, _PEE_UP), (12.0, _PEE_FOLD),
+            (13.6, _PEE_BRACE), (15.2, HOME_CTRL),
+        ],
+        [],
     ),
     "shake": (
         4.5,

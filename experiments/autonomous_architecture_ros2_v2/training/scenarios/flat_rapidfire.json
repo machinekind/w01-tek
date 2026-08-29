@@ -1,0 +1,27 @@
+[
+ {
+  "wav": "scenarios/wavs/q_imie.wav",
+  "quiet": 2.5,
+  "wait": 45
+ },
+ {
+  "wav": "scenarios/wavs/q_umiesz.wav",
+  "quiet": 2.5,
+  "wait": 45
+ },
+ {
+  "wav": "scenarios/wavs/q_widzisz.wav",
+  "quiet": 2.5,
+  "wait": 45
+ },
+ {
+  "wav": "scenarios/wavs/q_kolor.wav",
+  "quiet": 2.5,
+  "wait": 45
+ },
+ {
+  "wav": "scenarios/wavs/q_dokad.wav",
+  "quiet": 2.5,
+  "wait": 45
+ }
+]

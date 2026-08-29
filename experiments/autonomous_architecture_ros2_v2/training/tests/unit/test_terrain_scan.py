@@ -1,0 +1,939 @@
+"""Terrain-scan reduction, gates, and baseline handling.
+
+Everything here is pure: dicts and numpy arrays in, dicts out. No checkpoint,
+no jax rollout -- the rollout itself is exercised by running the scan.
+"""
+
+import json
+import sys
+
+import numpy as np
+import pytest
+
+from wojtek_rl import terrain_scan, terrain_suite
+
+N = terrain_suite.RUNS_PER_CELL_SPEED
+CROSSINGS = terrain_suite.CROSSINGS
+
+
+def _out(crossings, fell):
+    return {
+        "crossings": np.array(crossings),
+        "fell": np.array(fell, dtype=bool),
+        "saturation": np.full(len(crossings), 0.1),
+        "track_err": np.full(len(crossings), 0.05),
+        "clearance": np.full(len(crossings), 0.01),
+        "counted": np.full(len(crossings), 100.0),
+        "steps": 500,
+        "nacon_max": 77,
+        "nefc_max": 300,
+    }
+
+
+# -- reduction -----------------------------------------------------------------
+
+
+def test_pass_requires_all_four_crossings_and_no_fall():
+    crossings = [CROSSINGS, CROSSINGS, CROSSINGS - 1, 0]
+    fell = [False, True, False, True]
+    r = terrain_scan.reduce_runs(_out(crossings, fell))
+    assert r.passed == 1  # only the first
+    assert r.of == 4
+    assert r.falls == 2
+    assert r.timeouts == 1  # ran out of budget mid-course without falling
+    assert r.crossings_mean == pytest.approx((4 + 4 + 3 + 0) / 4)
+    assert r.nacon_max == 77
+    assert r.nefc_max == 300
+
+
+def test_the_recorded_step_count_is_the_longest_run_in_the_cell():
+    """The rollout counts steps per run, so a cell's number is its own runs'
+    even when the dispatch it rode in carried 42 other cells."""
+    out = _out([CROSSINGS] * 3, [False] * 3)
+    out["steps"] = np.array([120, 940, 300])
+    assert terrain_scan.reduce_runs(out).steps == 940
+
+
+def test_a_fall_fails_the_run():
+    """Falling during the course fails it, whatever the crossing count. The
+    rollout is what makes sure a fall AFTER the fourth crossing is never
+    recorded -- see fall_progress."""
+    r = terrain_scan.reduce_runs(_out([CROSSINGS - 1], [True]))
+    assert r.passed == 0
+    assert r.falls == 1
+    assert r.timeouts == 0
+
+
+def test_cell_entry_carries_bar_and_provenance():
+    cell = terrain_suite.CELLS_BY_NAME["pyramid_stairs_5cm"]
+    r = terrain_scan.reduce_runs(_out([CROSSINGS] * N, [False] * N))
+    at_plan = terrain_scan.cell_entry(cell, 0.4, r)
+    assert at_plan["passed"] == N and at_plan["of"] == N
+    assert at_plan["bar"] == 52 and at_plan["provenance"] == "plan"
+    assert at_plan["bar_fraction"] == 0.8
+    off_plan = terrain_scan.cell_entry(cell, 0.7, r)
+    assert off_plan["bar"] == 52 and off_plan["provenance"] == "provisional"
+    tracked = terrain_scan.cell_entry(
+        terrain_suite.CELLS_BY_NAME["pyramid_stairs_9cm"], 0.4, r
+    )
+    assert tracked["bar"] is None and tracked["provenance"] == "tracked"
+
+
+# -- absolute gate -------------------------------------------------------------
+
+
+def _cells(entries):
+    """{cell: {speed: entry}} from (cell_name, speed, passed) triples."""
+    out = {}
+    for name, speed, passed in entries:
+        cell = terrain_suite.CELLS_BY_NAME[name]
+        r = terrain_scan.reduce_runs(
+            _out([CROSSINGS] * passed + [0] * (N - passed), [False] * N)
+        )
+        out.setdefault(name, {})[str(speed)] = terrain_scan.cell_entry(cell, speed, r)
+    return out
+
+
+def test_absolute_gate_passes_on_the_bar():
+    """The bar is a floor, not a strict inequality: exactly 52 of 64 passes."""
+    gate = terrain_scan.absolute_gate(_cells([("pyramid_stairs_5cm", 0.4, 52)]))
+    assert gate["verdict"] == "pass"
+    assert gate["checked"] == 1
+
+
+def test_a_partial_scan_is_incomplete_not_a_pass():
+    """"The four cells I measured are fine" must not read as "the policy
+    passed"."""
+    cells = _cells([("pyramid_stairs_5cm", 0.4, N)])
+    assert terrain_scan.absolute_gate(cells)["verdict"] == "pass"
+    gate = terrain_scan.absolute_gate(cells, expect_gated=terrain_scan.gated_pairs())
+    assert gate["verdict"] == "incomplete"
+    assert gate["checked"] == 1 and gate["expected"] == 36
+    # a real failure still outranks incompleteness
+    bad = terrain_scan.absolute_gate(
+        _cells([("pyramid_stairs_5cm", 0.4, 1)]), expect_gated=terrain_scan.gated_pairs()
+    )
+    assert bad["verdict"] == "fail"
+
+
+def test_the_suite_measures_two_speeds():
+    """0.2 m/s was measured and dropped on 2026-07-27: finishing inside the step
+    budget needs 62% speed tracking, the measured policies track about 60% at
+    0.2, and every one of them scored 0 there. The bars gate at 0.4."""
+    assert terrain_suite.SPEEDS == (0.4, 0.7)
+    assert terrain_suite.PLAN_SPEED == 0.4
+    # a suite change has to retire the old baselines rather than be compared
+    # against them
+    assert terrain_suite.arena_fingerprint()["cells"] == "v3"
+
+
+def test_the_course_runs_two_noise_draws_of_the_same_starts():
+    """v3 doubled the runs per cell without moving the course: draw is the
+    outermost index, so runs 0-31 are the v2 layout and 32-63 repeat those
+    starts. What separates them is the per-run key split."""
+    assert terrain_suite.N_NOISE_DRAWS == 2
+    assert terrain_suite.RUNS_PER_CELL_SPEED == 64
+    course = terrain_suite.COURSE
+    half = len(course) // 2
+    assert [r.draw for r in course] == [0] * half + [1] * half
+    for a, b in zip(course[:half], course[half:]):
+        assert (a.heading_index, a.yaw, a.offset) == (
+            b.heading_index, b.yaw, b.offset
+        )
+
+
+def test_gated_pairs_counts_every_gated_cell_at_every_speed():
+    assert terrain_scan.gated_pairs() == 18 * 2
+    assert terrain_scan.gated_pairs(speeds=(0.4,)) == 18
+
+
+def test_absolute_gate_fails_one_below():
+    gate = terrain_scan.absolute_gate(_cells([("pyramid_stairs_5cm", 0.4, 51)]))
+    assert gate["verdict"] == "fail"
+    assert gate["failures"] == [
+        {
+            "cell": "pyramid_stairs_5cm",
+            "speed": "0.4",
+            "passed": 51,
+            "bar": 52,
+            "provenance": "plan",
+        }
+    ]
+
+
+def test_absolute_gate_ignores_tracked_cells():
+    """A tracked cell with zero passes is data, not a gate failure."""
+    gate = terrain_scan.absolute_gate(
+        _cells([("pyramid_stairs_9cm", 0.4, 0), ("discrete_obstacles_8cm", 0.4, 0)])
+    )
+    assert gate["verdict"] == "pass"
+    assert gate["checked"] == 0
+
+
+def test_absolute_gate_reports_provisional_provenance():
+    """A provisional failure has to be readable as one: the plan sets no bar
+    away from 0.4 m/s."""
+    gate = terrain_scan.absolute_gate(_cells([("pyramid_stairs_5cm", 0.7, 10)]))
+    assert gate["verdict"] == "fail"
+    assert gate["failures"][0]["provenance"] == "provisional"
+
+
+# -- relative gate -------------------------------------------------------------
+
+
+def _scan(cells, engine="warp", arena=None):
+    return {
+        "run": "candidate",
+        "checkpoint": "1",
+        "engine": engine,
+        "arena": arena if arena is not None else terrain_suite.arena_fingerprint(),
+        "cells": cells,
+    }
+
+
+def test_relative_gate_without_a_baseline_says_so():
+    gate = terrain_scan.relative_gate(_scan({}), None)
+    assert gate["verdict"] == "no baseline"
+
+
+def test_relative_gate_allows_a_drop_inside_the_measured_noise():
+    now = _scan(_cells([("pyramid_stairs_5cm", 0.4, 50)]))
+    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 64)]))
+    # 64/64 -> 50/64 is 21.9 points. The limit sits at 25, above the 18.75
+    # points the 32-run course's test-retest swing was measured at.
+    gate = terrain_scan.relative_gate(now, base)
+    assert gate["verdict"] == "pass", gate
+    assert gate["drops"] == []
+
+
+def test_relative_gate_fails_a_big_drop():
+    now = _scan(_cells([("pyramid_stairs_5cm", 0.4, 46)]))
+    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 64)]))
+    gate = terrain_scan.relative_gate(now, base)  # 28.1 points
+    assert gate["verdict"] == "fail"
+    assert gate["drops"][0]["drop"] == pytest.approx(28.1, abs=0.05)
+
+
+def test_relative_gate_gains_are_never_failures():
+    now = _scan(_cells([("pyramid_stairs_5cm", 0.4, N)]))
+    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 20)]))
+    assert terrain_scan.relative_gate(now, base)["verdict"] == "pass"
+
+
+def test_relative_gate_refuses_a_different_arena():
+    """Scores from two terrains are not comparable, so the gate refuses rather
+    than reporting a difference."""
+    other = dict(terrain_suite.arena_fingerprint(), rows=10)
+    now = _scan(_cells([("pyramid_stairs_5cm", 0.4, 5)]))
+    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, N)]), arena=other)
+    gate = terrain_scan.relative_gate(now, base)
+    assert gate["verdict"] == "refused"
+    assert "arena" in gate["notes"][0]
+
+
+def test_relative_gate_refuses_a_baseline_from_an_older_suite_version():
+    """The suite version rides in the arena fingerprint, so a baseline scored
+    out of 32 runs is refused rather than compared against one out of 64."""
+    v2 = dict(terrain_suite.arena_fingerprint(), cells="v2")
+    now = _scan(_cells([("pyramid_stairs_5cm", 0.4, 60)]))
+    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 30)]), arena=v2)
+    gate = terrain_scan.relative_gate(now, base)
+    assert gate["verdict"] == "refused"
+    assert "arena" in gate["notes"][0]
+
+
+def test_relative_gate_refuses_a_different_engine():
+    now = _scan(_cells([("pyramid_stairs_5cm", 0.4, 5)]), engine="warp")
+    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, N)]), engine="jax")
+    gate = terrain_scan.relative_gate(now, base)
+    assert gate["verdict"] == "refused"
+    assert "engine" in gate["notes"][0]
+
+
+def test_a_new_cell_has_nothing_to_compare_against():
+    """Otherwise the 6.5 cm steps cell fails its own first gate."""
+    now = _scan(
+        _cells([("pyramid_stairs_5cm", 0.4, 60), ("discrete_obstacles_6.5cm", 0.4, 0)])
+    )
+    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, 60)]))
+    gate = terrain_scan.relative_gate(now, base)
+    assert gate["verdict"] == "pass"
+    assert gate["unmatched"] == ["discrete_obstacles_6.5cm@0.4"]
+
+
+def test_a_cell_missing_at_one_speed_only_is_unmatched_at_that_speed():
+    now = _scan(
+        _cells([("pyramid_stairs_5cm", 0.4, 20), ("pyramid_stairs_5cm", 0.7, 20)])
+    )
+    base = _scan(_cells([("pyramid_stairs_5cm", 0.4, N)]))
+    gate = terrain_scan.relative_gate(now, base)
+    assert gate["verdict"] == "fail"  # the 0.4 pair dropped
+    assert gate["unmatched"] == ["pyramid_stairs_5cm@0.7"]
+
+
+# -- baseline loading ----------------------------------------------------------
+
+
+def test_load_baseline_from_a_file_and_a_directory(tmp_path):
+    doc = {"run": "keeper", "cells": {}}
+    path = tmp_path / "terrain_scan.json"
+    path.write_text(json.dumps(doc))
+    assert terrain_scan.load_baseline(str(path)) == doc
+    assert terrain_scan.load_baseline(str(tmp_path)) == doc
+    assert terrain_scan.load_baseline(None) is None
+    assert terrain_scan.load_baseline("") is None
+
+
+# -- the eval seed -------------------------------------------------------------
+
+
+def _raw_key(cell):
+    """The key expression the scan used before --eval-seed existed."""
+    import jax
+
+    from wojtek_rl import terrain
+
+    return jax.random.PRNGKey(
+        cell.row * 1000 + terrain.TYPES.index(cell.terrain_type)
+    )
+
+
+@pytest.mark.parametrize(
+    "name", ["pyramid_stairs_5cm", "discrete_obstacles_8cm", "rough_uniform_2.5cm"]
+)
+def test_seed_zero_is_the_default_stream(name):
+    """Seed 0 is the base key and the default, so every scan taken without the
+    flag -- the baselines the relative gate compares against included -- is the
+    same measurement rather than another draw of it."""
+    cell = terrain_suite.CELLS_BY_NAME[name]
+    raw = np.asarray(_raw_key(cell))
+    np.testing.assert_array_equal(np.asarray(terrain_scan.cell_key(cell, 0)), raw)
+    # the default is the historical stream too
+    np.testing.assert_array_equal(np.asarray(terrain_scan.cell_key(cell)), raw)
+
+
+def test_each_eval_seed_is_a_different_draw():
+    cell = terrain_suite.CELLS_BY_NAME["pyramid_stairs_5cm"]
+    keys = [np.asarray(terrain_scan.cell_key(cell, s)) for s in (0, 1, 2, 3)]
+    for i, a in enumerate(keys):
+        for b in keys[i + 1:]:
+            assert not np.array_equal(a, b)
+
+
+def test_cells_still_differ_from_each_other_under_one_seed():
+    """The per-cell key is what keeps two cells from sharing a noise draw; the
+    eval seed must not collapse that."""
+    keys = [
+        tuple(np.asarray(terrain_scan.cell_key(c, 7)).tolist())
+        for c in terrain_suite.CELLS
+    ]
+    assert len(set(keys)) == len(terrain_suite.CELLS)
+
+
+# -- the batched rollout's keys -------------------------------------------------
+
+BATCH_CELLS = ("pyramid_stairs_5cm", "rough_uniform_1cm", "wave_6cm")
+
+
+def _stacked(names, eval_seed=0):
+    import jax.numpy as jp
+
+    cells = [terrain_suite.CELLS_BY_NAME[n] for n in names]
+    return cells, jp.stack([terrain_scan.cell_key(c, eval_seed) for c in cells])
+
+
+@pytest.mark.parametrize("eval_seed", [0, 3])
+def test_the_batched_reset_keys_are_the_sequential_ones(eval_seed):
+    """Run r of cell c has to start on the key 86 separate dispatches would
+    have handed it, or the batched scan is a different draw of the course."""
+    import jax
+
+    cells, keys = _stacked(BATCH_CELLS, eval_seed)
+    got = np.asarray(terrain_scan.batch_reset_keys(keys))
+    assert got.shape[0] == len(cells) * N
+    for index, cell in enumerate(cells):
+        want = jax.random.split(terrain_scan.cell_key(cell, eval_seed), N)
+        np.testing.assert_array_equal(got[index * N : (index + 1) * N], np.asarray(want))
+
+
+def test_the_batched_policy_keys_follow_each_cell_own_stream():
+    """The per-step key is per cell, not per batch: the same `rng, sub =
+    split(rng)` the sequential rollout walks, one row per cell."""
+    import jax
+
+    cells, keys = _stacked(BATCH_CELLS)
+    streams = [terrain_scan.cell_key(c) for c in cells]
+    for _ in range(3):
+        keys, sub = terrain_scan.batch_step_keys(keys)
+        for index, stream in enumerate(streams):
+            streams[index], want = jax.random.split(stream)
+            np.testing.assert_array_equal(np.asarray(sub[index]), np.asarray(want))
+        np.testing.assert_array_equal(
+            np.asarray(keys), np.asarray(jax.numpy.stack(streams))
+        )
+
+
+def test_the_batched_policy_call_is_the_per_cell_one():
+    """Each cell's runs go through the policy on that cell's own key and its own
+    observations, so the actions are the ones separate dispatches produced."""
+    import jax
+    import jax.numpy as jp
+
+    cells, keys = _stacked(BATCH_CELLS)
+    obs = {
+        "state": jp.arange(len(cells) * N * 3, dtype=jp.float32).reshape(-1, 3),
+        "privileged_state": jp.zeros((len(cells) * N, 2)),
+    }
+
+    def inf(o, key):
+        return o["state"] + jax.random.uniform(key, o["state"].shape), {}
+
+    action, rng = terrain_scan.batch_policy(inf, len(cells), obs, keys)
+    for index, cell in enumerate(cells):
+        part = slice(index * N, (index + 1) * N)
+        stream, sub = jax.random.split(terrain_scan.cell_key(cell))
+        want, _ = inf({"state": obs["state"][part]}, sub)
+        np.testing.assert_array_equal(np.asarray(action[part]), np.asarray(want))
+        np.testing.assert_array_equal(np.asarray(rng[index]), np.asarray(stream))
+
+
+def _fake_env():
+    """Just the tile table `spawn_table` reads: no model, no device."""
+    from types import SimpleNamespace
+
+    from wojtek_rl import terrain
+
+    rng = np.random.default_rng(0)
+    shape = (len(terrain_suite.DIFFICULTIES), len(terrain.TYPES))
+    return SimpleNamespace(
+        _terrain=SimpleNamespace(
+            origin_xy=rng.normal(size=shape + (2,)) * 10.0,
+            pad_h=rng.uniform(size=shape),
+        )
+    )
+
+
+def _fake_runner(rng, centre, spawn_xy, pad_h, yaw, speed, height, deadline, budget):
+    """Per-env outputs that depend on every per-env input.
+
+    Nothing physical: the point is that a batch laid out or sliced the wrong way
+    cannot come back looking right. The key is per cell in both shapes -- one
+    row for the sequential rollout, one per cell for the batched one.
+    """
+    keys = np.asarray(rng, dtype=np.float64).reshape(-1, 2)[:, 0]
+    n = len(deadline)
+    signature = (
+        np.repeat(keys, n // len(keys)) * 1e-9
+        + spawn_xy[:, 0] + centre[:, 1] + pad_h + yaw + deadline + speed + height
+    ) % 1.0
+    return {
+        "crossings": (deadline % (terrain_suite.CROSSINGS + 1)).astype(np.int32),
+        "fell": (deadline % 3) == 0,
+        "saturation": signature,
+        "track_err": 1.0 - signature,
+        "clearance": signature / 2.0,
+        "counted": deadline.astype(np.float64),
+        "steps": np.minimum(deadline, budget),
+        "nacon_max": np.int32(11),
+        "nefc_max": np.int32(22),
+    }
+
+
+def test_the_two_rollout_drivers_fill_the_same_cells():
+    """One dispatch per cell per speed against one dispatch per speed, on the
+    same made-up physics: the batched driver has to hand each cell its own
+    tiles, keys and deadlines, and slice its runs back out in the same order."""
+    env = _fake_env()
+    cells = [terrain_suite.CELLS_BY_NAME[name] for name in BATCH_CELLS]
+    speeds = (0.4, 0.7)
+    budgets = {0.4: 300, 0.7: 200}
+    # Distinct per run and per speed, which is what makes a mis-laid-out batch
+    # land on the wrong numbers rather than the right ones by symmetry.
+    deadlines = {
+        speed: (np.arange(N) + int(1000 * speed)).astype(np.int32) for speed in speeds
+    }
+    args = (_fake_runner, env, cells, speeds, deadlines, budgets, 3)
+    one, steps_one = terrain_scan._rollout_per_cell(*args)
+    batched, steps_batched = terrain_scan._rollout_batched(*args)
+
+    assert batched == one
+    assert steps_batched == steps_one
+    # and in the order the JSON is written in: cells outer, speeds inner
+    assert list(batched) == [c.name for c in cells]
+    assert all(list(per_speed) == ["0.4", "0.7"] for per_speed in batched.values())
+
+
+def test_a_baseline_on_another_seed_is_flagged():
+    assert terrain_scan.baseline_seed_warnings({"eval_seed": 0}, 0) == []
+    assert terrain_scan.baseline_seed_warnings(None, 3) == []
+    warnings = terrain_scan.baseline_seed_warnings({"eval_seed": 0}, 3)
+    assert len(warnings) == 1
+    assert "test-retest" in warnings[0]
+
+
+def test_a_baseline_from_before_the_option_counts_as_seed_zero():
+    assert terrain_scan.baseline_seed_warnings({"run": "keeper"}, 0) == []
+    assert terrain_scan.baseline_seed_warnings({"run": "keeper"}, 2) != []
+
+
+def test_the_cli_takes_an_eval_seed(monkeypatch, capsys):
+    """scan() needs a checkpoint, so the result dict it assembles is out of
+    reach in a unit test; the flag that fills it is not."""
+    monkeypatch.setattr(sys, "argv", ["terrain-scan", "--help"])
+    with pytest.raises(SystemExit):
+        terrain_scan.main()
+    out = capsys.readouterr().out
+    assert "--eval-seed" in out
+    # the reference rollout the batched one is validated against
+    assert "--per-cell" in out
+
+
+# -- command box ---------------------------------------------------------------
+
+
+def test_command_box_warnings_flag_extrapolation():
+    """The code default trains vx +-0.6, so the 0.7 cells are extrapolation
+    there; every real preset trains -0.8 to 1.2 and stays quiet."""
+    tight = {"env_config": {"command": {"vx": [-0.6, 0.6], "height": [0.09, 0.17]}}}
+    assert any("0.7" in w for w in terrain_scan.command_box_warnings(tight))
+    real = {"env_config": {"command": {"vx": [-0.8, 1.2], "height": [0.125, 0.125]}}}
+    assert terrain_scan.command_box_warnings(real) == []
+
+
+def test_command_box_warnings_flag_an_unreachable_height():
+    run = {"env_config": {"command": {"vx": [-0.8, 1.2], "height": [0.15, 0.17]}}}
+    warnings = terrain_scan.command_box_warnings(run)
+    assert any("height" in w for w in warnings)
+
+
+def test_command_box_warnings_tolerate_an_old_run():
+    assert terrain_scan.command_box_warnings({}) == []
+
+
+# -- the crossing rule ---------------------------------------------------------
+
+OUT = terrain_suite.OUT_RADIUS
+BACK = terrain_suite.BACK_RADIUS
+
+
+def _advance(crossings, radius, running=True):
+    return int(
+        terrain_scan.crossing_progress(
+            np.array([crossings]), np.array([radius]), np.array([running])
+        )[0]
+    )
+
+
+def test_standing_on_the_pad_earns_no_crossing():
+    """The failure this rule exists for: half the commanded distance can be
+    walked on the flat pad without ever meeting the obstacle."""
+    assert _advance(0, 0.0) == 0
+    assert _advance(0, terrain_suite.EVAL_PAD_RADIUS) == 0
+    # and not even reaching the outermost stair tread counts
+    assert _advance(0, 1.25) == 0
+    assert _advance(0, OUT - 1e-6) == 0
+
+
+def test_outbound_leg_completes_at_the_turnaround_radius():
+    assert _advance(0, OUT) == 1
+    assert _advance(0, OUT + 0.3) == 1
+    assert _advance(2, OUT) == 3  # even counts are outbound
+
+
+def test_inbound_leg_completes_near_the_centre():
+    """After an outbound leg the robot is past OUT_RADIUS, so the inbound test
+    cannot fire on the same spot -- no double count."""
+    assert _advance(1, OUT) == 1
+    assert _advance(1, BACK + 1e-6) == 1
+    assert _advance(1, BACK) == 2
+    assert _advance(3, 0.0) == 4
+
+
+def test_a_finished_run_never_advances():
+    assert _advance(2, OUT, running=False) == 2
+    assert _advance(0, OUT, running=False) == 0
+
+
+def test_the_count_stops_at_four():
+    assert _advance(terrain_suite.CROSSINGS, 0.0) == terrain_suite.CROSSINGS
+    assert _advance(terrain_suite.CROSSINGS, OUT) == terrain_suite.CROSSINGS
+
+
+def test_a_single_step_advances_by_at_most_one():
+    """Otherwise a fast run could bank two crossings in one step."""
+    for crossings in range(terrain_suite.CROSSINGS):
+        for radius in (0.0, BACK, 1.0, OUT, 5.0):
+            assert _advance(crossings, radius) - crossings in (0, 1)
+
+
+def test_leg_sign_alternates_out_and_back():
+    signs = [float(terrain_scan.leg_sign(np.array([c]))[0]) for c in range(4)]
+    assert signs == [1.0, -1.0, 1.0, -1.0]
+
+
+def test_a_fall_after_the_course_is_not_recorded():
+    """A run keeps being stepped after its fourth crossing -- the batch is one
+    program over every env in the dispatch -- and its command still says walk
+    out, so it walks on.
+    Without the running gate, falling over a hundred steps after passing would
+    turn the pass into a fall."""
+    finished = np.array([False])  # no longer running: crossings == CROSSINGS
+    assert not bool(
+        terrain_scan.fall_progress(np.array([False]), np.array([True]), finished)[0]
+    )
+    # still on course: the fall counts
+    assert bool(
+        terrain_scan.fall_progress(np.array([False]), np.array([True]), np.array([True]))[0]
+    )
+    # and the flag is sticky once set, even after the run stops
+    assert bool(
+        terrain_scan.fall_progress(np.array([True]), np.array([False]), finished)[0]
+    )
+
+
+# -- arena validation ----------------------------------------------------------
+
+
+def _eval_spec(**overrides):
+    """A spec dict shaped like terrain_spec.json for the measurement arena."""
+    from wojtek_rl import terrain
+
+    spec = {
+        "seed": terrain_suite.EVAL_SEED,
+        "n_rows": len(terrain_suite.DIFFICULTIES),
+        "ordered": terrain_suite.EVAL_ORDERED,
+        "pad_radius": terrain_suite.EVAL_PAD_RADIUS,
+        "n_steps": terrain.N_STEPS,
+        "stair_platform_half": terrain.STAIR_PLATFORM_HALF,
+        "tile_size": terrain.TILE_SIZE,
+        "border": terrain.BORDER,
+        "cell_size": terrain.CELL_SIZE,
+        "tiles": [
+            {"row": r, "col": 0, "difficulty": d}
+            for r, d in enumerate(terrain_suite.DIFFICULTIES)
+        ],
+    }
+    spec.update(overrides)
+    return spec
+
+
+def test_check_arena_accepts_the_measurement_course():
+    terrain_scan.check_arena(_eval_spec())
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"seed": 5},
+        {"n_rows": 10},
+        {"ordered": False},
+        {"pad_radius": 0.6},
+        {"n_steps": 4},
+        {"stair_platform_half": 0.7},
+        # build-terrain passes these three through for every arena kind, so
+        # this gate is the only thing standing between a resized eval arena
+        # and the suite's fingerprint.
+        {"tile_size": 2.5},
+        {"border": 1.0},
+        {"cell_size": 0.05},
+    ],
+    ids=[
+        "seed", "rows", "shuffled", "pad", "steps", "platform",
+        "tile-size", "border", "cell-size",
+    ],
+)
+def test_check_arena_refuses_a_different_arena(overrides):
+    """The fingerprint the scan records comes from the suite's constants and the
+    gate compares two scans on it, so an arena built with other parameters would
+    file its numbers under a description of something else."""
+    with pytest.raises(ValueError, match="not the measurement course"):
+        terrain_scan.check_arena(_eval_spec(**overrides))
+
+
+def test_check_arena_catches_a_shifted_row_table():
+    """Same row count, different difficulties: the cells are defined by row
+    index, so this is a different terrain, not a rescale."""
+    rows = list(terrain_suite.DIFFICULTIES)
+    rows[3] = rows[3] + 0.05
+    spec = _eval_spec(
+        tiles=[{"row": r, "col": 0, "difficulty": d} for r, d in enumerate(rows)]
+    )
+    with pytest.raises(ValueError, match="difficulties"):
+        terrain_scan.check_arena(spec)
+
+
+def test_check_arena_tolerates_a_spec_without_tiles():
+    """An older spec has no per-tile difficulty to check; the scalar checks still
+    apply and must not raise on the missing list."""
+    terrain_scan.check_arena(_eval_spec(tiles=[]))
+
+
+def test_metrics_average_only_over_runs_that_were_measured():
+    """A run that fell inside the settle window has no metric steps, so its
+    saturation, tracking error and clearance come back as zero. Averaging those
+    in drags a cell's numbers toward zero exactly where falls are common -- the
+    hard cells -- and in the direction that makes hard terrain look easy. On this
+    case the diluted tracking error reads 2.7x better than the survivors'."""
+    n_fell, n_ok = 40, 24
+    counted = np.array([0.0] * n_fell + [900.0] * n_ok)
+    out = {
+        "crossings": np.array([0] * n_fell + [CROSSINGS] * n_ok),
+        "fell": np.array([True] * n_fell + [False] * n_ok),
+        "saturation": np.where(counted > 0, 0.30, 0.0),
+        "track_err": np.where(counted > 0, 0.22, 0.0),
+        "clearance": np.where(counted > 0, 0.02, 0.0),
+        "counted": counted,
+        "steps": 1036,
+        "nacon_max": 90,
+        "nefc_max": 310,
+    }
+    r = terrain_scan.reduce_runs(out)
+    assert r.track_err == pytest.approx(0.22)
+    assert r.saturation == pytest.approx(0.30)
+    assert r.clearance == pytest.approx(0.02)
+    assert r.measured == n_ok
+    # outcome counts still cover every run: a fall is a result, not a gap
+    assert r.of == n_fell + n_ok
+    assert r.falls == n_fell
+    assert r.passed == n_ok
+    # and the count is reported, so a thin sample is visible
+    cell = terrain_suite.CELLS_BY_NAME["pyramid_stairs_5cm"]
+    assert terrain_scan.cell_entry(cell, 0.4, r)["measured"] == n_ok
+
+
+def test_a_cell_where_every_run_died_early_reports_zero_not_nan():
+    counted = np.zeros(4)
+    out = {
+        "crossings": np.zeros(4, dtype=int), "fell": np.ones(4, dtype=bool),
+        "saturation": counted, "track_err": counted, "clearance": counted,
+        "counted": counted, "steps": 60, "nacon_max": 0, "nefc_max": 0,
+    }
+    r = terrain_scan.reduce_runs(out)
+    assert r.measured == 0
+    assert r.track_err == 0.0 and r.saturation == 0.0
+    assert r.falls == 4 and r.passed == 0
+
+
+def test_crossing_distance_is_chebyshev_not_euclidean():
+    """Every feature in the arena is a concentric square (terrain._cheby), so the
+    crossing has to be measured the same way. Read as a Euclidean radius, an
+    OUT_RADIUS crossing on a 45 degree heading ends on tread 4 of 6 -- half the
+    eight headings would score an easier test under the same bar."""
+    import math
+
+    from wojtek_rl import terrain
+
+    centre = np.zeros(2)
+    for heading in (0.0, math.pi / 4):
+        step = np.array([math.cos(heading), math.sin(heading)])
+        # walk out until the Chebyshev rule says the crossing is done
+        out = next(
+            r / 100
+            for r in range(1, 400)
+            if terrain_scan.tile_distance(step * (r / 100), centre)
+            >= terrain_suite.OUT_RADIUS
+        )
+        cheby = terrain_scan.tile_distance(step * out, centre)
+        assert cheby >= terrain_suite.OUT_RADIUS
+        # and on BOTH headings that clears the outermost tread
+        assert cheby > terrain.stair_pit_half(), heading
+    # the diagonal genuinely walks further to get there, which the budget covers
+    diag = terrain_suite.OUT_RADIUS * terrain_suite.heading_stretch(math.pi / 4)
+    assert diag == pytest.approx(2.051, abs=0.01)
+    assert terrain_suite.course_distance() > 4 * terrain_suite.OUT_RADIUS
+
+
+def test_tile_distance_is_relative_to_the_tile_centre():
+    centre = np.array([-1.5, -16.5])
+    xy = np.array([[-1.5, -16.5], [-0.5, -16.5], [-1.5, -15.4], [-0.6, -15.6]])
+    got = terrain_scan.tile_distance(xy, centre)
+    np.testing.assert_allclose(got, [0.0, 1.0, 1.1, 0.9], atol=1e-9)
+
+
+def test_still_running_stops_a_run_three_ways():
+    """The third rule the loop runs on: a run is on its course until it falls,
+    finishes its crossings, or passes its own deadline."""
+    i = 100
+    deadline = np.array([200, 200, 200, 200, 50])
+    crossings = np.array([0, CROSSINGS, 2, 2, 1])
+    fell = np.array([False, False, True, False, False])
+    got = terrain_scan.still_running(i, crossings, fell, deadline)
+    #        fresh  finished  fell   live   past its deadline
+    np.testing.assert_array_equal(got, [True, False, False, True, False])
+
+
+def test_still_running_deadline_is_per_run():
+    """An axis heading must not inherit a diagonal's slack."""
+    crossings, fell = np.zeros(2, dtype=int), np.zeros(2, dtype=bool)
+    axis, diagonal = 1032, 1442  # the real 0.4 m/s deadlines
+    deadline = np.array([axis, diagonal])
+    np.testing.assert_array_equal(
+        terrain_scan.still_running(axis - 1, crossings, fell, deadline), [True, True]
+    )
+    # the axis run is out of time while the diagonal one still has 410 steps
+    np.testing.assert_array_equal(
+        terrain_scan.still_running(axis, crossings, fell, deadline), [False, True]
+    )
+    np.testing.assert_array_equal(
+        terrain_scan.still_running(diagonal, crossings, fell, deadline), [False, False]
+    )
+
+
+# -- M1: dump-step-stats and its aggregation ------------------------------------
+
+
+def test_flatten_step_history_drops_the_settle_window_and_stopped_runs():
+    """Two envs, three steps: env 0 is running throughout, env 1 stops (falls
+    or finishes) after step 0. With settle_steps=1, step 0 is dropped for
+    both (the settle window) and step 1 is dropped for env 1 (not running),
+    leaving exactly step 1 of env 0 and step 2 of env 0."""
+    rough = np.array([[0.1, 0.9], [0.2, 0.8], [0.3, 0.7]])
+    pitch = np.array([[1.0, 9.0], [2.0, 8.0], [3.0, 7.0]])
+    direction = np.array([[1.0, -1.0], [1.0, -1.0], [1.0, -1.0]])
+    running = np.array([[True, True], [True, False], [True, False]])
+
+    r, p, d = terrain_scan.flatten_step_history(
+        rough, pitch, direction, running, settle_steps=1
+    )
+    np.testing.assert_array_equal(sorted(r), [0.2, 0.3])
+    np.testing.assert_array_equal(sorted(p), [2.0, 3.0])
+    assert set(d) == {1.0}
+
+
+def test_flat_pitch_cost_matches_the_reward_expression():
+    """Reproduces the plan's own pricing table (section 1.3): a 12 deg
+    transient on flat ground (rough=0, gate=1) prices at ~1.73/step (w=10)
+    and ~4.33/step (w=25), tol_deg=2."""
+    cost_w10 = terrain_scan.flat_pitch_cost(12.0, 0.0, w=10, cut=0.25, tol_deg=2.0)
+    cost_w25 = terrain_scan.flat_pitch_cost(12.0, 0.0, w=25, cut=0.25, tol_deg=2.0)
+    assert cost_w10 == pytest.approx(1.73, abs=0.01)
+    assert cost_w25 == pytest.approx(4.33, abs=0.01)
+    # doubling w exactly doubles the linear-in-w price
+    assert cost_w25 == pytest.approx(2.5 * cost_w10)
+
+
+def test_flat_pitch_cost_is_zero_inside_the_tolerance_cone():
+    assert terrain_scan.flat_pitch_cost(2.0, 0.0, w=25, cut=0.25) == 0.0
+    assert terrain_scan.flat_pitch_cost(0.0, 0.0, w=25, cut=0.25) == 0.0
+
+
+def test_flat_pitch_cost_is_zero_once_rough_reaches_the_cut():
+    """The gate saturates at rough >= cut: any lower cut only makes this
+    truer, never charges more."""
+    assert terrain_scan.flat_pitch_cost(12.0, 0.25, w=25, cut=0.25) == 0.0
+    assert terrain_scan.flat_pitch_cost(12.0, 0.4, w=25, cut=0.25) == 0.0
+
+
+def test_m1_report_leakage_and_cost_on_a_hand_built_population():
+    """Four steep forward steps, two under cut=0.25 (leakage 0.5), two
+    backward steps neither steep -- n_steep 0 reports leakage as None rather
+    than a division by zero."""
+    direction = np.array([1.0, 1.0, 1.0, 1.0, -1.0, -1.0])
+    pitch = np.array([10.0, 10.0, 10.0, 3.0, 1.0, 2.0])
+    rough = np.array([0.10, 0.20, 0.30, 0.05, 0.5, 0.5])
+
+    report = terrain_scan.m1_report(
+        rough, pitch, direction,
+        pitch_gate_deg=5.0, cuts=(0.25, 0.15), ws=(10,), tol_deg=2.0,
+    )
+    fwd = report["forward"]
+    assert fwd["n_steps"] == 4
+    assert fwd["n_steep"] == 3
+    assert fwd["leakage"]["0.25"] == pytest.approx(2 / 3)  # 0.10, 0.20 < 0.25
+    assert fwd["leakage"]["0.15"] == pytest.approx(1 / 3)  # only 0.10 < 0.15
+    expected_cost = float(
+        terrain_scan.flat_pitch_cost(pitch[:4], rough[:4], w=10, cut=0.25).mean()
+    )
+    assert fwd["cost_per_step"]["w10_cut0.25"] == pytest.approx(expected_cost)
+
+    back = report["backward"]
+    assert back["n_steps"] == 2
+    assert back["n_steep"] == 0
+    assert back["leakage"]["0.25"] is None
+    assert back["leakage"]["0.15"] is None
+
+
+def test_m1_report_empty_direction_reports_zero_not_nan():
+    """A dump with no backward steps at all (e.g. a single-leg replay) must
+    not crash the aggregation or report NaN costs."""
+    direction = np.array([1.0, 1.0])
+    pitch = np.array([10.0, 3.0])
+    rough = np.array([0.1, 0.1])
+    report = terrain_scan.m1_report(rough, pitch, direction)
+    back = report["backward"]
+    assert back["n_steps"] == 0
+    assert back["leakage"]["0.25"] is None
+    assert all(v == 0.0 for v in back["cost_per_step"].values())
+
+
+def _fake_gate_env(raise_m: float):
+    """The pieces `_state_rough_pitch` reads, faked -- no env, no model. The
+    terrain height function is a plane the test raises under one strip
+    point by a known amount, so `rough` is exact arithmetic rather than
+    something read off real terrain geometry."""
+    from types import SimpleNamespace
+
+    import jax.numpy as jp
+
+    from wojtek_rl import env as env_mod
+
+    gate_strip = jp.array(
+        [[x, y] for x in env_mod.GATE_STRIP_X for y in env_mod.GATE_STRIP_Y]
+    )
+
+    def height(xy):
+        raised = jp.all(jp.isclose(xy, jp.array([0.5, 0.0]), atol=1e-3), axis=-1)
+        return jp.where(raised, raise_m, 0.0)
+
+    return SimpleNamespace(
+        _config=SimpleNamespace(
+            reward=SimpleNamespace(terrain_gate=SimpleNamespace(rough_ref=0.05))
+        ),
+        _gate_strip=gate_strip,
+        _quat=lambda data: data.quat,
+        _terrain=SimpleNamespace(height=height),
+        _foot_geom_ids=jp.array([0, 1, 2, 3]),
+        _gravity_body=lambda data: data.gravity,
+    )
+
+
+def test_state_rough_pitch_matches_the_env_reward_definition():
+    """`_state_rough_pitch` has to be the read-only replica its docstring
+    claims: env.py's own rough formula (env.py:1610-1613) and the
+    flat_pitch pitch_down definition (plan section 1.2). Built from a fake
+    env whose terrain height and gravity are picked by hand -- (0.17, 0.5)
+    x (-0.2, 0, 0.2) is the real gate strip (env.GATE_STRIP_X/Y), and the
+    test raises the terrain exactly under the one strip point at (0.5, 0.0)
+    while both feet and every other strip point stay at height 0."""
+    import math
+    from types import SimpleNamespace
+
+    import jax.numpy as jp
+
+    env = _fake_gate_env(raise_m=0.025)  # half of rough_ref=0.05 -> rough=0.5
+    data = SimpleNamespace(
+        qpos=jp.array([0.0, 0.0, 0.125, 1.0, 0.0, 0.0, 0.0]),
+        geom_xpos=jp.zeros((4, 3)),
+        quat=jp.array([1.0, 0.0, 0.0, 0.0]),  # identity: yaw 0, strip unrotated
+        # +20 deg about body +y: gravity_body[0] = +sin(20 deg), per
+        # battery.pitch_down_deg's verified sign convention.
+        gravity=jp.array(
+            [math.sin(math.radians(20.0)), 0.0, -math.cos(math.radians(20.0))]
+        ),
+    )
+    rough, pitch = terrain_scan._state_rough_pitch(env, data)
+    assert float(rough) == pytest.approx(0.5)
+    assert float(pitch) == pytest.approx(20.0, abs=1e-3)
+
+
+def test_the_cli_has_the_m1_flags(monkeypatch, capsys):
+    """--dump-step-stats and --aggregate need no checkpoint to be visible in
+    --help; the rollout and env-building they drive are exercised the same
+    way the rest of this file's rollout machinery is -- tests/integration,
+    on a real checkpoint."""
+    monkeypatch.setattr(sys, "argv", ["terrain-scan", "--help"])
+    with pytest.raises(SystemExit):
+        terrain_scan.main()
+    out = capsys.readouterr().out
+    assert "--dump-step-stats" in out
+    assert "--aggregate" in out

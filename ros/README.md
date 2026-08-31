@@ -96,6 +96,11 @@ Foxglove as a panel — see
 [`foxglove/wojtek-console-panel`](foxglove/wojtek-console-panel/README.md)
 (`npm run local-install`, restart Foxglove, add the "Wojtek console" panel).
 
+There is a ready-made view to import once, in
+[`foxglove/layouts`](foxglove/layouts/README.md): temperature, throttling, CPU
+per core, policy tick time, drive command, joints, IMU and the console in one
+window.
+
 **Bluetooth Xbox pad**: left stick = vx/yaw, right stick left-right = strafe,
 **A** toggles arm, D-pad up/down steps the standing height; on the `joy`
 paths **Y**/**B** additionally trigger the stand-up / lie-down ramps (browser
@@ -209,6 +214,25 @@ Ctrl-C in the `robot` shell tears down both sides (stops the RT service + viz).
 Wind down gently first: disarm, then `ros2 service call /wojtek/lie_down
 std_srvs/srv/Trigger`.
 
+### Watching a run
+
+Two topics say how the run is going. `/wojtek/sysinfo` is the state of the
+computer: CPU per core, memory, SoC temperature, the Raspberry Pi throttle
+flags, free space where the bag is written, and wifi traffic.
+`/wojtek/policy_timing` is per control tick: how long the policy step took and
+how far apart the ticks landed. A run that records lands both in the bag with
+everything else, so a stutter can be matched against a hot or throttled Pi
+afterwards.
+
+`telemetry:=true` publishes the two topics. `foxglove:=true` opens a bridge on
+port 8765, so the native Foxglove app connects to the robot with nothing
+running on the PC. A manual `robot.launch.py` run has all of this off, the
+same way it does not record. Ask for what you want with `telemetry:=true
+foxglove:=true bag:=true`. The RPi service passes all three, so a
+service-driven run is watchable live and readable back afterwards. Import
+[`foxglove/layouts/robot-dashboard.json`](foxglove/layouts/README.md) to see
+it plotted.
+
 ## Layout
 
 | Path | What |
@@ -222,4 +246,5 @@ std_srvs/srv/Trigger`.
 | `deploy/rpi/`             | RPi provisioning: `install.sh`, network + service configs, `IMAGE.md`, `cloud-init/` |
 | `deploy/wojtek-robot.service` | RPi systemd unit (RT control stack) |
 | `src/`                    | ROS 2 packages (`wojtek_bringup`, `wojtek_policy`, `wojtek_pc`, hardware ifaces) |
+| `foxglove/`               | Foxglove extras: the console panel extension and the dashboard layout |
 | `docker/`                 | PC image + compose |

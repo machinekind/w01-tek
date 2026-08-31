@@ -8,6 +8,7 @@ nodes -- no RViz, no GUI. Run visualization/debug on the PC separately:
                                                [max_torque:=2.0] [dry_run:=true]
                                                [boot_pose:=home|folded] [bag:=true]
                                                [gamepad:=true] [perception:=true]
+                                               [telemetry:=true] [foxglove:=true]
 
 The servo settings the MD80s run with (impedance kp/kd, torque cap) come
 from the loaded policy's contract: policy_meta.json carries the pd block
@@ -21,6 +22,12 @@ on demand: bag:=true bag_cpus:=0,1). The systemd service
 service-driven run leaves a lossless on-robot bag -- the black box of a
 real run, now that PC viz also records on demand only. Bags go to
 bag_dir/run_<timestamp> (bag_dir defaults to ~/wojtek_bags).
+
+Telemetry is opt-in, like recording. A manual run publishes no
+/wojtek/sysinfo and no /wojtek/policy_timing, and starts no Foxglove
+bridge. Ask for them with telemetry:=true foxglove:=true. The systemd
+service passes both, so a service-driven run can be watched live on port
+8765 and read back from its own bag afterwards.
 
 Startup/arming procedure is unchanged from real.launch.py:
   1. Power the motors and launch this file (any robot pose is fine). The

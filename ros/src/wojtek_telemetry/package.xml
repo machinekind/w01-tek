@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>wojtek_telemetry</name>
+  <version>0.1.0</version>
+  <description>
+    Telemetry about the machine wojtek runs on and about its control loop.
+    Carries the SysInfo and PolicyTiming messages and the node that samples
+    the computer (CPU, memory, temperature, throttling, disk, wifi).
+
+    Every run records all topics, so these end up in the same bag as the
+    control data and can be read back side by side afterwards.
+  </description>
+  <maintainer email="wysocki@undef.pl">Marcin Wysocki</maintainer>
+  <license>Apache License 2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>rosidl_default_generators</buildtool_depend>
+
+  <depend>std_msgs</depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <!-- sysinfo_node reads CPU, memory, disk and network counters through
+       psutil. Nothing else in the package needs it. -->
+  <exec_depend>python3-psutil</exec_depend>
+  <exec_depend>rosidl_default_runtime</exec_depend>
+
+  <member_of_group>rosidl_interface_packages</member_of_group>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

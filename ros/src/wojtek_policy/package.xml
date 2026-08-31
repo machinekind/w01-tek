@@ -18,6 +18,8 @@
   <depend>std_srvs</depend>
   <depend>tf2_ros</depend>
   <depend>python3-numpy</depend>
+  <!-- policy_node reports its per-tick timing as a PolicyTiming message. -->
+  <depend>wojtek_telemetry</depend>
 
   <test_depend>python3-pytest</test_depend>
 

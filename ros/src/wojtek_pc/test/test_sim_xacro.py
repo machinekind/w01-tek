@@ -92,6 +92,10 @@ def test_tau_ff_adds_the_effort_command_on_both_sides():
     )
     assert _joints(sim) == _joints(real)
     assert ("command", "effort") in _joints(sim)["front_left_first_joint"]
+    # The mock's mode-switch check knows only position/velocity/acceleration,
+    # so the effort channel is only claimable with the dynamics off.
+    dynamics = sim[0].find("hardware/param[@name='calculate_dynamics']")
+    assert dynamics is not None and dynamics.text == "false"
 
 
 def test_sim_plant_is_selected_by_hw(sim):

@@ -84,8 +84,17 @@
       <xacro:if value="${'$(arg hw)' == 'mock'}">
         <plugin>mock_components/GenericSystem</plugin>
         <!-- Integrate velocity from the position commands instead of
-             reporting zero, so /joint_states is not obviously fake. -->
-        <param name="calculate_dynamics">true</param>
+             reporting zero, so /joint_states is not obviously fake. Except
+             with tau_ff: the mock's mode-switch check knows only position/
+             velocity/acceleration, so claiming the effort channel needs the
+             dynamics off. Velocities then read zero; the mock is for the
+             stack's logic, not gait, and a dead effort spawner costs more. -->
+        <xacro:unless value="$(arg tau_ff)">
+          <param name="calculate_dynamics">true</param>
+        </xacro:unless>
+        <xacro:if value="$(arg tau_ff)">
+          <param name="calculate_dynamics">false</param>
+        </xacro:if>
       </xacro:if>
       <xacro:unless value="${'$(arg hw)' == 'mock'}">
         <plugin>wojtek_mujoco_hardware_interface/MujocoHardwareInterface</plugin>

@@ -109,6 +109,10 @@ public:
 
   /// Command in MuJoCo convention, relative to the activation pose.
   void setCommand(int actuator, double q_relative);
+  /// Feed-forward torque on top of the PD servo, applied through qfrc_applied
+  /// the way the training env does. The actuator's forcerange does not clamp
+  /// it: the drive clamps the sum, and the launch widens its cap to match.
+  void setFeedForward(int actuator, double tau);
   /// Bench mode: physics runs, no actuator force is applied.
   void setDryRun(bool dry_run) {dry_run_ = dry_run;}
 

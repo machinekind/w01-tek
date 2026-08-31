@@ -81,6 +81,19 @@ def test_use_imu_false_drops_the_sensor_on_both_sides():
     assert _joints(sim) == _joints(real)
 
 
+def test_tau_ff_adds_the_effort_command_on_both_sides():
+    """A tau_ff policy asks for a feed-forward torque channel per joint. The
+    simulated component has to grow the same interface the drives grow."""
+    sim = _ros2_control(
+        "wojtek_pc", "urdf/wojtek_sim.urdf.xacro", hw="mock", tau_ff="true",
+    )
+    real = _ros2_control(
+        "wojtek_bringup", "urdf/wojtek_real.urdf.xacro", tau_ff="true",
+    )
+    assert _joints(sim) == _joints(real)
+    assert ("command", "effort") in _joints(sim)["front_left_first_joint"]
+
+
 def test_sim_plant_is_selected_by_hw(sim):
     plugin = sim[0].find("hardware/plugin").text
     assert plugin == "mock_components/GenericSystem"

@@ -157,6 +157,54 @@ TEST_F(Plant, a_zero_command_holds_the_activation_pose)
   EXPECT_NEAR(plant_.jointPosition(0), 0.0, 0.05);
 }
 
+TEST_F(Plant, a_feed_forward_torque_moves_what_the_servo_alone_holds)
+{
+  // A tau_ff policy's torque head lands on top of the PD law, exactly as it
+  // does in training: the same command has to settle somewhere else.
+  const double held = [this] {
+      plant_.latchActivationPose();
+      plant_.setCommand(0, 0.0);
+      for (int i = 0; i < 2000; ++i) {plant_.advance(kControlPeriod);}
+      return plant_.jointPosition(0);
+    }();
+
+  MujocoPlant pushed;
+  pushed.load(writeModel(), "/nonexistent/meshes");
+  pushed.latchActivationPose();
+  pushed.setCommand(0, 0.0);
+  for (int i = 0; i < 2000; ++i) {
+    pushed.setFeedForward(0, 4.0);
+    pushed.advance(kControlPeriod);
+  }
+  // 4 Nm against kp=20 is 0.2 rad of steady-state offset, far outside the
+  // 0.05 the servo alone holds.
+  EXPECT_GT(pushed.jointPosition(0), held + 0.1);
+}
+
+TEST_F(Plant, dry_run_withholds_the_feed_forward_like_it_withholds_servo_torque)
+{
+  // Bench mode has to be limp all the way through: a torque head still
+  // pushing would be a robot moving on the bench.
+  const double limp = [this] {
+      plant_.setDryRun(true);
+      plant_.latchActivationPose();
+      plant_.setCommand(0, 0.0);
+      for (int i = 0; i < 800; ++i) {plant_.advance(kControlPeriod);}
+      return plant_.jointPosition(0);
+    }();
+
+  MujocoPlant pushed;
+  pushed.load(writeModel(), "/nonexistent/meshes");
+  pushed.setDryRun(true);
+  pushed.latchActivationPose();
+  pushed.setCommand(0, 0.0);
+  for (int i = 0; i < 800; ++i) {
+    pushed.setFeedForward(0, 6.0);
+    pushed.advance(kControlPeriod);
+  }
+  EXPECT_NEAR(pushed.jointPosition(0), limp, 1e-9);
+}
+
 TEST_F(Plant, servo_settings_from_the_policy_contract_reach_the_actuator)
 {
   // A soft servo cannot hold what a stiff one holds: the gains are what the

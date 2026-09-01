@@ -79,7 +79,10 @@ private:
   std::vector<std::string> joint_names_;
   /// Actuator index in the model per exported joint.
   std::vector<int> actuator_of_joint_;
-  std::vector<double> position_, velocity_, effort_, command_;
+  std::vector<double> position_, velocity_, effort_, command_, effort_command_;
+  /// Which joints declared the effort command interface (tau_ff policies);
+  /// the rest run the servo alone and never touch effort_command_.
+  std::vector<bool> joint_has_effort_;
 
   /// IMU states in the driver's layout: magnetometer xyz (0-2), gyro xyz
   /// (3-5), accel xyz (6-8), orientation xyzw (9-12).

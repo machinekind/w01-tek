@@ -87,12 +87,13 @@ pytest ros/src/wojtek_deck/test          # the drive gate (dead-man), no ROS
 node --test ros/src/wojtek_deck/web/test # the CDR decoder
 ```
 
-The panel is a head-up display: the camera fills the screen and the
-symbology is drawn on it in one colour at one line weight, the way a
-cockpit HUD works. A heading tape across the top, a pitch ladder with an
-artificial horizon in the middle, a speed tape (commanded vx) on the left
-and a stance-height tape on the right, three strip charts bottom-left
-(series told apart by dash pattern, direct-labeled), readouts bottom-right,
-the service buttons along the bottom edge. Amber marks a warning that is
-on; the dead-man is hazard stripes around the whole screen and the one
-thing allowed to shout.
+The look is night-city instruments: a near-black ground, flat panels cut
+at two corners, and two colours with jobs. Cyan is the system (link words,
+telemetry, the reticle); magenta is people and warnings (a detected
+person, ARMED, the joint working hardest, under-voltage). The camera sits
+in a shard-cut frame in the middle with a reticle that points the heading
+and a short horizon line from the IMU, the mode word under it, attitude
+and gyro strips on the left, joint bars and system gauges on the right,
+the services along the bottom, the command strip and log under them.
+Dead-man is hazard stripes inside the frame and the one thing allowed to
+blink.

@@ -1,88 +1,127 @@
-/* Deck panel: a head-up display over the camera.
-
-   One colour (pale ice, --hud) at one line weight, on the live picture.
-   Nothing glows and nothing is boxed unless it is a control. The only
-   second colour is amber for a warning that is on, and the alert red of
-   the dead-man, which is the one thing on this screen allowed to shout. */
+/* Deck panel: night-city instruments. Near-black ground, flat cut panels,
+   two colours with jobs: cyan is the system (link, telemetry, reticle),
+   magenta is people and warnings (detections, ARMED, a joint at its
+   limit, under-voltage). Nothing glows except the mode word. */
 :root {
-  --bg: #0a0e14;
-  --hud: #d8ecff;
-  --hud-dim: rgba(216,236,255,.55);
-  --amber: #ffd27a;
-  --alert: #ff4d5e;
+  --bg: #08090e;
+  --panel: #0d0f16;
+  --edge: #1c2233;
+  --cyan: #2fd6ff;
+  --cyan-deep: #10303a;
+  --magenta: #ff2fb8;
+  --ink: #e6f0ff;
+  --dim: #aab6cc;
+  --mute: #4b5670;
   --mono: ui-monospace, "SF Mono", Menlo, "DejaVu Sans Mono", Consolas, monospace;
+  --display: "Avenir Next Condensed", "Roboto Condensed", "DejaVu Sans Condensed",
+             "Arial Narrow", system-ui, sans-serif;
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body {
-  margin: 0; background: var(--bg); color: var(--hud);
-  font: 13px/1.35 var(--mono); font-variant-numeric: tabular-nums;
-  letter-spacing: .06em; text-transform: uppercase;
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 12px/1.4 var(--mono); font-variant-numeric: tabular-nums;
   overflow: hidden; user-select: none; -webkit-user-select: none;
+  display: grid; grid-template-rows: 44px 1fr; gap: 20px; padding: 24px 40px 24px;
 }
-.screen { position: relative; width: 100%; height: 100%; overflow: hidden; background: var(--bg); }
-#cam { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; filter: saturate(.6) brightness(.85); }
-/* the combiner tint: a little darker so the symbology reads on sky */
-.screen::before { content: ""; position: absolute; inset: 0; background: rgba(4,10,18,.22); pointer-events: none; }
+.lbl { font-size: 10px; letter-spacing: .26em; text-transform: uppercase; color: var(--cyan); }
+.row { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; }
+.row.hot { color: var(--magenta); }
+.row.warn { color: var(--dim); }
+.row.warn.now { color: var(--magenta); }
+.row.warn.ever { color: var(--magenta); opacity: .7; }
+
+/* ---- masthead ---------------------------------------------------------- */
+.top { display: flex; align-items: center; gap: 24px; border-bottom: 1px solid var(--edge); }
+.brand { font: 700 30px/1 var(--display); letter-spacing: .1em; color: #ffffff; }
+.lamps { display: flex; gap: 6px; }
+.lamp {
+  font-size: 10px; letter-spacing: .26em; text-transform: uppercase;
+  padding: 5px 10px; border: 1px solid var(--edge); color: var(--mute);
+}
+.lamp.on { color: var(--cyan); border-color: var(--cyan); }
+.policy { color: var(--mute); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+.readouts { margin-left: auto; display: flex; gap: 24px; }
+.readouts .lbl { color: var(--ink); }
+.readouts b { font-weight: 600; }
+
+/* ---- grid -------------------------------------------------------------- */
+.grid {
+  display: grid; min-height: 0;
+  grid-template-columns: 236px 1fr 236px;
+  grid-template-rows: 1fr auto minmax(88px, 96px);
+  gap: 20px 24px;
+}
+.col { display: flex; flex-direction: column; gap: 20px; min-height: 0; }
+.panel {
+  position: relative; background: var(--panel); border: 1px solid var(--edge);
+  padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; min-height: 0;
+  clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px));
+}
+.col .panel { flex: 1; }
+.panel canvas { flex: 1; min-height: 0; width: 100%; display: block; }
+.systems .row { margin-top: 2px; }
+.bar { height: 4px; background: var(--edge); }
+.bar i { display: block; height: 4px; width: 0; background: var(--cyan); }
+.bar i.hot { background: var(--magenta); }
+
+/* ---- the shard --------------------------------------------------------- */
+.center { display: grid; grid-template-rows: 1fr auto; gap: 16px; min-height: 0; position: relative; }
+.shard {
+  position: relative; background: #000; min-height: 0; overflow: hidden;
+  clip-path: polygon(0 0, calc(100% - 40px) 0, 100% 40px, 100% 100%, 40px 100%, 0 calc(100% - 40px));
+}
+.shard-edge { position: absolute; left: 0; top: 0; width: 100%; height: calc(100% - 16px - 56px); color: var(--cyan); pointer-events: none; }
+.shard.deadman + .shard-edge { color: var(--magenta); }
+#cam { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; filter: saturate(1.15) contrast(1.05); }
 #overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-.hud { position: absolute; color: var(--hud); }
-
-/* ---- words and readouts ---------------------------------------------- */
-.words { left: 40px; top: 30px; display: flex; }
-.lamp { padding: 0 12px; border-right: 1px solid var(--hud-dim); color: var(--hud-dim); }
-.lamp:first-child { padding-left: 0; }
-.lamp:last-child { border-right: 0; }
-.lamp.on { color: var(--hud); }
-.lamp.warn { color: var(--amber); }
-.clock { right: 40px; top: 30px; }
-.policy { left: 40px; top: 52px; font-size: 11px; color: var(--hud-dim); }
-
-.readouts { right: 40px; top: 600px; width: 320px; font-size: 12px; line-height: 1.8; }
-.row { display: flex; justify-content: space-between; gap: 12px; }
-.row span:last-child { text-align: right; }
-.row.warn { color: var(--hud-dim); }
-.row.warn.now { color: var(--amber); }
-.row.warn.ever { color: var(--amber); opacity: .75; }
-.log { right: 40px; top: 700px; width: 320px; font-size: 11px; line-height: 1.6; color: var(--hud-dim); text-transform: none; }
-.log div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.log .bad { color: var(--alert); }
-.log .ok { color: var(--hud); }
-
-/* ---- strips ------------------------------------------------------------- */
-.strips { position: absolute; left: 40px; top: 590px; width: 330px; display: flex; flex-direction: column; gap: 6px; }
-.strip { display: flex; flex-direction: column; }
-.strip .cap { font-size: 11px; color: var(--hud); }
-.strip canvas { width: 330px; height: 38px; display: block; }
-
-/* ---- mode word ------------------------------------------------------------ */
-.drive {
-  left: 50%; top: 716px; transform: translateX(-50%); min-width: 100px; text-align: center;
-  font-size: 15px; letter-spacing: .3em; padding: 5px 0 5px .3em; border: 1px solid var(--hud);
-  color: var(--hud-dim);
-}
-.drive.live { color: #ffffff; }
-.drive.deadman { color: var(--bg); background: var(--alert); border-color: var(--alert); animation: blink .6s steps(2) infinite; }
-@keyframes blink { 50% { opacity: .4; } }
-/* dead-man: hazard stripes around the whole screen */
-.screen.deadman::after {
+.hud { position: absolute; color: var(--ink); background: rgba(8,9,14,.7); padding: 2px 6px; pointer-events: none; }
+.hud-tl { left: 20px; top: 14px; }
+.hud-tr { right: 20px; top: 14px; }
+.hud-tr.on { color: var(--magenta); }
+.speed { position: absolute; right: 24px; bottom: 14px; display: flex; align-items: baseline; gap: 10px; pointer-events: none; }
+.speed b { font: 700 40px/1 var(--display); color: #ffffff; }
+/* dead-man: hazard stripes inside the shard */
+.shard.deadman::after {
   content: ""; position: absolute; inset: 0; pointer-events: none;
   border: 12px solid transparent;
-  border-image: repeating-linear-gradient(45deg, var(--alert) 0 14px, transparent 14px 28px) 12;
+  border-image: repeating-linear-gradient(45deg, var(--magenta) 0 14px, transparent 14px 28px) 12;
   animation: blink .6s steps(2) infinite;
 }
+@keyframes blink { 50% { opacity: .4; } }
+
+/* ---- mode word ----------------------------------------------------------- */
+.drive {
+  text-align: center; font: 700 56px/1 var(--display); letter-spacing: .4em; padding-left: .4em;
+  text-transform: uppercase; color: var(--mute);
+}
+.drive.live { color: var(--cyan); text-shadow: 0 0 18px rgba(47,214,255,.55); }
+.drive.deadman { color: var(--magenta); text-shadow: 0 0 18px rgba(255,47,184,.55); animation: blink .6s steps(2) infinite; }
 
 /* ---- controls ------------------------------------------------------------ */
-.controls { left: 40px; right: 40px; bottom: 16px; display: flex; gap: 6px; align-items: center; }
-.controls .sep { width: 14px; }
+.controls { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; }
+.controls .sep { width: 20px; }
+.controls .spacer { flex: 1 1 auto; }
 button {
-  font: 12px var(--mono); letter-spacing: .12em; text-transform: uppercase;
-  background: rgba(4,10,18,.45); color: var(--hud); border: 1px solid var(--hud-dim);
-  padding: 8px 12px; min-width: 56px; cursor: pointer;
+  font: 500 17px var(--display); letter-spacing: .14em; text-transform: uppercase;
+  color: var(--ink); background: transparent; border: 1px solid var(--cyan);
+  padding: 13px 22px; cursor: pointer;
+  clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
 }
-button:hover { border-color: var(--hud); }
-button:focus-visible { outline: 2px solid var(--hud); outline-offset: 1px; }
+button.trick { border-color: var(--edge); color: var(--dim); }
+button:hover { color: var(--cyan); }
+button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
 button:disabled { opacity: .3; cursor: default; }
-button.on { color: #ffffff; border-color: var(--hud); }
-button.armed { color: var(--bg); background: var(--amber); border-color: var(--amber); }
+button.on { background: var(--cyan-deep); color: #ffffff; }
+button.armed { color: var(--bg); background: var(--magenta); border-color: var(--magenta); font-weight: 700; }
 
-@media (prefers-reduced-motion: reduce) { .drive.deadman, .screen.deadman::after { animation: none; } }
+/* ---- command strip + log --------------------------------------------------- */
+.strip { grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 28px; padding: 10px 16px; }
+.strip .lbl { width: 80px; }
+.strip canvas { flex: 0 0 520px; height: 100%; }
+.log { flex: 1; min-width: 0; font-size: 12px; line-height: 1.7; color: var(--dim); }
+.log div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.log .bad { color: var(--magenta); }
+.log .ok { color: var(--ink); }
+
+@media (prefers-reduced-motion: reduce) { .drive.deadman, .shard.deadman::after { animation: none; } }

@@ -1,7 +1,8 @@
-// A strip chart for the HUD, no library: a few series over a sliding time
-// window, one colour, identity by dash pattern, direct labels at the right
-// edge. Colours come from CSS custom properties so the palette lives in
-// one place.
+// Canvas charts for the panel, no library.
+//   Strip  -- a few series over a sliding time window, one colour, identity
+//             by dash pattern, direct labels at the right edge
+//   Bars   -- one value per joint; the largest one in the second colour
+// Colours come from CSS custom properties so the palette lives in one place.
 
 function cssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -35,9 +36,9 @@ export class Strip {
     if (c.width !== W * dpr || c.height !== H * dpr) { c.width = W * dpr; c.height = H * dpr; }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
-    const hud = cssVar("--hud");
+    const line = cssVar("--cyan"), edge = cssVar("--edge"), ink = cssVar("--ink");
 
-    const padR = 70, x0 = 0, x1 = W - padR, y0 = 3, y1 = H - 3;
+    const padR = 64, x0 = 0, x1 = W - padR, y0 = 3, y1 = H - 3;
     const t0 = now - this.opts.window, t1 = now;
 
     // y range: fixed if given, else from the data with a little headroom
@@ -55,17 +56,16 @@ export class Strip {
     const X = t => x0 + (t - t0) / (t1 - t0) * (x1 - x0);
     const Y = v => y1 - (v - lo) / (hi - lo) * (y1 - y0);
 
-    // one hairline baseline at zero (or the bottom when zero is off-range)
-    ctx.strokeStyle = hud; ctx.globalAlpha = 0.5; ctx.lineWidth = 0.5;
+    // one baseline at zero (or the bottom when zero is off-range)
+    ctx.strokeStyle = edge; ctx.lineWidth = 1;
     const zy = (0 >= lo && 0 <= hi) ? Y(0) : y1;
     ctx.beginPath(); ctx.moveTo(x0, Math.round(zy) + 0.5); ctx.lineTo(x1, Math.round(zy) + 0.5); ctx.stroke();
-    ctx.globalAlpha = 1;
 
-    ctx.font = `11px ${cssVar("--mono")}`;
-    ctx.textBaseline = "middle"; ctx.fillStyle = hud;
+    ctx.font = `10px ${cssVar("--mono")}`;
+    ctx.textBaseline = "middle"; ctx.fillStyle = ink;
     const labels = [];
     this.series.forEach((s, i) => {
-      ctx.strokeStyle = hud; ctx.lineWidth = 1.25; ctx.lineJoin = "round";
+      ctx.strokeStyle = line; ctx.lineWidth = 1.5; ctx.lineJoin = "round";
       ctx.setLineDash(s.dash || []);
       ctx.beginPath();
       let pen = false;
@@ -89,6 +89,38 @@ export class Strip {
     for (const l of labels) {
       const y = Math.max(y0 + 5, Math.min(y1 - 5, l.y));
       ctx.fillText(`${l.s.name} ${l.v.toFixed(this.opts.fixed)}`, x1 + 8, y);
+    }
+  }
+}
+
+export class Bars {
+  // values in [-max, max], drawn as bars from the bottom by magnitude; the
+  // largest one is drawn in the second colour
+  constructor(canvas, opts) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext("2d");
+    this.opts = { max: 1, ...opts };
+    this.values = [];
+  }
+  set(values) { this.values = values; }
+  draw() {
+    const c = this.canvas, ctx = this.ctx;
+    const dpr = window.devicePixelRatio || 1;
+    const W = c.clientWidth, H = c.clientHeight;
+    if (!W || !H) return;
+    if (c.width !== W * dpr || c.height !== H * dpr) { c.width = W * dpr; c.height = H * dpr; }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    const n = this.values.length;
+    if (!n) return;
+    let k = 0;
+    for (let i = 1; i < n; i++) if (Math.abs(this.values[i]) > Math.abs(this.values[k])) k = i;
+    const gap = 4, bw = (W - gap * (n - 1)) / n;
+    for (let i = 0; i < n; i++) {
+      const f = Math.min(1, Math.abs(this.values[i] || 0) / this.opts.max);
+      const h = Math.max(2, f * (H - 2));
+      ctx.fillStyle = i === k ? cssVar("--magenta") : cssVar("--cyan");
+      ctx.fillRect(i * (bw + gap), H - h, bw, h);
     }
   }
 }

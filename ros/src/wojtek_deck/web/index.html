@@ -4,10 +4,11 @@
      internet. Charts read foxglove_bridge directly (bridge.js), commands go
      to the gateway (/ws), the camera is the gateway's MJPEG stream.
 
-     The camera fills the screen; everything else is drawn on it the way a
-     head-up display is: one colour, one line weight, symbology instead of
-     panels. The overlay canvas carries the heading tape, pitch ladder,
-     speed and height tapes and the detection brackets (deck.js). -->
+     Two colours with jobs: cyan is the system (link, telemetry, reticle),
+     magenta is people and warnings (detections, ARMED, the joint at its
+     limit, under-voltage). The camera sits in a shard-cut frame in the
+     middle; the reticle, horizon and detections are drawn on its overlay
+     canvas (deck.js). -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -16,43 +17,70 @@
 <link rel="stylesheet" href="deck.css">
 </head>
 <body>
-<div class="screen" id="viewport">
-  <img id="cam" alt="" src="stream.mjpg">
-  <canvas id="overlay"></canvas>
-
-  <!-- top-left: link state as words -->
-  <div class="hud words" id="words">
+<header class="top">
+  <div class="brand">WOJTEK</div>
+  <div class="lamps">
     <span class="lamp" id="lamp-link">link</span>
     <span class="lamp" id="lamp-bridge">bridge</span>
     <span class="lamp" id="lamp-cam">cam —</span>
     <span class="lamp" id="lamp-pad">pad</span>
     <span class="lamp" id="lamp-det">det</span>
   </div>
-  <div class="hud clock" id="hud-clock"></div>
-  <div class="hud policy" id="policy"></div>
-
-  <!-- bottom-left: three strips -->
-  <div class="strips">
-    <div class="strip"><span class="cap">att  roll ─  pitch ┄  deg</span><canvas id="ch-att"></canvas></div>
-    <div class="strip"><span class="cap">gyro  x ─  y ┄  z ┈  rad/s</span><canvas id="ch-gyro"></canvas></div>
-    <div class="strip"><span class="cap">cmd  vx ─  vy ┄  wz ┈</span><canvas id="ch-cmd"></canvas></div>
+  <span class="policy" id="policy"></span>
+  <div class="readouts">
+    <span class="lbl">H <b id="height">—</b> m</span>
+    <span class="lbl" id="hud-clock"></span>
   </div>
+</header>
 
-  <!-- bottom-right: readouts and the last service verdicts -->
-  <div class="hud readouts">
-    <div class="row"><span>tick</span><span id="ro-tick">—</span></div>
-    <div class="row"><span>cpu · soc</span><span id="ro-sys">—</span></div>
-    <div class="row"><span>wifi rx · tx</span><span id="ro-wifi">—</span></div>
-    <div class="row"><span id="ro-eff-label">joint max</span><span id="ro-eff">—</span></div>
-    <div class="row warn" id="ro-flags"><span>power</span><span id="ro-flag">—</span></div>
-  </div>
-  <div class="hud log" id="log"></div>
+<main class="grid">
+  <section class="col">
+    <div class="panel">
+      <div class="lbl">attitude</div>
+      <canvas id="ch-att"></canvas>
+      <div class="row"><span id="att-r">roll —</span><span id="att-p">pitch —</span></div>
+    </div>
+    <div class="panel">
+      <div class="lbl">gyro</div>
+      <canvas id="ch-gyro"></canvas>
+      <div class="row"><span>z</span><span id="gyro-z">— rad/s</span></div>
+    </div>
+  </section>
 
-  <!-- mode word -->
-  <div class="hud drive" id="drive">idle</div>
+  <section class="center">
+    <div class="shard" id="viewport">
+      <img id="cam" alt="" src="stream.mjpg">
+      <canvas id="overlay"></canvas>
+      <div class="lbl hud hud-tl" id="hud-cam">fwd cam · —</div>
+      <div class="lbl hud hud-tr" id="hud-det">no detector</div>
+      <div class="speed"><b id="speed">0.00</b><span class="lbl">m/s</span></div>
+    </div>
+    <svg class="shard-edge" viewBox="0 0 680 400" preserveAspectRatio="none" aria-hidden="true">
+      <polygon points="0.5,0.5 640,0.5 679.5,40 679.5,399.5 40,399.5 0.5,360" fill="none" stroke="currentColor" stroke-width="1" vector-effect="non-scaling-stroke"></polygon>
+    </svg>
+    <div class="drive" id="drive">idle</div>
+  </section>
 
-  <!-- bottom edge: the services, as words -->
-  <div class="hud controls">
+  <section class="col">
+    <div class="panel">
+      <div class="lbl"><span id="eff-title">joint targets</span></div>
+      <canvas id="ch-eff"></canvas>
+      <div class="row hot"><span id="eff-name">—</span><span id="eff-val">—</span></div>
+    </div>
+    <div class="panel systems">
+      <div class="lbl">systems</div>
+      <div class="row"><span>cpu</span><span id="sys-cpu">—</span></div>
+      <div class="bar"><i id="bar-cpu"></i></div>
+      <div class="row"><span>soc</span><span id="sys-soc">—</span></div>
+      <div class="bar"><i id="bar-soc"></i></div>
+      <div class="row"><span>wifi tx</span><span id="sys-wifi">—</span></div>
+      <div class="bar"><i id="bar-wifi"></i></div>
+      <div class="row"><span>tick</span><span id="sys-tick">—</span></div>
+      <div class="row warn" id="sys-flags"><span>power</span><span id="sys-flag">—</span></div>
+    </div>
+  </section>
+
+  <div class="controls">
     <button data-call="arm" id="btn-arm">arm</button>
     <button data-call="zero">zero</button>
     <button data-call="stand_up">stand</button>
@@ -60,15 +88,21 @@
     <button data-call="enable" id="btn-enable">policy</button>
     <button data-call="reset">reset</button>
     <span class="sep"></span>
-    <button data-call="trick_paw_wave">paw</button>
-    <button data-call="trick_bow">bow</button>
-    <button data-call="trick_sit">sit</button>
-    <button data-call="trick_shake">shake</button>
-    <span class="sep"></span>
+    <button class="trick" data-call="trick_paw_wave">paw</button>
+    <button class="trick" data-call="trick_bow">bow</button>
+    <button class="trick" data-call="trick_sit">sit</button>
+    <button class="trick" data-call="trick_shake">shake</button>
+    <span class="spacer"></span>
     <button data-height="-0.005">h −</button>
     <button data-height="0.005">h +</button>
   </div>
-</div>
+
+  <div class="panel strip">
+    <div class="lbl">command</div>
+    <canvas id="ch-cmd"></canvas>
+    <div class="log" id="log"></div>
+  </div>
+</main>
 
 <script type="module" src="deck.js"></script>
 </body>

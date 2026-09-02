@@ -69,6 +69,11 @@ The operator console (drive pad, arm/pose buttons, jog, telemetry) is the
 phone on the robot's AP works too). Drive commands are dead-man guarded:
 if the page goes silent mid-drive, `/cmd_vel` is zeroed.
 
+**Deck panel** — the handheld cockpit (`wojtek_deck`, on by default in
+the sim): open <http://localhost:8090>. Camera, pad in the browser, charts
+straight from the Foxglove bridge (`--foxglove`), and the drive dead-man on
+the robot side. See [`src/wojtek_deck/README.md`](src/wojtek_deck/README.md).
+
 **Text commands (the VLM contract, #92)**: the web console also shows the
 robot's colour camera and a `forward / left / right / stop` command panel —
 the browser is a human dry-run of the future VLM, which will watch

@@ -1,0 +1,88 @@
+/* Deck panel: a head-up display over the camera.
+
+   One colour (pale ice, --hud) at one line weight, on the live picture.
+   Nothing glows and nothing is boxed unless it is a control. The only
+   second colour is amber for a warning that is on, and the alert red of
+   the dead-man, which is the one thing on this screen allowed to shout. */
+:root {
+  --bg: #0a0e14;
+  --hud: #d8ecff;
+  --hud-dim: rgba(216,236,255,.55);
+  --amber: #ffd27a;
+  --alert: #ff4d5e;
+  --mono: ui-monospace, "SF Mono", Menlo, "DejaVu Sans Mono", Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--hud);
+  font: 13px/1.35 var(--mono); font-variant-numeric: tabular-nums;
+  letter-spacing: .06em; text-transform: uppercase;
+  overflow: hidden; user-select: none; -webkit-user-select: none;
+}
+.screen { position: relative; width: 100%; height: 100%; overflow: hidden; background: var(--bg); }
+#cam { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; filter: saturate(.6) brightness(.85); }
+/* the combiner tint: a little darker so the symbology reads on sky */
+.screen::before { content: ""; position: absolute; inset: 0; background: rgba(4,10,18,.22); pointer-events: none; }
+#overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.hud { position: absolute; color: var(--hud); }
+
+/* ---- words and readouts ---------------------------------------------- */
+.words { left: 40px; top: 30px; display: flex; }
+.lamp { padding: 0 12px; border-right: 1px solid var(--hud-dim); color: var(--hud-dim); }
+.lamp:first-child { padding-left: 0; }
+.lamp:last-child { border-right: 0; }
+.lamp.on { color: var(--hud); }
+.lamp.warn { color: var(--amber); }
+.clock { right: 40px; top: 30px; }
+.policy { left: 40px; top: 52px; font-size: 11px; color: var(--hud-dim); }
+
+.readouts { right: 40px; top: 600px; width: 320px; font-size: 12px; line-height: 1.8; }
+.row { display: flex; justify-content: space-between; gap: 12px; }
+.row span:last-child { text-align: right; }
+.row.warn { color: var(--hud-dim); }
+.row.warn.now { color: var(--amber); }
+.row.warn.ever { color: var(--amber); opacity: .75; }
+.log { right: 40px; top: 700px; width: 320px; font-size: 11px; line-height: 1.6; color: var(--hud-dim); text-transform: none; }
+.log div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.log .bad { color: var(--alert); }
+.log .ok { color: var(--hud); }
+
+/* ---- strips ------------------------------------------------------------- */
+.strips { position: absolute; left: 40px; top: 590px; width: 330px; display: flex; flex-direction: column; gap: 6px; }
+.strip { display: flex; flex-direction: column; }
+.strip .cap { font-size: 11px; color: var(--hud); }
+.strip canvas { width: 330px; height: 38px; display: block; }
+
+/* ---- mode word ------------------------------------------------------------ */
+.drive {
+  left: 50%; top: 716px; transform: translateX(-50%); min-width: 100px; text-align: center;
+  font-size: 15px; letter-spacing: .3em; padding: 5px 0 5px .3em; border: 1px solid var(--hud);
+  color: var(--hud-dim);
+}
+.drive.live { color: #ffffff; }
+.drive.deadman { color: var(--bg); background: var(--alert); border-color: var(--alert); animation: blink .6s steps(2) infinite; }
+@keyframes blink { 50% { opacity: .4; } }
+/* dead-man: hazard stripes around the whole screen */
+.screen.deadman::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  border: 12px solid transparent;
+  border-image: repeating-linear-gradient(45deg, var(--alert) 0 14px, transparent 14px 28px) 12;
+  animation: blink .6s steps(2) infinite;
+}
+
+/* ---- controls ------------------------------------------------------------ */
+.controls { left: 40px; right: 40px; bottom: 16px; display: flex; gap: 6px; align-items: center; }
+.controls .sep { width: 14px; }
+button {
+  font: 12px var(--mono); letter-spacing: .12em; text-transform: uppercase;
+  background: rgba(4,10,18,.45); color: var(--hud); border: 1px solid var(--hud-dim);
+  padding: 8px 12px; min-width: 56px; cursor: pointer;
+}
+button:hover { border-color: var(--hud); }
+button:focus-visible { outline: 2px solid var(--hud); outline-offset: 1px; }
+button:disabled { opacity: .3; cursor: default; }
+button.on { color: #ffffff; border-color: var(--hud); }
+button.armed { color: var(--bg); background: var(--amber); border-color: var(--amber); }
+
+@media (prefers-reduced-motion: reduce) { .drive.deadman, .screen.deadman::after { animation: none; } }

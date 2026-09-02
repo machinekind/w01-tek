@@ -269,6 +269,29 @@ def _launch_setup(context, with_rviz, hardware):
             )
         )
 
+    # The deck panel's robot-side gateway (wojtek_deck): the page, the
+    # command websocket with the dead-man, the MJPEG camera stream. Gets
+    # the resolved policy directory so its command box matches policy_node.
+    # deck_cpus keeps the JPEG encoder off the isolated RT cores on the RPi.
+    deck_cpus = LaunchConfiguration("deck_cpus").perform(context)
+    nodes.append(
+        Node(
+            package="wojtek_deck",
+            executable="deck_gateway",
+            output="screen",
+            condition=IfCondition(LaunchConfiguration("deck")),
+            prefix=f"taskset -c {deck_cpus}" if deck_cpus else None,
+            parameters=[
+                {
+                    "policy": str(loaded.directory),
+                    "port": ParameterValue(
+                        LaunchConfiguration("deck_port"), value_type=int
+                    ),
+                }
+            ],
+        )
+    )
+
     nodes.append(
         # bash -c: mkdir the parent (rosbag2 creates the bag dir itself but
         # not missing parents), then exec the recorder -- optionally under
@@ -466,6 +489,14 @@ def common_launch_description(
             }.items(),
             condition=IfCondition(LaunchConfiguration("perception")),
         ),
+        # The deck panel (wojtek_deck): a browser cockpit for a handheld on
+        # the robot's wifi. On in the simulation (open http://localhost:8090),
+        # opt-in on the robot (deck:=true deck_cpus:=0,1 in the service).
+        DeclareLaunchArgument(
+            "deck", default_value="true" if hardware == "sim" else "false",
+        ),
+        DeclareLaunchArgument("deck_port", default_value="8090"),
+        DeclareLaunchArgument("deck_cpus", default_value=""),
         OpaqueFunction(
             function=_launch_setup,
             kwargs={"with_rviz": with_rviz, "hardware": hardware},

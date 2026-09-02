@@ -18,5 +18,9 @@ services:
       # web operator console (wojtek_pc web_console) -- browser opens
       # http://localhost:8080 (page + JSON websocket on one port).
       - "8080:8080"
+      # deck panel (wojtek_deck deck_gateway, sim.launch.py deck:=true) --
+      # browser opens http://localhost:8090; a handheld on the same LAN uses
+      # the Mac's address instead.
+      - "8090:8090"
     volumes:
       - /dev/null:/ssh-agent

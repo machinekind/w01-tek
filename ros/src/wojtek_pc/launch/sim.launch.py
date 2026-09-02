@@ -7,7 +7,7 @@ virtual camera, RViz, the operator console and optionally a gamepad.
     ros2 launch wojtek_pc sim.launch.py [hw:=mock|mujoco] [rviz:=false]
                                        [boot_pose:=folded] [camera:=false]
                                        [console:=web|qt|none] [gamepad:=true]
-                                       [telemetry:=true]
+                                       [telemetry:=true] [deck:=false]
 
 This is `robot.launch.py` with the hardware plugin swapped -- same
 controller_manager at 400 Hz, same broadcasters, same real_io_node, same
@@ -42,6 +42,10 @@ text_commander (wojtek#92) is always up: text commands on /wojtek/nav_command
 (the web console's VLM panel, or `ros2 topic pub`) drive /cmd_vel with a 2 s
 dead-man. Resident by design -- it publishes NOTHING until commanded and goes
 silent after its single stop Twist, so it never fights the other teleops.
+
+deck:=true (the default here) also serves the deck panel on
+http://localhost:8090 -- the handheld cockpit from wojtek_deck: camera,
+pad, and charts read from the Foxglove bridge (viz.launch.py foxglove:=true).
 
 camera:=false turns off the D435-compatible virtual camera (on by default;
 the off-switch for weak machines). It needs a physics-backed plant, so it is

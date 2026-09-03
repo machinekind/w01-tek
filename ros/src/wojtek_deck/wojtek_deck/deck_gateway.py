@@ -281,6 +281,14 @@ async def cross_origin_isolation(request, handler):
     resp = await handler(request)
     resp.headers["Cross-Origin-Opener-Policy"] = "same-origin"
     resp.headers["Cross-Origin-Embedder-Policy"] = "require-corp"
+    # The page's own files change with every deploy, and a browser left to
+    # guess from Last-Modified will happily keep yesterday's deck.js for
+    # hours. no-cache means "ask first": the browser still keeps a copy and
+    # revalidates it with the ETag, which is one small round trip per file.
+    # The detector assets are pinned by hash and never change under the
+    # same name, so those are left to cache for as long as they like.
+    if not request.path.startswith("/det/"):
+        resp.headers.setdefault("Cache-Control", "no-cache")
     return resp
 
 

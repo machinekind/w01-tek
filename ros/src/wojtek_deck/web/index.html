@@ -1,24 +1,30 @@
 <!DOCTYPE html>
 <!-- The deck panel, served by wojtek_deck/deck_gateway.py. Self-contained:
-     no fonts or scripts from the network, because the robot's wifi has no
-     internet. Charts read foxglove_bridge directly (bridge.js), commands go
-     to the gateway (/ws), the camera is the gateway's MJPEG stream.
+     the fonts sit next to this file and nothing is fetched from the network,
+     because the robot's wifi has no internet. Charts read foxglove_bridge
+     directly (bridge.js), commands go to the gateway (/ws), the camera is
+     the gateway's MJPEG stream.
 
-     Two colours with jobs: cyan is the system (link, telemetry, reticle),
-     magenta is people and warnings (detections, ARMED, the joint at its
-     limit, under-voltage). The camera sits in a shard-cut frame in the
-     middle; the reticle, horizon and detections are drawn on its overlay
-     canvas (deck.js). -->
+     The look is the Machinekind design system, dark context: an ink ground,
+     white text at three strengths, regions divided by 1px hairlines, and one
+     accent -- soft red. Red at full strength is a fill only (the armed
+     button, the dead-man frame). The camera sits plain in the middle; the
+     reticle, horizon and detections are drawn on its overlay canvas
+     (deck.js). -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
 <title>Wojtek deck</title>
+<link rel="stylesheet" href="fonts/fonts.css">
 <link rel="stylesheet" href="deck.css">
 </head>
 <body>
 <header class="top">
-  <div class="brand">WOJTEK</div>
+  <!-- The brand mark arrives with the brand kit. Until it does the box keeps
+       its size and shows nothing, so the title never shifts. -->
+  <img class="mark" src="mark.svg" alt="" width="28" height="28" onerror="this.style.visibility='hidden'">
+  <div class="brand">Wojtek</div>
   <div class="lamps">
     <span class="lamp" id="lamp-link">link</span>
     <span class="lamp" id="lamp-bridge">bridge</span>
@@ -28,55 +34,52 @@
   </div>
   <span class="policy" id="policy"></span>
   <div class="readouts">
-    <span class="lbl">H <b id="height">—</b> m</span>
-    <span class="lbl" id="hud-clock"></span>
+    <span>H <b id="height">—</b> m</span>
+    <span id="hud-clock"></span>
   </div>
 </header>
 
 <main class="grid">
   <section class="col">
     <div class="panel">
-      <div class="lbl">attitude</div>
+      <div class="kicker">attitude</div>
       <canvas id="ch-att"></canvas>
       <div class="row"><span id="att-r">roll —</span><span id="att-p">pitch —</span></div>
     </div>
     <div class="panel">
-      <div class="lbl">gyro</div>
+      <div class="kicker">gyro</div>
       <canvas id="ch-gyro"></canvas>
-      <div class="row"><span>z</span><span id="gyro-z">— rad/s</span></div>
+      <div class="row"><span class="k">z</span><span id="gyro-z">— rad/s</span></div>
     </div>
   </section>
 
   <section class="center">
-    <div class="shard" id="viewport">
+    <div class="viewport" id="viewport">
       <img id="cam" alt="" src="stream.mjpg">
       <canvas id="overlay"></canvas>
-      <div class="lbl hud hud-tl" id="hud-cam">fwd cam · —</div>
-      <div class="lbl hud hud-tr" id="hud-det">no detector</div>
-      <div class="speed"><b id="speed">0.00</b><span class="lbl">m/s</span></div>
+      <div class="hud hud-tl" id="hud-cam">fwd cam · —</div>
+      <div class="hud hud-tr" id="hud-det">no detector</div>
+      <div class="speed"><b id="speed">0.00</b><span class="unit">m/s</span></div>
     </div>
-    <svg class="shard-edge" viewBox="0 0 680 400" preserveAspectRatio="none" aria-hidden="true">
-      <polygon points="0.5,0.5 640,0.5 679.5,40 679.5,399.5 40,399.5 0.5,360" fill="none" stroke="currentColor" stroke-width="1" vector-effect="non-scaling-stroke"></polygon>
-    </svg>
     <div class="drive" id="drive">idle</div>
   </section>
 
   <section class="col">
     <div class="panel">
-      <div class="lbl"><span id="eff-title">joint targets</span></div>
+      <div class="kicker"><span id="eff-title">joint targets</span></div>
       <canvas id="ch-eff"></canvas>
-      <div class="row hot"><span id="eff-name">—</span><span id="eff-val">—</span></div>
+      <div class="row hot"><span class="k" id="eff-name">—</span><span id="eff-val">—</span></div>
     </div>
     <div class="panel systems">
-      <div class="lbl">systems</div>
-      <div class="row"><span>cpu</span><span id="sys-cpu">—</span></div>
+      <div class="kicker">systems</div>
+      <div class="row"><span class="k">cpu</span><span id="sys-cpu">—</span></div>
       <div class="bar"><i id="bar-cpu"></i></div>
-      <div class="row"><span>soc</span><span id="sys-soc">—</span></div>
+      <div class="row"><span class="k">soc</span><span id="sys-soc">—</span></div>
       <div class="bar"><i id="bar-soc"></i></div>
-      <div class="row"><span>wifi tx</span><span id="sys-wifi">—</span></div>
+      <div class="row"><span class="k">wifi tx</span><span id="sys-wifi">—</span></div>
       <div class="bar"><i id="bar-wifi"></i></div>
-      <div class="row"><span>tick</span><span id="sys-tick">—</span></div>
-      <div class="row warn" id="sys-flags"><span>power</span><span id="sys-flag">—</span></div>
+      <div class="row"><span class="k">tick</span><span id="sys-tick">—</span></div>
+      <div class="row warn" id="sys-flags"><span class="k">power</span><span id="sys-flag">—</span></div>
     </div>
   </section>
 
@@ -98,7 +101,7 @@
   </div>
 
   <div class="panel strip">
-    <div class="lbl">command</div>
+    <div class="kicker">command</div>
     <canvas id="ch-cmd"></canvas>
     <div class="log" id="log"></div>
   </div>

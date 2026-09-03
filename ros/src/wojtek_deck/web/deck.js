@@ -148,35 +148,39 @@ function drawOverlay() {
   const ctx = overlay.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H);
-  const cyan = css("--cyan"), magenta = css("--magenta"), ink = css("--ink"), mono = css("--mono");
+  // The overlay is drawn in the same colours as the rest of the panel:
+  // white at two strengths for everything that just sits there, and the
+  // one accent for the thing worth looking at.
+  const dim = css("--on-dark-2"), faint = css("--on-dark-3"), accent = css("--accent"), mono = css("--mono");
   const [roll, pitch, yaw] = rpy;
   const cx = W / 2, cy = H / 2, R = Math.min(W, H) * 0.2;
 
   // reticle: dashed outer ring, inner ring, and an arc that points the way
   // the robot is heading (ROS +yaw is counter-clockwise), centre bars
   const hdg = ((-yaw * 180 / Math.PI) % 360 + 360) % 360;
-  ctx.strokeStyle = cyan; ctx.lineWidth = 1;
+  ctx.strokeStyle = faint; ctx.lineWidth = 1;
   ctx.setLineDash([3, 9]); ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.stroke();
-  ctx.setLineDash([]); ctx.globalAlpha = .6; ctx.beginPath(); ctx.arc(cx, cy, R * 0.7, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1;
+  ctx.setLineDash([]); ctx.beginPath(); ctx.arc(cx, cy, R * 0.7, 0, Math.PI * 2); ctx.stroke();
   const a0 = -Math.PI / 2 + hdg * Math.PI / 180;
-  ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(cx, cy, R, a0 - Math.PI / 4, a0 + Math.PI / 4); ctx.stroke();
-  ctx.lineWidth = 1.5; ctx.strokeStyle = "#ffffff";
+  ctx.strokeStyle = accent; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(cx, cy, R, a0 - Math.PI / 4, a0 + Math.PI / 4); ctx.stroke();
+  ctx.lineWidth = 1.5; ctx.strokeStyle = dim;
   ctx.beginPath();
   ctx.moveTo(cx - R * 0.5, cy); ctx.lineTo(cx - R * 0.15, cy); ctx.moveTo(cx + R * 0.15, cy); ctx.lineTo(cx + R * 0.5, cy);
   ctx.moveTo(cx, cy - R * 0.5); ctx.lineTo(cx, cy - R * 0.15);
   ctx.stroke();
-  ctx.fillStyle = ink; ctx.font = `10px ${mono}`; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+  ctx.fillStyle = dim; ctx.font = `10px ${mono}`; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
   ctx.fillText(`HDG ${String(Math.round(hdg) % 360).padStart(3, "0")}`, cx, cy - R - 8);
 
   // horizon: a short line inside the inner ring that stays level with the ground
   ctx.save();
   ctx.translate(cx, cy + pitch * (H / 2) / (Math.PI / 4));
   ctx.rotate(-roll);
-  ctx.strokeStyle = cyan; ctx.lineWidth = 1;
+  ctx.strokeStyle = faint; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(-R * 1.6, 0); ctx.lineTo(-R * 1.1, 0); ctx.moveTo(R * 1.1, 0); ctx.lineTo(R * 1.6, 0); ctx.stroke();
   ctx.restore();
 
-  // detections, in the frame's pixel space mapped onto the shard (object-fit: cover)
+  // detections, in the frame's pixel space mapped onto the viewport (object-fit: cover)
   if (!det || now() - det.at > 1.0) return;
   const nw = cam.naturalWidth || det.w, nh = cam.naturalHeight || det.h;
   const s = Math.max(W / nw, H / nh), ox = (W - nw * s) / 2, oy = (H - nh * s) / 2;
@@ -185,9 +189,9 @@ function drawOverlay() {
   for (const b of det.boxes) {
     const x = ox + b.x * sx, y = oy + b.y * sy, w = b.w * sx, h = b.h * sy;
     const person = b.label === "person";
-    ctx.strokeStyle = person ? magenta : cyan; ctx.lineWidth = 1.5;
+    ctx.strokeStyle = person ? accent : dim; ctx.lineWidth = 1.5;
     ctx.strokeRect(x, y, w, h);
-    ctx.fillStyle = person ? magenta : cyan;
+    ctx.fillStyle = person ? accent : dim;
     ctx.fillText(`${b.label} ${(b.p * 100).toFixed(0)}`.toUpperCase(), x, y - 5);
   }
 }
@@ -368,7 +372,7 @@ setInterval(() => { $("hud-clock").textContent = stamp(); }, 1000);
 
 connectGateway();
 
-// ?detsrc=<url> puts a still image in the shard instead of the camera, and
+// ?detsrc=<url> puts a still image in the viewport instead of the camera, and
 // the detector then looks at that. It is how the detection path gets tested
 // without a robot pointed at something interesting. Same-origin only: the
 // page is cross-origin isolated, so a picture from elsewhere will not load.

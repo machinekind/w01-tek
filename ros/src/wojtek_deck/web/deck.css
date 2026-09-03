@@ -1,127 +1,187 @@
-/* Deck panel: night-city instruments. Near-black ground, flat cut panels,
-   two colours with jobs: cyan is the system (link, telemetry, reticle),
-   magenta is people and warnings (detections, ARMED, a joint at its
-   limit, under-voltage). Nothing glows except the mode word. */
+/* Deck panel, in the Machinekind design system.
+
+   The whole page is the system's dark context: the ground is ink (#0d0f10),
+   text is white and two steps of white, and the accent is red-soft. Brand
+   red itself is only ever a fill (the armed button, the dead-man frame),
+   never small text -- on this ground it does not have the contrast for it.
+
+   Three rules carried over from the system:
+     1. Colour sets the context. Everything here stands on ink, so nothing
+        inside has to know what it stands on.
+     2. Divisions are 1px hairlines. No boxes, no shadows, no glow.
+     3. Spacing comes from the parent grid. Nothing inside carries margins.
+
+   Three faces with three jobs: the display face carries the wordmark and
+   the mode word, the body face carries words a person reads, and the mono
+   face carries measurement -- rates, angles, counts, clock. */
 :root {
-  --bg: #08090e;
-  --panel: #0d0f16;
-  --edge: #1c2233;
-  --cyan: #2fd6ff;
-  --cyan-deep: #10303a;
-  --magenta: #ff2fb8;
-  --ink: #e6f0ff;
-  --dim: #aab6cc;
-  --mute: #4b5670;
-  --mono: ui-monospace, "SF Mono", Menlo, "DejaVu Sans Mono", Consolas, monospace;
-  --display: "Avenir Next Condensed", "Roboto Condensed", "DejaVu Sans Condensed",
-             "Arial Narrow", system-ui, sans-serif;
+  /* brand */
+  --red: #bd3e3e;
+  --red-deep: #9c2f2f;
+  --red-soft: #d86a6a;
+  --ground: #0d0f10;
+  /* the dark context: white at three strengths, plus the hairline */
+  --on-dark-1: rgba(255, 255, 255, .92);
+  --on-dark-2: rgba(255, 255, 255, .72);
+  --on-dark-3: rgba(255, 255, 255, .55);
+  --on-dark-line: rgba(255, 255, 255, .16);
+  --line-2: rgba(255, 255, 255, .28);
+  /* one accent, and it is the soft red */
+  --accent: var(--red-soft);
+  /* faces, verbatim from the system */
+  --display: 'Big Shoulders Display Variable', 'Big Shoulders Display', 'Oswald', 'Arial Narrow', system-ui, sans-serif;
+  --body: 'IBM Plex Sans Variable', 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --micro: 0.72rem;
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body {
-  margin: 0; background: var(--bg); color: var(--ink);
-  font: 12px/1.4 var(--mono); font-variant-numeric: tabular-nums;
+  margin: 0; background: var(--ground); color: #fff;
+  font: 400 13px/1.45 var(--body);
   overflow: hidden; user-select: none; -webkit-user-select: none;
-  display: grid; grid-template-rows: 44px 1fr; gap: 20px; padding: 24px 40px 24px;
+  -webkit-font-smoothing: antialiased;
+  display: grid; grid-template-rows: 44px 1fr; gap: 18px; padding: 22px 40px 24px;
 }
-.lbl { font-size: 10px; letter-spacing: .26em; text-transform: uppercase; color: var(--cyan); }
-.row { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; }
-.row.hot { color: var(--magenta); }
-.row.warn { color: var(--dim); }
-.row.warn.now { color: var(--magenta); }
-.row.warn.ever { color: var(--magenta); opacity: .7; }
+::selection { background: var(--red); color: #fff; }
+
+/* The kicker: a short hairline, then the title in spaced mono. It names a
+   region; it is not a measurement, but it is a label of one, so mono. */
+.kicker {
+  display: flex; align-items: center; gap: .6rem;
+  font: 500 var(--micro)/1 var(--mono); letter-spacing: .2em;
+  text-transform: uppercase; color: var(--on-dark-2); white-space: nowrap;
+}
+.kicker::before { content: ""; flex: 0 0 1.75rem; height: 1px; background: var(--on-dark-line); }
+
+/* A row of readings: the thing on the left in words, the number on the
+   right in mono, digits aligned so they do not dance as they change. */
+.row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.row > span { font: 400 12px/1.5 var(--mono); font-variant-numeric: tabular-nums; color: var(--on-dark-2); }
+.row > span:last-child { text-align: right; }
+.row > .k { font-family: var(--body); font-size: 12.5px; letter-spacing: 0; }
+.row.hot > span:last-child { color: var(--accent); }
+.row.warn.now > span:last-child { color: var(--accent); }
+.row.warn.ever > span:last-child { color: var(--on-dark-3); }
 
 /* ---- masthead ---------------------------------------------------------- */
-.top { display: flex; align-items: center; gap: 24px; border-bottom: 1px solid var(--edge); }
-.brand { font: 700 30px/1 var(--display); letter-spacing: .1em; color: #ffffff; }
+.top {
+  display: flex; align-items: center; gap: 20px;
+  border-bottom: 1px solid var(--on-dark-line);
+}
+/* The brand mark ships separately. Until it is here the box stays the same
+   size and simply shows nothing, so the title never jumps. */
+.mark { width: 28px; height: 28px; flex: 0 0 28px; display: block; }
+.brand {
+  font: 500 26px/1 var(--display); letter-spacing: .055em;
+  text-transform: uppercase; color: #fff;
+}
 .lamps { display: flex; gap: 6px; }
 .lamp {
-  font-size: 10px; letter-spacing: .26em; text-transform: uppercase;
-  padding: 5px 10px; border: 1px solid var(--edge); color: var(--mute);
+  font: 400 var(--micro)/1 var(--mono); letter-spacing: .12em; text-transform: uppercase;
+  padding: .35rem .7rem; border: 1px solid var(--on-dark-line); color: var(--on-dark-3);
 }
-.lamp.on { color: var(--cyan); border-color: var(--cyan); }
-.policy { color: var(--mute); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
-.readouts { margin-left: auto; display: flex; gap: 24px; }
-.readouts .lbl { color: var(--ink); }
-.readouts b { font-weight: 600; }
+.lamp.on { border-color: var(--line-2); color: #fff; }
+.policy {
+  font: 400 var(--micro)/1 var(--mono); color: var(--on-dark-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px;
+}
+.readouts {
+  margin-left: auto; display: flex; gap: 24px;
+  font: 400 12px/1 var(--mono); font-variant-numeric: tabular-nums; color: var(--on-dark-2);
+}
+.readouts b { font-weight: 500; color: #fff; }
 
 /* ---- grid -------------------------------------------------------------- */
 .grid {
   display: grid; min-height: 0;
   grid-template-columns: 236px 1fr 236px;
   grid-template-rows: 1fr auto minmax(88px, 96px);
-  gap: 20px 24px;
+  gap: 18px 28px;
 }
-.col { display: flex; flex-direction: column; gap: 20px; min-height: 0; }
+.col { display: flex; flex-direction: column; gap: 18px; min-height: 0; }
+/* A panel is not a box. One hairline on top and the region begins. */
 .panel {
-  position: relative; background: var(--panel); border: 1px solid var(--edge);
-  padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; min-height: 0;
-  clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px));
+  border-top: 1px solid var(--on-dark-line); padding-top: 10px;
+  display: flex; flex-direction: column; gap: 8px; min-height: 0;
 }
 .col .panel { flex: 1; }
 .panel canvas { flex: 1; min-height: 0; width: 100%; display: block; }
-.systems .row { margin-top: 2px; }
-.bar { height: 4px; background: var(--edge); }
-.bar i { display: block; height: 4px; width: 0; background: var(--cyan); }
-.bar i.hot { background: var(--magenta); }
+/* Systems rows read as a table: a hairline under each one, no frame. */
+.systems .row { padding-bottom: 5px; border-bottom: 1px solid var(--on-dark-line); }
+.bar { height: 3px; background: var(--on-dark-line); }
+.bar i { display: block; height: 3px; width: 0; background: var(--on-dark-2); }
+.bar i.hot { background: var(--red); }
 
-/* ---- the shard --------------------------------------------------------- */
-.center { display: grid; grid-template-rows: 1fr auto; gap: 16px; min-height: 0; position: relative; }
-.shard {
+/* ---- the camera -------------------------------------------------------- */
+.center { display: grid; grid-template-rows: 1fr auto; gap: 14px; min-height: 0; position: relative; }
+/* One hairline on top, the same one the side panels start on, so the three
+   columns begin on a single line. The picture is not framed. */
+.viewport {
   position: relative; background: #000; min-height: 0; overflow: hidden;
-  clip-path: polygon(0 0, calc(100% - 40px) 0, 100% 40px, 100% 100%, 40px 100%, 0 calc(100% - 40px));
+  border-top: 1px solid var(--on-dark-line);
 }
-.shard-edge { position: absolute; left: 0; top: 0; width: 100%; height: calc(100% - 16px - 56px); color: var(--cyan); pointer-events: none; }
-.shard.deadman + .shard-edge { color: var(--magenta); }
-#cam { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; filter: saturate(1.15) contrast(1.05); }
+#cam { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 #overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-.hud { position: absolute; color: var(--ink); background: rgba(8,9,14,.7); padding: 2px 6px; pointer-events: none; }
-.hud-tl { left: 20px; top: 14px; }
-.hud-tr { right: 20px; top: 14px; }
-.hud-tr.on { color: var(--magenta); }
-.speed { position: absolute; right: 24px; bottom: 14px; display: flex; align-items: baseline; gap: 10px; pointer-events: none; }
-.speed b { font: 700 40px/1 var(--display); color: #ffffff; }
-/* dead-man: hazard stripes inside the shard */
-.shard.deadman::after {
+/* Text over moving pictures needs something behind it, so a flat scrim. */
+.hud {
+  position: absolute; pointer-events: none;
+  font: 400 11px/1.3 var(--mono); letter-spacing: .08em; text-transform: uppercase;
+  color: var(--on-dark-1); background: rgba(13, 15, 16, .62); padding: 3px 7px;
+}
+.hud-tl { left: 14px; top: 12px; }
+.hud-tr { right: 14px; top: 12px; }
+.hud-tr.on { color: var(--accent); }
+.speed { position: absolute; right: 16px; bottom: 12px; display: flex; align-items: baseline; gap: 8px; pointer-events: none; }
+.speed b { font: 500 34px/1 var(--mono); font-variant-numeric: tabular-nums; color: #fff; }
+.speed .unit { font: 400 var(--micro)/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--on-dark-2); }
+/* Dead-man: a red frame inside the picture, blinking with the mode word.
+   Red as a fill is allowed; red as small text is not. */
+.viewport.deadman::after {
   content: ""; position: absolute; inset: 0; pointer-events: none;
-  border: 12px solid transparent;
-  border-image: repeating-linear-gradient(45deg, var(--magenta) 0 14px, transparent 14px 28px) 12;
-  animation: blink .6s steps(2) infinite;
+  border: 2px solid var(--red); animation: blink .6s steps(2) infinite;
 }
-@keyframes blink { 50% { opacity: .4; } }
+@keyframes blink { 50% { opacity: .3; } }
 
-/* ---- mode word ----------------------------------------------------------- */
+/* ---- mode word --------------------------------------------------------- */
 .drive {
-  text-align: center; font: 700 56px/1 var(--display); letter-spacing: .4em; padding-left: .4em;
-  text-transform: uppercase; color: var(--mute);
+  text-align: center; font: 500 60px/.9 var(--display); letter-spacing: .02em;
+  text-transform: uppercase; color: var(--on-dark-3);
 }
-.drive.live { color: var(--cyan); text-shadow: 0 0 18px rgba(47,214,255,.55); }
-.drive.deadman { color: var(--magenta); text-shadow: 0 0 18px rgba(255,47,184,.55); animation: blink .6s steps(2) infinite; }
+.drive.live { color: #fff; }
+.drive.deadman { color: var(--accent); animation: blink .6s steps(2) infinite; }
 
-/* ---- controls ------------------------------------------------------------ */
-.controls { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; }
+/* ---- controls ---------------------------------------------------------- */
+.controls {
+  grid-column: 1 / -1; display: flex; gap: 8px; align-items: center;
+  border-top: 1px solid var(--on-dark-line); padding-top: 14px;
+}
 .controls .sep { width: 20px; }
 .controls .spacer { flex: 1 1 auto; }
+/* The pill is the only rounded shape in the system. Ghost on dark. */
 button {
-  font: 500 17px var(--display); letter-spacing: .14em; text-transform: uppercase;
-  color: var(--ink); background: transparent; border: 1px solid var(--cyan);
-  padding: 13px 22px; cursor: pointer;
-  clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
+  font: 500 .85rem/1 var(--body); text-transform: capitalize;
+  color: #fff; background: transparent;
+  border: 1px solid var(--line-2); border-radius: 999px;
+  padding: .6rem 1.1rem; cursor: pointer;
 }
-button.trick { border-color: var(--edge); color: var(--dim); }
-button:hover { color: var(--cyan); }
-button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
-button:disabled { opacity: .3; cursor: default; }
-button.on { background: var(--cyan-deep); color: #ffffff; }
-button.armed { color: var(--bg); background: var(--magenta); border-color: var(--magenta); font-weight: 700; }
+button.trick { color: var(--on-dark-3); }
+button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+button:focus-visible { outline: 2px solid var(--red); outline-offset: 3px; }
+button:disabled { opacity: .35; cursor: default; }
+/* Policy running: the system's filled button on dark, white with ink text. */
+button.on { background: #fff; border-color: #fff; color: var(--ground); }
+button.on:hover:not(:disabled) { background: #fff; border-color: #fff; color: var(--ground); }
+button.armed { background: var(--red); border-color: var(--red); color: #fff; }
+button.armed:hover:not(:disabled) { background: var(--red-deep); border-color: var(--red-deep); color: #fff; }
 
-/* ---- command strip + log --------------------------------------------------- */
-.strip { grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 28px; padding: 10px 16px; }
-.strip .lbl { width: 80px; }
+/* ---- command strip and log --------------------------------------------- */
+.strip { grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 24px; }
+.strip .kicker { flex: 0 0 auto; width: 120px; }
 .strip canvas { flex: 0 0 520px; height: 100%; }
-.log { flex: 1; min-width: 0; font-size: 12px; line-height: 1.7; color: var(--dim); }
+.log { flex: 1; min-width: 0; font: 400 11px/1.7 var(--mono); color: var(--on-dark-3); }
 .log div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.log .bad { color: var(--magenta); }
-.log .ok { color: var(--ink); }
+.log .bad { color: var(--accent); }
+.log .ok { color: #fff; }
 
-@media (prefers-reduced-motion: reduce) { .drive.deadman, .shard.deadman::after { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .drive.deadman, .viewport.deadman::after { animation: none; } }

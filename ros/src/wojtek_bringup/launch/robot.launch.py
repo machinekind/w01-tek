@@ -9,6 +9,7 @@ nodes -- no RViz, no GUI. Run visualization/debug on the PC separately:
                                                [boot_pose:=home|folded] [bag:=true]
                                                [gamepad:=true] [perception:=true]
                                                [telemetry:=true] [foxglove:=true]
+                                               [deck:=true deck_cpus:=0,1]
 
 The servo settings the MD80s run with (impedance kp/kd, torque cap) come
 from the loaded policy's contract: policy_meta.json carries the pd block

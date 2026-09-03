@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>wojtek_deck</name>
+  <version>0.1.0</version>
+  <description>
+    The deck panel: a browser cockpit for a handheld (a Steam Deck, a
+    phone, a laptop) joined to the robot's wifi, and the robot-side gateway
+    it talks to. One process on the robot serves the page, carries the
+    drive commands over a websocket with the dead-man on THIS side of the
+    wifi link, and streams the colour camera as MJPEG. Telemetry for the
+    charts does not pass through here: the page reads it straight from
+    foxglove_bridge. Runs on the RPi (no GUI deps) and in the simulation.
+  </description>
+  <maintainer email="wysocki@undef.pl">Marcin Wysocki</maintainer>
+  <license>Apache License 2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_srvs</depend>
+  <!-- The sticks scale into the trained command box read from the policy
+       contract, same source policy_node clips against. -->
+  <depend>wojtek_policy</depend>
+  <!-- One HTTP server for the page, the websocket and the MJPEG stream. -->
+  <depend>python3-aiohttp</depend>
+  <!-- JPEG encoding of the camera frames. Soft dependency in code: without
+       it the stream is empty and everything else works. -->
+  <depend>python3-pil</depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

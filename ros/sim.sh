@@ -218,6 +218,9 @@ fi
 if ! $WANT_QT && ! printf '%s\n' ${EXTRA[@]+"${EXTRA[@]}"} | grep -q '^console:=none$'; then
   echo ">> console:  open http://localhost:8080 (drive pad, arm/pose buttons)"
 fi
+if ! printf '%s\n' ${EXTRA[@]+"${EXTRA[@]}"} | grep -q '^deck:=false$'; then
+  echo ">> deck:     open http://localhost:8090 (handheld cockpit; charts need --foxglove)"
+fi
 if $WANT_GAMEPAD && ! $MAC; then
   echo ">> gamepad:  left stick vx/yaw, right stick strafe, A arms, D-pad height"
 fi

@@ -67,6 +67,15 @@ async function load() {
 
   // The runtime looks for its WASM half next to this path.
   ort.env.wasm.wasmPaths = "/det/";
+  // One thread, deliberately. Left to itself the runtime opens a pool of
+  // them, and a pool started from inside a worker never comes up: the
+  // threads are workers of a worker, and they hang before the first one
+  // reports for duty. The page is cross-origin isolated and shared memory
+  // is there -- it is the nesting that breaks, and it hangs rather than
+  // failing, which would leave the panel waiting for boxes forever.
+  // Measured on a laptop at 416x416: 10 ms a frame on the GPU, 44 on one
+  // CPU thread, both faster than the camera, so this costs nothing today.
+  ort.env.wasm.numThreads = 1;
   const opts = { graphOptimizationLevel: "all" };
 
   // GPU first, CPU behind it. Two separate attempts rather than one list,

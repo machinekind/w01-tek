@@ -205,7 +205,7 @@ function onBoxes(w, h, boxes) {
 
 function startDetector() {
   const worker = new Worker("det_worker.js", { type: "module" });
-  let ready = false, last = 0, said = false;
+  let ready = false, last = 0, seen = 0, msAvg = 0;
   worker.onmessage = e => {
     const m = e.data;
     if (m.t === "ready") { ready = true; return; }
@@ -216,7 +216,12 @@ function startDetector() {
     }
     if (m.t === "error") { lamp("det", false, "det"); log(`detector: ${m.msg}`, "bad"); return; }
     if (m.t !== "det") return;
-    if (!said) { log(`detector on ${m.backend}, ${m.ms.toFixed(0)} ms/frame`, "ok"); said = true; }
+    // Say once how it went. Not on the first frames: those carry the
+    // warm-up and read many times too slow, so ignore three and average
+    // the ten after them.
+    seen++;
+    if (seen > 3) msAvg += m.ms / 10;
+    if (seen === 13) log(`detector on ${m.backend}, ${msAvg.toFixed(0)} ms/frame`, "ok");
     const t = now();
     // Detections per second, leaned on the last reading so the lamp shows a
     // rate instead of a flicker.

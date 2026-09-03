@@ -263,13 +263,16 @@ class GatewayNode(Node):
 
 @web.middleware
 async def cross_origin_isolation(request, handler):
-    """Let the page use threads.
+    """Let the page use shared memory.
 
-    The detector's WASM runs on several threads, and a browser only hands a
-    page shared memory once the page promises it is not sharing a process
-    with anything it did not ask for. These two headers are that promise.
-    Everything the panel loads is same-origin, so nothing else has to change:
-    the camera stream, the scripts and the bridge websocket are unaffected.
+    A browser only hands a page shared memory once the page promises it is
+    not sharing a process with anything it did not ask for. These two
+    headers are that promise. The detector runs on one thread today
+    (det_worker.js says why), so nothing needs the memory yet; the headers
+    stay because they are the one thing a multithreaded runtime will ask
+    for, and they cost nothing. Everything the panel loads is same-origin,
+    so nothing else has to change: the camera stream, the scripts and the
+    bridge websocket are unaffected.
 
     A response that has already started (the MJPEG stream, the websocket)
     sent its headers inside the handler, so this only decorates the rest --
@@ -481,10 +484,12 @@ def main():
     param = str(node.get_parameter("assets_dir").value).strip()
     assets_dir = Path(param).expanduser() if param else assets_store()
     if assets_dir is None or not assets_dir.is_dir():
+        where = (f"no detector assets in {assets_dir}" if assets_dir
+                 else "cannot tell where the detector assets are (set "
+                      "WOJTEK_DECK_ASSETS or the assets_dir parameter)")
         node.get_logger().warning(
-            f"no detector assets at {assets_dir} -- the panel will run "
-            "without detection. Fetch them with "
-            "ros/src/wojtek_deck/fetch_assets.sh")
+            f"{where} -- the panel will run without detection. Fetch them "
+            "with ros/src/wojtek_deck/fetch_assets.sh")
         assets_dir = None
     else:
         node.get_logger().info(f"detector assets from {assets_dir}")

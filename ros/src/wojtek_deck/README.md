@@ -153,13 +153,34 @@ pytest ros/src/wojtek_deck/test          # the drive gate (dead-man), no ROS
 node --test ros/src/wojtek_deck/web/test # the CDR decoder and the YOLOX maths
 ```
 
-The look is night-city instruments: a near-black ground, flat panels cut
-at two corners, and two colours with jobs. Cyan is the system (link words,
-telemetry, the reticle); magenta is people and warnings (a detected
-person, ARMED, the joint working hardest, under-voltage). The camera sits
-in a shard-cut frame in the middle with a reticle that points the heading
-and a short horizon line from the IMU, the mode word under it, attitude
-and gyro strips on the left, joint bars and system gauges on the right,
-the services along the bottom, the command strip and log under them.
-Dead-man is hazard stripes inside the frame and the one thing allowed to
-blink.
+## The look
+
+The panel follows the Machinekind design system, in its dark context: the
+ground is ink (`#0d0f10`), text is white at three strengths, and regions
+are told apart by 1px hairlines rather than boxes. No frames around
+blocks, no shadows, no glow, no gradients. There is one accent, the soft
+red `#d86a6a`, and it marks the thing worth looking at: the heading arc,
+a detected person, the joint working hardest, a refused command, the
+dead-man word. Full brand red `#bd3e3e` appears only as a fill -- the
+armed button and the dead-man frame -- because on this ground it does not
+have the contrast for small text. The one rounded shape is the button
+pill.
+
+Three faces, three jobs. Big Shoulders Display carries the wordmark and
+the mode word. IBM Plex Sans carries the words a person reads: button
+labels, row names. IBM Plex Mono carries measurement -- rates, angles,
+counts, the clock, the log -- and nothing else.
+
+The layout is unchanged: the camera plain in the middle with a reticle
+that points the heading and a short horizon line from the IMU, the mode
+word under it, attitude and gyro strips on the left, joint bars and
+system gauges on the right, the services along the bottom, the command
+strip and log under them. Dead-man is a red frame inside the picture and
+the one thing allowed to blink.
+
+The three fonts live in `web/fonts/`, taken from fontsource 5.3.0 and
+licensed under the OFL (`web/fonts/LICENSE.txt`). They ship with the
+package and are served from the robot, because its wifi has no internet;
+latin-ext is included so Polish letters render. `web/mark.svg` is the
+Machinekind mark from the brand kit; while it is missing the masthead
+keeps its space and shows nothing.

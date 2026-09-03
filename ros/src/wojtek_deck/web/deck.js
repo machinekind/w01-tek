@@ -1,10 +1,14 @@
-// The deck panel. Three links, three jobs:
+// The deck panel. Two links and a worker:
 //   gateway  ws://<host>/ws         commands out (sticks, buttons), status in
 //   bridge   ws://<host>:<bridge>   telemetry in, decoded from CDR (bridge.js)
-//   detector ws://localhost:8091    boxes from a detector running on the
-//                                   handheld itself (optional, ?det=<url>)
+//   detector det_worker.js          YOLOX on this machine, fed frames off
+//                                   the camera image already on screen
 // The camera is the gateway's MJPEG stream in a plain <img>; the reticle,
 // horizon and detections are drawn on the overlay canvas above it.
+//
+// Query parameters: ?bridge=<url> for the telemetry bridge, ?det=off to
+// switch detection off, ?det=<ws url> for a detector in another process,
+// ?detsrc=<url> to point the camera and the detector at a still image.
 import { Bridge } from "./bridge.js";
 import { Bars, Strip } from "./charts.js";
 
@@ -187,21 +191,67 @@ function drawOverlay() {
   }
 }
 
-// ---- detector (optional, on the handheld) --------------------------------
-function connectDetector() {
-  const url = params.get("det") || "ws://localhost:8091";
+// ---- detector -------------------------------------------------------------
+// Detection runs here, in the browser, in a worker (det_worker.js). Nothing
+// is asked of the robot: it already sends the camera, and the handheld is
+// the machine with a GPU to spare.
+let detRate = 0;             // detections per second, smoothed
+function onBoxes(w, h, boxes) {
+  det = { w, h, boxes: boxes || [], at: now() };
+  const people = det.boxes.filter(b => b.label === "person").length;
+  $("hud-det").textContent = `${det.boxes.length} objects · ${people} people`;
+  $("hud-det").classList.toggle("on", people > 0);
+}
+
+function startDetector() {
+  const worker = new Worker("det_worker.js", { type: "module" });
+  let ready = false, last = 0, said = false;
+  worker.onmessage = e => {
+    const m = e.data;
+    if (m.t === "ready") { ready = true; return; }
+    if (m.t === "log") { log(m.msg); return; }
+    if (m.t === "missing") {
+      log("detector assets missing – run fetch_assets.sh", "bad");
+      return;
+    }
+    if (m.t === "error") { lamp("det", false, "det"); log(`detector: ${m.msg}`, "bad"); return; }
+    if (m.t !== "det") return;
+    if (!said) { log(`detector on ${m.backend}, ${m.ms.toFixed(0)} ms/frame`, "ok"); said = true; }
+    const t = now();
+    // Detections per second, leaned on the last reading so the lamp shows a
+    // rate instead of a flicker.
+    if (last) detRate = detRate ? detRate * 0.8 + 0.2 / (t - last) : 1 / (t - last);
+    last = t;
+    lamp("det", true, `det ${m.backend} ${detRate.toFixed(0)}`);
+    onBoxes(m.w, m.h, m.boxes);
+  };
+  worker.onerror = e => { lamp("det", false, "det"); log(`detector: ${e.message}`, "bad"); };
+
+  // Take a frame off the camera image that is already on screen. No second
+  // stream: the wifi carries one MJPEG and this reads the picture out of it.
+  // Only when the worker has finished the last one, and no faster than
+  // 15 Hz, because past that the network is the limit anyway.
+  setInterval(() => {
+    if (!ready || !cam.naturalWidth) return;
+    ready = false;
+    const w = cam.naturalWidth, h = cam.naturalHeight;
+    createImageBitmap(cam)
+      .then(bmp => worker.postMessage({ t: "frame", bmp, w, h }, [bmp]))
+      .catch(() => { ready = true; });
+  }, 66);
+}
+
+// The escape hatch: a detector in some other process, sending the same
+// {t:"det", w, h, boxes} frames over a websocket (?det=ws://...).
+function connectDetector(url) {
   let ws;
-  try { ws = new WebSocket(url); } catch { setTimeout(connectDetector, 10000); return; }
+  try { ws = new WebSocket(url); } catch { setTimeout(() => connectDetector(url), 10000); return; }
   ws.onopen = () => { lamp("det", true, "det"); $("hud-det").textContent = "detector on"; };
-  ws.onclose = () => { lamp("det", false, "det"); $("hud-det").textContent = "no detector"; $("hud-det").classList.remove("on"); setTimeout(connectDetector, 5000); };
+  ws.onclose = () => { lamp("det", false, "det"); $("hud-det").textContent = "no detector"; $("hud-det").classList.remove("on"); setTimeout(() => connectDetector(url), 5000); };
   ws.onerror = () => {};
   ws.onmessage = e => {
     const m = JSON.parse(e.data);
-    if (m.t !== "det") return;
-    det = { w: m.w, h: m.h, boxes: m.boxes || [], at: now() };
-    const people = det.boxes.filter(b => b.label === "person").length;
-    $("hud-det").textContent = `${det.boxes.length} objects · ${people} people`;
-    $("hud-det").classList.toggle("on", people > 0);
+    if (m.t === "det") onBoxes(m.w, m.h, m.boxes);
   };
 }
 
@@ -287,4 +337,16 @@ setInterval(() => {
 setInterval(() => { $("hud-clock").textContent = stamp(); }, 1000);
 
 connectGateway();
-connectDetector();
+
+// ?detsrc=<url> puts a still image in the shard instead of the camera, and
+// the detector then looks at that. It is how the detection path gets tested
+// without a robot pointed at something interesting. Same-origin only: the
+// page is cross-origin isolated, so a picture from elsewhere will not load.
+// Drop one in the asset store and it is at /det/<name>.
+const detsrc = params.get("detsrc");
+if (detsrc) cam.src = detsrc;
+
+const detParam = params.get("det");
+if (detParam === "off") log("detector off (?det=off)");
+else if (detParam) connectDetector(detParam);
+else startDetector();

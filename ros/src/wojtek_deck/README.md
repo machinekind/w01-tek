@@ -153,13 +153,24 @@ pytest ros/src/wojtek_deck/test          # the drive gate (dead-man), no ROS
 node --test ros/src/wojtek_deck/web/test # the CDR decoder and the YOLOX maths
 ```
 
-The look is night-city instruments: a near-black ground, flat panels cut
-at two corners, and two colours with jobs. Cyan is the system (link words,
-telemetry, the reticle); magenta is people and warnings (a detected
-person, ARMED, the joint working hardest, under-voltage). The camera sits
-in a shard-cut frame in the middle with a reticle that points the heading
-and a short horizon line from the IMU, the mode word under it, attitude
-and gyro strips on the left, joint bars and system gauges on the right,
-the services along the bottom, the command strip and log under them.
-Dead-man is hazard stripes inside the frame and the one thing allowed to
-blink.
+## The look
+
+The panel follows the Machinekind design system, on paper, the way the
+system's own pages do: white ground, ink for text at three strengths, and
+regions told apart by 1px hairlines rather than boxes. No frames around
+blocks, no shadows, no glow, no gradients. There is one accent, brand red
+`#bd3e3e`, and it marks the thing worth looking at: the joint working
+hardest, a refused command, the dead-man word, the armed button. The
+camera picture is the one dark thing on the page, so the text drawn over
+it takes the system's on-dark whites and the soft red `#d86a6a`, the red
+the system allows on ink.
+
+Three faces with three jobs, served from the robot (`web/fonts/`,
+fontsource 5.3.0 builds, SIL Open Font License; latin-ext is in, it
+carries the Polish letters): Big Shoulders Display carries the WOJTEK
+title and the mode word, IBM Plex Sans carries words a person reads, IBM
+Plex Mono carries measurement: rates, angles, counts, the clock, the log.
+
+`web/mark.svg` and `web/favicon.svg` are the Machinekind mark from the
+brand kit: the mark in its red variant, the primary one on paper, and the
+favicon on its red field because at 16 px the knot needs it.

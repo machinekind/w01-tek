@@ -1,7 +1,7 @@
 // Canvas charts for the panel, no library.
-//   Strip  -- a few series over a sliding time window, one colour, identity
-//             by dash pattern, direct labels at the right edge
-//   Bars   -- one value per joint; the largest one in the second colour
+//   Strip  -- a few series over a sliding time window, all in white,
+//             identity by dash pattern, direct labels at the right edge
+//   Bars   -- one value per joint; the largest one in the accent
 // Colours come from CSS custom properties so the palette lives in one place.
 
 function cssVar(name) {
@@ -36,7 +36,8 @@ export class Strip {
     if (c.width !== W * dpr || c.height !== H * dpr) { c.width = W * dpr; c.height = H * dpr; }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
-    const line = cssVar("--cyan"), edge = cssVar("--edge"), ink = cssVar("--ink");
+    // Lines and labels share one white; the baseline is the hairline.
+    const line = cssVar("--ink-2"), edge = cssVar("--line");
 
     const padR = 64, x0 = 0, x1 = W - padR, y0 = 3, y1 = H - 3;
     const t0 = now - this.opts.window, t1 = now;
@@ -62,7 +63,7 @@ export class Strip {
     ctx.beginPath(); ctx.moveTo(x0, Math.round(zy) + 0.5); ctx.lineTo(x1, Math.round(zy) + 0.5); ctx.stroke();
 
     ctx.font = `10px ${cssVar("--mono")}`;
-    ctx.textBaseline = "middle"; ctx.fillStyle = ink;
+    ctx.textBaseline = "middle"; ctx.fillStyle = line;
     const labels = [];
     this.series.forEach((s, i) => {
       ctx.strokeStyle = line; ctx.lineWidth = 1.5; ctx.lineJoin = "round";
@@ -95,7 +96,7 @@ export class Strip {
 
 export class Bars {
   // values in [-max, max], drawn as bars from the bottom by magnitude; the
-  // largest one is drawn in the second colour
+  // largest one is drawn in the accent
   constructor(canvas, opts) {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d");
@@ -119,7 +120,7 @@ export class Bars {
     for (let i = 0; i < n; i++) {
       const f = Math.min(1, Math.abs(this.values[i] || 0) / this.opts.max);
       const h = Math.max(2, f * (H - 2));
-      ctx.fillStyle = i === k ? cssVar("--magenta") : cssVar("--cyan");
+      ctx.fillStyle = i === k ? cssVar("--accent") : cssVar("--line-2");
       ctx.fillRect(i * (bw + gap), H - h, bw, h);
     }
   }

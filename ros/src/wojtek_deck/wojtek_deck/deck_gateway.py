@@ -45,6 +45,7 @@ which rclpy allows from any thread.
 import asyncio
 import io
 import os
+import signal
 import threading
 import time
 import json
@@ -56,6 +57,7 @@ from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
+from rclpy.signals import SignalHandlerOptions
 from sensor_msgs.msg import Image
 from std_srvs.srv import SetBool, Trigger
 
@@ -470,7 +472,12 @@ class Server:
 
 
 def main():
-    rclpy.init()
+    # No rclpy signal handlers: they would shut the ROS context down under
+    # the spin thread and leave the web server running with no ROS behind
+    # it -- a page that loads and never gets a frame, on a port the next
+    # launch cannot take. The asyncio loop below owns the signals instead
+    # and takes everything down in one go.
+    rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
@@ -505,15 +512,30 @@ def main():
     server = Server(node, web_dir, loop, assets_dir)
     node.on_frame = server.push_frame
 
+    stopping = asyncio.Event()
+
+    def stop(why):
+        if not stopping.is_set():
+            node.get_logger().info(f"deck gateway stopping ({why})")
+            stopping.set()
+
     def spin():
-        # On SIGINT rclpy's own handler shuts the context down under the
-        # spinner, which then raises -- an expected teardown race.
+        # If ROS goes away underneath us (an external shutdown), the server
+        # must not outlive it: nothing behind it would ever send a frame.
         try:
             rclpy.spin(node)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 -- shutdown races raise here
             pass
+        finally:
+            loop.call_soon_threadsafe(stop, "ROS spin ended")
 
-    threading.Thread(target=spin, daemon=True).start()
+    spinner = threading.Thread(target=spin, daemon=True)
+    spinner.start()
+
+    # Ctrl-C at a terminal, SIGTERM from a launch file or systemd: one path
+    # for both, and it ends in the finally below.
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, stop, signal.Signals(sig).name)
 
     async def run():
         runner = web.AppRunner(server.app(), access_log=None)
@@ -521,17 +543,25 @@ def main():
         site = web.TCPSite(runner, "0.0.0.0", port)
         await site.start()
         node.get_logger().info(f"deck panel on http://0.0.0.0:{port}")
+        ticks = asyncio.gather(server.drive_tick(), server.status_tick())
         try:
-            await asyncio.gather(server.drive_tick(), server.status_tick())
+            await stopping.wait()
         finally:
+            ticks.cancel()
+            try:
+                await ticks
+            except asyncio.CancelledError:
+                pass
             await runner.cleanup()
 
     try:
         loop.run_until_complete(run())
-    except KeyboardInterrupt:
-        pass
     finally:
+        # Shut ROS down first so the spin thread wakes up and returns, then
+        # wait for it. Exiting while it still sits inside the executor ends
+        # in a C++ abort rather than a clean exit.
         rclpy.try_shutdown()
+        spinner.join(timeout=3.0)
 
 
 if __name__ == "__main__":

@@ -34,7 +34,8 @@ Simulation (the gateway is on by default there):
 
 ```bash
 ./ros/sim.sh                                   # or inside ./ros/dev.sh:
-ros2 launch wojtek_pc sim.launch.py            # deck:=true is the default
+ros2 launch wojtek_pc sim.launch.py            # deck:=true is the default;
+                                               # telemetry:=true fills the systems panel
 ros2 launch wojtek_pc viz.launch.py foxglove:=true rviz:=false   # the charts' source
 ```
 
@@ -42,9 +43,10 @@ Open <http://localhost:8090>. A handheld on the same LAN uses the machine's
 address instead of `localhost`; the page finds the bridge on the same host,
 port 8765 (`?bridge=ws://host:port` overrides).
 
-Robot: `robot.launch.py deck:=true deck_cpus:=0,1` (plus `foxglove:=true
-telemetry:=true` from the telemetry bringup for the charts). The handheld
-joins the robot's access point and opens `http://10.42.0.2:8090`.
+Robot: `robot.launch.py deck:=true deck_cpus:=0,1`, plus `foxglove:=true
+telemetry:=true` for the charts (the RPi service already passes those two;
+the deck itself stays opt-in there). The handheld joins the robot's access
+point and opens `http://10.42.0.2:8090`.
 
 Docker note: the dev image needs a rebuild once for the new package's
 dependencies (`python3-aiohttp`): `docker compose build` in `ros/docker`.

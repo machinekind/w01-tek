@@ -79,9 +79,10 @@ body {
   display: flex; align-items: center; gap: 20px;
   border-bottom: 1px solid var(--line);
 }
-/* The brand mark, in currentColor so it takes the ink of the page. The
-   knot is 1118 x 956, so at 28px tall it is a little wider than tall. */
-.mark { height: 28px; width: auto; flex: 0 0 auto; display: block; color: var(--ink); }
+/* The brand mark, the kit's red variant (the primary one on paper). It is
+   an <img>, which does not inherit CSS colour, so the colour lives in the
+   file. The knot is 1118 x 956, so at 28px tall it is a bit wider than tall. */
+.mark { height: 28px; width: auto; flex: 0 0 auto; display: block; }
 .brand {
   font: 500 26px/1 var(--display); letter-spacing: .055em;
   text-transform: uppercase; color: var(--ink);

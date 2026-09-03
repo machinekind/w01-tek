@@ -172,5 +172,5 @@ title and the mode word, IBM Plex Sans carries words a person reads, IBM
 Plex Mono carries measurement: rates, angles, counts, the clock, the log.
 
 `web/mark.svg` and `web/favicon.svg` are the Machinekind mark from the
-brand kit: the mark in `currentColor` so it takes the page's ink, the
+brand kit: the mark in its red variant, the primary one on paper, and the
 favicon on its red field because at 16 px the knot needs it.

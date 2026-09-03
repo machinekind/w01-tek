@@ -10,6 +10,10 @@
 // loads its WASM half with a dynamic import, and a classic worker cannot do
 // either. So: module worker, `import`, no importScripts.
 //
+// The worker is started as det_worker.js?backend=auto|gpu|cpu. auto tries
+// the GPU and falls back to the CPU; the page uses gpu/cpu to pin one, and
+// restarts this worker on the CPU when the GPU path never answers.
+//
 // Messages in
 //   {t: "frame", bmp, w, h}   an ImageBitmap of a camera frame, transferred
 // Messages out
@@ -26,6 +30,7 @@ import * as ort from "/det/ort.webgpu.min.mjs";
 import { letterboxScale, postprocess } from "./yolox.js";
 
 let cfg = null, session = null, backend = "";
+const wanted = new URL(self.location.href).searchParams.get("backend") || "auto";
 let canvas = null, ctx = null, input = 0;
 
 // The tensor the network wants, built from one frame.
@@ -83,7 +88,7 @@ async function load() {
   // ended up on, and the panel puts that word on a lamp. Asking twice costs
   // nothing: the first attempt only fails on a machine with no WebGPU, and
   // then it fails immediately.
-  if (self.navigator.gpu) {
+  if (wanted !== "cpu" && self.navigator.gpu) {
     try {
       session = await ort.InferenceSession.create(
         bytes, { ...opts, executionProviders: ["webgpu"] });
@@ -92,6 +97,7 @@ async function load() {
       self.postMessage({ t: "log", msg: `webgpu unavailable (${err})` });
     }
   }
+  if (!session && wanted === "gpu") throw new Error("webgpu unavailable and backend pinned to gpu");
   if (!session) {
     session = await ort.InferenceSession.create(
       bytes, { ...opts, executionProviders: ["wasm"] });

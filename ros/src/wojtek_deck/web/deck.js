@@ -7,8 +7,9 @@
 // horizon and detections are drawn on the overlay canvas above it.
 //
 // Query parameters: ?bridge=<url> for the telemetry bridge, ?det=off to
-// switch detection off, ?det=<ws url> for a detector in another process,
-// ?detsrc=<url> to point the camera and the detector at a still image.
+// switch detection off, ?det=cpu or ?det=gpu to pin the detector's backend,
+// ?det=<ws url> for a detector in another process, ?detsrc=<url> to point
+// the camera and the detector at a still image.
 import { Bridge } from "./bridge.js";
 import { Bars, Strip } from "./charts.js";
 
@@ -196,6 +197,7 @@ function drawOverlay() {
 // is asked of the robot: it already sends the camera, and the handheld is
 // the machine with a GPU to spare.
 let detRate = 0;             // detections per second, smoothed
+const GPU_DEADLINE_MS = 8000; // first GPU answer must land within this
 function onBoxes(w, h, boxes) {
   det = { w, h, boxes: boxes || [], at: now() };
   const people = det.boxes.filter(b => b.label === "person").length;
@@ -203,19 +205,39 @@ function onBoxes(w, h, boxes) {
   $("hud-det").classList.toggle("on", people > 0);
 }
 
-function startDetector() {
-  const worker = new Worker("det_worker.js", { type: "module" });
-  let ready = false, last = 0, seen = 0, msAvg = 0;
+function startDetector(backend) {
+  const worker = new Worker(`det_worker.js?backend=${backend}`, { type: "module" });
+  let ready = false, last = 0, seen = 0, msAvg = 0, feed = null, guard = null;
+  const stopWorker = () => { clearInterval(feed); clearTimeout(guard); worker.terminate(); };
+  // The GPU path can wedge: one Chrome build we met took the session and
+  // then never answered a frame, and dragged the whole tab down with it.
+  // So the first frame gets a deadline; miss it and the worker is thrown
+  // away and started again on the CPU, which is slow but does not hang.
+  const armGuard = () => {
+    clearTimeout(guard);
+    if (backend === "cpu") return;
+    guard = setTimeout(() => {
+      stopWorker();
+      log("detector: gpu did not answer in time, switching to cpu", "bad");
+      startDetector("cpu");
+    }, GPU_DEADLINE_MS);
+  };
   worker.onmessage = e => {
     const m = e.data;
-    if (m.t === "ready") { ready = true; return; }
+    if (m.t === "ready") { ready = true; if (!seen) armGuard(); return; }
     if (m.t === "log") { log(m.msg); return; }
     if (m.t === "missing") {
+      stopWorker();
       log("detector assets missing – run fetch_assets.sh", "bad");
       return;
     }
-    if (m.t === "error") { lamp("det", false, "det"); log(`detector: ${m.msg}`, "bad"); return; }
+    if (m.t === "error") {
+      stopWorker(); lamp("det", false, "det"); log(`detector: ${m.msg}`, "bad");
+      if (backend !== "cpu") startDetector("cpu");
+      return;
+    }
     if (m.t !== "det") return;
+    clearTimeout(guard);
     // Say once how it went. Not on the first frames: those carry the
     // warm-up and read many times too slow, so ignore three and average
     // the ten after them.
@@ -230,13 +252,16 @@ function startDetector() {
     lamp("det", true, `det ${m.backend} ${detRate.toFixed(0)}`);
     onBoxes(m.w, m.h, m.boxes);
   };
-  worker.onerror = e => { lamp("det", false, "det"); log(`detector: ${e.message}`, "bad"); };
+  worker.onerror = e => {
+    stopWorker(); lamp("det", false, "det"); log(`detector: ${e.message}`, "bad");
+    if (backend !== "cpu") startDetector("cpu");
+  };
 
   // Take a frame off the camera image that is already on screen. No second
   // stream: the wifi carries one MJPEG and this reads the picture out of it.
   // Only when the worker has finished the last one, and no faster than
   // 15 Hz, because past that the network is the limit anyway.
-  setInterval(() => {
+  feed = setInterval(() => {
     if (!ready || !cam.naturalWidth) return;
     ready = false;
     const w = cam.naturalWidth, h = cam.naturalHeight;
@@ -353,5 +378,6 @@ if (detsrc) cam.src = detsrc;
 
 const detParam = params.get("det");
 if (detParam === "off") log("detector off (?det=off)");
+else if (detParam === "cpu" || detParam === "gpu") startDetector(detParam);
 else if (detParam) connectDetector(detParam);
-else startDetector();
+else startDetector("auto");

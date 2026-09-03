@@ -118,6 +118,7 @@ panel loads is same-origin, so nothing else had to change.
 | query | what it does |
 |---|---|
 | `?det=off` | no detection |
+| `?det=cpu` / `?det=gpu` | pin the backend (default: try the GPU, fall back to the CPU) |
 | `?det=ws://host:port` | boxes from a detector in another process, below |
 | `?detsrc=<url>` | a still image in the shard instead of the camera |
 
@@ -125,6 +126,12 @@ panel loads is same-origin, so nothing else had to change.
 something interesting: drop a picture in the asset store and open
 `?detsrc=/det/<name>`. It has to be same-origin — the page is cross-origin
 isolated, so a picture from elsewhere will not load at all.
+
+The GPU path gets a deadline: if the first frame has not come back within
+8 s the worker is thrown away and started again on the CPU, and the log
+says so. That covers a browser whose WebGPU takes the session and then
+never answers. The first WebGPU run in a fresh browser profile can also be
+slow while the shaders compile once; after that it is quick.
 
 ### A detector somewhere else
 

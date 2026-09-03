@@ -10,6 +10,10 @@ One HTTP port (parameter `port`, default 8090) carries three things:
   GET /stream.mjpg   the colour camera as MJPEG (multipart), for the page's
                      <img> and for any detector on the handheld that wants
                      the same frames (OpenCV opens the URL directly)
+  GET /det/          the detector's assets: the YOLOX network and the
+                     onnxruntime-web runtime the page runs it with. Big
+                     downloaded binaries, so they live in a store outside
+                     the package (fetch_assets.sh), not in web/.
 
 The page reads its charts from foxglove_bridge, not from here: this process
 only carries what has to run on the robot, which is the dead-man. The
@@ -44,6 +48,7 @@ import os
 import threading
 import time
 import json
+from pathlib import Path
 
 import rclpy
 from aiohttp import web
@@ -85,6 +90,28 @@ TRIGGER_SERVICES = ("zero", "stand_up", "lie_down", "reset",
                     "trick_paw_wave", "trick_bow", "trick_sit", "trick_shake")
 
 
+def assets_store():
+    """Where the detector's downloaded files live on this machine.
+
+    The same shape as wojtek_policy's policy_store, and for the same reason:
+    they are fetched binaries that must not be committed, so they sit in a
+    gitignored directory next to the workspace's `src/` -- ros/deck_assets in
+    a checkout, ~/wojtek_ws/deck_assets on the robot. WOJTEK_DECK_ASSETS wins
+    when set, which is how a container names it, because a build there is not
+    always --symlink-install and the walk up from this file finds no src/.
+
+    Returns None when it cannot tell; the caller then serves the panel
+    without a detector rather than refusing to start.
+    """
+    env = os.environ.get("WOJTEK_DECK_ASSETS", "").strip()
+    if env:
+        return Path(env).expanduser()
+    for parent in Path(__file__).resolve().parents:
+        if parent.name == "src":
+            return parent.parent / "deck_assets"
+    return None
+
+
 class GatewayNode(Node):
     """ROS half: service clients, the /cmd_vel publisher, the camera tap."""
 
@@ -100,6 +127,9 @@ class GatewayNode(Node):
         self.declare_parameter("bridge_port", 8765)
         self.declare_parameter("color_topic", DEFAULT_COLOR_TOPIC)
         self.declare_parameter("jpeg_quality", 80)
+        # Where the detector's files are. Empty means "work it out", which
+        # is right everywhere except a container that named it differently.
+        self.declare_parameter("assets_dir", "")
 
         self._cli = {k: self.create_client(SetBool, f"wojtek/{k}")
                      for k in SETBOOL_SERVICES}
@@ -231,12 +261,33 @@ class GatewayNode(Node):
         self._pub_cmd.publish(t)
 
 
+@web.middleware
+async def cross_origin_isolation(request, handler):
+    """Let the page use threads.
+
+    The detector's WASM runs on several threads, and a browser only hands a
+    page shared memory once the page promises it is not sharing a process
+    with anything it did not ask for. These two headers are that promise.
+    Everything the panel loads is same-origin, so nothing else has to change:
+    the camera stream, the scripts and the bridge websocket are unaffected.
+
+    A response that has already started (the MJPEG stream, the websocket)
+    sent its headers inside the handler, so this only decorates the rest --
+    which is fine, because the promise has to be on the page itself.
+    """
+    resp = await handler(request)
+    resp.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+    resp.headers["Cross-Origin-Embedder-Policy"] = "require-corp"
+    return resp
+
+
 class Server:
     """asyncio half: HTTP + websocket + MJPEG, and the drive tick."""
 
-    def __init__(self, node, web_dir, loop):
+    def __init__(self, node, web_dir, loop, assets_dir=None):
         self.node = node
         self.web_dir = web_dir
+        self.assets_dir = assets_dir
         self.loop = loop
         self.clients = set()      # websocket connections
         self.streams = set()      # asyncio.Queue per MJPEG viewer
@@ -393,10 +444,15 @@ class Server:
             await asyncio.sleep(1.0 / STATUS_HZ)
 
     def app(self):
-        app = web.Application()
+        app = web.Application(middlewares=[cross_origin_isolation])
         app.router.add_get("/", self.index)
         app.router.add_get("/ws", self.websocket)
         app.router.add_get("/stream.mjpg", self.stream)
+        # The detector's assets, before the catch-all below: aiohttp tries
+        # routes in the order they were added, and "/" matches everything.
+        if self.assets_dir is not None:
+            app.router.add_static("/det/", str(self.assets_dir),
+                                  show_index=False)
         # css/js next to the page; no directory listing
         app.router.add_static("/", self.web_dir, show_index=False)
         return app
@@ -419,7 +475,21 @@ def main():
     node = GatewayNode(emit, want_frames)
     port = int(node.get_parameter("port").value)
     web_dir = os.path.join(get_package_share_directory("wojtek_deck"), "web")
-    server = Server(node, web_dir, loop)
+
+    # The detector's files are optional. Without them the panel is the panel
+    # it always was, minus the boxes, so say so once and carry on.
+    param = str(node.get_parameter("assets_dir").value).strip()
+    assets_dir = Path(param).expanduser() if param else assets_store()
+    if assets_dir is None or not assets_dir.is_dir():
+        node.get_logger().warning(
+            f"no detector assets at {assets_dir} -- the panel will run "
+            "without detection. Fetch them with "
+            "ros/src/wojtek_deck/fetch_assets.sh")
+        assets_dir = None
+    else:
+        node.get_logger().info(f"detector assets from {assets_dir}")
+
+    server = Server(node, web_dir, loop, assets_dir)
     node.on_frame = server.push_frame
 
     def spin():

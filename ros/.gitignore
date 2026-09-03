@@ -38,5 +38,11 @@ deploy/rpi/cache/
 /policies/
 /policy_override
 
+# The deck panel's detector assets: the YOLOX network and the
+# onnxruntime-web runtime the page downloads. Fetched by
+# src/wojtek_deck/fetch_assets.sh -- other people's binaries, tens of
+# megabytes, so they are downloaded rather than committed.
+/deck_assets/
+
 .policies/
 

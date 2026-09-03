@@ -25,6 +25,10 @@ services:
       # policy fetched in the container is fetched for the host too, and
       # deploy.sh rsyncs the same store to the RPi.
       - ../policies:/ros2_ws/policies
+      # The deck panel's detector assets (the YOLOX network and the
+      # onnxruntime-web runtime the page downloads). Same idea as the
+      # policy store: fetched once on the host, served from here.
+      - ../deck_assets:/ros2_ws/deck_assets
       # Per-run rosbags. This container is the PC dev environment, where
       # viz.launch.py bag:=true records the whole run (all RPi topics, over
       # DDS). The launch default bag_dir is ~/wojtek_bags == /root/wojtek_bags
@@ -94,6 +98,10 @@ services:
       # a symlink-installed src tree, and a build inside the container may
       # not have one.
       - WOJTEK_POLICY_STORE=/ros2_ws/policies
+      # Same reason for the deck panel's detector assets: a build here is
+      # not always --symlink-install, so the automatic derivation has no
+      # src/ tree to walk and the location has to be named.
+      - WOJTEK_DECK_ASSETS=/ros2_ws/deck_assets
     # No command: override here on purpose - the image's CMD (sleep infinity)
     # just keeps this standing as a dev environment. Use ../dev.sh to start
     # this and get a shell in one step; edit src/ on the host as normal,

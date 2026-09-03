@@ -145,6 +145,16 @@ if [ -n "${POLICY}" ]; then
     PYTHONPATH="${HERE}/src/wojtek_policy" python3 -m wojtek_policy.policy_source "${POLICY}"
 fi
 
+# The deck panel's detector runs in the browser on the handheld, and the
+# handheld gets its files from the robot. So the network assets are fetched
+# here, where there is internet, and rsynced below. Unlike the policy, a
+# missing detector is not a broken robot -- the panel drops the boxes and
+# everything else works -- so a failure here warns and the deploy carries on.
+echo ">> fetch the deck panel's detector assets"
+"${HERE}/src/wojtek_deck/fetch_assets.sh" \
+    || echo "!! could not fetch the deck assets (no internet?) -- the panel " \
+            "will run without detection until this succeeds"
+
 # The policy store holds the snapshots this PC has resolved. The RPi has no
 # internet, so policies reach it only through this rsync. A fresh clone has
 # no store, and syncing then would --delete a working robot's policies, so
@@ -154,6 +164,16 @@ if [ -d "${HERE}/policies" ]; then
     rsync -az --delete "${HERE}/policies/" "${RPI_HOST}:${REMOTE_WS}/policies/"
 else
     echo ">> no ${HERE}/policies here -- leaving the robot's policy store alone"
+fi
+
+# Same rule for the detector assets: the robot has no internet, so they get
+# there only through this rsync, and an absent store here means the fetch
+# above failed or was never run -- leave whatever the robot already has.
+if [ -d "${HERE}/deck_assets" ]; then
+    echo ">> rsync deck assets -> ${RPI_HOST}:${REMOTE_WS}/deck_assets"
+    rsync -az --delete "${HERE}/deck_assets/" "${RPI_HOST}:${REMOTE_WS}/deck_assets/"
+else
+    echo ">> no ${HERE}/deck_assets here -- leaving the robot's deck assets alone"
 fi
 
 # The override file names the policy every bringup on the robot comes up

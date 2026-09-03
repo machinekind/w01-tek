@@ -11,9 +11,12 @@ setup(
     data_files=[
         ("share/ament_index/resource_index/packages", [f"resource/{package_name}"]),
         (f"share/{package_name}", ["package.xml"]),
-        # The whole page: html, css and the JS modules it imports.
+        # The whole page: html, css, the JS modules it imports, and the
+        # detector's settings. Named rather than globbed for *.json, because
+        # web/package.json is there for `node --test` and belongs to nobody
+        # on the robot.
         (f"share/{package_name}/web", glob("web/*.html") + glob("web/*.css")
-         + glob("web/*.js")),
+         + glob("web/*.js") + ["web/yolox.json"]),
     ],
     install_requires=["setuptools"],
     zip_safe=True,

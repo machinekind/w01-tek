@@ -151,7 +151,7 @@ function drawOverlay() {
   // The overlay is drawn in the same colours as the rest of the panel:
   // white at two strengths for everything that just sits there, and the
   // one accent for the thing worth looking at.
-  const dim = css("--on-dark-2"), faint = css("--on-dark-3"), accent = css("--accent"), mono = css("--mono");
+  const dim = css("--on-image-2"), faint = css("--on-image-3"), accent = css("--accent-image"), mono = css("--mono");
   const [roll, pitch, yaw] = rpy;
   const cx = W / 2, cy = H / 2, R = Math.min(W, H) * 0.2;
 

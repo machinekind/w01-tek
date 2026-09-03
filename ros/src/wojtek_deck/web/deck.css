@@ -1,13 +1,14 @@
 /* Deck panel, in the Machinekind design system.
 
-   The whole page is the system's dark context: the ground is ink (#0d0f10),
-   text is white and two steps of white, and the accent is red-soft. Brand
-   red itself is only ever a fill (the armed button, the dead-man frame),
-   never small text -- on this ground it does not have the contrast for it.
+   The page stands on paper, the way the system's own pages do: white
+   ground, ink for text at three strengths, hairlines for divisions, and
+   brand red as the one accent. The only dark thing on the page is the
+   camera picture, and the text drawn over it uses the system's on-dark
+   whites, because that text stands on a photo, not on paper.
 
    Three rules carried over from the system:
-     1. Colour sets the context. Everything here stands on ink, so nothing
-        inside has to know what it stands on.
+     1. Colour sets the context. The page is the paper context; the camera
+        block is its own small dark context. Nothing else picks colours.
      2. Divisions are 1px hairlines. No boxes, no shadows, no glow.
      3. Spacing comes from the parent grid. Nothing inside carries margins.
 
@@ -15,19 +16,28 @@
    the mode word, the body face carries words a person reads, and the mono
    face carries measurement -- rates, angles, counts, clock. */
 :root {
-  /* brand */
+  /* brand, verbatim from system.css */
   --red: #bd3e3e;
   --red-deep: #9c2f2f;
   --red-soft: #d86a6a;
-  --ground: #0d0f10;
-  /* the dark context: white at three strengths, plus the hairline */
-  --on-dark-1: rgba(255, 255, 255, .92);
-  --on-dark-2: rgba(255, 255, 255, .72);
-  --on-dark-3: rgba(255, 255, 255, .55);
-  --on-dark-line: rgba(255, 255, 255, .16);
-  --line-2: rgba(255, 255, 255, .28);
-  /* one accent, and it is the soft red */
-  --accent: var(--red-soft);
+  --red-wash: #fbf1f1;
+  --ink: #0d0f10;
+  --ink-2: #4e5558;
+  --ink-3: #6b7376;
+  --paper: #ffffff;
+  --paper-2: #f5f6f6;
+  --paper-3: #eceeef;
+  --line: #e4e7e8;
+  --line-2: #d2d7d9;
+  /* the one accent on paper */
+  --accent: var(--red);
+  /* the camera block: text over a picture stands on dark, so it takes the
+     system's on-dark whites, and its accent is the soft red, the one the
+     system allows on ink */
+  --on-image-1: rgba(255, 255, 255, .92);
+  --on-image-2: rgba(255, 255, 255, .72);
+  --on-image-3: rgba(255, 255, 255, .55);
+  --accent-image: var(--red-soft);
   /* faces, verbatim from the system */
   --display: 'Big Shoulders Display Variable', 'Big Shoulders Display', 'Oswald', 'Arial Narrow', system-ui, sans-serif;
   --body: 'IBM Plex Sans Variable', 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
@@ -37,7 +47,7 @@
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body {
-  margin: 0; background: var(--ground); color: #fff;
+  margin: 0; background: var(--paper); color: var(--ink);
   font: 400 13px/1.45 var(--body);
   overflow: hidden; user-select: none; -webkit-user-select: none;
   -webkit-font-smoothing: antialiased;
@@ -50,47 +60,48 @@ body {
 .kicker {
   display: flex; align-items: center; gap: .6rem;
   font: 500 var(--micro)/1 var(--mono); letter-spacing: .2em;
-  text-transform: uppercase; color: var(--on-dark-2); white-space: nowrap;
+  text-transform: uppercase; color: var(--ink-2); white-space: nowrap;
 }
-.kicker::before { content: ""; flex: 0 0 1.75rem; height: 1px; background: var(--on-dark-line); }
+.kicker::before { content: ""; flex: 0 0 1.75rem; height: 1px; background: var(--line-2); }
 
 /* A row of readings: the thing on the left in words, the number on the
    right in mono, digits aligned so they do not dance as they change. */
 .row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
-.row > span { font: 400 12px/1.5 var(--mono); font-variant-numeric: tabular-nums; color: var(--on-dark-2); }
-.row > span:last-child { text-align: right; }
+.row > span { font: 400 12px/1.5 var(--mono); font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.row > span:last-child { text-align: right; color: var(--ink); }
 .row > .k { font-family: var(--body); font-size: 12.5px; letter-spacing: 0; }
 .row.hot > span:last-child { color: var(--accent); }
 .row.warn.now > span:last-child { color: var(--accent); }
-.row.warn.ever > span:last-child { color: var(--on-dark-3); }
+.row.warn.ever > span:last-child { color: var(--ink-3); }
 
 /* ---- masthead ---------------------------------------------------------- */
 .top {
   display: flex; align-items: center; gap: 20px;
-  border-bottom: 1px solid var(--on-dark-line);
+  border-bottom: 1px solid var(--line);
 }
-/* The brand mark ships separately. Until it is here the box stays the same
-   size and simply shows nothing, so the title never jumps. */
-.mark { width: 28px; height: 28px; flex: 0 0 28px; display: block; }
+/* The brand mark, in currentColor so it takes the ink of the page. The
+   knot is 1118 x 956, so at 28px tall it is a little wider than tall. */
+.mark { height: 28px; width: auto; flex: 0 0 auto; display: block; color: var(--ink); }
 .brand {
   font: 500 26px/1 var(--display); letter-spacing: .055em;
-  text-transform: uppercase; color: #fff;
+  text-transform: uppercase; color: var(--ink);
 }
+/* Lamps are the system's tag: mono, spaced, on a hairline border. */
 .lamps { display: flex; gap: 6px; }
 .lamp {
   font: 400 var(--micro)/1 var(--mono); letter-spacing: .12em; text-transform: uppercase;
-  padding: .35rem .7rem; border: 1px solid var(--on-dark-line); color: var(--on-dark-3);
+  padding: .35rem .7rem; border: 1px solid var(--line); color: var(--ink-3);
 }
-.lamp.on { border-color: var(--line-2); color: #fff; }
+.lamp.on { border-color: var(--ink); color: var(--ink); }
 .policy {
-  font: 400 var(--micro)/1 var(--mono); color: var(--on-dark-3);
+  font: 400 var(--micro)/1 var(--mono); color: var(--ink-3);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px;
 }
 .readouts {
   margin-left: auto; display: flex; gap: 24px;
-  font: 400 12px/1 var(--mono); font-variant-numeric: tabular-nums; color: var(--on-dark-2);
+  font: 400 12px/1 var(--mono); font-variant-numeric: tabular-nums; color: var(--ink-2);
 }
-.readouts b { font-weight: 500; color: #fff; }
+.readouts b { font-weight: 500; color: var(--ink); }
 
 /* ---- grid -------------------------------------------------------------- */
 .grid {
@@ -102,15 +113,15 @@ body {
 .col { display: flex; flex-direction: column; gap: 18px; min-height: 0; }
 /* A panel is not a box. One hairline on top and the region begins. */
 .panel {
-  border-top: 1px solid var(--on-dark-line); padding-top: 10px;
+  border-top: 1px solid var(--line); padding-top: 10px;
   display: flex; flex-direction: column; gap: 8px; min-height: 0;
 }
 .col .panel { flex: 1; }
 .panel canvas { flex: 1; min-height: 0; width: 100%; display: block; }
 /* Systems rows read as a table: a hairline under each one, no frame. */
-.systems .row { padding-bottom: 5px; border-bottom: 1px solid var(--on-dark-line); }
-.bar { height: 3px; background: var(--on-dark-line); }
-.bar i { display: block; height: 3px; width: 0; background: var(--on-dark-2); }
+.systems .row { padding-bottom: 5px; border-bottom: 1px solid var(--line); }
+.bar { height: 3px; background: var(--paper-3); }
+.bar i { display: block; height: 3px; width: 0; background: var(--ink-2); }
 .bar i.hot { background: var(--red); }
 
 /* ---- the camera -------------------------------------------------------- */
@@ -118,23 +129,23 @@ body {
 /* One hairline on top, the same one the side panels start on, so the three
    columns begin on a single line. The picture is not framed. */
 .viewport {
-  position: relative; background: #000; min-height: 0; overflow: hidden;
-  border-top: 1px solid var(--on-dark-line);
+  position: relative; background: var(--ink); min-height: 0; overflow: hidden;
+  border-top: 1px solid var(--line);
 }
 #cam { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 #overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-/* Text over moving pictures needs something behind it, so a flat scrim. */
+/* Text over moving pictures needs something behind it, so a flat ink scrim. */
 .hud {
   position: absolute; pointer-events: none;
   font: 400 11px/1.3 var(--mono); letter-spacing: .08em; text-transform: uppercase;
-  color: var(--on-dark-1); background: rgba(13, 15, 16, .62); padding: 3px 7px;
+  color: var(--on-image-1); background: rgba(13, 15, 16, .62); padding: 3px 7px;
 }
 .hud-tl { left: 14px; top: 12px; }
 .hud-tr { right: 14px; top: 12px; }
-.hud-tr.on { color: var(--accent); }
+.hud-tr.on { color: var(--accent-image); }
 .speed { position: absolute; right: 16px; bottom: 12px; display: flex; align-items: baseline; gap: 8px; pointer-events: none; }
 .speed b { font: 500 34px/1 var(--mono); font-variant-numeric: tabular-nums; color: #fff; }
-.speed .unit { font: 400 var(--micro)/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--on-dark-2); }
+.speed .unit { font: 400 var(--micro)/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--on-image-2); }
 /* Dead-man: a red frame inside the picture, blinking with the mode word.
    Red as a fill is allowed; red as small text is not. */
 .viewport.deadman::after {
@@ -146,32 +157,34 @@ body {
 /* ---- mode word --------------------------------------------------------- */
 .drive {
   text-align: center; font: 500 60px/.9 var(--display); letter-spacing: .02em;
-  text-transform: uppercase; color: var(--on-dark-3);
+  text-transform: uppercase; color: var(--line-2);
 }
-.drive.live { color: #fff; }
-.drive.deadman { color: var(--accent); animation: blink .6s steps(2) infinite; }
+.drive.live { color: var(--ink); }
+.drive.deadman { color: var(--red); animation: blink .6s steps(2) infinite; }
 
 /* ---- controls ---------------------------------------------------------- */
 .controls {
   grid-column: 1 / -1; display: flex; gap: 8px; align-items: center;
-  border-top: 1px solid var(--on-dark-line); padding-top: 14px;
+  border-top: 1px solid var(--line); padding-top: 14px;
 }
 .controls .sep { width: 20px; }
 .controls .spacer { flex: 1 1 auto; }
-/* The pill is the only rounded shape in the system. Ghost on dark. */
+/* The pill is the only rounded shape in the system. The ghost variant on
+   paper: ink text on a hairline, red on hover, exactly the system's .btn--ghost. */
 button {
   font: 500 .85rem/1 var(--body); text-transform: capitalize;
-  color: #fff; background: transparent;
+  color: var(--ink); background: transparent;
   border: 1px solid var(--line-2); border-radius: 999px;
   padding: .6rem 1.1rem; cursor: pointer;
 }
-button.trick { color: var(--on-dark-3); }
-button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+button.trick { color: var(--ink-3); }
+button:hover:not(:disabled) { border-color: var(--red); color: var(--red); }
 button:focus-visible { outline: 2px solid var(--red); outline-offset: 3px; }
-button:disabled { opacity: .35; cursor: default; }
-/* Policy running: the system's filled button on dark, white with ink text. */
-button.on { background: #fff; border-color: #fff; color: var(--ground); }
-button.on:hover:not(:disabled) { background: #fff; border-color: #fff; color: var(--ground); }
+button:disabled { color: var(--ink-3); border-color: var(--line); background: var(--paper-3); cursor: default; }
+/* Policy running: the system's filled button, ink with white text. */
+button.on { background: var(--ink); border-color: var(--ink); color: #fff; }
+button.on:hover:not(:disabled) { background: var(--ink); border-color: var(--ink); color: #fff; }
+/* Armed: the red fill. */
 button.armed { background: var(--red); border-color: var(--red); color: #fff; }
 button.armed:hover:not(:disabled) { background: var(--red-deep); border-color: var(--red-deep); color: #fff; }
 
@@ -179,9 +192,9 @@ button.armed:hover:not(:disabled) { background: var(--red-deep); border-color: v
 .strip { grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 24px; }
 .strip .kicker { flex: 0 0 auto; width: 120px; }
 .strip canvas { flex: 0 0 520px; height: 100%; }
-.log { flex: 1; min-width: 0; font: 400 11px/1.7 var(--mono); color: var(--on-dark-3); }
+.log { flex: 1; min-width: 0; font: 400 11px/1.7 var(--mono); color: var(--ink-3); }
 .log div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.log .bad { color: var(--accent); }
-.log .ok { color: #fff; }
+.log .bad { color: var(--red); }
+.log .ok { color: var(--ink); }
 
 @media (prefers-reduced-motion: reduce) { .drive.deadman, .viewport.deadman::after { animation: none; } }

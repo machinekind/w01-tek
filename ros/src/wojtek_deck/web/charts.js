@@ -37,7 +37,7 @@ export class Strip {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
     // Lines and labels share one white; the baseline is the hairline.
-    const line = cssVar("--on-dark-2"), edge = cssVar("--on-dark-line");
+    const line = cssVar("--ink-2"), edge = cssVar("--line");
 
     const padR = 64, x0 = 0, x1 = W - padR, y0 = 3, y1 = H - 3;
     const t0 = now - this.opts.window, t1 = now;
@@ -120,7 +120,7 @@ export class Bars {
     for (let i = 0; i < n; i++) {
       const f = Math.min(1, Math.abs(this.values[i] || 0) / this.opts.max);
       const h = Math.max(2, f * (H - 2));
-      ctx.fillStyle = i === k ? cssVar("--accent") : cssVar("--on-dark-2");
+      ctx.fillStyle = i === k ? cssVar("--accent") : cssVar("--line-2");
       ctx.fillRect(i * (bw + gap), H - h, bw, h);
     }
   }

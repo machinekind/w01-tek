@@ -5,12 +5,12 @@
      directly (bridge.js), commands go to the gateway (/ws), the camera is
      the gateway's MJPEG stream.
 
-     The look is the Machinekind design system, dark context: an ink ground,
-     white text at three strengths, regions divided by 1px hairlines, and one
-     accent -- soft red. Red at full strength is a fill only (the armed
-     button, the dead-man frame). The camera sits plain in the middle; the
-     reticle, horizon and detections are drawn on its overlay canvas
-     (deck.js). -->
+     The camera fills the screen and everything else is laid on top of it.
+     The picture is the page; the instruments are a few small groups near
+     the edges, so the middle stays clear to look through. The reticle,
+     the horizon and the detection boxes are drawn on the overlay canvas
+     (deck.js). Colours and faces are the Machinekind design system, in its
+     dark context, because the text stands on a photo. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -21,57 +21,67 @@
 <link rel="stylesheet" href="deck.css">
 </head>
 <body>
-<header class="top">
-  <!-- The Machinekind mark from the brand kit, the red variant. -->
-  <img class="mark" src="mark.svg" alt="Machinekind" onerror="this.style.visibility='hidden'">
-  <div class="brand">Wojtek</div>
-  <div class="lamps">
-    <span class="lamp" id="lamp-link">link</span>
-    <span class="lamp" id="lamp-bridge">bridge</span>
-    <span class="lamp" id="lamp-cam">cam —</span>
-    <span class="lamp" id="lamp-pad">pad</span>
-    <span class="lamp" id="lamp-det">det</span>
-  </div>
-  <span class="policy" id="policy"></span>
-  <div class="readouts">
-    <span>H <b id="height">—</b> m</span>
-    <span id="hud-clock"></span>
-  </div>
-</header>
+<div class="screen" id="viewport">
+  <img id="cam" alt="" src="stream.mjpg">
+  <canvas id="overlay"></canvas>
 
-<main class="grid">
-  <section class="col">
-    <div class="panel">
-      <div class="kicker">attitude</div>
+  <!-- top edge: who this is, and whether the links are up -->
+  <header class="top">
+    <!-- The Machinekind mark from the brand kit, the red variant. -->
+    <img class="mark" src="mark.svg" alt="Machinekind" onerror="this.style.visibility='hidden'">
+    <div class="brand">Wojtek</div>
+    <div class="lamps">
+      <span class="lamp" id="lamp-link">link</span>
+      <span class="lamp" id="lamp-bridge">bridge</span>
+      <span class="lamp" id="lamp-cam">cam —</span>
+      <span class="lamp" id="lamp-pad">pad</span>
+      <span class="lamp" id="lamp-det">det</span>
+    </div>
+    <span class="policy" id="policy"></span>
+    <div class="readouts">
+      <span>H <b id="height">—</b> m</span>
+      <span id="hud-clock"></span>
+    </div>
+  </header>
+
+  <!-- just under the masthead: what the camera and the detector are doing -->
+  <div class="tag tag-l" id="hud-cam">fwd cam · —</div>
+  <div class="tag tag-r" id="hud-det">no detector</div>
+
+  <!-- The lower third: instruments left and right, the two numbers worth a
+       glance between them. One row, so the three groups end level. -->
+  <div class="deck">
+  <section class="instruments left">
+    <div class="gauge">
+      <div class="head"><span class="kicker">attitude</span><span class="vals"><span id="att-r">roll —</span><span id="att-p">pitch —</span></span></div>
       <canvas id="ch-att"></canvas>
-      <div class="row"><span id="att-r">roll —</span><span id="att-p">pitch —</span></div>
     </div>
-    <div class="panel">
-      <div class="kicker">gyro</div>
+    <div class="gauge">
+      <div class="head"><span class="kicker">gyro</span><span class="vals"><span id="gyro-z">— rad/s</span></span></div>
       <canvas id="ch-gyro"></canvas>
-      <div class="row"><span class="k">z</span><span id="gyro-z">— rad/s</span></div>
     </div>
+    <div class="gauge">
+      <div class="head"><span class="kicker">command</span></div>
+      <canvas id="ch-cmd"></canvas>
+    </div>
+    <div class="log" id="log"></div>
   </section>
 
-  <section class="center">
-    <div class="viewport" id="viewport">
-      <img id="cam" alt="" src="stream.mjpg">
-      <canvas id="overlay"></canvas>
-      <div class="hud hud-tl" id="hud-cam">fwd cam · —</div>
-      <div class="hud hud-tr" id="hud-det">no detector</div>
-      <div class="speed"><b id="speed">0.00</b><span class="unit">m/s</span></div>
-    </div>
+  <!-- between them, above the thumbs: the two things worth a glance -->
+  <div class="centre">
+    <div class="speed"><b id="speed">0.00</b><span class="unit">m/s</span></div>
     <div class="drive" id="drive">idle</div>
-  </section>
+  </div>
 
-  <section class="col">
-    <div class="panel">
-      <div class="kicker"><span id="eff-title">joint targets</span></div>
-      <canvas id="ch-eff"></canvas>
+  <!-- bottom right: what the legs and the computer are doing -->
+  <section class="instruments right">
+    <div class="gauge">
+      <div class="head"><span class="kicker"><span id="eff-title">joint targets</span></span></div>
+      <div class="plot"><canvas id="ch-eff"></canvas></div>
       <div class="row hot"><span class="k" id="eff-name">—</span><span id="eff-val">—</span></div>
     </div>
-    <div class="panel systems">
-      <div class="kicker">systems</div>
+    <div class="gauge systems">
+      <div class="head"><span class="kicker">systems</span></div>
       <div class="row"><span class="k">cpu</span><span id="sys-cpu">—</span></div>
       <div class="bar"><i id="bar-cpu"></i></div>
       <div class="row"><span class="k">soc</span><span id="sys-soc">—</span></div>
@@ -82,7 +92,9 @@
       <div class="row warn" id="sys-flags"><span class="k">power</span><span id="sys-flag">—</span></div>
     </div>
   </section>
+  </div>
 
+  <!-- bottom edge, under the thumbs: the services -->
   <div class="controls">
     <button data-call="arm" id="btn-arm">arm</button>
     <button data-call="zero">zero</button>
@@ -99,13 +111,7 @@
     <button data-height="-0.005">h −</button>
     <button data-height="0.005">h +</button>
   </div>
-
-  <div class="panel strip">
-    <div class="kicker">command</div>
-    <canvas id="ch-cmd"></canvas>
-    <div class="log" id="log"></div>
-  </div>
-</main>
+</div>
 
 <script type="module" src="deck.js"></script>
 </body>

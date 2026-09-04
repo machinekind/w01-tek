@@ -3,8 +3,9 @@
 //   bridge   ws://<host>:<bridge>   telemetry in, decoded from CDR (bridge.js)
 //   detector det_worker.js          YOLOX on this machine, fed frames off
 //                                   the camera image already on screen
-// The camera is the gateway's MJPEG stream in a plain <img>; the reticle,
-// horizon and detections are drawn on the overlay canvas above it.
+// The camera is the gateway's MJPEG stream in a plain <img>, filling the
+// screen; the reticle, horizon and detections are drawn on the overlay
+// canvas above it, and the instruments are laid over both.
 //
 // Query parameters: ?bridge=<url> for the telemetry bridge, ?det=off to
 // switch detection off, ?det=cpu or ?det=gpu to pin the detector's backend,

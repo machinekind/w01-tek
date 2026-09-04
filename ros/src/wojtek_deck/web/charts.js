@@ -37,7 +37,7 @@ export class Strip {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
     // Lines and labels share one white; the baseline is the hairline.
-    const line = cssVar("--ink-2"), edge = cssVar("--line");
+    const line = cssVar("--chart-line"), edge = cssVar("--chart-base");
 
     const padR = 64, x0 = 0, x1 = W - padR, y0 = 3, y1 = H - 3;
     const t0 = now - this.opts.window, t1 = now;
@@ -83,10 +83,15 @@ export class Strip {
       if (Number.isFinite(last)) labels.push({ y: Y(Math.max(lo, Math.min(hi, last))), s, v: last });
     });
 
-    // direct labels at the right edge, nudged apart so they never overlap
+    // Direct labels at the right edge, nudged apart so they never overlap.
+    // Nudging only pushes downwards, so when the series are bunched near the
+    // bottom the last label walks off the strip; slide the whole set back up
+    // by however far it went over. Strips here are short, so this happens.
     labels.sort((a, b) => a.y - b.y);
     for (let i = 1; i < labels.length; i++)
       if (labels[i].y - labels[i - 1].y < 12) labels[i].y = labels[i - 1].y + 12;
+    const over = labels.length ? labels[labels.length - 1].y - (y1 - 5) : 0;
+    if (over > 0) for (const l of labels) l.y -= over;
     for (const l of labels) {
       const y = Math.max(y0 + 5, Math.min(y1 - 5, l.y));
       ctx.fillText(`${l.s.name} ${l.v.toFixed(this.opts.fixed)}`, x1 + 8, y);
@@ -120,7 +125,7 @@ export class Bars {
     for (let i = 0; i < n; i++) {
       const f = Math.min(1, Math.abs(this.values[i] || 0) / this.opts.max);
       const h = Math.max(2, f * (H - 2));
-      ctx.fillStyle = i === k ? cssVar("--accent") : cssVar("--line-2");
+      ctx.fillStyle = i === k ? cssVar("--chart-hot") : cssVar("--chart-rest");
       ctx.fillRect(i * (bw + gap), H - h, bw, h);
     }
   }

@@ -71,8 +71,8 @@ services for a touchscreen.
 ## Detection
 
 The panel finds objects in the camera picture and draws a box around each
-one: magenta for a person, cyan for everything else. It is on by default and
-needs nothing running anywhere else.
+one: the accent red for a person, plain white for everything else. It is on
+by default and needs nothing running anywhere else.
 
 It runs **in the page**, on the handheld. YOLOX-nano goes through
 onnxruntime-web in a worker (`det_worker.js`), on the GPU through WebGPU
@@ -155,15 +155,54 @@ node --test ros/src/wojtek_deck/web/test # the CDR decoder and the YOLOX maths
 
 ## The look
 
-The panel follows the Machinekind design system, on paper, the way the
-system's own pages do: white ground, ink for text at three strengths, and
-regions told apart by 1px hairlines rather than boxes. No frames around
-blocks, no shadows, no glow, no gradients. There is one accent, brand red
-`#bd3e3e`, and it marks the thing worth looking at: the joint working
-hardest, a refused command, the dead-man word, the armed button. The
-camera picture is the one dark thing on the page, so the text drawn over
-it takes the system's on-dark whites and the soft red `#d86a6a`, the red
-the system allows on ink.
+### Where things sit
+
+The camera picture is the page. It fills the screen, and every instrument
+is laid on top of it, because the screen is small and the picture is the
+thing the operator is actually looking at. The handheld it is drawn for is
+1280 by 800, held in two hands, so the middle of the picture stays clear
+and everything else keeps to the edges:
+
+```
+ mark WOJTEK   link bridge cam pad det        policy      H     clock
+ fwd cam · fps                                          objects · people
+
+                          reticle, heading,
+                        horizon, detection boxes
+
+ ┌ attitude ───────┐      ┌ speed ──┐        ┌ joint effort ────┐
+ │ gyro            │      │ mode    │        │ systems          │
+ │ command         │      └─────────┘        │ cpu soc wifi tick│
+ │ last three log lines │                    │ power            │
+ └──────────────────┘                        └──────────────────┘
+ arm zero stand lie policy reset   paw bow sit shake        h− h+
+```
+
+Top and bottom are bands: who this is and whether the links are up along
+the top, the services along the bottom edge where the thumbs already rest.
+The buttons are pills at least 48 px tall, which is what a thumb needs on
+a touch screen. Between the bands sit three groups on one line — how the
+body is moving on the left, what the legs and the computer are doing on
+the right, and the two numbers worth a glance, speed and mode, in the
+middle. They are one row in the markup, so they finish level without
+anyone counting pixels.
+
+### Colours and faces
+
+Everything stands on a photo, so the panel is in the dark half of the
+Machinekind design system: white text at three strengths, regions told
+apart by 1px hairlines rather than boxes, no frames, no shadows, no glow,
+no gradients. Each group sits on a flat ink scrim at 72% — one colour at
+one opacity, no blur, no fade at the edges — which is what keeps white
+text readable whether the camera is pointed at a dark room or a white
+wall. Enough of the picture still comes through the scrim to see what is
+behind a group.
+
+There is one accent, the soft red `#d86a6a`, the red the system allows on
+ink, and it marks the thing worth looking at: the joint working hardest, a
+refused command, a person in the picture. Brand red `#bd3e3e` at full
+strength is only ever a fill — the armed button, the dead-man frame around
+the whole screen — and the mark keeps its own red.
 
 Three faces with three jobs, served from the robot (`web/fonts/`,
 fontsource 5.3.0 builds, SIL Open Font License; latin-ext is in, it
@@ -172,5 +211,5 @@ title and the mode word, IBM Plex Sans carries words a person reads, IBM
 Plex Mono carries measurement: rates, angles, counts, the clock, the log.
 
 `web/mark.svg` and `web/favicon.svg` are the Machinekind mark from the
-brand kit: the mark in its red variant, the primary one on paper, and the
-favicon on its red field because at 16 px the knot needs it.
+brand kit: the mark in its red variant, and the favicon on its red field
+because at 16 px the knot needs it.

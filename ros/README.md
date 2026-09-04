@@ -77,6 +77,40 @@ YOLOX in the browser on the handheld rather than on the robot; that needs
 `src/wojtek_deck/fetch_assets.sh` once, which `deploy.sh` runs for you. See
 [`src/wojtek_deck/README.md`](src/wojtek_deck/README.md).
 
+**Things to look at** — the simulated world is not an empty floor. The
+training scene is a checkerboard plane and nothing else, which is what a
+walking policy needs and gives the panel's detector nothing to find, so the
+simulation loads `src/wojtek_pc/config/scene_sim.xml`: the same scene plus a
+few props standing around the spawn.
+
+| prop          | where it stands   | the panel names it from        |
+| ------------- | ----------------- | ------------------------------ |
+| sports ball   | ahead and left    | 1 to 3 m                       |
+| fire hydrant  | ahead and right   | 1 to 3 m (best inside 2 m)     |
+| stop sign     | left, turn ~55°   | 1 to 3 m (best inside 2 m)     |
+| traffic light | right, turn ~75°  | 1.5 to 3 m (too tall closer)   |
+| clock         | behind, turn ~160°| 1 to 3 m                       |
+| person        | straight ahead    | 5.5 m and further              |
+
+The props were picked by rendering the camera view and asking the panel's
+own YOLOX-nano what it saw; every one that stayed is named with better than
+even confidence over the range above, mostly 0.8 to 0.95. They are short
+because the camera sits 0.21 m off the floor looking 15° down — at two
+metres the top of the picture is only 0.75 m up — and the person stands far
+back for the same reason: from two metres away a person is a pair of legs
+and reads as nobody.
+
+The plant loads the same file, so the props are solid and the robot bumps
+into them. They are static bodies, so `/sim/qpos` has exactly the layout it
+had before and neither the policy nor the training model knows they exist.
+Their pictures are drawn by `config/props/make_textures.py`, committed next
+to it; run it only when you want a sign to look different. To walk the empty
+floor again, hand the launch the old scene:
+
+```bash
+./sim.sh model_xml:=/ros2_ws/install/wojtek_pc/share/wojtek_pc/config/scene_mjx.xml
+```
+
 **Text commands (the VLM contract, #92)**: the web console also shows the
 robot's colour camera and a `forward / left / right / stop` command panel —
 the browser is a human dry-run of the future VLM, which will watch

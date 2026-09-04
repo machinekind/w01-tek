@@ -115,7 +115,7 @@ def _launch_setup(context, with_rviz, hardware):
             " boot_pose:=", LaunchConfiguration("boot_pose"),
             " model_xml:=" + (
                 LaunchConfiguration("model_xml").perform(context)
-                or os.path.join(pc_share, "config", "scene_mjx.xml")
+                or os.path.join(pc_share, "config", "scene_sim.xml")
             ),
         ]
     robot_description = ParameterValue(
@@ -420,7 +420,8 @@ def common_launch_description(
                 choices=["mock", "mujoco"],
             ),
             # Physics scene for hw:=mujoco; empty = the plugin's default
-            # (scene_mjx.xml shipped by wojtek_pc).
+            # (scene_sim.xml shipped by wojtek_pc: the training scene plus
+            # the props the camera and its detector have something to see in).
             DeclareLaunchArgument("model_xml", default_value=""),
         ]
     if with_rviz:

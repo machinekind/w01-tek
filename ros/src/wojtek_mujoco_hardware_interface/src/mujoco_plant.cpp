@@ -53,6 +53,11 @@ std::string readFile(const std::string & path)
 /// the meshes they reference. Stage the scene's whole directory with meshdir
 /// rewritten, which is what the Python sim node has always done (the include
 /// has to resolve, so siblings come along).
+///
+/// Everything that is not an XML is copied as it is, because a scene may
+/// bring assets of its own: scene_sim.xml's props/ holds the pictures its
+/// signs wear, and MuJoCo looks for those relative to the file rather than
+/// through meshdir. Keep this in step with _staged_scene in sim_camera_node.
 std::filesystem::path stageScene(
   const std::string & scene_xml, const std::string & mesh_dir)
 {
@@ -64,13 +69,21 @@ std::filesystem::path stageScene(
     ("wojtek_mjx_" + std::to_string(::getpid()));
   std::filesystem::create_directories(staged);
   for (const auto & entry : std::filesystem::directory_iterator(scene.parent_path())) {
-    if (entry.path().extension() != ".xml") {
-      continue;
+    const auto target = staged / entry.path().filename();
+    if (entry.is_directory()) {
+      std::filesystem::copy(
+        entry.path(), target,
+        std::filesystem::copy_options::recursive |
+        std::filesystem::copy_options::overwrite_existing);
+    } else if (entry.path().extension() == ".xml") {
+      const auto rewritten = std::regex_replace(
+        readFile(entry.path().string()), std::regex("meshdir=\"[^\"]*\""),
+        "meshdir=\"" + mesh_dir + "\"");
+      std::ofstream(target) << rewritten;
+    } else {
+      std::filesystem::copy_file(
+        entry.path(), target, std::filesystem::copy_options::overwrite_existing);
     }
-    const auto rewritten = std::regex_replace(
-      readFile(entry.path().string()), std::regex("meshdir=\"[^\"]*\""),
-      "meshdir=\"" + mesh_dir + "\"");
-    std::ofstream(staged / entry.path().filename()) << rewritten;
   }
   return staged / scene.filename();
 }

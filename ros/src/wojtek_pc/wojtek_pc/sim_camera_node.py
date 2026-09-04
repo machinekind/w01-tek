@@ -27,6 +27,7 @@ docs/sim-test-contract.md says so.
 
 import os
 import re
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -42,20 +43,30 @@ from wojtek_pc import camera_spec
 
 
 def _staged_scene(model_xml):
-    """Copy the scene next to nothing, with meshdir pointing at the meshes.
+    """Copy the scene somewhere private, with meshdir pointing at the meshes.
 
     The MJX XMLs ship in wojtek_pc's share, the meshes in wojtek_description's,
     and the robot file's meshdir is relative to itself -- so it has to be
     rewritten before MuJoCo can load it. The hardware plugin does the same on
     its side (see MujocoPlant::load); this is the Python half.
+
+    Anything else lying next to the scene comes along untouched, because a
+    scene may bring assets of its own: scene_sim.xml's props/ holds the
+    pictures its signs wear, and those are found relative to the file, not
+    through meshdir.
     """
     scene = Path(model_xml)
     meshes = Path(get_package_share_directory("wojtek_description")) / "meshes"
     staged = Path(tempfile.mkdtemp(prefix="wojtek_sim_camera_"))
-    for xml in scene.parent.glob("*.xml"):
-        (staged / xml.name).write_text(
-            re.sub(r'meshdir="[^"]*"', f'meshdir="{meshes}"', xml.read_text())
-        )
+    for entry in scene.parent.iterdir():
+        if entry.is_dir():
+            shutil.copytree(entry, staged / entry.name)
+        elif entry.suffix == ".xml":
+            (staged / entry.name).write_text(
+                re.sub(r'meshdir="[^"]*"', f'meshdir="{meshes}"', entry.read_text())
+            )
+        else:
+            shutil.copy2(entry, staged / entry.name)
     return str(staged / scene.name)
 
 

@@ -300,12 +300,23 @@ function shape(v) {
   const s = Math.abs(v) < DEADZONE ? 0 : Math.min(1, (Math.abs(v) - DEADZONE) / (1 - DEADZONE));
   return v < 0 ? -s : s;
 }
-let padIndex = null, padPrev = {};
-const PAD_BUTTONS = { 0: "arm", 1: "lie_down", 3: "stand_up", 4: "h-", 5: "h+",
-                      12: "trick_paw_wave", 13: "trick_shake", 14: "trick_bow", 15: "trick_sit" };
+let padIndex = null, padPrev = {}, padButtons = null;
+// Button numbers in the browser's "standard" layout (A B X Y, bumpers, d-pad).
+const STANDARD_BUTTONS = { 0: "arm", 1: "lie_down", 3: "stand_up", 4: "h-", 5: "h+",
+                           12: "trick_paw_wave", 13: "trick_shake", 14: "trick_bow", 15: "trick_sit" };
+// The Steam Deck's own controller, read straight from the kernel driver when
+// Steam is not running to translate it: the browser reports it without a
+// standard layout, and its buttons come in the driver's order. Same actions,
+// numbers measured on the device (A=3 B=4 X=5 Y=6, bumpers 9 10, d-pad
+// 16..19 up down left right); the sticks sit on axes 0-3 like the standard.
+const RAW_DECK_BUTTONS = { 3: "arm", 4: "lie_down", 6: "stand_up", 9: "h-", 10: "h+",
+                           16: "trick_paw_wave", 17: "trick_shake", 18: "trick_bow", 19: "trick_sit" };
 window.addEventListener("gamepadconnected", e => {
   if (padIndex !== null) return;
-  padIndex = e.gamepad.index; lamp("pad", true); log(`pad: ${e.gamepad.id}`);
+  const gp = e.gamepad;
+  const standard = gp.mapping === "standard";
+  padIndex = gp.index; padButtons = standard ? STANDARD_BUTTONS : RAW_DECK_BUTTONS;
+  lamp("pad", true); log(`pad: ${gp.id}${standard ? "" : " (raw layout)"}`);
 });
 window.addEventListener("gamepaddisconnected", e => {
   if (e.gamepad.index !== padIndex) return;
@@ -322,7 +333,7 @@ function padFrame() {
   const gp = navigator.getGamepads()[padIndex];
   if (!gp) return null;
   const pressed = {};
-  for (const [i, key] of Object.entries(PAD_BUTTONS)) {
+  for (const [i, key] of Object.entries(padButtons)) {
     pressed[i] = !!gp.buttons[i] && gp.buttons[i].pressed;
     if (pressed[i] && !padPrev[i]) call(key);
   }

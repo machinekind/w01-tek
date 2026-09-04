@@ -68,6 +68,15 @@ The pad is read in the browser (Gamepad API), the same mapping as
 `wojtek_teleop/gamepad_teleop.py`. Buttons on the page cover the same
 services for a touchscreen.
 
+On a Steam Deck the pad only reaches the browser one of two ways. With
+Steam running, Steam owns the controller and the desktop gets Steam's
+"desktop" layout, which is a mouse and a keyboard, not a pad; the browser
+sees a pad only once that layout is switched to a gamepad template. With
+Steam closed, the kernel driver exposes the controller itself, which the
+browser reports without a standard layout and with the buttons in the
+driver's order. `deck.js` carries that order too, so both ways work; the
+log line at connect says which one the page got.
+
 ## Detection
 
 The panel finds objects in the camera picture and draws a box around each

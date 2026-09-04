@@ -12,7 +12,10 @@ setup(
         ("share/ament_index/resource_index/packages", [f"resource/{package_name}"]),
         (f"share/{package_name}", ["package.xml"]),
         (f"share/{package_name}/launch", glob("launch/*.launch.py")),
-        (f"share/{package_name}/config", glob("config/*")),
+        # glob("config/*") would list the props directory itself, which
+        # data_files cannot copy; the two lines below name files only.
+        (f"share/{package_name}/config", glob("config/*.*")),
+        (f"share/{package_name}/config/props", glob("config/props/*")),
         (f"share/{package_name}/urdf", glob("urdf/*.xacro")),
         (f"share/{package_name}/web", glob("web/*.html")),
     ],

@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>wojtek_structure_core</name>
+  <version>0.1.0</version>
+  <description>
+    ROS 2 driver for the Occipital Structure Core (STO2D-C) depth sensor,
+    publishing colour and depth on RealSense-shaped topic names so consumers
+    written against the D435 move over by changing a namespace.
+
+    The closed-source Structure SDK is NOT vendored and NOT a declared
+    dependency: its path comes in through STRUCTURE_SDK_DIR, and without it
+    the package still builds its SDK-free conversion layer and tests. Only
+    the driver node is skipped.
+  </description>
+  <maintainer email="kubastaudt@gmail.com">Jakub Staudt</maintainer>
+  <license>Apache License 2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>tf2_ros</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

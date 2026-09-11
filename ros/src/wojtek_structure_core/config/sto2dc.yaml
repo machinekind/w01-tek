@@ -1,0 +1,53 @@
+# Structure Core STO2D-C as the targeting camera.
+#
+# Leaner than wojtek_perception_bringup/config/d435.yaml on purpose: no
+# pointcloud, no RGBD, no depth post-processing stack. This camera feeds a
+# detector and (maybe) a range lookup, nothing that needs a filtered cloud.
+#
+# That leanness is not cosmetic. The measured ceiling on this hardware is CPU,
+# not bandwidth: a Python subscriber received ~70% of the D435's 848x480x15
+# RGBD messages (2.04 MB each) with zero UDP buffer errors -- deserialisation
+# could not keep up. Two cameras plus a detector on one Pi 5 is the same
+# budget, so every stream here has to justify itself.
+
+structure_core:
+  ros__parameters:
+    camera_name: targeting_camera
+    camera_namespace: targeting_camera
+
+    # Fill in once the exact string is known (CorePlayground shows it, so
+    # does the SDK's enumeration sample). Empty takes the first sensor found,
+    # which is fine with one depth camera on the bus and a coin flip with two.
+    serial_number: ""
+
+    # 640x480 at 30 Hz. Above this the Pi is the bottleneck, not the sensor,
+    # and a detector does not benefit from pixels it downsamples away.
+    depth_resolution: VGA
+    depth_framerate: 30.0
+    color_framerate: 30.0
+
+    # Medium is the general-purpose mode. Short tightens precision for a
+    # close demo; Long buys range the targeting geometry probably cannot use.
+    depth_range_mode: Medium
+
+    enable_depth: true
+    enable_color: true
+    enable_infrared: false
+
+    # Outside this band a pixel is published as 0 (no return) rather than
+    # clamped: a clamped pixel is indistinguishable from a real surface at
+    # the limit, and the gimbal would aim at it.
+    depth_min_m: 0.3
+    depth_max_m: 5.0
+
+    latency_reducer: true
+    expensive_correction: false
+
+    watchdog_timeout_s: 2.0
+
+    # PLACEHOLDER, and it matters. The colour and depth sensors sit a
+    # baseline apart, so a bbox centre from the colour image does not index
+    # the depth image at the same pixel. Measure it (or read the SDK's own
+    # depth-to-visible extrinsic) before any range lookup is trusted. A zero
+    # here is a lie that reads as a working system.
+    color_to_depth_baseline_m: 0.0

@@ -265,6 +265,13 @@ void MujocoPlant::setCommand(int actuator, double q_relative)
     : activation_qpos_[actuator] + q_relative;
 }
 
+void MujocoPlant::setFeedForward(int actuator, double tau)
+{
+  // The same slot the training env writes: the joint's generalized force,
+  // which for a hinge is the torque about its axis.
+  data_->qfrc_applied[dof_adr_[actuator]] = dry_run_ ? 0.0 : tau;
+}
+
 ImuSample MujocoPlant::imu(
   const std::array<double, 4> & mount_quat_wxyz,
   const std::array<double, 3> & earth_field_ut) const

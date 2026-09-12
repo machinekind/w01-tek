@@ -109,6 +109,11 @@ public:
 
   /// Command in MuJoCo convention, relative to the activation pose.
   void setCommand(int actuator, double q_relative);
+  /// Feed-forward torque on the joint, N*m in MuJoCo convention, applied on
+  /// top of the servo the way the MD80 adds tau_ff to its impedance loop.
+  /// It rides qfrc_applied, so it stays on until written again; the caller
+  /// clamps it, the plant does not. Withheld in dry run like the servo.
+  void setFeedForward(int actuator, double tau);
   /// Bench mode: physics runs, no actuator force is applied.
   void setDryRun(bool dry_run) {dry_run_ = dry_run;}
 

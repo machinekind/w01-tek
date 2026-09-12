@@ -24,6 +24,10 @@
        from the loaded policy's contract and widens max_torque to
        pd.max_torque + tau_ff.scale (the sim clamps the two separately). -->
   <xacro:arg name="tau_ff" default="false" />
+  <!-- The head's clamp, passed by the launch for the simulated plant. The
+       drives clamp the sum, so it is declared here only so the launch can
+       hand both xacros the same arguments. -->
+  <xacro:arg name="tau_ff_scale" default="0.0" />
   <!-- CAN link to the MD80s: CANdle HAT over SPI by default (drives flashed
        to 8M). bus:=usb can_baud:=1 falls back to the old USB dongle; only
        works if the drives are flashed back to 1M. -->

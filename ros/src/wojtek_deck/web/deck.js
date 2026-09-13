@@ -7,6 +7,11 @@
 // screen; the reticle, horizon and detections are drawn on the overlay
 // canvas above it, and the instruments are laid over both.
 //
+// A tap on the picture locks onto the box under the finger (lock.js). The
+// lock is held from frame to frame and sent to the gateway ten times a
+// second as {t:"track"}, which is what the robot will follow. Sticks, stop
+// and a second tap on the target let go.
+//
 // Query parameters: ?telemetry=on shows the instruments the bridge feeds
 // (off by default: no bridge, no numbers), ?bridge=<url> for the
 // telemetry bridge, ?det=off to
@@ -15,6 +20,7 @@
 // the camera and the detector at a still image.
 import { Bridge } from "./bridge.js";
 import { Bars, Strip } from "./charts.js";
+import { Lock, pick, stickMoved, toFrame } from "./lock.js";
 
 // The instruments the telemetry bridge feeds are off unless ?telemetry=on.
 const telemetry = new URLSearchParams(location.search).get("telemetry") === "on";
@@ -31,6 +37,8 @@ let height = 0.125;
 let armed = false, policyOn = false;
 let rpy = [0, 0, 0];          // latest attitude
 let det = null;               // {w, h, boxes, at}
+let lock = null;              // the target the operator tapped (lock.js)
+let lockNote = null;          // {text, until}: a word left on the HUD after a lock ends
 
 function lamp(name, on, text) {
   const el = $(`lamp-${name}`);
@@ -56,7 +64,13 @@ let gw = null, bridge = null;
 function connectGateway() {
   gw = new WebSocket(`ws://${location.host}/ws`);
   gw.onopen = () => { lamp("link", true); log("gateway connected", "ok"); };
-  gw.onclose = () => { lamp("link", false); setDrive("idle"); setTimeout(connectGateway, 1000); };
+  gw.onclose = () => {
+    lamp("link", false); setDrive("idle");
+    // No link, no follow: the robot's own dead-man has already stopped it,
+    // and a lock kept here would start it again the moment the link is back.
+    if (lock) { lock = null; note("dropped · link down"); }
+    setTimeout(connectGateway, 1000);
+  };
   gw.onmessage = e => onGateway(JSON.parse(e.data));
 }
 function send(o) { if (gw && gw.readyState === 1) gw.send(JSON.stringify(o)); }
@@ -190,20 +204,52 @@ function drawOverlay() {
   ctx.beginPath(); ctx.moveTo(-R * 1.6, 0); ctx.lineTo(-R * 1.1, 0); ctx.moveTo(R * 1.1, 0); ctx.lineTo(R * 1.6, 0); ctx.stroke();
   ctx.restore();
 
-  // detections, in the frame's pixel space mapped onto the viewport (object-fit: cover)
-  if (!det || now() - det.at > 1.0) return;
-  const nw = cam.naturalWidth || det.w, nh = cam.naturalHeight || det.h;
-  const s = Math.max(W / nw, H / nh), ox = (W - nw * s) / 2, oy = (H - nh * s) / 2;
-  const sx = s * nw / det.w, sy = s * nh / det.h;
+  // Boxes are in the pixels of the frame the detector saw, and the picture
+  // is object-fit: cover, so a frame pixel lands on the viewport at the
+  // cover scale of the camera's own size, times the ratio of the two frames
+  // when they differ.
+  const nw = cam.naturalWidth, nh = cam.naturalHeight;
+  const place = (fw, fh) => {
+    const iw = nw || fw, ih = nh || fh;
+    const s = Math.max(W / iw, H / ih), ox = (W - iw * s) / 2, oy = (H - ih * s) / 2;
+    const sx = s * iw / fw, sy = s * ih / fh;
+    return b => ({ x: ox + b.x * sx, y: oy + b.y * sy, w: b.w * sx, h: b.h * sy });
+  };
   ctx.textAlign = "start"; ctx.font = `10px ${mono}`;
-  for (const b of det.boxes) {
-    const x = ox + b.x * sx, y = oy + b.y * sy, w = b.w * sx, h = b.h * sy;
-    const person = b.label === "person";
-    ctx.strokeStyle = person ? accent : dim; ctx.lineWidth = 1.5;
-    ctx.strokeRect(x, y, w, h);
-    ctx.fillStyle = person ? accent : dim;
-    ctx.fillText(`${b.label} ${(b.p * 100).toFixed(0)}`.toUpperCase(), x, y - 5);
+
+  // detections
+  if (det && now() - det.at <= 1.0) {
+    const at = place(det.w, det.h);
+    for (const b of det.boxes) {
+      const { x, y, w, h } = at(b);
+      const person = b.label === "person";
+      ctx.strokeStyle = person ? accent : dim; ctx.lineWidth = 1.5;
+      ctx.strokeRect(x, y, w, h);
+      ctx.fillStyle = person ? accent : dim;
+      ctx.fillText(`${b.label} ${(b.p * 100).toFixed(0)}`.toUpperCase(), x, y - 5);
+    }
   }
+
+  // the lock: brackets on the corners of the held box, in the accent, drawn
+  // over whatever the detector drew there. Solid while a detection matches,
+  // dashed while coasting on the last box, and a faint dashed square while
+  // waiting for a detection to appear under a tap on empty picture.
+  if (!lock) return;
+  const state = lock.state(now());
+  const { x, y, w, h } = place(lock.fw, lock.fh)(lock.box);
+  const waiting = state === "waiting";
+  ctx.strokeStyle = waiting ? dim : accent; ctx.lineWidth = waiting ? 1 : 2.5;
+  ctx.setLineDash(state === "locked" ? [] : [6, 5]);
+  const L = Math.min(w, h) * 0.3;
+  ctx.beginPath();
+  for (const [px, py, dx, dy] of [[x, y, 1, 1], [x + w, y, -1, 1], [x, y + h, 1, -1], [x + w, y + h, -1, -1]]) {
+    ctx.moveTo(px + dx * L, py); ctx.lineTo(px, py); ctx.lineTo(px, py + dy * L);
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = waiting ? dim : accent;
+  const word = waiting ? "tap · waiting" : `lock ${lock.label} ${(lock.p * 100).toFixed(0)}`;
+  ctx.fillText(word.toUpperCase(), x, y + h + 13);
 }
 
 // ---- detector -------------------------------------------------------------
@@ -214,10 +260,58 @@ let detRate = 0;             // detections per second, smoothed
 const GPU_DEADLINE_MS = 8000; // first GPU answer must land within this
 function onBoxes(w, h, boxes) {
   det = { w, h, boxes: boxes || [], at: now() };
+  if (lock) lock.update(det.boxes, det.at);
   const people = det.boxes.filter(b => b.label === "person").length;
   $("hud-det").textContent = `${det.boxes.length} objects · ${people} people`;
   $("hud-det").classList.toggle("on", people > 0);
 }
+
+// ---- lock-in ----------------------------------------------------------------
+// A tap on the picture locks onto the box under the finger, or on a square
+// around the finger when there is no box there yet. The lock is held across
+// frames by lock.js and told to the gateway ten times a second. It ends on
+// a second tap on the target, on the sticks, on stop, and by itself when
+// the target has been out of sight for a few seconds.
+function note(text) { lockNote = { text, until: now() + 3 }; }
+function unlock(why) {
+  if (!lock) return;
+  lock = null;
+  send({ t: "unlock" });
+  log(`lock: ${why}`);
+  note(why);
+}
+cam.addEventListener("click", e => {
+  if (!cam.naturalWidth) return;
+  const r = cam.getBoundingClientRect();
+  // The tap in the camera's pixels, then in the detector's frame, which is
+  // the camera's frame unless a still image was put in the viewport.
+  const fresh = det && now() - det.at <= 1.0;
+  const fw = fresh ? det.w : cam.naturalWidth, fh = fresh ? det.h : cam.naturalHeight;
+  const p = toFrame(e.clientX - r.left, e.clientY - r.top, r.width, r.height, cam.naturalWidth, cam.naturalHeight);
+  const x = p.x * fw / cam.naturalWidth, y = p.y * fh / cam.naturalHeight;
+  if (x < 0 || y < 0 || x > fw || y > fh) return;
+  if (lock && lock.covers(x, y)) { unlock("released"); return; }
+  lock = new Lock(pick(fresh ? det.boxes : [], x, y, fw, fh), fw, fh, now());
+  lockNote = null;
+  log(lock.label ? `lock: ${lock.label}` : "lock: waiting for a box under the tap");
+});
+setInterval(() => {
+  const t = now();
+  const tag = $("hud-lock");
+  if (lock) {
+    const s = lock.state(t);
+    if (s === "lost") { unlock("lost"); return; }
+    const m = lock.message(t);
+    if (m) send(m);
+    tag.hidden = false;
+    tag.classList.toggle("on", s !== "waiting");
+    tag.textContent = s === "waiting" ? "tap · waiting for a box"
+      : s === "locked" ? `lock · ${lock.label}`
+      : `lock · ${lock.label} · coasting ${lock.age(t).toFixed(1)} s`;
+  } else if (lockNote && t < lockNote.until) {
+    tag.hidden = false; tag.classList.remove("on"); tag.textContent = `lock · ${lockNote.text}`;
+  } else tag.hidden = true;
+}, 100);
 
 function startDetector(backend) {
   const worker = new Worker(`det_worker.js?backend=${backend}`, { type: "module" });
@@ -356,7 +450,7 @@ const keys = new Set();
 const KEYMAP = { KeyW: 1, KeyS: 1, KeyA: 1, KeyD: 1, KeyQ: 1, KeyE: 1, ArrowUp: 1, ArrowDown: 1, ArrowLeft: 1, ArrowRight: 1 };
 window.addEventListener("keydown", e => {
   if (e.target.tagName === "INPUT") return;
-  if (e.code === "Space") { keys.clear(); send({ t: "stop" }); e.preventDefault(); return; }
+  if (e.code === "Space") { keys.clear(); unlock("stop"); send({ t: "stop" }); e.preventDefault(); return; }
   if (KEYMAP[e.code]) { keys.add(e.code); e.preventDefault(); }
 });
 window.addEventListener("keyup", e => keys.delete(e.code));
@@ -374,10 +468,15 @@ function keyFrame() {
 let wasDriving = false;
 setInterval(() => {
   const frame = padIndex !== null ? padFrame() : keyFrame();
+  // The operator moving a stick ends the lock: the same rule the gateway
+  // will apply on its side, so the two never disagree. A connected pad
+  // sends a frame every tick even at rest, so it is the movement that
+  // counts, not the frame.
+  if (stickMoved(frame)) unlock("sticks");
   if (frame) { send({ t: "cmd", ...frame }); wasDriving = true; }
   else if (wasDriving) { send({ t: "stop" }); wasDriving = false; }
 }, 50);
-document.addEventListener("visibilitychange", () => { if (document.hidden) { keys.clear(); send({ t: "stop" }); } });
+document.addEventListener("visibilitychange", () => { if (document.hidden) { keys.clear(); unlock("page hidden"); send({ t: "stop" }); } });
 
 for (const b of document.querySelectorAll("[data-call]")) b.onclick = () => call(b.dataset.call);
 for (const b of document.querySelectorAll("[data-height]")) b.onclick = () => send({ t: "height", delta: parseFloat(b.dataset.height) });

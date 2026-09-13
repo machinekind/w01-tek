@@ -63,6 +63,7 @@ dependencies (`python3-aiohttp`): `docker compose build` in `ros/docker`.
 | D-pad up / left / right / down | paw wave / bow / sit / shake |
 | W S A D Q E, arrows | drive from a keyboard (desk testing) |
 | space | stop |
+| tap the picture | lock onto the box under the finger (below) |
 
 The pad is read in the browser (Gamepad API), the same mapping as
 `wojtek_teleop/gamepad_teleop.py`. Buttons on the page cover the same
@@ -98,6 +99,44 @@ the CPU. The page asks for a frame at most every 66 ms, so both keep up.
 boxes, throwing away the duplicates, scaling back to the camera's pixels —
 so it can be tested from node. `yolox.json` holds the settings and the class
 names.
+
+### Lock-in
+
+A tap on the picture locks onto the box under the finger. The lock is
+drawn as brackets on the box's corners, in the accent, with the label under
+it, and a tag under the masthead says what is locked. From then on the page
+keeps hold of that box on its own: each pass of the detector, the box with
+the same label nearest the last one takes over, and a box that covers the
+same spot takes over whatever the network calls it this time, because a can
+flips between bottle and cup from frame to frame.
+
+A tap on empty picture makes a square around the finger and waits, drawn
+dashed and faint. The first detection to appear under it adopts the lock.
+That is for a target the network sees only up close.
+
+The page tells the gateway about the lock ten times a second:
+
+```json
+{"t": "track", "cx": 260, "cy": 250, "w": 120, "h": 300,
+ "fw": 640, "fh": 480, "label": "person", "age": 0.0}
+```
+
+`cx, cy` is the box's centre and `w, h` its size, in pixels of a frame
+`fw` by `fh`; `age` is how long ago a detection last matched, in seconds.
+When the target is out of sight the last box is held and `age` grows; the
+brackets go dashed after 0.7 s and the lock is dropped after 3 s, with
+`{"t": "unlock"}` sent once. Nothing is sent while waiting.
+
+The lock also ends on a second tap on the target, on the sticks or the
+keys, on stop, when the page is hidden, and when the gateway link drops.
+The sticks rule is the one the gateway will apply on its side, so the two
+never disagree about who is driving.
+
+The gateway ignores `track` and `unlock` today. The follow node that acts
+on them is the next step of
+[the follow plan](../../../docs/plans/wojtek-follow-v1-plan.md).
+
+`lock.js` is the arithmetic on its own, tested from node like `yolox.js`.
 
 ### The assets
 
@@ -159,7 +198,7 @@ coordinates in pixels of the frame it looked at, and reads those frames from
 
 ```bash
 pytest ros/src/wojtek_deck/test          # the drive gate (dead-man), no ROS
-node --test ros/src/wojtek_deck/web/test # the CDR decoder and the YOLOX maths
+node --test ros/src/wojtek_deck/web/test # the CDR decoder, the YOLOX maths, the lock
 ```
 
 ## The look

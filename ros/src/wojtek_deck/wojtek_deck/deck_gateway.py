@@ -36,6 +36,9 @@ Websocket protocol (text frames, JSON):
     {"t":"height", "delta": +-0.005}           step the held stance height
     {"t":"call", key, [value]}                 arm/enable (bool) and the
                                                Trigger services below
+    {"t":"track", cx, cy, w, h, fw, fh, label, age}
+    {"t":"unlock"}                             the page's lock-in (web/lock.js),
+                                               10 Hz; not acted on here yet
 
 Threading is the web_console pattern: rclpy spins in a background thread;
 the ROS side hands data to the asyncio side with call_soon_threadsafe and

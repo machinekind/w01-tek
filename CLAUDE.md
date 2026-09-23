@@ -29,6 +29,9 @@ keep the command, seed, and resulting run directory together.
   and do not treat an experiment's layout as precedent for the rest of the
   tree.  See
   [experiments/autonomous_architecture_ros2_v1/README.md](experiments/autonomous_architecture_ros2_v1/README.md).
+- `learning/` holds self-contained learning guides for tools and hardware
+  around Wojtek (currently the SO-101 arms with LeRobot's web GUI).  Nothing
+  in `ros/` or `training/` depends on it.
 - `skills/` contains opt-in local guides.  Claude users must explicitly
   symlink a skill or ask to read its `SKILL.md`; see [skills/README.md](skills/README.md).
 - Use **Wojtek** everywhere: prose, artifact names, run names, and new paths.

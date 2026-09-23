@@ -1,0 +1,350 @@
+<mujoco model="wojtek_legs_v627">
+  <compiler angle="radian" meshdir="../../meshes/"/>
+
+  <option iterations="4" ls_iterations="8"/>
+
+  <size nkey="1"/>
+
+  <default>
+    <joint limited="true" armature="0.01" damping="0.3" frictionloss="0.3"/>
+    <geom conaffinity="15" condim="4" friction="0.9 0.2 0.2" solref="0.001 2"/>
+
+    <equality solref="0.001 2"/>
+    <general ctrllimited="true"/>
+    <default class="visual">
+      <geom type="mesh" contype="0" conaffinity="0" group="2" density="0" material="grey"/>
+    </default>
+    <default class="collision">
+      <geom type="mesh" group="3"/>
+    </default>
+  </default>
+
+  <asset>
+    <texture type="2d" colorspace="auto" name="grid" builtin="checker" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3" width="300" height="300"/>
+    <material name="grey" rgba="0.5 0.5 0.5 1"/>
+    <material name="m_udo" rgba="0.85 0.45 0.2 1"/>
+    <material name="m_dzwignia" rgba="0.25 0.6 0.85 1"/>
+    <material name="m_wodzik" rgba="0.85 0.8 0.25 1"/>
+    <material name="m_golen" rgba="0.35 0.75 0.35 1"/>
+    <material name="grid" texture="grid" texrepeat="8 8" reflectance="0.1"/>
+    <mesh name="base_link" file="base_link.stl"/>
+    <mesh name="first_link" file="first_link.stl"/>
+    <mesh name="second_link" file="second_link.stl"/>
+    <mesh name="vis_udo_A" file="legs_v627/vis_udo_A.stl"/>
+    <mesh name="vis_udo_B" file="legs_v627/vis_udo_B.stl"/>
+    <mesh name="vis_dzwignia_A" file="legs_v627/vis_dzwignia_A.stl"/>
+    <mesh name="vis_dzwignia_B" file="legs_v627/vis_dzwignia_B.stl"/>
+    <mesh name="vis_wodzik_A" file="legs_v627/vis_wodzik_A.stl"/>
+    <mesh name="vis_wodzik_B" file="legs_v627/vis_wodzik_B.stl"/>
+    <mesh name="vis_golen_A" file="legs_v627/vis_golen_A.stl"/>
+    <mesh name="vis_golen_B" file="legs_v627/vis_golen_B.stl"/>
+  </asset>
+
+  <worldbody>
+    <body name="root" pos="0 0 0.359995">
+      <inertial pos="0 0 0" mass="7.54375" diaginertia="0.0223798 0.0789579 0.0887648"/>
+      <joint name="root" type="free" armature="0" damping="0" frictionloss="0"/>
+      <geom name="base_link_visual" class="visual" pos="0 0 0" quat="0 0 0 1" mesh="base_link"/>
+      <geom name="base_link_collision" class="collision" pos="0 0 0" quat="0 0 0 1" contype="0" conaffinity="0" mesh="base_link"/>
+      <geom name="rear_left_first_link_visual" class="visual" pos="-0.131 0.06 0.06" quat="0 0 -0.707107 0.707107" mesh="first_link"/>
+      <geom name="rear_left_first_link_collision" class="collision" pos="-0.131 0.06 0.06" quat="0 0 -0.707107 0.707107" contype="0" conaffinity="0" mesh="first_link"/>
+      <geom name="rear_right_first_link_visual" class="visual" pos="-0.131 -0.06 0.06" quat="0 0 -0.707107 0.707107" mesh="first_link"/>
+      <geom name="rear_right_first_link_collision" class="collision" pos="-0.131 -0.06 0.06" quat="0 0 -0.707107 0.707107" contype="0" conaffinity="0" mesh="first_link"/>
+      <geom name="front_right_first_link_visual" class="visual" pos="0.131 -0.06 0.06" quat="0.707107 -0.707107 0 0" mesh="first_link"/>
+      <geom name="front_right_first_link_collision" class="collision" pos="0.131 -0.06 0.06" quat="0.707107 -0.707107 0 0" contype="0" conaffinity="0" mesh="first_link"/>
+      <geom name="front_left_first_link_visual" class="visual" pos="0.131 0.06 0.06" quat="0.707107 -0.707107 0 0" mesh="first_link"/>
+      <geom name="front_left_first_link_collision" class="collision" pos="0.131 0.06 0.06" quat="0.707107 -0.707107 0 0" contype="0" conaffinity="0" mesh="first_link"/>
+      <geom name="base_box_r0c0" size="0.0278333 0.0261667 0.05" pos="-0.141667 -0.0533333 0" type="box" group="3"/>
+      <geom name="base_box_r0c2" size="0.0278333 0.0261667 0.05" pos="-0.0283333 -0.0533333 0" type="box" group="3"/>
+      <geom name="base_box_r0c4" size="0.0278333 0.0261667 0.05" pos="0.085 -0.0533333 0" type="box" group="3"/>
+      <geom name="base_box_r1c1" size="0.0278333 0.0261667 0.05" pos="-0.085 0 0" type="box" group="3"/>
+      <geom name="base_box_r1c3" size="0.0278333 0.0261667 0.05" pos="0.0283333 0 0" type="box" group="3"/>
+      <geom name="base_box_r1c5" size="0.0278333 0.0261667 0.05" pos="0.141667 0 0" type="box" group="3"/>
+      <geom name="base_box_r2c0" size="0.0278333 0.0261667 0.05" pos="-0.141667 0.0533333 0" type="box" group="3"/>
+      <geom name="base_box_r2c2" size="0.0278333 0.0261667 0.05" pos="-0.0283333 0.0533333 0" type="box" group="3"/>
+      <geom name="base_box_r2c4" size="0.0278333 0.0261667 0.05" pos="0.085 0.0533333 0" type="box" group="3"/>
+      <site name="imu" pos="0 0 0" size="1e-08"/>
+      <camera name="ego" pos="0.3 0 0.1" quat="0.541665 0.454532 -0.454532 -0.541665" fovy="100"/>
+      <camera name="bench" pos="0.05 0 1.11" quat="-0.5 -0.5 0.5 0.5" fovy="73.74"/>
+      <body name="rear_left_second_link" pos="-0.162 0.06 0.06" quat="0 0 0.707107 0.707107">
+        <inertial pos="0.055 0 0" quat="0.5 0.5 -0.5 0.5" mass="0.6" diaginertia="0.00075 0.000455 0.000455"/>
+        <joint name="rear_left_first_joint" pos="0 0 0" axis="1 0 0" range="-3.1416 3.1416" damping="0.05" frictionloss="0.01"/>
+        <geom name="rear_left_second_link_visual" class="visual" mesh="second_link"/>
+        <geom name="rear_left_second_link_collision" class="collision" contype="0" conaffinity="0" mesh="second_link"/>
+        <geom name="rear_left_second_link_floor" size="0.035" pos="0.055 0 0" contype="2" conaffinity="0" group="3"/>
+        <body name="rear_left_third_link" pos="0.064 0 0.0668" quat="-0.904316 0 0 0.426864">
+          <inertial pos="0.0394156 0.000858148 0.0250979" quat="-0.00514395 0.703225 0.00750772 0.710909" mass="1.0898" diaginertia="0.00962075 0.00915335 0.00112774"/>
+          <joint name="rear_left_second_joint" pos="0 0 0" axis="0 0 -1" ref="-2.25955" range="-2.69479 -1.53589" armature="0.02" damping="0.05" frictionloss="0.2"/>
+          <geom name="rear_left_udo_visual" class="visual" material="m_udo" mesh="vis_udo_B"/>
+          <geom name="rear_left_third_link_floor" size="0.03 0.144" pos="0.144 0 0.03" quat="0.707107 0 -0.707107 0" type="capsule" contype="2" conaffinity="0" group="3"/>
+          <site name="rear_left_P1" pos="0 0 0" size="0.004" group="4"/>
+          <body name="rear_left_fourth_link" quat="0.537643 0 0 -0.843173">
+            <inertial pos="0.0138922 4.11189e-09 0.0149449" quat="0 0.620173 0 0.784465" mass="0.102018" diaginertia="5.17307e-05 4.64771e-05 1.85064e-05"/>
+            <joint name="rear_left_third_joint" pos="0 0 0" axis="0 0 1" ref="-2.00632" range="-2.83267 -0.244346" armature="0.02" damping="0.05" frictionloss="0.2"/>
+            <geom name="rear_left_dzwignia_visual" class="visual" material="m_dzwignia" mesh="vis_dzwignia_B"/>
+            <body name="rear_left_fifth_link" pos="0.0329881 0 0" quat="0.436064 0 0 0.899916">
+              <inertial pos="0.200478 0 0.0255" quat="0 0.707107 0 0.707107" mass="0.07891" diaginertia="0.00115302 0.00114916 7.59801e-06"/>
+              <joint name="rear_left_fourth_joint" pos="0 0 0" axis="0 0 -1" ref="-2.23915" limited="false" damping="0.01" frictionloss="0.48"/>
+              <geom name="rear_left_wodzik_visual" class="visual" material="m_wodzik" mesh="vis_wodzik_B"/>
+              <geom name="rear_left_fifth_link_floor" size="0.012 0.135" pos="0.155 0 0.0255" quat="0.707107 0 -0.707107 0" type="capsule" contype="2" conaffinity="0" group="3"/>
+              <site name="rear_left_chain_close_a" pos="0.290953 0 0" group="4"/>
+              <body name="rear_left_chain_close_a_link" pos="0.290953 0 0"/>
+            </body>
+          </body>
+          <body name="rear_left_sixth_link" pos="0.288242 0 0" quat="0.521687 0 0 0.853137">
+            <inertial pos="-0.0695813 0.0314282 0.0253786" quat="0.597286 0.567265 0.418376 0.382649" mass="0.33083" diaginertia="0.0032533 0.00324266 7.82591e-05"/>
+            <joint name="rear_left_fifth_joint" pos="0 0 0" axis="0 0 -1" ref="-2.04394" limited="false" damping="0.01" frictionloss="0"/>
+            <geom name="rear_left_golen_visual" class="visual" material="m_golen" mesh="vis_golen_B"/>
+            <geom name="rear_left_foot_sphere" size="0.02" pos="-0.237713 0.102244 0.0255" conaffinity="1" group="3"/>
+            <geom name="rear_left_sixth_link_floor" size="0.015 0.109969" pos="-0.101 0.0435 0.0255" quat="0.707107 0.279707 0.649434 0" type="capsule" contype="2" conaffinity="0" group="3"/>
+            <site name="rear_left_foot" pos="-0.237713 0.102244 0" group="4"/>
+            <body name="rear_left_foot_link" pos="0.041823 0 0">
+              <inertial pos="0 0 0" mass="0.01" diaginertia="1e-06 1e-06 1e-06"/>
+              <joint name="rear_left_foot_joint" pos="0 0 0" axis="0 0 1" limited="false" armature="0.0001" damping="0.01" frictionloss="0"/>
+              <site name="rear_left_chain_close_b" pos="0 0 0" group="4"/>
+            </body>
+          </body>
+        </body>
+      </body>
+      <body name="rear_right_second_link" pos="-0.162 -0.06 0.06" quat="0 0 -0.707107 0.707107">
+        <inertial pos="0.055 0 0" quat="0.5 0.5 -0.5 0.5" mass="0.6" diaginertia="0.00075 0.000455 0.000455"/>
+        <joint name="rear_right_first_joint" pos="0 0 0" axis="1 0 0" range="-3.1416 3.1416" damping="0.05" frictionloss="0.01"/>
+        <geom name="rear_right_second_link_visual" class="visual" mesh="second_link"/>
+        <geom name="rear_right_second_link_collision" class="collision" contype="0" conaffinity="0" mesh="second_link"/>
+        <geom name="rear_right_second_link_floor" size="0.035" pos="0.055 0 0" contype="2" conaffinity="0" group="3"/>
+        <body name="rear_right_third_link" pos="0.064 0 0.0668" quat="0.904316 0 0 0.426864">
+          <inertial pos="0.0394156 -0.000858148 0.0250979" quat="0.00514395 0.703225 -0.00750772 0.710909" mass="1.0898" diaginertia="0.00962075 0.00915335 0.00112774"/>
+          <joint name="rear_right_second_joint" pos="0 0 0" axis="0 0 1" ref="-2.25955" range="-2.69479 -1.53589" armature="0.02" damping="0.05" frictionloss="0.2"/>
+          <geom name="rear_right_udo_visual" class="visual" material="m_udo" mesh="vis_udo_A"/>
+          <geom name="rear_right_third_link_floor" size="0.03 0.144" pos="0.144 0 0.03" quat="0.707107 0 -0.707107 0" type="capsule" contype="2" conaffinity="0" group="3"/>
+          <site name="rear_right_P1" pos="0 0 0" size="0.004" group="4"/>
+          <body name="rear_right_fourth_link" quat="0.537643 0 0 0.843173">
+            <inertial pos="0.0138922 -4.11189e-09 0.0149449" quat="0 0.620173 0 0.784465" mass="0.102018" diaginertia="5.17307e-05 4.64771e-05 1.85064e-05"/>
+            <joint name="rear_right_third_joint" pos="0 0 0" axis="0 0 -1" ref="-2.00632" range="-2.83267 -0.244346" armature="0.02" damping="0.05" frictionloss="0.2"/>
+            <geom name="rear_right_dzwignia_visual" class="visual" material="m_dzwignia" mesh="vis_dzwignia_A"/>
+            <body name="rear_right_fifth_link" pos="0.0329881 0 0" quat="0.436064 0 0 -0.899916">
+              <inertial pos="0.200478 0 0.0255" quat="0 0.707107 0 0.707107" mass="0.07891" diaginertia="0.00115302 0.00114916 7.59801e-06"/>
+              <joint name="rear_right_fourth_joint" pos="0 0 0" axis="0 0 -1" ref="2.23915" limited="false" damping="0.01" frictionloss="0.48"/>
+              <geom name="rear_right_wodzik_visual" class="visual" material="m_wodzik" mesh="vis_wodzik_A"/>
+              <geom name="rear_right_fifth_link_floor" size="0.012 0.135" pos="0.155 0 0.0255" quat="0.707107 0 -0.707107 0" type="capsule" contype="2" conaffinity="0" group="3"/>
+              <site name="rear_right_chain_close_a" pos="0.290953 0 0" group="4"/>
+              <body name="rear_right_chain_close_a_link" pos="0.290953 0 0"/>
+            </body>
+          </body>
+          <body name="rear_right_sixth_link" pos="0.288242 0 0" quat="0.521687 0 0 -0.853137">
+            <inertial pos="-0.0695813 -0.0314282 0.0253786" quat="0.382649 0.418376 0.567265 0.597286" mass="0.33083" diaginertia="0.0032533 0.00324266 7.82591e-05"/>
+            <joint name="rear_right_fifth_joint" pos="0 0 0" axis="0 0 -1" ref="2.04394" limited="false" damping="0.01" frictionloss="0"/>
+            <geom name="rear_right_golen_visual" class="visual" material="m_golen" mesh="vis_golen_A"/>
+            <geom name="rear_right_foot_sphere" size="0.02" pos="-0.237713 -0.102244 0.0255" conaffinity="1" group="3"/>
+            <geom name="rear_right_sixth_link_floor" size="0.015 0.109969" pos="-0.101 -0.0435 0.0255" quat="0.707107 -0.279707 0.649434 0" type="capsule" contype="2" conaffinity="0" group="3"/>
+            <site name="rear_right_foot" pos="-0.237713 -0.102244 0" group="4"/>
+            <body name="rear_right_foot_link" pos="0.041823 0 0">
+              <inertial pos="0 0 0" mass="0.01" diaginertia="1e-06 1e-06 1e-06"/>
+              <joint name="rear_right_foot_joint" pos="0 0 0" axis="0 0 1" limited="false" armature="0.0001" damping="0.01" frictionloss="0"/>
+              <site name="rear_right_chain_close_b" pos="0 0 0" group="4"/>
+            </body>
+          </body>
+        </body>
+      </body>
+      <body name="front_right_second_link" pos="0.162 -0.06 0.06" quat="0.707107 0.707107 0 0">
+        <inertial pos="0.055 0 0" quat="0.5 0.5 -0.5 0.5" mass="0.6" diaginertia="0.00075 0.000455 0.000455"/>
+        <joint name="front_right_first_joint" pos="0 0 0" axis="1 0 0" range="-3.1416 3.1416" damping="0.05" frictionloss="0.01"/>
+        <geom name="front_right_second_link_visual" class="visual" mesh="second_link"/>
+        <geom name="front_right_second_link_collision" class="collision" contype="0" conaffinity="0" mesh="second_link"/>
+        <geom name="front_right_second_link_floor" size="0.035" pos="0.055 0 0" contype="2" conaffinity="0" group="3"/>
+        <body name="front_right_third_link" pos="0.064 0 0.0668" quat="0.426864 0 0 -0.904316">
+          <inertial pos="0.0394156 -0.000858148 0.0250979" quat="0.00514395 0.703225 -0.00750772 0.710909" mass="1.0898" diaginertia="0.00962075 0.00915335 0.00112774"/>
+          <joint name="front_right_second_joint" pos="0 0 0" axis="0 0 -1" ref="2.25955" range="1.53589 2.69479" armature="0.02" damping="0.05" frictionloss="0.2"/>
+          <geom name="front_right_udo_visual" class="visual" material="m_udo" mesh="vis_udo_A"/>
+          <geom name="front_right_third_link_floor" size="0.03 0.144" pos="0.144 0 0.03" quat="0.707107 0 -0.707107 0" type="capsule" contype="2" conaffinity="0" group="3"/>
+          <site name="front_right_P1" pos="0 0 0" size="0.004" group="4"/>
+          <body name="front_right_fourth_link" quat="0.537643 0 0 0.843173">
+            <inertial pos="0.0138922 -4.11189e-09 0.0149449" quat="0 0.620173 0 0.784465" mass="0.102018" diaginertia="5.17307e-05 4.64771e-05 1.85064e-05"/>
+            <joint name="front_right_third_joint" pos="0 0 0" axis="0 0 1" ref="2.00632" range="0.244346 2.83267" armature="0.02" damping="0.05" frictionloss="0.2"/>
+            <geom name="front_right_dzwignia_visual" class="visual" material="m_dzwignia" mesh="vis_dzwignia_A"/>
+            <body name="front_right_fifth_link" pos="0.0329881 0 0" quat="0.436064 0 0 -0.899916">
+              <inertial pos="0.200478 0 0.0255" quat="0 0.707107 0 0.707107" mass="0.07891" diaginertia="0.00115302 0.00114916 7.59801e-06"/>
+              <joint name="front_right_fourth_joint" pos="0 0 0" axis="0 0 -1" ref="2.23915" limited="false" damping="0.01" frictionloss="0.48"/>
+              <geom name="front_right_wodzik_visual" class="visual" material="m_wodzik" mesh="vis_wodzik_A"/>
+              <geom name="front_right_fifth_link_floor" size="0.012 0.135" pos="0.155 0 0.0255" quat="0.707107 0 -0.707107 0" type="capsule" contype="2" conaffinity="0" group="3"/>
+              <site name="front_right_chain_close_a" pos="0.290953 0 0" group="4"/>
+              <body name="front_right_chain_close_a_link" pos="0.290953 0 0"/>
+            </body>
+          </body>
+          <body name="front_right_sixth_link" pos="0.288242 0 0" quat="0.521687 0 0 -0.853137">
+            <inertial pos="-0.0695813 -0.0314282 0.0253786" quat="0.382649 0.418376 0.567265 0.597286" mass="0.33083" diaginertia="0.0032533 0.00324266 7.82591e-05"/>
+            <joint name="front_right_fifth_joint" pos="0 0 0" axis="0 0 -1" ref="2.04394" limited="false" damping="0.01" frictionloss="0"/>
+            <geom name="front_right_golen_visual" class="visual" material="m_golen" mesh="vis_golen_A"/>
+            <geom name="front_right_foot_sphere" size="0.02" pos="-0.237713 -0.102244 0.0255" conaffinity="1" group="3"/>
+            <geom name="front_right_sixth_link_floor" size="0.015 0.109969" pos="-0.101 -0.0435 0.0255" quat="0.707107 -0.279707 0.649434 0" type="capsule" contype="2" conaffinity="0" group="3"/>
+            <site name="front_right_foot" pos="-0.237713 -0.102244 0" group="4"/>
+            <body name="front_right_foot_link" pos="0.041823 0 0">
+              <inertial pos="0 0 0" mass="0.01" diaginertia="1e-06 1e-06 1e-06"/>
+              <joint name="front_right_foot_joint" pos="0 0 0" axis="0 0 1" limited="false" armature="0.0001" damping="0.01" frictionloss="0"/>
+              <site name="front_right_chain_close_b" pos="0 0 0" group="4"/>
+            </body>
+          </body>
+        </body>
+      </body>
+      <body name="front_left_second_link" pos="0.162 0.06 0.06" quat="0.707107 -0.707107 0 0">
+        <inertial pos="0.055 0 0" quat="0.5 0.5 -0.5 0.5" mass="0.6" diaginertia="0.00075 0.000455 0.000455"/>
+        <joint name="front_left_first_joint" pos="0 0 0" axis="1 0 0" range="-3.1416 3.1416" damping="0.05" frictionloss="0.01"/>
+        <geom name="front_left_second_link_visual" class="visual" mesh="second_link"/>
+        <geom name="front_left_second_link_collision" class="collision" contype="0" conaffinity="0" mesh="second_link"/>
+        <geom name="front_left_second_link_floor" size="0.035" pos="0.055 0 0" contype="2" conaffinity="0" group="3"/>
+        <body name="front_left_third_link" pos="0.064 0 0.0668" quat="0.426864 0 0 0.904316">
+          <inertial pos="0.0394156 0.000858148 0.0250979" quat="-0.00514395 0.703225 0.00750772 0.710909" mass="1.0898" diaginertia="0.00962075 0.00915335 0.00112774"/>
+          <joint name="front_left_second_joint" pos="0 0 0" axis="0 0 1" ref="2.25955" range="1.53589 2.69479" armature="0.02" damping="0.05" frictionloss="0.2"/>
+          <geom name="front_left_udo_visual" class="visual" material="m_udo" mesh="vis_udo_B"/>
+          <geom name="front_left_third_link_floor" size="0.03 0.144" pos="0.144 0 0.03" quat="0.707107 0 -0.707107 0" type="capsule" contype="2" conaffinity="0" group="3"/>
+          <site name="front_left_P1" pos="0 0 0" size="0.004" group="4"/>
+          <body name="front_left_fourth_link" quat="0.537643 0 0 -0.843173">
+            <inertial pos="0.0138922 4.11189e-09 0.0149449" quat="0 0.620173 0 0.784465" mass="0.102018" diaginertia="5.17307e-05 4.64771e-05 1.85064e-05"/>
+            <joint name="front_left_third_joint" pos="0 0 0" axis="0 0 -1" ref="2.00632" range="0.244346 2.83267" armature="0.02" damping="0.05" frictionloss="0.2"/>
+            <geom name="front_left_dzwignia_visual" class="visual" material="m_dzwignia" mesh="vis_dzwignia_B"/>
+            <body name="front_left_fifth_link" pos="0.0329881 0 0" quat="0.436064 0 0 0.899916">
+              <inertial pos="0.200478 0 0.0255" quat="0 0.707107 0 0.707107" mass="0.07891" diaginertia="0.00115302 0.00114916 7.59801e-06"/>
+              <joint name="front_left_fourth_joint" pos="0 0 0" axis="0 0 -1" ref="-2.23915" limited="false" damping="0.01" frictionloss="0.48"/>
+              <geom name="front_left_wodzik_visual" class="visual" material="m_wodzik" mesh="vis_wodzik_B"/>
+              <geom name="front_left_fifth_link_floor" size="0.012 0.135" pos="0.155 0 0.0255" quat="0.707107 0 -0.707107 0" type="capsule" contype="2" conaffinity="0" group="3"/>
+              <site name="front_left_chain_close_a" pos="0.290953 0 0" group="4"/>
+              <body name="front_left_chain_close_a_link" pos="0.290953 0 0"/>
+            </body>
+          </body>
+          <body name="front_left_sixth_link" pos="0.288242 0 0" quat="0.521687 0 0 0.853137">
+            <inertial pos="-0.0695813 0.0314282 0.0253786" quat="0.597286 0.567265 0.418376 0.382649" mass="0.33083" diaginertia="0.0032533 0.00324266 7.82591e-05"/>
+            <joint name="front_left_fifth_joint" pos="0 0 0" axis="0 0 -1" ref="-2.04394" limited="false" damping="0.01" frictionloss="0"/>
+            <geom name="front_left_golen_visual" class="visual" material="m_golen" mesh="vis_golen_B"/>
+            <geom name="front_left_foot_sphere" size="0.02" pos="-0.237713 0.102244 0.0255" conaffinity="1" group="3"/>
+            <geom name="front_left_sixth_link_floor" size="0.015 0.109969" pos="-0.101 0.0435 0.0255" quat="0.707107 0.279707 0.649434 0" type="capsule" contype="2" conaffinity="0" group="3"/>
+            <site name="front_left_foot" pos="-0.237713 0.102244 0" group="4"/>
+            <body name="front_left_foot_link" pos="0.041823 0 0">
+              <inertial pos="0 0 0" mass="0.01" diaginertia="1e-06 1e-06 1e-06"/>
+              <joint name="front_left_foot_joint" pos="0 0 0" axis="0 0 1" limited="false" armature="0.0001" damping="0.01" frictionloss="0"/>
+              <site name="front_left_chain_close_b" pos="0 0 0" group="4"/>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <contact>
+    <exclude name="ex_rear_left_second_link_root" body1="root" body2="rear_left_second_link"/>
+    <exclude name="ex_rear_right_second_link_root" body1="root" body2="rear_right_second_link"/>
+    <exclude name="ex_front_right_second_link_root" body1="root" body2="front_right_second_link"/>
+    <exclude name="ex_front_left_second_link_root" body1="root" body2="front_left_second_link"/>
+    <exclude name="ex_rear_left_fifth_link_sixth_link" body1="rear_left_fifth_link" body2="rear_left_sixth_link"/>
+    <exclude name="ex_rear_right_fifth_link_sixth_link" body1="rear_right_fifth_link" body2="rear_right_sixth_link"/>
+    <exclude name="ex_front_right_fifth_link_sixth_link" body1="front_right_fifth_link" body2="front_right_sixth_link"/>
+    <exclude name="ex_front_left_fifth_link_sixth_link" body1="front_left_fifth_link" body2="front_left_sixth_link"/>
+  </contact>
+
+  <equality>
+    <connect name="equality_sconstraint_front_left" site1="front_left_chain_close_b" site2="front_left_chain_close_a" solimp="0.99 0.999"/>
+    <connect name="equality_sconstraint_front_right" site1="front_right_chain_close_b" site2="front_right_chain_close_a" solimp="0.99 0.999"/>
+    <connect name="equality_sconstraint_rear_left" site1="rear_left_chain_close_b" site2="rear_left_chain_close_a" solimp="0.99 0.999"/>
+    <connect name="equality_sconstraint_rear_right" site1="rear_right_chain_close_b" site2="rear_right_chain_close_a" solimp="0.99 0.999"/>
+  </equality>
+
+  <actuator>
+    <general name="rear_left_first_joint" joint="rear_left_first_joint" ctrlrange="-3.1416 3.1416" forcerange="-22 22" biastype="affine" gainprm="60" biasprm="0 -60 -2"/>
+    <general name="rear_left_second_joint" joint="rear_left_second_joint" ctrlrange="-0.443199 0.7157" forcerange="-22 22" biastype="affine" gainprm="60" biasprm="-135.095 -60 -2"/>
+    <general name="rear_left_third_joint" joint="rear_left_third_joint" ctrlrange="-0.79588 1.79244" forcerange="-22 22" biastype="affine" gainprm="60" biasprm="-122.207 -60 -2"/>
+    <general name="rear_right_first_joint" joint="rear_right_first_joint" ctrlrange="-3.1416 3.1416" forcerange="-22 22" biastype="affine" gainprm="60" biasprm="0 -60 -2"/>
+    <general name="rear_right_second_joint" joint="rear_right_second_joint" ctrlrange="-0.443199 0.7157" forcerange="-22 22" biastype="affine" gainprm="60" biasprm="-135.095 -60 -2"/>
+    <general name="rear_right_third_joint" joint="rear_right_third_joint" ctrlrange="-0.79588 1.79244" forcerange="-22 22" biastype="affine" gainprm="60" biasprm="-122.207 -60 -2"/>
+    <general name="front_right_first_joint" joint="front_right_first_joint" ctrlrange="-3.1416 3.1416" forcerange="-22 22" biastype="affine" gainprm="60" biasprm="0 -60 -2"/>
+    <general name="front_right_second_joint" joint="front_right_second_joint" ctrlrange="-0.730806 0.428093" forcerange="-22 22" biastype="affine" gainprm="60" biasprm="136.002 -60 -2"/>
+    <general name="front_right_third_joint" joint="front_right_third_joint" ctrlrange="-1.73781 0.850511" forcerange="-22 22" biastype="affine" gainprm="60" biasprm="118.93 -60 -2"/>
+    <general name="front_left_first_joint" joint="front_left_first_joint" ctrlrange="-3.1416 3.1416" forcerange="-22 22" biastype="affine" gainprm="60" biasprm="0 -60 -2"/>
+    <general name="front_left_second_joint" joint="front_left_second_joint" ctrlrange="-0.730806 0.428093" forcerange="-22 22" biastype="affine" gainprm="60" biasprm="136.002 -60 -2"/>
+    <general name="front_left_third_joint" joint="front_left_third_joint" ctrlrange="-1.73781 0.850511" forcerange="-22 22" biastype="affine" gainprm="60" biasprm="118.93 -60 -2"/>
+  </actuator>
+
+  <sensor>
+
+    <actuatorpos actuator="rear_left_first_joint" name="rear_left_first_joint_p"/>
+
+    <actuatorvel actuator="rear_left_first_joint" name="rear_left_first_joint_v"/>
+
+    <actuatorfrc actuator="rear_left_first_joint" name="rear_left_first_joint_f" noise="0.001"/>
+
+    <actuatorpos actuator="rear_left_second_joint" name="rear_left_second_joint_p"/>
+
+    <actuatorvel actuator="rear_left_second_joint" name="rear_left_second_joint_v"/>
+
+    <actuatorfrc actuator="rear_left_second_joint" name="rear_left_second_joint_f" noise="0.001"/>
+
+    <actuatorpos actuator="rear_left_third_joint" name="rear_left_third_joint_p"/>
+
+    <actuatorvel actuator="rear_left_third_joint" name="rear_left_third_joint_v"/>
+
+    <actuatorfrc actuator="rear_left_third_joint" name="rear_left_third_joint_f" noise="0.001"/>
+
+    <actuatorpos actuator="rear_right_first_joint" name="rear_right_first_joint_p"/>
+
+    <actuatorvel actuator="rear_right_first_joint" name="rear_right_first_joint_v"/>
+
+    <actuatorfrc actuator="rear_right_first_joint" name="rear_right_first_joint_f" noise="0.001"/>
+
+    <actuatorpos actuator="rear_right_second_joint" name="rear_right_second_joint_p"/>
+
+    <actuatorvel actuator="rear_right_second_joint" name="rear_right_second_joint_v"/>
+
+    <actuatorfrc actuator="rear_right_second_joint" name="rear_right_second_joint_f" noise="0.001"/>
+
+    <actuatorpos actuator="rear_right_third_joint" name="rear_right_third_joint_p"/>
+
+    <actuatorvel actuator="rear_right_third_joint" name="rear_right_third_joint_v"/>
+
+    <actuatorfrc actuator="rear_right_third_joint" name="rear_right_third_joint_f" noise="0.001"/>
+
+    <actuatorpos actuator="front_right_first_joint" name="front_right_first_joint_p"/>
+
+    <actuatorvel actuator="front_right_first_joint" name="front_right_first_joint_v"/>
+
+    <actuatorfrc actuator="front_right_first_joint" name="front_right_first_joint_f" noise="0.001"/>
+
+    <actuatorpos actuator="front_right_second_joint" name="front_right_second_joint_p"/>
+
+    <actuatorvel actuator="front_right_second_joint" name="front_right_second_joint_v"/>
+
+    <actuatorfrc actuator="front_right_second_joint" name="front_right_second_joint_f" noise="0.001"/>
+
+    <actuatorpos actuator="front_right_third_joint" name="front_right_third_joint_p"/>
+
+    <actuatorvel actuator="front_right_third_joint" name="front_right_third_joint_v"/>
+
+    <actuatorfrc actuator="front_right_third_joint" name="front_right_third_joint_f" noise="0.001"/>
+
+    <actuatorpos actuator="front_left_first_joint" name="front_left_first_joint_p"/>
+
+    <actuatorvel actuator="front_left_first_joint" name="front_left_first_joint_v"/>
+
+    <actuatorfrc actuator="front_left_first_joint" name="front_left_first_joint_f" noise="0.001"/>
+
+    <actuatorpos actuator="front_left_second_joint" name="front_left_second_joint_p"/>
+
+    <actuatorvel actuator="front_left_second_joint" name="front_left_second_joint_v"/>
+
+    <actuatorfrc actuator="front_left_second_joint" name="front_left_second_joint_f" noise="0.001"/>
+
+    <actuatorpos actuator="front_left_third_joint" name="front_left_third_joint_p"/>
+
+    <actuatorvel actuator="front_left_third_joint" name="front_left_third_joint_v"/>
+
+    <actuatorfrc actuator="front_left_third_joint" name="front_left_third_joint_f" noise="0.001"/>
+    <framequat objtype="site" objname="imu" name="orientation" noise="0.001"/>
+    <gyro site="imu" name="angular-velocity" cutoff="34.9" noise="0.005"/>
+    <accelerometer site="imu" name="linear-acceleration"/>
+    <framelinvel objtype="geom" objname="rear_left_foot_sphere" name="rear_left_foot_linvel"/>
+    <framelinvel objtype="geom" objname="rear_right_foot_sphere" name="rear_right_foot_linvel"/>
+    <framelinvel objtype="geom" objname="front_right_foot_sphere" name="front_right_foot_linvel"/>
+    <framelinvel objtype="geom" objname="front_left_foot_sphere" name="front_left_foot_linvel"/>
+  </sensor>
+
+  <keyframe>
+    <key name="home" qpos="0 0 0.345934 1 0 0 0 -0.0186536 -2.2224 -1.9316 -2.17111 -1.98844 2.53475e-07 0.0186536 -2.2224 -1.9316 2.17111 1.98844 -2.53475e-07 -0.0100269 2.23666 1.90961 2.15082 1.97585 -9.78131e-08 0.0100269 2.23666 1.90961 -2.15082 -1.97585 9.78131e-08"/>
+  </keyframe>
+</mujoco>

@@ -1,5 +1,6 @@
 defaults:
   - task: joystick
+  - robot: wojtek # which legs: wojtek (stock) / legs_v627; see docs/robots.md
   - network: default
   - obs: full # sensor-suite preset: full / no_imu (subtracts from obs.state)
   - _self_

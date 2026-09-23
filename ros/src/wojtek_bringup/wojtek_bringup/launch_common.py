@@ -30,6 +30,7 @@ from launch.actions import (
     ExecuteProcess,
     IncludeLaunchDescription,
     OpaqueFunction,
+    SetLaunchConfiguration,
 )
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import (
@@ -43,6 +44,7 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
+from wojtek_policy import robots
 from wojtek_policy.policy_source import active_policy, load_policy
 
 
@@ -58,14 +60,46 @@ def _cpu_prefix(context, arg):
     return [f"taskset -c {cpus}"] if cpus else None
 
 
+def robot_profile(context):
+    """The robot profile this launch runs, from its robot:= argument."""
+    return robots.get(LaunchConfiguration("robot").perform(context))
+
+
+def sim_model_xml(context):
+    """The scene a simulated plant loads: model_xml:=, or the robot's own.
+
+    The plant and the simulated camera both call this, so they always load
+    the same scene and share one physics state.
+    """
+    explicit = LaunchConfiguration("model_xml").perform(context)
+    if explicit:
+        return explicit
+    package, path = robot_profile(context).sim_scene
+    return os.path.join(get_package_share_directory(package), path)
+
+
 def _launch_setup(context, with_rviz, hardware):
     share = get_package_share_directory("wojtek_bringup")
     policy_share = get_package_share_directory("wojtek_policy")
 
+    # Which robot this is decides the legs in the URDF, the joint map, the
+    # knee clamp and the default policy (wojtek_policy/robots.py).
+    profile = robot_profile(context)
+    joint_map_yaml = os.path.join(policy_share, "config", profile.joint_map)
+    # An explicit policy:= wins. Without it the robot's default runs: the
+    # override file deploy.sh --policy leaves on the robot, or else the
+    # profile's pin. The launch configuration is set to the answer, so the
+    # nodes declared after this one (the web console) read the same policy.
+    policy_ref = (
+        LaunchConfiguration("policy").perform(context)
+        or active_policy(profile.name)
+    )
+    # load_policy refuses a policy trained for other legs than the profile's.
     loaded = load_policy(
-        LaunchConfiguration("policy").perform(context),
+        policy_ref,
         overrides={k: LaunchConfiguration(k).perform(context)
                    for k in ("kp", "kd", "max_torque")},
+        robot=profile.name,
     )
     pd = loaded.pd
     # Feed-forward torque head: read straight from the contract, so a
@@ -77,7 +111,8 @@ def _launch_setup(context, with_rviz, hardware):
     tau_ff_on = bool(tff.get("enable"))
     tau_ff_scale = float(tff.get("scale", 0.0))
     drive_torque = pd["max_torque"] + (tau_ff_scale if tau_ff_on else 0.0)
-    print(f">> policy {loaded.run_name} from {loaded.source}; servo settings "
+    print(f">> robot {profile.name}; "
+          f"policy {loaded.run_name} from {loaded.source}; servo settings "
           f"kp={pd['kp']:g} kd={pd['kd']:g} max_torque={pd['max_torque']:g}"
           + (f"; tau_ff head +-{tau_ff_scale:g} N*m -> drive torque limit "
              f"{drive_torque:g}" if tau_ff_on else ""))
@@ -92,6 +127,7 @@ def _launch_setup(context, with_rviz, hardware):
         f" tau_ff:={'true' if tau_ff_on else 'false'}",
         " use_imu:=", use_imu,
         " dry_run:=", LaunchConfiguration("dry_run"),
+        f" legs:={profile.legs}",
     ]
     if hardware == "real":
         xacro_file = os.path.join(share, "urdf", "wojtek_real.urdf.xacro")
@@ -113,10 +149,8 @@ def _launch_setup(context, with_rviz, hardware):
         xacro_args += [
             " hw:=", LaunchConfiguration("hw"),
             " boot_pose:=", LaunchConfiguration("boot_pose"),
-            " model_xml:=" + (
-                LaunchConfiguration("model_xml").perform(context)
-                or os.path.join(pc_share, "config", "scene_sim.xml")
-            ),
+            " model_xml:=" + sim_model_xml(context),
+            " joint_map_yaml:=" + joint_map_yaml,
         ]
     robot_description = ParameterValue(
         Command(["xacro ", xacro_file] + xacro_args), value_type=str,
@@ -188,6 +222,7 @@ def _launch_setup(context, with_rviz, hardware):
                 {
                     "dry_run": LaunchConfiguration("dry_run"),
                     "boot_pose": LaunchConfiguration("boot_pose"),
+                    "joint_map_yaml": joint_map_yaml,
                 }
             ],
         ),
@@ -201,6 +236,10 @@ def _launch_setup(context, with_rviz, hardware):
                     # loads the same files without resolving the ref again.
                     "policy": str(loaded.directory),
                     "policy_source": loaded.source,
+                    # The node checks the policy against the profile again,
+                    # so a policy for other legs cannot slip in by any path.
+                    "robot": profile.name,
+                    "joint_map_yaml": joint_map_yaml,
                     # URDF imu_joint: rpy 0 0 0 relative to base_link -- the
                     # sensor sits upright and its driver publishes the chip
                     # axes unmodified, so nothing needs rotating here. Keep
@@ -210,7 +249,7 @@ def _launch_setup(context, with_rviz, hardware):
                     "imu_mount_rpy": [0.0, 0.0, 0.0],
                     "auto_enable": True,  # real_io arming is the gate
                     "soft_start_s": 2.0,
-                    "clamp_knee": True,
+                    "clamp_knee": profile.clamp_knee,
                     "watchdog_timeout_s": 0.2,
                     # Same switch as the sysinfo node above, so one argument
                     # turns both topics on together.
@@ -315,15 +354,12 @@ def _launch_setup(context, with_rviz, hardware):
             output="screen",
         )
     )
-    return nodes
-
-
-DEFAULT_POLICY = active_policy()
+    return [SetLaunchConfiguration("policy", policy_ref)] + nodes
 
 
 def common_launch_description(
     with_rviz, bag_default, with_gamepad=False, hardware="real",
-    policy_default=DEFAULT_POLICY,
+    policy_default="",
 ):
     """LaunchDescription shared by the real-robot and simulation launches.
 
@@ -333,10 +369,11 @@ def common_launch_description(
     arg); hardware is "real" (MD80 + I2C IMU) or "sim" (simulated plugin from
     wojtek_pc's xacro), which selects the URDF and the hardware-specific args;
     policy_default is the policy reference this workflow comes up with when
-    none is given. Every launch takes DEFAULT_POLICY today -- the hook stays
-    because a simulation and the robot may reasonably differ on which policy
-    is the one to look at by default (an experimental one at the desk, a
-    vetted one on the robot); a one-off divergence is `policy:=` instead.
+    none is given. Empty means the robot's default (robots.py), which every
+    launch takes today -- the hook stays because a simulation and the robot
+    may reasonably differ on which policy is the one to look at by default
+    (an experimental one at the desk, a vetted one on the robot); a one-off
+    divergence is `policy:=` instead.
     """
     if hardware not in ("real", "sim"):
         raise ValueError(f"hardware must be 'real' or 'sim', got {hardware!r}")
@@ -347,8 +384,17 @@ def common_launch_description(
         # for a durable real-robot run: policy:=<repo>@<sha>. A Hugging Face
         # reference is answered from the policy store. deploy.sh keeps the
         # default there, and deploy.sh --policy <ref> ships and activates
-        # any other reference. The robot needs no network.
+        # any other reference. The robot needs no network. Empty means the
+        # robot's default: the override file, or else the profile's pin.
         DeclareLaunchArgument("policy", default_value=policy_default),
+        # Which robot this is, as a profile from wojtek_policy/robots.py:
+        # "wojtek" for the stock legs, "wojtek_v2" for the v6.27 legs. It
+        # picks the URDF legs, the joint map, the knee clamp and the default
+        # policy. A policy trained for other legs is refused.
+        DeclareLaunchArgument(
+            "robot", default_value=robots.DEFAULT_ROBOT,
+            choices=list(robots.NAMES),
+        ),
         # Explicit overrides of the policy contract's servo settings (empty =
         # from the contract). E.g. max_torque:=2 for cautious first tests.
         DeclareLaunchArgument("kp", default_value=""),
@@ -419,9 +465,10 @@ def common_launch_description(
                 "hw", default_value="mujoco",
                 choices=["mock", "mujoco"],
             ),
-            # Physics scene for hw:=mujoco; empty = the plugin's default
-            # (scene_sim.xml shipped by wojtek_pc: the training scene plus
-            # the props the camera and its detector have something to see in).
+            # Physics scene for hw:=mujoco; empty = the robot profile's scene.
+            # For the stock robot that is scene_sim.xml shipped by wojtek_pc:
+            # the training scene plus the props the camera and its detector
+            # have something to see in.
             DeclareLaunchArgument("model_xml", default_value=""),
         ]
     if with_rviz:

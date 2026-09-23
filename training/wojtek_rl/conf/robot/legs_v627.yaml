@@ -1,0 +1,24 @@
+# @package _global_
+# The v6.27 four-bar legs (wojtek_rl/robots.py LEGS_V627): same body, legs
+# about 2.3 times longer, standing at 0.345 m instead of 0.12 m. Joystick
+# task, flat ground only. Build the model first:
+#   ./training/run.sh build --robot legs_v627
+# This file holds what follows from the geometry. Everything that is a
+# training choice (rewards, gait clock, command box) stays with the
+# experiment presets; the stock ones are tuned to the stock legs, and one
+# that sets command.height to the stock range is refused by the env.
+task:
+  env:
+    robot: legs_v627
+    # The model was validated at this step and no coarser (robots.py says
+    # why). A control step is therefore 10 sim steps, not 5, and
+    # latency.min/max_substeps count these shorter steps.
+    sim_dt: 0.002
+    # Home settles at 0.345 m; the legs reach 0.21-0.39 m with the foot
+    # under the hip. This band keeps clear of both ends.
+    command:
+      height: [0.28, 0.37]
+    fall:
+      min_height: 0.15 # the stock 0.06 is half the stock stance; so is this
+    gait:
+      swing_height: 0.06 # stock 0.03 on legs less than half as long

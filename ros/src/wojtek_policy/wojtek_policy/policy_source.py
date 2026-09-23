@@ -19,16 +19,19 @@ The robot has no internet and no huggingface_hub, so it never downloads.
 Downloading happens on the operator PC, which has the network and the token
 for the private repos:
 
-    python3 -m wojtek_policy.policy_source --default  # the pin below
+    python3 -m wojtek_policy.policy_source --default  # the stock robot's pin
+    python3 -m wojtek_policy.policy_source --default --robot <name>
     python3 -m wojtek_policy.policy_source <ref>      # any other reference
     ./deploy.sh                                       # syncs it to the robot
+
+The pins live in the robot profiles (robots.py), one per robot.
 
 On the robot every reference is answered from the store, offline. A missing
 reference fails with the instruction above instead of a network error. Only
 the two policy files are ever fetched, never the checkpoint.
 
-deploy.sh runs `--default` before syncing, so the default policy needs no
-manual step. `./deploy.sh --policy <ref>` does the same for a one-off policy
+deploy.sh runs `--default --robot $WOJTEK_ROBOT` before syncing, so the
+default policy needs no manual step. `./deploy.sh --policy <ref>` does the same for a one-off policy
 and leaves the robot running it.
 
 Every reference resolves once. A commit is immutable, and a branch or tag
@@ -50,6 +53,8 @@ import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+from wojtek_policy import robots
 
 FILES = ("policy.npz", "policy_meta.json")
 
@@ -91,27 +96,18 @@ def policy_store() -> Path:
     )
 
 
-# The pinned default policy. A bringup runs it when no policy:= is given and
-# no override file is present. The pin is a commit on purpose. An unpinned repo id
-# follows main, so tomorrow's launch could silently run a different policy,
-# and only a pinned commit resolves from the store with no network. The pin
-# lives in this module rather than in the launch files because deploy.sh has
-# to resolve it too, and this module imports nothing beyond the standard
-# library.
-_DEFAULT_REPO = ("wojtek-quiet-locomotion"
-                 "@553795b13001cc1f519a4abc0235f275095129f8")
+def default_policy(robot: str = robots.DEFAULT_ROBOT) -> str:
+    """A robot's pinned default reference, or "" when there is none.
 
-
-def default_policy() -> str:
-    """The pinned default reference, or "" when there is no organization.
-
-    The org comes from HF_ORGANIZATION in the environment (see .env.example),
-    because the keeper repos are private and this repository is public.
-    Without it there is no default and every launch needs an explicit
-    policy:=.
+    The pin lives in the robot's profile (robots.py). The org comes from
+    HF_ORGANIZATION in the environment (see .env.example), because the
+    keeper repos are private and this repository is public. Without the org,
+    or for a robot with no pin, there is no default and every launch needs
+    an explicit policy:=.
     """
+    pin = robots.get(robot).default_policy
     org = os.environ.get("HF_ORGANIZATION", "").strip()
-    return f"{org}/{_DEFAULT_REPO}" if org else ""
+    return f"{org}/{pin}" if org and pin else ""
 
 
 def policy_override_file() -> Path:
@@ -123,11 +119,11 @@ def policy_override_file() -> Path:
     return policy_store().parent / "policy_override"
 
 
-def active_policy() -> str:
+def active_policy(robot: str = robots.DEFAULT_ROBOT) -> str:
     """The reference a bringup comes up with when no policy:= is given.
 
     The override file wins when it exists and is non-empty. Otherwise the
-    pin answers. The file is deployment state on the robot, written by
+    robot's pin answers. The file is deployment state on the robot, written by
     `./deploy.sh --policy <ref>` and removed by a plain `./deploy.sh`. The
     PC never has one, so PC launches run the pin.
     """
@@ -136,7 +132,7 @@ def active_policy() -> str:
         ref = path.read_text().strip()
         if ref:
             return ref
-    return default_policy()
+    return default_policy(robot)
 
 
 def resolve_policy(ref: str) -> ResolvedPolicy:
@@ -316,15 +312,20 @@ class LoadedPolicy:
     directory: Path
 
 
-def load_policy(ref: str, overrides=None) -> LoadedPolicy:
+def load_policy(ref: str, overrides=None, robot=None) -> LoadedPolicy:
     """Resolve a reference once and read everything a launch needs from it.
 
     pd is the contract's servo block; overrides ({kp,kd,max_torque}, float or
     string, empty string = keep the contract value) replace individual entries
     verbatim -- e.g. a low max_torque for cautious first tests.
+
+    robot is a profile name from robots.py. When it is given, a policy
+    trained for other legs is refused here, before any node starts.
     """
     resolved = resolve_policy(ref)
     meta = json.loads(resolved.meta.read_text())
+    if robot:
+        robots.check_policy(meta, robot, where=f"policy {resolved.source}")
     pd = pd_settings(meta)
     for key in ("kp", "kd", "max_torque"):
         override = (overrides or {}).get(key)
@@ -342,13 +343,32 @@ def load_policy(ref: str, overrides=None) -> LoadedPolicy:
 
 
 def main(argv=None) -> int:
-    args = argv if argv is not None else sys.argv[1:]
+    args = list(argv if argv is not None else sys.argv[1:])
+    # --robot <name> picks whose pin --default means. It is the stock robot
+    # when not given.
+    robot = robots.DEFAULT_ROBOT
+    if "--robot" in args:
+        i = args.index("--robot")
+        if i + 1 >= len(args):
+            print(__doc__)
+            return 2
+        robot = args[i + 1]
+        del args[i:i + 2]
+        if robot not in robots.PROFILES:
+            print(f"unknown robot {robot!r}: one of {robots.NAMES}")
+            return 2
     if len(args) != 1 or (args[0].startswith("-") and args[0] != "--default"):
         print(__doc__)
         return 2
     ref = args[0]
     if ref == "--default":
-        ref = default_policy()
+        if robots.get(robot).default_policy is None:
+            print(
+                f"no default policy: robot {robot} has no pinned policy "
+                "(robots.py) -- name a reference instead"
+            )
+            return 2
+        ref = default_policy(robot)
         if not ref:
             print(
                 "no default policy: HF_ORGANIZATION is not set -- put it in "

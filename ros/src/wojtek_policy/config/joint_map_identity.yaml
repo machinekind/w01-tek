@@ -1,0 +1,25 @@
+# The identity joint map, for legs whose URDF uses MuJoCo's joint angles.
+# The v6.27 legs (robot profile wojtek_v2) are such legs. Their URDF has no
+# gear-correction offsets, so every joint reads the same in both conventions.
+# Same format as joint_map.yaml: q_urdf = sign * q_mujoco + offset (radians).
+joint_map:
+  rear_left_first_joint: {sign: 1, offset: 0.0}
+  rear_left_second_joint: {sign: 1, offset: 0.0}
+  rear_left_third_joint: {sign: 1, offset: 0.0}
+  rear_left_fourth_joint: {sign: 1, offset: 0.0}
+  rear_left_fifth_joint: {sign: 1, offset: 0.0}
+  rear_right_first_joint: {sign: 1, offset: 0.0}
+  rear_right_second_joint: {sign: 1, offset: 0.0}
+  rear_right_third_joint: {sign: 1, offset: 0.0}
+  rear_right_fourth_joint: {sign: 1, offset: 0.0}
+  rear_right_fifth_joint: {sign: 1, offset: 0.0}
+  front_right_first_joint: {sign: 1, offset: 0.0}
+  front_right_second_joint: {sign: 1, offset: 0.0}
+  front_right_third_joint: {sign: 1, offset: 0.0}
+  front_right_fourth_joint: {sign: 1, offset: 0.0}
+  front_right_fifth_joint: {sign: 1, offset: 0.0}
+  front_left_first_joint: {sign: 1, offset: 0.0}
+  front_left_second_joint: {sign: 1, offset: 0.0}
+  front_left_third_joint: {sign: 1, offset: 0.0}
+  front_left_fourth_joint: {sign: 1, offset: 0.0}
+  front_left_fifth_joint: {sign: 1, offset: 0.0}

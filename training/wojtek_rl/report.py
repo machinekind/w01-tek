@@ -31,6 +31,7 @@ import numpy as np
 
 from wojtek_rl.battery import (
     battery_scenarios,
+    scenario_heights,
     load_checkpoint_policy,
     rollout,
     scenario_result,
@@ -256,7 +257,7 @@ def build_report(run_dir: Path) -> dict:
     force_chunks, vel_chunks, accel_z_chunks = [], [], []
     vx_local_chunks, vy_local_chunks = [], []
     term_events = []
-    for name, (cmd_at, n) in battery_scenarios().items():
+    for name, (cmd_at, n) in battery_scenarios(scenario_heights(env)).items():
         rec, fell_at, term = rollout(env, reset, step, inf, cmd_at, n)
         battery[name] = scenario_result(name, rec, fell_at, env.dt, torque_cap)
         if rec["actuator_force"].size:

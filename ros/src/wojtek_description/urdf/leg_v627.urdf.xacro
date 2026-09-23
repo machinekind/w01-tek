@@ -1,0 +1,157 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="quadruped_robot_legs_v627">
+  <xacro:include filename="$(find wojtek_description)/urdf/inertia.urdf.xacro" />
+
+  <!-- The v6.27 four-bar leg, selected with legs:=legs_v627 on wojtek_body.
+       Numbers are the CAD export's (robot.urdf in the sim_robot_v627
+       archive); training/wojtek_rl/import_robot.py imports the MJCF of the
+       same export, and a test compares the two.
+
+       It keeps the stock leg's link and joint names and its mounting up to
+       the first joint, so TF consumers and the ros2_control joint list do
+       not change. From the second joint on it differs from the stock leg in
+       three ways that matter to whoever drives it:
+         - Joint angles are the MuJoCo model's angles. The stock leg has
+           gear-correction offsets in its URDF and joint_map.yaml to undo
+           them; this leg needs the identity map.
+         - Front and rear legs are mounted mirrored (knees point at each
+           other), so the rear legs' second and third joints run negative.
+         - The loop closes 42 mm below the knee, at foot_link, not at the
+           foot. URDF is a tree and cannot say so: fifth_link (the rod) ends
+           at chain_close_a_link, which coincides with foot_link when the
+           passive joints sit where the loop puts them. loop_closure in the
+           MJCF is the only place the constraint exists.
+
+       side is +1 for a left leg and -1 for a right one: the right-hand
+       parts (meshes *_A) are mirror images of the left-hand ones (*_B).
+       dir is the stock macro's third_joint_gear_correction_dir and gives
+       the second joint's axis; rear is true for the two rear legs. -->
+  <xacro:macro name="leg_v627"
+    params="prefix xyz rpy first_joint_offset dir side rear">
+
+    <xacro:property name="mesh_side" value="${'B' if side > 0 else 'A'}" />
+    <xacro:property name="lim" value="${-1.0 if rear else 1.0}" />
+
+    <link name="${prefix}_leg_base_link" />
+    <joint name="${prefix}_base_to_leg_joint" type="fixed">
+      <parent link="base_link" />
+      <child link="${prefix}_leg_base_link" />
+      <origin xyz="${xyz}" rpy="${rpy}" />
+    </joint>
+
+    <!-- Same hip as the stock leg: first_link and second_link are its parts. -->
+    <xacro:first_link name="${prefix}_first_link" />
+    <joint name="${prefix}_leg_base_to_first_link_joint" type="fixed">
+      <parent link="${prefix}_leg_base_link" />
+      <child link="${prefix}_first_link" />
+      <origin xyz="0.0 0.0 0.0" rpy="${-pi/2.0} 0.0 0.0" />
+    </joint>
+
+    <xacro:second_link name="${prefix}_second_link" />
+    <joint name="${prefix}_first_joint" type="revolute">
+      <parent link="${prefix}_first_link" />
+      <child link="${prefix}_second_link" />
+      <origin xyz="0.031 0.0 0.0" rpy="${first_joint_offset} 0.0 0.0" />
+      <axis xyz="1 0 0" />
+      <limit effort="9" lower="-3.1416" upper="3.1416" velocity="20" />
+    </joint>
+
+    <!-- Thigh (udo), L1 = 288.2 mm to the knee. -->
+    <xacro:v627_link name="${prefix}_third_link" mesh="vis_udo_${mesh_side}"
+      m="1.0898013" com="0.0394156322 ${side*0.000858147547} 0.0250979492"
+      ixx="0.00113131174" ixy="${side*-0.000143718167}" ixz="-9.20316273e-05"
+      iyy="0.00915077731" iyz="${side*-4.05098865e-08}" izz="0.00961974953" />
+    <joint name="${prefix}_second_joint" type="revolute">
+      <parent link="${prefix}_second_link" />
+      <child link="${prefix}_third_link" />
+      <origin xyz="0.064 0 0.0668000048" rpy="0 0 ${pi if rear else 0.0}" />
+      <axis xyz="0 0 ${dir}" />
+      <limit effort="22" velocity="20"
+        lower="${min(lim*1.53588974, lim*2.69478837)}"
+        upper="${max(lim*1.53588974, lim*2.69478837)}" />
+    </joint>
+
+    <!-- Crank (dzwignia), L2 = 33.0 mm, on the hip axis. -->
+    <xacro:v627_link name="${prefix}_fourth_link" mesh="vis_dzwignia_${mesh_side}"
+      m="0.102018" com="0.0138922194 ${side*4.11188856e-09} 0.0149449436"
+      ixx="2.0275739e-05" ixy="${side*5.59160128e-12}" ixz="-7.4602413e-06"
+      iyy="4.6477108e-05" iyz="${side*-1.49546912e-13}" izz="4.996135e-05" />
+    <joint name="${prefix}_third_joint" type="revolute">
+      <parent link="${prefix}_third_link" />
+      <child link="${prefix}_fourth_link" />
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <axis xyz="0 0 ${-dir}" />
+      <limit effort="22" velocity="20"
+        lower="${min(lim*0.244346095, lim*2.83266938)}"
+        upper="${max(lim*0.244346095, lim*2.83266938)}" />
+    </joint>
+
+    <!-- Rod (wodzik), L4 = 291.0 mm, passive. -->
+    <xacro:v627_link name="${prefix}_fifth_link" mesh="vis_wodzik_${mesh_side}"
+      m="0.07891" com="0.200477529 0 0.0255000221"
+      ixx="7.59801241e-06" ixy="0" ixz="2.99430464e-10"
+      iyy="0.00114915708" iyz="0" izz="0.00115302161" />
+    <joint name="${prefix}_fourth_joint" type="continuous">
+      <parent link="${prefix}_fourth_link" />
+      <child link="${prefix}_fifth_link" />
+      <origin xyz="0.0329880602 0 0" rpy="0 0 0" />
+      <axis xyz="0 0 -1" />
+    </joint>
+
+    <!-- Shin (golen), passive at the knee; the pad is at its far end. -->
+    <xacro:v627_link name="${prefix}_sixth_link" mesh="vis_golen_${mesh_side}"
+      m="0.33082967" com="-0.0695813154 ${side*0.0314282279} 0.0253786195"
+      ixx="0.000484073385" ixy="${side*0.00105991563}" ixz="-1.89937798e-05"
+      iyy="0.00284756885" iyz="${side*6.52345872e-06}" izz="0.00324257878" />
+    <joint name="${prefix}_fifth_joint" type="continuous">
+      <parent link="${prefix}_third_link" />
+      <child link="${prefix}_sixth_link" />
+      <origin xyz="0.288242496 0 0" rpy="0 0 0" />
+      <axis xyz="0 0 -1" />
+    </joint>
+
+    <!-- The two ends of the loop: D on the shin (L3 = 41.8 mm from the
+         knee) and D on the rod. -->
+    <link name="${prefix}_foot_link">
+      <xacro:inertia_stub />
+    </link>
+    <joint name="${prefix}_foot_joint" type="continuous">
+      <parent link="${prefix}_sixth_link" />
+      <child link="${prefix}_foot_link" />
+      <origin xyz="0.0418229679 0 0" rpy="0 0 0" />
+      <axis xyz="0 0 1" />
+    </joint>
+    <link name="${prefix}_chain_close_a_link">
+      <xacro:inertia_stub />
+    </link>
+    <joint name="${prefix}_chain_close_a_joint" type="fixed">
+      <parent link="${prefix}_fifth_link" />
+      <child link="${prefix}_chain_close_a_link" />
+      <origin xyz="0.290952718 0 0" rpy="0 0 0" />
+    </joint>
+  </xacro:macro>
+
+  <xacro:macro name="v627_link" params="name mesh m com ixx ixy ixz iyy iyz izz">
+    <link name="${name}">
+      <visual>
+        <origin rpy="0 0 0" xyz="0 0 0" />
+        <geometry>
+          <mesh filename="package://wojtek_description/meshes/legs_v627/${mesh}.stl" />
+        </geometry>
+        <xacro:grey_material />
+      </visual>
+      <collision name="${name}_collision">
+        <origin rpy="0 0 0" xyz="0 0 0" />
+        <geometry>
+          <mesh filename="package://wojtek_description/meshes/legs_v627/${mesh}.stl" />
+        </geometry>
+      </collision>
+      <inertial>
+        <origin xyz="${com}" rpy="0 0 0" />
+        <mass value="${m}" />
+        <inertia ixx="${ixx}" ixy="${ixy}" ixz="${ixz}"
+          iyy="${iyy}" iyz="${iyz}" izz="${izz}" />
+      </inertial>
+    </link>
+  </xacro:macro>
+</robot>

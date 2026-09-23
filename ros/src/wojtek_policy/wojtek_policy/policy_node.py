@@ -65,6 +65,10 @@ class PolicyNode(Node):
         # `ros2 run` with a raw ref) -> derive it from `policy`.
         self.declare_parameter("policy_source", "")
         self.declare_parameter("joint_map_yaml", f"{share}/config/joint_map.yaml")
+        # Robot profile name (wojtek_policy/robots.py). The bringup launches
+        # set it, and the node then refuses a policy trained for other legs.
+        # Empty for a standalone `ros2 run`, which checks nothing.
+        self.declare_parameter("robot", "")
         # Rotation of the IMU frame expressed in base_link (URDF imu_joint
         # rpy). Sim publishes IMU already in base_link -> zeros.
         self.declare_parameter("imu_mount_rpy", [0.0, 0.0, 0.0])
@@ -90,6 +94,7 @@ class PolicyNode(Node):
             resolved.npz,
             meta_path=resolved.meta,
             clamp_knee=self.get_parameter("clamp_knee").value,
+            robot=self.get_parameter("robot").value,
         )
         if self.policy.joint_names != poses.ACTUATOR_NAMES:
             raise ValueError(

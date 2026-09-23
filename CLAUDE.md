@@ -19,6 +19,11 @@ keep the command, seed, and resulting run directory together.
 - `ros/src/wojtek_description/mujoco/wojtek.xml` is the model source;
   `wojtek_mjx.xml` and `scene_mjx.xml` are generated via `./training/run.sh
   build`.  Do not hand-edit generated XML.
+- Other sets of legs are robot variants.  Each has the same three files in
+  `ros/src/wojtek_description/mujoco/<robot>/`, its numbers in
+  `training/wojtek_rl/robots.py`, and is selected with the `robot=` config
+  group.  The stock robot is `wojtek` and stays the default.  See
+  [training/docs/robots.md](training/docs/robots.md).
 - `experiments/` holds work that is **not production and not on the robot**.
   Each subdirectory is one self-contained experiment with its own `README.md`
   stating its status, and carries whatever it needs (ROS packages, Python
@@ -61,6 +66,9 @@ keep the command, seed, and resulting run directory together.
   setting, experiment preset, and command-mode usage.  Its "Course benchmark"
   section defines the path-following scores and the frozen follower constants
   that must not be retuned.
+- [Robot variants](training/docs/robots.md) — the stock legs and
+  `legs_v627`: how a variant is imported, built and selected, and what does
+  not support a variant yet.
 - [Training lessons](skills/brax-locomotion-training/references/wojtek-training-lessons.md)
   — evidence from previous locomotion iterations; consult it before changing
   rewards, observations, or gait behavior.
@@ -160,9 +168,11 @@ self-contained `policy.npz` + `policy_meta.json` (the schema-2 deployment
 contract), keepers publish that pair to their Hugging Face repo, and the
 ROS stack loads a policy by reference -- `policy:=<org/name[@rev] | dir>`
 on the launch files.  A Hugging Face reference is resolved from the
-gitignored policy store (`ros/policies/`).  `ros/deploy.sh` resolves the
-pinned default (see `wojtek_policy/policy_source.py`) into the store and
-syncs the store to the RPi, which has no internet.  `ros/deploy.sh --policy
+gitignored policy store (`ros/policies/`).  The pinned default lives in
+the robot profile (`wojtek_policy/robots.py`), and `WOJTEK_ROBOT` in
+`ros/.env` picks the profile, `wojtek` by default; the launch files take
+the same name as `robot:=`.  `ros/deploy.sh` resolves that pin into the
+store and syncs the store to the RPi, which has no internet.  `ros/deploy.sh --policy
 <ref>` fetches a one-off reference, syncs it, and makes the robot run it, and
 a plain `ros/deploy.sh` returns the robot to the pin.
 Changing the deployed policy is a config change, not a code change.

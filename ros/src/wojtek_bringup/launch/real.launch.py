@@ -5,12 +5,17 @@
     use_imu:=false brings the stack up with the sensor absent/unwired.
 
     ros2 launch wojtek_bringup real.launch.py [policy:=org/name@sha]
+                                              [robot:=wojtek|wojtek_v2]
                                               [max_torque:=2.0] [dry_run:=true]
                                               [boot_pose:=home|folded] [bag:=false]
 
     The MD80 servo settings (impedance kp/kd, torque cap) come from the
     loaded policy's contract. Explicit kp:=/kd:=/max_torque:= override it
     verbatim -- e.g. max_torque:=2 for first tests.
+
+    robot:= names the robot profile (wojtek_policy/robots.py), "wojtek" by
+    default. It picks the URDF legs, the joint map, the knee clamp and the
+    default policy, and a policy trained for other legs is refused.
 
     Every run records a full rosbag (all topics) to bag_dir/run_<timestamp>
     (bag_dir defaults to ~/wojtek_bags). Disable with bag:=false.

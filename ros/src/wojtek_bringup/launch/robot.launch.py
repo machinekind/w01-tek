@@ -5,6 +5,7 @@ nodes -- no RViz, no GUI. Run visualization/debug on the PC separately:
     ros2 launch wojtek_pc viz.launch.py
 
     ros2 launch wojtek_bringup robot.launch.py [policy:=org/name@sha]
+                                               [robot:=wojtek|wojtek_v2]
                                                [max_torque:=2.0] [dry_run:=true]
                                                [boot_pose:=home|folded] [bag:=true]
                                                [gamepad:=true] [perception:=true]
@@ -16,6 +17,11 @@ from the loaded policy's contract: policy_meta.json carries the pd block
 the policy trained against, and this launch feeds it into the xacro.
 Explicit kp:=/kd:=/max_torque:= override the contract verbatim -- e.g. a
 low max_torque for cautious first tests.
+
+robot:= names the robot profile (wojtek_policy/robots.py), "wojtek" by
+default. It picks the URDF legs, the joint map, the knee clamp and the
+default policy, and a policy trained for other legs is refused. The systemd
+service passes no robot:=, so it runs the stock profile.
 
 Recording note: manual runs of this file do not record by default (record
 on demand: bag:=true bag_cpus:=0,1). The systemd service

@@ -5,6 +5,10 @@ few jitted MJX steps to prove the model compiles under MJX at all.
 GPU mode (--gpu): adds a batched step-rate benchmark against the Go1
 playground model on the same machine. Gate: fbb >= Go1/5.
 
+`--robot` checks another robot variant (robots.py). The step-rate gate
+counts control steps' worth of physics, so a variant that needs a finer
+timestep is charged for it.
+
 Run on the box:  ./run.sh check --gpu
 """
 
@@ -15,12 +19,12 @@ import time
 import mujoco
 import numpy as np
 
-from wojtek_rl import paths
+from wojtek_rl import paths, robots
 
 
-def check_static() -> bool:
+def check_static(robot: str = paths.DEFAULT_ROBOT) -> bool:
     ok = True
-    m = mujoco.MjModel.from_xml_path(str(paths.SCENE_XML))
+    m = mujoco.MjModel.from_xml_path(str(paths.robot_files(robot)["scene"]))
     d = mujoco.MjData(m)
     key = m.key("home")
     d.qpos[:] = key.qpos
@@ -72,7 +76,9 @@ def _bench(mjx, jax, jp, mjx_model, qpos0, nenv, nsteps, init_data=None) -> floa
     return nenv * nsteps / dt
 
 
-def check_gpu(nenv: int, nsteps: int, backend: str = "jax") -> bool:
+def check_gpu(
+    nenv: int, nsteps: int, backend: str = "jax", robot: str = paths.DEFAULT_ROBOT
+) -> bool:
     import jax
     import jax.numpy as jp
     from mujoco import mjx
@@ -81,14 +87,21 @@ def check_gpu(nenv: int, nsteps: int, backend: str = "jax") -> bool:
 
     from wojtek_rl.base import make_data_fn
 
-    m = mujoco.MjModel.from_xml_path(str(paths.SCENE_XML))
+    m = mujoco.MjModel.from_xml_path(str(paths.robot_files(robot)["scene"]))
     wojtek_model = mjx.put_model(m, impl=backend)
     data_fn = make_data_fn(backend, m, wojtek_model, 32, 320, nenv)
     wojtek_rate = _bench(
         mjx, jax, jp, wojtek_model, m.key("home").qpos, nenv, nsteps,
         init_data=lambda _: data_fn(),
     )
-    print(f"wojtek ({backend}): {wojtek_rate:,.0f} steps/s ({nenv} envs)")
+    print(f"{robot} ({backend}): {wojtek_rate:,.0f} steps/s ({nenv} envs)")
+    # The gate was set for the stock 4 ms step. A model that needs a finer
+    # one pays for it in steps per control step, so compare simulated time.
+    stock_dt = robots.WOJTEK.timestep
+    if m.opt.timestep != stock_dt:
+        wojtek_rate *= m.opt.timestep / stock_dt
+        print(f"  at a {m.opt.timestep} s step that is worth "
+              f"{wojtek_rate:,.0f} steps/s of the stock {stock_dt} s step")
 
     go1_env = registry.load("Go1JoystickFlatTerrain", config_overrides={"impl": "jax"})
     g = go1_env.mj_model
@@ -102,26 +115,31 @@ def check_gpu(nenv: int, nsteps: int, backend: str = "jax") -> bool:
 
 def main() -> None:
     p = argparse.ArgumentParser()
+    p.add_argument("--robot", default=paths.DEFAULT_ROBOT, choices=robots.NAMES)
     p.add_argument("--gpu", action="store_true")
     p.add_argument("--backend", choices=["jax", "warp", "auto"], default="jax")
     p.add_argument("--nenv", type=int, default=4096)
     p.add_argument("--nsteps", type=int, default=200)
     args = p.parse_args()
 
-    ok = check_static()
+    ok = check_static(args.robot)
     if ok and not args.gpu:
         # prove the model compiles under MJX at all (tiny, CPU)
         import jax
         import jax.numpy as jp
         from mujoco import mjx
 
-        m = mujoco.MjModel.from_xml_path(str(paths.SCENE_XML))
+        m = mujoco.MjModel.from_xml_path(
+            str(paths.robot_files(args.robot)["scene"])
+        )
         _bench(mjx, jax, jp, mjx.put_model(m, impl="jax"), m.key("home").qpos, 2, 5)
         print("mjx: compiles and steps")
     if ok and args.gpu:
         from wojtek_rl.base import resolve_backend
 
-        ok = check_gpu(args.nenv, args.nsteps, resolve_backend(args.backend))
+        ok = check_gpu(
+            args.nenv, args.nsteps, resolve_backend(args.backend), args.robot
+        )
     print("GATE PASS" if ok else "GATE FAIL")
     sys.exit(0 if ok else 1)
 

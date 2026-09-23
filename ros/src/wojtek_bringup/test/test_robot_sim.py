@@ -103,6 +103,14 @@ def test_sim_gamepad_is_a_launch_argument_not_a_process(spawned):
     assert gamepads == [], "robot.py spawned gamepad.launch.py next to the launch's"
 
 
+def test_robot_profile_is_passed_through_to_the_sim_launch(spawned):
+    # robot:= picks the legs, the joint map and the default policy inside
+    # sim.launch.py. This script only has to hand it over untouched.
+    commands = spawned(["--sim", "--no-viz", "robot:=wojtek_v2"])
+    assert "robot:=wojtek_v2" in _sim_launch(commands)
+    assert len(commands) == 1, commands
+
+
 def test_explicit_passthrough_tokens_come_after_the_translated_flags(spawned):
     # A hand-typed console:= must win over the flag translation; ros2 launch
     # lets the last occurrence of an argument win.

@@ -25,7 +25,7 @@ from wojtek_policy.policy import (  # noqa: E402
     gravity_from_quat,
     height_anchor,
 )
-from wojtek_policy import policy_source  # noqa: E402
+from wojtek_policy import policy_source, robots  # noqa: E402
 from wojtek_policy.policy_source import (  # noqa: E402
     active_policy,
     default_policy,
@@ -227,6 +227,40 @@ def test_height_command_moves_anchor_and_obs(tmp_path):
     assert np.allclose(pol.last_obs[36:40], [0.1, 0.0, 0.0, 0.125], atol=1e-6)
     default = height_anchor(pol.home_ctrl, 0.125, pol.ctrl_low, pol.ctrl_high)
     assert np.allclose(pol.anchor_ctrl, default, atol=1e-6)
+
+
+# Legs other than the stock ones ship a third-joint column and a sign per
+# leg in their height table (deploy_contract.py, contract field "robot").
+V627_TABLE = {
+    "heights": [0.2, 0.3, 0.4],
+    "dsecond": [0.3, 0.1, -0.1],
+    "dthird": [-0.9, -0.3, 0.3],
+    "leg_sign": [-1.0, -1.0, 1.0, 1.0],
+}
+
+
+def test_height_table_with_its_own_third_column_and_leg_signs():
+    home = np.array([0.0, -2.2, -2.0] * 2 + [0.0, 2.2, 2.0] * 2, np.float32)
+    lo, hi = np.full(12, -4.0, np.float32), np.full(12, 4.0, np.float32)
+    got = height_anchor(home, 0.25, lo, hi, table=V627_TABLE)
+    rear = [0.0, -2.2 - 0.2, -2.0 + 0.6]
+    front = [0.0, 2.2 + 0.2, 2.0 - 0.6]
+    assert np.allclose(got, rear * 2 + front * 2, atol=1e-6)
+
+
+def test_table_without_third_column_keeps_the_stock_rule():
+    table = {k: V627_TABLE[k] for k in ("heights", "dsecond")}
+    home = np.array(HOME, np.float32)
+    lo, hi = np.full(12, -9.0, np.float32), np.full(12, 9.0, np.float32)
+    got = height_anchor(home, 0.25, lo, hi, table=table)
+    assert np.allclose(got, home + np.tile([0.0, 0.2, 0.4], 4), atol=1e-6)
+
+
+def test_policy_without_knee_singularity_refuses_clamp_knee(tmp_path):
+    updates = {"knee_singularity": None, "robot": "legs_v627"}
+    assert make_policy(tmp_path, meta_updates=updates).knee_singularity is None
+    with pytest.raises(ValueError, match="clamp_knee"):
+        make_policy(tmp_path, meta_updates=updates, clamp_knee=True)
 
 
 def test_pinned_height_keeps_resolved_anchor(policy):
@@ -559,14 +593,17 @@ def test_default_policy_needs_an_organization(monkeypatch):
     monkeypatch.delenv("HF_ORGANIZATION", raising=False)
     assert default_policy() == ""
     monkeypatch.setenv("HF_ORGANIZATION", "org")
-    assert default_policy() == "org/" + policy_source._DEFAULT_REPO
+    assert default_policy() == "org/" + robots.get("wojtek").default_policy
 
 
 def test_default_policy_is_pinned_to_a_commit():
     # The robot is offline and can only answer a commit that is already in
     # its store, so the shipped pin must be a commit.
-    _, _, revision = policy_source._DEFAULT_REPO.partition("@")
-    assert policy_source._is_commit(revision)
+    for profile in robots.PROFILES.values():
+        if profile.default_policy is None:
+            continue
+        _, _, revision = profile.default_policy.partition("@")
+        assert policy_source._is_commit(revision), profile.name
 
 
 def test_default_cli_resolves_from_the_store(tmp_path, monkeypatch):

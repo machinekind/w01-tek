@@ -42,6 +42,10 @@ fi
 RPI_HOST="${RPI_HOST:-rpi@10.42.0.2}"      # static anchor; same over eth or the RPi's AP
 REMOTE_WS="${REMOTE_WS:-wojtek_ws}"        # relative to the RPi user's home
 ROS_DISTRO="${ROS_DISTRO:-jazzy}"
+# Which robot profile's pinned policy to resolve (wojtek_policy/robots.py).
+# It only picks the pin resolved below. The robot's service launches with
+# no robot:= and so runs the stock profile.
+WOJTEK_ROBOT="${WOJTEK_ROBOT:-wojtek}"
 # Keep in sync with docker/Dockerfile's CANDLE_COMMIT.
 CANDLE_COMMIT="7c201d744baa107ee408e3e01694efd1a764a174"
 RESTART=1
@@ -117,18 +121,24 @@ rsync -az --delete \
     "${HERE}/src/" "${RPI_HOST}:${REMOTE_WS}/src/"
 
 # Which policy runs is a launch parameter, and the launch files default to
-# the pin in wojtek_policy/policy_source.py. This PC resolves the pin into
-# the store, so the robot never downloads anything and no one runs a
-# prefetch by hand. A resolve failure stops the deploy (set -e) on purpose,
-# because a robot without the default policy in its store would crash-loop.
-# huggingface_hub is needed only for a pin that is not in the store yet. A
-# stored pin resolves offline with the standard library.
-if [ -n "${HF_ORGANIZATION:-}" ]; then
-    echo ">> resolve the default policy into the store"
-    PYTHONPATH="${HERE}/src/wojtek_policy" python3 -m wojtek_policy.policy_source --default
-else
+# the pin in the robot's profile (wojtek_policy/robots.py). WOJTEK_ROBOT
+# names the profile. This PC resolves the pin into the store, so the robot
+# never downloads anything and no one runs a prefetch by hand. A resolve
+# failure stops the deploy (set -e) on purpose, because a robot without
+# the default policy in its store would crash-loop. An unknown robot name
+# stops it too. huggingface_hub is needed only for a pin that is not in the
+# store yet. A stored pin resolves offline with the standard library.
+ROBOT_PIN="$(PYTHONPATH="${HERE}/src/wojtek_policy" python3 -m wojtek_policy.robots "${WOJTEK_ROBOT}")"
+if [ -z "${HF_ORGANIZATION:-}" ]; then
     echo ">> HF_ORGANIZATION unset -- no default policy to resolve"
     echo "   (set it in .env; without it every launch needs an explicit policy:=)"
+elif [ -z "${ROBOT_PIN}" ]; then
+    echo ">> robot ${WOJTEK_ROBOT} has no pinned policy -- no default policy to resolve"
+    echo "   (every launch on it needs an explicit policy:=, or use --policy <ref>)"
+else
+    echo ">> resolve the default policy of robot ${WOJTEK_ROBOT} into the store"
+    PYTHONPATH="${HERE}/src/wojtek_policy" python3 -m wojtek_policy.policy_source \
+        --default --robot "${WOJTEK_ROBOT}"
 fi
 
 # A --policy reference has to reach the store the same way, and a failure to

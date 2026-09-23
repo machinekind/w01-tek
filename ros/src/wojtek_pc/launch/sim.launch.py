@@ -8,6 +8,7 @@ virtual camera, RViz, the operator console and optionally a gamepad.
                                        [boot_pose:=folded] [camera:=false]
                                        [console:=web|qt|none] [gamepad:=true]
                                        [telemetry:=true] [deck:=false]
+                                       [robot:=wojtek|wojtek_v2]
 
 This is `robot.launch.py` with the hardware plugin swapped -- same
 controller_manager at 400 Hz, same broadcasters, same real_io_node, same
@@ -57,6 +58,12 @@ standing around the spawn, so the deck panel's detector has something to
 name. The plant loads the same file, so they are solid. model_xml:= takes
 you back to the empty floor (config/scene_mjx.xml) or anywhere else.
 
+robot:=wojtek_v2 simulates the v6.27 legs (wojtek_policy/robots.py). The
+profile swaps the URDF legs, the joint map and the knee clamp, and the plant
+loads the legs' own training scene, which has no props. That profile has no
+pinned policy yet, so it needs policy:= naming a policy trained on those
+legs. A policy for the other legs is refused at launch.
+
 telemetry:=true adds /wojtek/sysinfo and /wojtek/policy_timing, the same
 opt-in the robot service uses. It is off by default here too. The Foxglove bridge
 stays with viz.launch.py in a simulation, so leave foxglove:= alone unless
@@ -65,8 +72,7 @@ nothing else holds port 8765.
 
 import os
 
-from ament_index_python.packages import get_package_share_directory
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.substitutions import (
     EqualsSubstitution,
@@ -76,26 +82,14 @@ from launch.substitutions import (
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
-from wojtek_bringup.launch_common import common_launch_description
+from wojtek_bringup.launch_common import (
+    common_launch_description,
+    sim_model_xml,
+)
 
 
-def generate_launch_description():
-    # RViz on by default (this is the desk workflow), recording opt-in, and
-    # everything else -- nodes, parameters, the arming procedure, and the
-    # default policy (launch_common.DEFAULT_POLICY) -- shared verbatim with the
-    # robot bringup, so what you watch here is what the robot comes up with.
-    ld = common_launch_description(
-        with_rviz=True, bag_default="false", hardware="sim", with_gamepad=True,
-    )
-    for action in (
-        # D435-compatible virtual camera: a separate node now, because the
-        # physics lives inside ros2_control_node and the renderer is Python.
-        # It mirrors the plant's /sim/qpos into its own copy of the model, so
-        # there is still one physics state. Needs something to mirror, hence
-        # the hw:=mujoco condition -- with the mock there is no pose to draw.
-        DeclareLaunchArgument("camera", default_value="true"),
-        DeclareLaunchArgument("camera_depth_hz", default_value="15.0"),
-        DeclareLaunchArgument("camera_color_hz", default_value="5.0"),
+def _camera_node(context):
+    return [
         Node(
             package="wojtek_pc",
             executable="sim_camera_node",
@@ -114,15 +108,9 @@ def generate_launch_description():
             ),
             parameters=[
                 {
-                    "model_xml": PythonExpression([
-                        "'", LaunchConfiguration("model_xml"), "' or ",
-                        repr(os.path.join(
-                            get_package_share_directory("wojtek_pc"),
-                            # Same default the plant gets in
-                            # launch_common: one scene, one physics state.
-                            "config", "scene_sim.xml",
-                        )),
-                    ]),
+                    # The same scene the plant loads, from the same helper:
+                    # one scene, one physics state.
+                    "model_xml": sim_model_xml(context),
                     "depth_hz": ParameterValue(
                         LaunchConfiguration("camera_depth_hz"), value_type=float
                     ),
@@ -131,7 +119,31 @@ def generate_launch_description():
                     ),
                 }
             ],
-        ),
+        )
+    ]
+
+
+def generate_launch_description():
+    # RViz on by default (this is the desk workflow), recording opt-in, and
+    # everything else -- nodes, parameters, the arming procedure, the robot
+    # profile and its default policy (robot:=, wojtek_policy/robots.py) --
+    # shared verbatim with the robot bringup, so what you watch here is what
+    # the robot comes up with.
+    ld = common_launch_description(
+        with_rviz=True, bag_default="false", hardware="sim", with_gamepad=True,
+    )
+    for action in (
+        # D435-compatible virtual camera: a separate node now, because the
+        # physics lives inside ros2_control_node and the renderer is Python.
+        # It mirrors the plant's /sim/qpos into its own copy of the model, so
+        # there is still one physics state. Needs something to mirror, hence
+        # the hw:=mujoco condition -- with the mock there is no pose to draw.
+        DeclareLaunchArgument("camera", default_value="true"),
+        DeclareLaunchArgument("camera_depth_hz", default_value="15.0"),
+        DeclareLaunchArgument("camera_color_hz", default_value="5.0"),
+        # The scene depends on robot:=, so the node is built once the
+        # arguments are known.
+        OpaqueFunction(function=_camera_node),
         # Text-command bridge (wojtek#92), resident by design -- see the
         # module docstring for why that is safe.
         Node(

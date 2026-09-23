@@ -6,9 +6,30 @@ from pathlib import Path
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = PROJECT_DIR.parent
 MUJOCO_DIR = REPO_ROOT / "ros/src/wojtek_description/mujoco"
+MESH_DIR = REPO_ROOT / "ros/src/wojtek_description/meshes"
 SOURCE_XML = MUJOCO_DIR / "wojtek.xml"
 ROBOT_XML = MUJOCO_DIR / "wojtek_mjx.xml"
 SCENE_XML = MUJOCO_DIR / "scene_mjx.xml"
+
+# The robot the three paths above belong to. Other robot variants (see
+# robots.py) keep the same three file names in a directory of their own, so
+# a variant never overwrites the stock robot's generated files.
+DEFAULT_ROBOT = "wojtek"
+
+
+def robot_files(robot: str = DEFAULT_ROBOT) -> dict[str, Path]:
+    """Source MJCF, generated robot MJCF and generated flat scene of a robot."""
+    if robot == DEFAULT_ROBOT:
+        return {"source": SOURCE_XML, "robot": ROBOT_XML, "scene": SCENE_XML}
+    directory = MUJOCO_DIR / robot
+    return {
+        "source": directory / "wojtek.xml",
+        "robot": directory / "wojtek_mjx.xml",
+        "scene": directory / "scene_mjx.xml",
+        # For looking at the robot in a viewer; nothing trains on these.
+        "view_robot": directory / "wojtek_view.xml",
+        "view_scene": directory / "scene_view.xml",
+    }
 
 # Room-scan scene (room_assets.py -> build_room.py -> room_app.py).
 ROOM_DIR = PROJECT_DIR / "assets/room"

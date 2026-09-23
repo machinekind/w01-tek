@@ -41,8 +41,12 @@
   <xacro:arg name="imu_bus" default="/dev/i2c-1" />
   <xacro:arg name="imu_addr_ag" default="0x6A" />
   <xacro:arg name="imu_addr_mag" default="0x1C" />
+  <!-- Which legs the description shows: "stock" or "legs_v627" (see
+       wojtek_description's body.urdf.xacro). The launches set it from the
+       robot profile (robot:=, wojtek_policy/robots.py). -->
+  <xacro:arg name="legs" default="stock" />
 
-  <xacro:wojtek_body />
+  <xacro:wojtek_body legs="$(arg legs)" />
 
   <xacro:wojtek_ros2_control kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)"
     usb_port="$(arg usb_port)" bus="$(arg bus)" can_baud="$(arg can_baud)"

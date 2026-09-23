@@ -18,8 +18,8 @@ from brax import math as brax_math
 from mujoco import mjx
 from mujoco_playground._src import mjx_env
 
-from wojtek_rl import paths, terrain_env
-from wojtek_rl.build_model import BASE_BOX_NAMES, FOOT_RADIUS
+from wojtek_rl import paths, robots, terrain_env
+from wojtek_rl.build_model import BASE_BOX_NAMES
 
 # How the 12 joint-torque changes reach the 3 gyro axes in the gyro-vib
 # sensor model (obs_noise.gyro_vib). Row x sums the legs with alternating
@@ -135,15 +135,45 @@ def make_data_fn(backend, mj_model, mjx_model, naconmax_per_env, njmax, num_envs
 
 
 class WojtekEnv(mjx_env.MjxEnv):
+    # Whether the task runs on robot variants other than the stock one
+    # (config key `robot`, see robots.py). A task that holds literal poses
+    # or knee angles of the stock legs leaves this off.
+    supports_robot_variants = False
+
     def __init__(self, config, config_overrides=None):
         super().__init__(config, config_overrides)
+        robot = self._config.get("robot", paths.DEFAULT_ROBOT)
+        self._robot = robots.get(robot)
+        if robot != paths.DEFAULT_ROBOT and not self.supports_robot_variants:
+            raise ValueError(
+                f"{type(self).__name__} holds poses of the stock legs and "
+                f"does not run on robot={robot!r}"
+            )
         # Terrain is opt-in and joystick-only. getup/jump have no terrain key, so
         # `.get` leaves them on the flat scene. terrain_env owns the loading,
         # validation and lookup; this class only asks it for heights.
         terrain_cfg = self._config.get("terrain")
         enabled = bool(terrain_cfg is not None and terrain_cfg.enable)
+        if enabled and robot != paths.DEFAULT_ROBOT:
+            # The arenas include the stock robot's model and are sized to
+            # its footprint (terrain.py); see training/docs/robots.md.
+            raise ValueError(
+                f"terrain.enable has no arena for robot={robot!r}; only "
+                f"{paths.DEFAULT_ROBOT!r} trains on terrain"
+            )
         self._terrain = terrain_env.load(terrain_cfg) if enabled else None
-        scene_xml = self._terrain.files["scene"] if enabled else paths.SCENE_XML
+        scene_xml = (
+            self._terrain.files["scene"] if enabled
+            else paths.robot_files(robot)["scene"]
+        )
+        if self.sim_dt > self._robot.timestep + 1e-9:
+            # A longer step softens the loop-closure constraints, and on
+            # legs with a short crank that is a different leg (robots.py).
+            raise ValueError(
+                f"sim_dt={self.sim_dt} is coarser than the {self._robot.timestep} "
+                f"robot={robot!r} was validated at; select the robot with "
+                f"the robot={robot} config group, which sets both"
+            )
         self._mj_model = mujoco.MjModel.from_xml_path(str(scene_xml))
         self._mj_model.opt.timestep = self.sim_dt
         self._customize_model(self._mj_model)
@@ -257,7 +287,8 @@ class WojtekEnv(mjx_env.MjxEnv):
     @property
     def xml_path(self) -> str:
         return str(
-            self._terrain.files["scene"] if self._terrain_enabled else paths.SCENE_XML
+            self._terrain.files["scene"] if self._terrain_enabled
+            else paths.robot_files(self._robot.name)["scene"]
         )
 
     @property
@@ -309,7 +340,7 @@ class WojtekEnv(mjx_env.MjxEnv):
         z = foot[:, 2]
         if self._terrain_enabled:
             z = z - self._terrain.height(foot[:, :2])
-        return z < FOOT_RADIUS + 0.005
+        return z < self._robot.foot_radius + 0.005
 
     def _base_terrain_contact(self, data):
         """Whether any base collision box is down on the terrain.
@@ -341,9 +372,9 @@ class WojtekEnv(mjx_env.MjxEnv):
 
     def _foot_clearance(self, data):
         """Height of each foot's bottom above the ground. Flat: the old
-        ``geom_xpos[..., 2] - FOOT_RADIUS``, unchanged."""
+        ``geom_xpos[..., 2] - foot_radius``, unchanged."""
         foot = data.geom_xpos[self._foot_geom_ids]
-        clearance = foot[:, 2] - FOOT_RADIUS
+        clearance = foot[:, 2] - self._robot.foot_radius
         if self._terrain_enabled:
             clearance = clearance - self._terrain.height(foot[:, :2])
         return clearance

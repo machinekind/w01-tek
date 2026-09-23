@@ -40,6 +40,8 @@ from pathlib import Path
 
 import numpy as np
 
+from wojtek_policy import robots
+
 SCHEMA_VERSION = 2
 
 # Obs components this interpreter can produce, mapped to the step() inputs.
@@ -75,12 +77,20 @@ def height_anchor(home_ctrl, height, ctrl_low, ctrl_high, table=None):
         else (HEIGHT_TABLE, DSECOND_TABLE)
     )
     dsecond = np.interp(height, heights, dsecond_tbl)
-    offset = np.tile(np.array([0.0, 1.0, 2.0]), 4) * dsecond
+    if table and "dthird" in table:
+        # Legs other than the stock ones (contract field "robot"): the
+        # third joint has its own column, and legs mounted the other way
+        # round turn the other way to extend.
+        dthird = np.interp(height, heights, table["dthird"])
+        per_leg = np.array([0.0, dsecond, dthird])
+        offset = np.concatenate([sign * per_leg for sign in table["leg_sign"]])
+    else:
+        offset = np.tile(np.array([0.0, 1.0, 2.0]), 4) * dsecond
     return np.clip(home_ctrl + offset, ctrl_low, ctrl_high).astype(np.float32)
 
 
 class WojtekPolicy:
-    def __init__(self, npz_path, meta_path=None, clamp_knee=False):
+    def __init__(self, npz_path, meta_path=None, clamp_knee=False, robot=None):
         npz_path = Path(npz_path)
         meta_path = Path(meta_path) if meta_path else npz_path.with_name(
             "policy_meta.json"
@@ -95,6 +105,11 @@ class WojtekPolicy:
                 "or regenerate a keeper's meta with "
                 "training/wojtek_rl/migrate_keeper_meta.py"
             )
+        # robot is a profile name from robots.py. With it, a policy trained
+        # for other legs is refused before its weights are even read.
+        # Without it, nothing is checked, as before profiles existed.
+        if robot:
+            robots.check_policy(m, robot, where=f"policy at {meta_path}")
         data = np.load(npz_path)
         self._norm_mean = data["norm_mean"]
         self._norm_std = data["norm_std"]
@@ -115,7 +130,15 @@ class WojtekPolicy:
         self.command_fill = np.array(m["command_fill"], np.float32)
         self.action_filter = float(m["action_filter"])
         self.ctrl_dt = float(m["ctrl_dt"])
-        self.knee_singularity = float(m["knee_singularity"])
+        # null on legs that have no knee singularity angle. clamp_knee is a
+        # safety option, so asking for it there is an error, not a no-op.
+        ks = m["knee_singularity"]
+        self.knee_singularity = None if ks is None else float(ks)
+        if clamp_knee and self.knee_singularity is None:
+            raise ValueError(
+                f"clamp_knee: policy for robot {m.get('robot')!r} has no "
+                "knee_singularity to clamp at"
+            )
         self.clamp_knee = clamp_knee
 
         # Feed-forward torque head (schema-2 "tau_ff" block; metas exported

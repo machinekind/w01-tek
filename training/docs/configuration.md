@@ -121,6 +121,16 @@ not already represented in task YAML.
 `joystick` has no task-level PPO override. `getup` and `jump` set
 `task.ppo.num_timesteps=150000000`; root `++ppo.num_timesteps=...` still wins.
 
+### Robot group (`robot=`)
+
+The `robot` group selects the set of legs the env simulates. `robot=wojtek` is
+the default and is the robot as built. `robot=legs_v627` selects the v6.27
+four-bar legs and also sets `task.env.sim_dt=0.002`,
+`task.env.command.height=[0.28,0.37]`, `task.env.fall.min_height=0.15` and
+`task.env.gait.swing_height=0.06`. Only the joystick task on flat ground runs
+on `legs_v627`. [Robot variants](robots.md) covers the build steps, the
+measurements behind these values and the open questions.
+
 ### Shared task options
 
 All three tasks support these paths through their `default_config()`:
@@ -803,6 +813,7 @@ so command-line values can still override it.
 | `jump` | jump | Commanded jump baseline. |
 | `jump_v3` | jump | Higher torque and deliberate wind-up jump recipe. |
 | `locomotion` | joystick | Deployable no-IMU locomotion, stand/walk/trot schedule. |
+| `legs_v627_locomotion` | joystick | The `locomotion` schedule on the `legs_v627` robot variant, with lengths scaled to the longer legs. Untrained starting point. |
 | `locomotion_3090` | locomotion | Single-GPU locomotion variant. |
 | `locomotion_v2` … `locomotion_v8` | locomotion | Recorded locomotion iteration recipes. |
 | `run` | joystick | Extended command range / faster gait for running. |
@@ -848,6 +859,7 @@ than infer them from a historical run name:
 | `jump` | `fbb_jump_v1` | Selects `task=jump`. |
 | `jump_v3` | `fbb_jump_v3` | `task.env.forcerange=12`, `task.env.action_scale=0.8`, `task.env.countdown_steps=40`, `task.env.reward.scales.{flight,launch_vel,action_rate,action_accel}={15,5,-0.4,-0.2}`. |
 | `locomotion` | `fbb_loco_v1` | Joystick + `obs=no_imu`; `task.env.command.{vx,vy,wz,height}={[-0.8,1.2],[-0.5,0.5],[-1,1],[0.09,0.17]}`, `task.env.gait.{freq,swing_height,trot_band}={[1.4,3.2],0.035,[0.35,0.55]}`, `task.env.push.vel=0.5`, `task.ppo.num_timesteps=300000000`. |
+| `legs_v627_locomotion` | `wojtek_legs_v627_loco_v1` | Joystick + `robot=legs_v627` (so `task.env.sim_dt=0.002`, `task.env.fall.min_height=0.15`) with the full sensor suite; `task.env.real_pose_ref=true`; `task.env.command.{vx,vy,wz,height}={[-0.8,1.2],[-0.5,0.5],[-1,1],[0.28,0.37]}`, `task.env.gait.{freq,swing_height,trot_band}={[0.9,2.0],0.07,[0.5,0.8]}`, `task.env.push.vel=0.5`, `ppo.num_timesteps=300000000`. Build the model first with `./training/run.sh build --robot legs_v627`. See [Robot variants](robots.md). |
 | `locomotion_3090` | `fbb_loco_3090_v1` | Inherits `locomotion`, changes only the run name. |
 | `locomotion_v2` | `fbb_loco_v2` | `locomotion` + `task.env.reward.height_sigma=5e-4`, `task.env.reward.scales.height_tracking=2`, `task.env.reward.scales.stand_still=-1`. |
 | `locomotion_v3` | `fbb_loco_v3` | v2 fields + `task.env.gait.freq=[1.4,3.6]`, `task.env.reward.scales.tracking_lin_vel=2`. |
@@ -887,9 +899,10 @@ using the preset.
 
 | Command | Usage / output |
 |---|---|
-| `build` | `./training/run.sh build [--total-mass M --kp K --kd D]`; regenerates the training model and home keyframe. Defaults: `16` kg, `20`, `1`. |
+| `build` | `./training/run.sh build [--robot R --total-mass M --kp K --kd D]`; regenerates the training model and home keyframe of one robot variant. `--robot` defaults to `wojtek`. Mass and gains default to the variant's values in `robots.py`, which are `14` kg, `20`, `1` for `wojtek`. |
+| `import-robot` | `./training/run.sh import-robot --robot R --archive <sim_robot.tgz>`; writes a variant's source MJCF and visual meshes from a CAD export. See [Robot variants](robots.md). |
 | `pose` | `./training/run.sh pose [--second RAD --third RAD --kp K]`; renders linkage pose samples; `--kp` defaults to `20`. |
-| `check` | `./training/run.sh check [--gpu --backend {jax,warp,auto} --nenv N --nsteps N]`; static checks plus a small MJX/JAX fallback compile by default. Use `--gpu --backend warp` to exercise the primary MJWarp CUDA path. GPU CLI defaults: backend `jax`, `nenv=4096`, `nsteps=200`. |
+| `check` | `./training/run.sh check [--robot R --gpu --backend {jax,warp,auto} --nenv N --nsteps N]`; static checks plus a small MJX/JAX fallback compile by default. Use `--gpu --backend warp` to exercise the primary MJWarp CUDA path. GPU CLI defaults: backend `jax`, `nenv=4096`, `nsteps=200`. |
 | `train` | `./training/run.sh train [Hydra overrides]`; writes checkpoints and `run.json` to `training/runs/<run_name>`. |
 | `smoke` | `./training/run.sh smoke [Hydra overrides]`; tiny CPU pipeline check with WandB disabled. A selected preset can override smoke's short PPO budget, so use `++ppo.num_timesteps=100000` when combining a preset with smoke. |
 | `eval` | `./training/run.sh eval --run runs/<name> [--x-vel V --y-vel V --yaw-vel W --height H --steps N --out FILE --video-size WxH --overlay-torque --overlay-camera]`; renders a rollout. See "Rendering videos" below for the three render switches. |

@@ -2,6 +2,7 @@
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="wojtek_body">
   <xacro:include filename="$(find wojtek_description)/urdf/inertia.urdf.xacro" />
   <xacro:include filename="$(find wojtek_description)/urdf/leg.urdf.xacro" />
+  <xacro:include filename="$(find wojtek_description)/urdf/leg_v627.urdf.xacro" />
 
   <!-- Mechanical assembly shared by every bringup of this robot: material,
        base_link/body_link/imu_link, and the four legs. ros2_control/Gazebo
@@ -14,8 +15,14 @@
        of the same TF edge fight. The sim URDF turns it on: there the
        robot model owns the ground-truth extrinsics (machinekind/wojtek#91).
        The mount numbers must match wojtek_pc/camera_spec.py (MOUNT_XYZ,
-       MOUNT_PITCH_RAD); a test cross-checks them. -->
-  <xacro:macro name="wojtek_body" params="with_camera:=false">
+       MOUNT_PITCH_RAD); a test cross-checks them.
+
+       legs picks the set of legs bolted to this body: "stock" (the robot as
+       built, leg.urdf.xacro) or "legs_v627" (leg_v627.urdf.xacro, simulation
+       only so far). Both use the same link and joint names. The names match
+       training's robot variants (training/wojtek_rl/robots.py), where the
+       stock legs are called "wojtek". -->
+  <xacro:macro name="wojtek_body" params="with_camera:=false legs:=stock">
     <material name="grey">
       <color rgba="0.5 0.5 0.5 1" />
     </material>
@@ -114,6 +121,7 @@
       </joint>
     </xacro:if>
 
+    <xacro:if value="${legs == 'stock'}">
     <xacro:leg prefix="rear_left" xyz="-0.131 0.06 0.06" rpy="0 0 ${pi}" first_joint_offset="${pi}"
       third_joint_gear_correction_dir="-1.0" />
     <xacro:leg prefix="rear_right" xyz="-0.131 -0.06 0.06" rpy="0 0 ${pi}" first_joint_offset="0.0"
@@ -125,5 +133,19 @@
     <xacro:leg prefix="front_left" xyz="0.131 0.06 0.06" rpy="0 0 0" first_joint_offset="0.0"
       third_joint_gear_correction_dir="1.0"
     />
+    </xacro:if>
+    <xacro:if value="${legs == 'legs_v627'}">
+      <xacro:leg_v627 prefix="rear_left" xyz="-0.131 0.06 0.06" rpy="0 0 ${pi}"
+        first_joint_offset="${pi}" dir="-1.0" side="1.0" rear="true" />
+      <xacro:leg_v627 prefix="rear_right" xyz="-0.131 -0.06 0.06" rpy="0 0 ${pi}"
+        first_joint_offset="0.0" dir="1.0" side="-1.0" rear="true" />
+      <xacro:leg_v627 prefix="front_right" xyz="0.131 -0.06 0.06" rpy="0 0 0"
+        first_joint_offset="${pi}" dir="-1.0" side="-1.0" rear="false" />
+      <xacro:leg_v627 prefix="front_left" xyz="0.131 0.06 0.06" rpy="0 0 0"
+        first_joint_offset="0.0" dir="1.0" side="1.0" rear="false" />
+    </xacro:if>
+    <xacro:unless value="${legs in ('stock', 'legs_v627')}">
+      ${xacro.fatal("wojtek_body: legs must be 'stock' or 'legs_v627', got '" + legs + "'")}
+    </xacro:unless>
   </xacro:macro>
 </robot>

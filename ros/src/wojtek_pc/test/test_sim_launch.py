@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 from launch import LaunchContext
+from launch.actions import SetLaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.utilities import evaluate_parameters
 
@@ -33,13 +34,20 @@ class _FakePolicy:
     source = "dir:/tmp/test_policy"
     directory = "/tmp/test_policy"
     pd = {"kp": 40.0, "kd": 1.6, "max_torque": 9.0}
+    meta = {}
 
 
 @pytest.fixture(autouse=True)
 def _no_policy_download(monkeypatch):
-    monkeypatch.setattr(
-        launch_common, "load_policy", lambda *a, **k: _FakePolicy(),
-    )
+    """load_policy replaced by a recorder, so a test can see what was asked."""
+    calls = []
+
+    def fake_load_policy(ref, overrides=None, robot=None):
+        calls.append({"ref": ref, "robot": robot})
+        return _FakePolicy()
+
+    monkeypatch.setattr(launch_common, "load_policy", fake_load_policy)
+    return calls
 
 
 def _context(hardware, **overrides):
@@ -54,6 +62,10 @@ def _context(hardware, **overrides):
         "bag": "false", "bag_dir": "/tmp/bags", "bag_cpus": "",
         "rviz": "false", "rviz_config": "/tmp/x.rviz",
         "launch-prefix": "",
+        "robot": "wojtek",
+        "telemetry": "false", "sysinfo_cpus": "",
+        "foxglove": "false", "foxglove_cpus": "",
+        "deck": "false", "deck_port": "8090", "deck_cpus": "",
     }
     if hardware == "real":
         defaults.update({
@@ -180,5 +192,102 @@ def test_sim_launch_keeps_the_arguments_its_callers_pass():
     }
     assert {
         "rviz", "policy", "camera", "camera_depth_hz", "camera_color_hz",
-        "boot_pose", "hw", "model_xml", "console", "gamepad",
+        "boot_pose", "hw", "model_xml", "console", "gamepad", "robot",
     } <= declared
+
+
+# -- the robot profile (robot:=) -----------------------------------------------
+
+def _policy_params(hardware, **overrides):
+    ctx, nodes = _nodes(hardware, **overrides)
+    return _params(_by_executable(nodes, "policy_node"), ctx)[0]
+
+
+def _description(hardware, **overrides):
+    ctx, nodes = _nodes(hardware, **overrides)
+    params = _params(_by_executable(nodes, "ros2_control_node"), ctx)[0]
+    return params["robot_description"]
+
+
+@pytest.mark.parametrize("hardware", ["real", "sim"])
+def test_stock_robot_keeps_the_stock_settings(hardware):
+    """robot:=wojtek is the default and must come up as the stack did
+    before profiles: stock joint map, knee clamp on, stock legs."""
+    params = _policy_params(hardware)
+    assert params["robot"] == "wojtek"
+    assert params["clamp_knee"] is True
+    assert params["joint_map_yaml"].endswith("/config/joint_map.yaml")
+    assert "legs_v627" not in _description(hardware)
+
+
+@pytest.mark.parametrize("hardware", ["real", "sim"])
+def test_v2_robot_takes_its_legs_map_and_clamp(hardware):
+    params = _policy_params(hardware, robot="wojtek_v2")
+    assert params["robot"] == "wojtek_v2"
+    assert params["clamp_knee"] is False
+    assert params["joint_map_yaml"].endswith("/config/joint_map_identity.yaml")
+    # The v6.27 legs' own meshes are in the description.
+    assert "legs_v627" in _description(hardware, robot="wojtek_v2")
+
+
+def test_real_io_node_uses_the_profiles_joint_map():
+    """real_io_node converts its named poses with the same map policy_node
+    uses, so the two can never disagree about a joint angle."""
+    for robot, name in (("wojtek", "joint_map.yaml"),
+                        ("wojtek_v2", "joint_map_identity.yaml")):
+        ctx, nodes = _nodes("real", robot=robot)
+        params = _params(_by_executable(nodes, "real_io_node"), ctx)[0]
+        assert params["joint_map_yaml"].endswith(f"/config/{name}")
+
+
+def test_v2_mujoco_plant_loads_the_v627_scene_and_identity_map():
+    description = _description("sim", robot="wojtek_v2", hw="mujoco")
+    assert "mujoco/legs_v627/scene_mjx.xml" in description
+    assert "joint_map_identity.yaml" in description
+    stock = _description("sim", hw="mujoco")
+    assert "config/scene_sim.xml" in stock
+    assert "config/joint_map.yaml" in stock
+    # Both scenes are installed where the profiles say.
+    for robot in ("wojtek", "wojtek_v2"):
+        ctx = _context("sim", robot=robot)
+        assert Path(launch_common.sim_model_xml(ctx)).is_file(), robot
+
+
+def test_explicit_model_xml_wins_over_the_profile():
+    description = _description(
+        "sim", robot="wojtek_v2", hw="mujoco", model_xml="/tmp/other.xml",
+    )
+    assert "/tmp/other.xml" in description
+
+
+def test_default_policy_follows_the_robot(_no_policy_download, monkeypatch):
+    """No policy:= means the profile's default, and the profile is handed
+    to load_policy, which refuses a policy for other legs."""
+    monkeypatch.setattr(
+        launch_common, "active_policy",
+        lambda robot: {"wojtek": "org/stock@sha", "wojtek_v2": ""}[robot],
+    )
+    _nodes("sim", policy="")
+    _nodes("sim", policy="", robot="wojtek_v2")
+    _nodes("sim", policy="org/explicit@sha", robot="wojtek_v2")
+    assert _no_policy_download == [
+        {"ref": "org/stock@sha", "robot": "wojtek"},
+        {"ref": "", "robot": "wojtek_v2"},
+        {"ref": "org/explicit@sha", "robot": "wojtek_v2"},
+    ]
+
+
+def test_the_chosen_policy_reaches_later_nodes():
+    """The web console is declared after the setup and reads policy:=, so
+    the setup writes the reference it chose back into the configuration."""
+    ctx = _context("sim", policy="org/explicit@sha")
+    actions = launch_common._launch_setup(ctx, with_rviz=False, hardware="sim")
+    sets = [a for a in actions if isinstance(a, SetLaunchConfiguration)]
+    assert len(sets) == 1
+    sets[0].visit(ctx)
+    assert ctx.launch_configurations["policy"] == "org/explicit@sha"
+
+
+def test_unknown_robot_is_refused():
+    with pytest.raises(ValueError, match="no_such_robot"):
+        _nodes("sim", robot="no_such_robot")

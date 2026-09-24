@@ -240,6 +240,7 @@ def trenuj(run_name: str, kroki: int, envs: int = 2048, preset: str = PRESET, se
     st = status(run_name)
     if st == "complete":
         print("trening już jest:", run_dir)
+        pokaz_krzywa(run_name)
         return run_dir
     if st is not None:
         print(f"poprzedni trening {run_name} nie dokończył się; liczę od nowa")

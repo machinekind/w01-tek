@@ -1,11 +1,10 @@
-# Wojtek RL guide
+# Wojtek: uczenie chodu krok po kroku
 
-`wojtek_rl_guide.ipynb`, a Google Colab notebook. Step by step: robot → environment → training → export → your policy against the keeper deployed on the robot. Every step ends with an inline MuJoCo video.
+`wojtek_rl_guide.ipynb`, notebook na Google Colab. Krok po kroku: robot w MuJoCo → środowisko → trening → eksport → Twoja polityka kontra ta na robocie. Każdy krok kończy się widokiem z MuJoCo. Na razie zawiera instalację i krok 1 (Wojtek stoi w MuJoCo); kolejne kroki dochodzą pojedynczo.
 
-[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/machinekind/w01-tek/blob/main/learning/wojtek_rl_guide.ipynb)
+[![Otwórz w Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/machinekind/w01-tek/blob/main/learning/wojtek_rl_guide.ipynb)
 
-1. Open the badge, choose a **GPU** runtime.
-2. Optional Secrets: `HF_ORGANIZATION`, `HF_TOKEN` (published keepers are private).
-3. Run the cells in order. Step 0 clones the repo and installs `training/`; restart the session once if the import cell fails.
+1. Otwórz link, wybierz środowisko **GPU**.
+2. Uruchamiaj komórki po kolei. Krok 0 klonuje repozytorium i instaluje `training/`; jeśli import nie zadziała, zrestartuj sesję raz.
 
-Committed without outputs. Generated files land in the git-ignored `training/runs/` and `training/videos/guide/`. Nothing in the notebook deploys to or arms the robot.
+Notebook jest w repozytorium bez wyników komórek. Nic w nim nie wgrywa polityki na robota ani go nie uzbraja.

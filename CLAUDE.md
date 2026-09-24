@@ -67,6 +67,9 @@ keep the command, seed, and resulting run directory together.
 - [MJWarp backend report](docs/plans/mjwarp-phase0-report.md) — backend buffer
   sizing and validation context.
 - [Demo guide](training/demo/README.md) — interactive navigation demo usage.
+- [Guided notebook](learning/README.md) — the Colab step-by-step tour of the
+  training stack (`learning/wojtek_rl_guide.ipynb`); committed without
+  outputs.
 - [SCAN-Planner](training/docs/scan-planner.md) — the collision-aware local
   planner that executes the VLM's mid-level commands; read it before touching
   `wojtek_rl/scan/`, the room demo's executor, or the nav-eval collision

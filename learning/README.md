@@ -1,6 +1,6 @@
 # Wojtek: uczenie chodu krok po kroku
 
-`wojtek_rl_guide.ipynb`, notebook na Google Colab. Krok po kroku: robot w MuJoCo → środowisko → trening → eksport → Twoja polityka kontra ta na robocie. Każdy krok kończy się widokiem z MuJoCo. Na razie zawiera instalację i krok 1 (Wojtek stoi w MuJoCo); kolejne kroki dochodzą pojedynczo.
+`wojtek_rl_guide.ipynb`, notebook na Google Colab. Krok po kroku: robot w MuJoCo → środowisko → trening → eksport → Twoja polityka kontra ta na robocie. Każdy krok kończy się widokiem z MuJoCo. Kroki: 1 Wojtek stoi w MuJoCo, 2 polityka na początku treningu, 3 nagroda, 4 trening na GPU, 5 wytrenowana polityka w MuJoCo, 6 zadania, 7 zadanie główne (panel sterowania kierunkiem), 8 finał: porównanie z polityką z robota (Hugging Face, sekrety `HF_ORGANIZATION` i `HF_TOKEN`). Pomocniki: `wojtek_kurs.py` (przebieg w MuJoCo, tabela, trening, eksport) i `lowpoly.py` (uproszczone siatki do renderowania, bo Colab nie ma OpenGL NVIDII).
 
 [![Otwórz w Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/machinekind/w01-tek/blob/main/learning/wojtek_rl_guide.ipynb)
 

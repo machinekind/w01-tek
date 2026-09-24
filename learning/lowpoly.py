@@ -39,6 +39,7 @@ def decimate_meshes(meshdir: Path, out: Path) -> None:
 
 def render_model(scene_xml: Path, cache: Path) -> mujoco.MjModel:
     """The scene compiled against decimated meshes (built once into `cache`)."""
+    cache = Path(cache).resolve()          # meshdir jest względem pliku modelu, więc ścieżka absolutna
     spec = mujoco.MjSpec.from_file(str(scene_xml))
     meshdir = (Path(spec.modelfiledir) / spec.meshdir).resolve()
     decimate_meshes(meshdir, cache)

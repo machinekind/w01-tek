@@ -43,6 +43,14 @@ def srodowisko(preset: str = PRESET):
     treningowi w podprocesie (`trenuj` zdejmuje tę zmienną).
     """
     os.environ.setdefault("JAX_PLATFORMS", "cpu")
+    if "jax" in sys.modules:                      # JAX czyta JAX_PLATFORMS tylko przy imporcie
+        import jax
+        from jax._src import xla_bridge
+
+        if xla_bridge._backends:
+            raise RuntimeError("JAX w kernelu już zajął kartę (operacja JAX przed importem kursu): "
+                               "Runtime → Restart session i uruchom komórki od początku")
+        jax.config.update("jax_platforms", "cpu")
     from omegaconf import OmegaConf
 
     from wojtek_rl.registry import TASKS, _apply_overrides
@@ -115,13 +123,15 @@ def model_z_serwem(pd: dict | None = None) -> mujoco.MjModel:
 
 
 def przebieg(polityka, komenda, sekundy: float = 4.0, widok: Widok | None = None,
-             pchniecie_s: float | None = None, pchniecie_ms: float = 0.6, seed: int = 0) -> dict:
+             pchniecie_s: float | None = None, pchniecie_ms: float = 0.6, seed: int = 0,
+             opoznienie: int = 1) -> dict:
     """Polityka steruje robotem w czystym MuJoCo, jak na sprzęcie.
 
     `polityka`: obiekt z `step(gyro, grawitacja, q, dq, komenda) -> 12 celów`,
     `reset()`, `ctrl_dt`, `meta` (WojtekPolicy z eksportu albo własna klasa).
     `komenda`: (vx, vy, wz) lub funkcja krok -> (vx, vy, wz). Czwarty element,
-    wysokość stania, dopełnia kontrakt polityki.
+    wysokość stania, dopełnia kontrakt polityki. `opoznienie`: o tyle kroków
+    sterowania później cele trafiają do serw (1 = jak w treningu, task.env.action_delay).
     Zwraca słownik z przebiegiem (czas, komenda, prędkość w układzie robota,
     obrót, wysokość, momenty, prędkości przegubów), klatkami i krokiem upadku.
     """
@@ -140,14 +150,19 @@ def przebieg(polityka, komenda, sekundy: float = 4.0, widok: Widok | None = None
     log = {k: [] for k in ("t", "komenda", "v", "wz", "h", "moment", "dq", "xy")}
     klatki, upadek = [], None
     qinv, v_body = np.zeros(4), np.zeros(3)
+    kolejka = [(d.ctrl.copy(), np.zeros(12, np.float32))] * opoznienie   # cele z poprzednich kroków (home na start)
     for i in range(n):
         cmd = np.asarray(komenda(i) if callable(komenda) else komenda, np.float32)
         gyro = d.sensordata[gyro_adr:gyro_adr + 3].copy()
         graw = gravity_from_quat(*d.qpos[3:7])
-        d.ctrl[:] = polityka.step(gyro, graw, d.qpos[qadr].copy(), d.qvel[vadr].copy(), cmd)
+        cele = np.asarray(polityka.step(gyro, graw, d.qpos[qadr].copy(), d.qvel[vadr].copy(), cmd), np.float32)
+        tau = polityka.last_tau_ff.copy() if tau_ff else np.zeros(12, np.float32)
+        kolejka.append((cele, tau))
+        cele, tau = kolejka.pop(0)
+        d.ctrl[:] = cele
         if tau_ff:
             d.qfrc_applied[:] = 0.0
-            d.qfrc_applied[vadr] = polityka.last_tau_ff
+            d.qfrc_applied[vadr] = tau
         if pchniecie_s is not None and i == int(pchniecie_s / polityka.ctrl_dt):
             kierunek = rng.uniform(-1, 1, 2)
             d.qvel[:2] += kierunek / (np.linalg.norm(kierunek) + 1e-6) * pchniecie_ms
@@ -196,6 +211,8 @@ def podsumuj(p: dict) -> dict:
 
 def tabela(przebiegi: dict) -> str:
     """Jedna tabela tekstowa: kolumna na przebieg."""
+    if not przebiegi:
+        raise ValueError("brak przebiegów")
     nazwy = list(przebiegi)
     pods = {n: podsumuj(p) for n, p in przebiegi.items()}
     szer = max(len(k) for k in next(iter(pods.values())))
@@ -208,6 +225,9 @@ def tabela(przebiegi: dict) -> str:
 
 def obok_siebie(przebiegi: dict) -> list:
     """Klatki kilku przebiegów zszyte w jeden kadr; upadły zastyga na ostatniej."""
+    bez = [n for n, p in przebiegi.items() if not p["klatki"]]
+    if bez:
+        raise ValueError(f"przebieg bez klatek (wywołaj przebieg(..., widok=widok)): {', '.join(bez)}")
     n = max(len(p["klatki"]) for p in przebiegi.values())
     return [np.hstack([p["klatki"][min(k, len(p["klatki"]) - 1)] for p in przebiegi.values()]) for k in range(n)]
 
@@ -237,8 +257,16 @@ def trenuj(run_name: str, kroki: int, envs: int = 2048, preset: str = PRESET, se
     checkpointu, od którego trening rusza zamiast od losowych wag (dostrajanie).
     """
     run_dir = TRAINING / "runs" / run_name
+    overrides = [f"+experiment={preset}", f"run_name={run_name}", f"seed={seed}",
+                 f"++ppo.num_timesteps={kroki}", f"++ppo.num_envs={envs}", "wandb.enable=false", *dodatkowe]
+    if start is not None:
+        overrides.append(f"restore={Path(start).resolve()}")
     st = status(run_name)
     if st == "complete":
+        zapis = run_dir / "trenuj.json"
+        if zapis.exists() and json.loads(zapis.read_text()).get("overrides") != overrides:
+            raise ValueError(f"trening {run_name} istnieje z inną konfiguracją; podaj nową nazwę "
+                             f"albo skasuj {run_dir}")
         print("trening już jest:", run_dir)
         pokaz_krzywa(run_name)
         return run_dir
@@ -248,16 +276,19 @@ def trenuj(run_name: str, kroki: int, envs: int = 2048, preset: str = PRESET, se
     if not jest_gpu():
         print("brak GPU: Runtime → Change runtime type → GPU (trening na CPU nie ma sensu)")
         return run_dir
-    overrides = [f"+experiment={preset}", f"run_name={run_name}", f"seed={seed}",
-                 f"++ppo.num_timesteps={kroki}", f"++ppo.num_envs={envs}", "wandb.enable=false", *dodatkowe]
-    if start is not None:
-        overrides.append(f"restore={Path(start).resolve()}")
+    env = dict(os.environ, PYTHONUNBUFFERED="1")
+    env.pop("JAX_PLATFORMS", None)              # kernel trzyma JAX na CPU; trening ma dostać GPU
+    proba = subprocess.run([sys.executable, "-c", "import jax; print(jax.default_backend())"],
+                           env=env, capture_output=True, text=True)
+    if proba.stdout.strip().splitlines()[-1:] != ["gpu"]:
+        print(proba.stderr[-1500:])
+        print("JAX w podprocesie nie widzi GPU: Runtime → Restart session i uruchom instalację od nowa")
+        return run_dir
     print("polecenie: python -m wojtek_rl.train " + " ".join(overrides))
     print("kompilacja trwa 1-3 min, pierwsza linia pojawi się po niej; potem jedna linia na ewaluację")
     run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "trenuj.json").write_text(json.dumps({"overrides": overrides}))
     with open(run_dir / "train.log", "w") as log:
-        env = dict(os.environ, PYTHONUNBUFFERED="1")
-        env.pop("JAX_PLATFORMS", None)          # kernel trzyma JAX na CPU; trening ma dostać GPU
         proc = subprocess.Popen([sys.executable, "-m", "wojtek_rl.train", *overrides], cwd=TRAINING, env=env,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
         try:
@@ -300,10 +331,16 @@ def eksportuj(run_name: str) -> Path:
         raise RuntimeError(f"trening {run_name} nie dokończył się: uruchom trenuj() ponownie")
     if not (out / "policy_meta.json").exists():
         print("eksport (budowa środowiska na CPU i dwie walidacje, 1-2 min)...")
-        res = subprocess.run([sys.executable, "-m", "wojtek_rl.export_policy", "--run", f"runs/{run_name}"],
+        tmp = run_dir / "deploy.tmp"
+        shutil.rmtree(tmp, ignore_errors=True)
+        res = subprocess.run([sys.executable, "-m", "wojtek_rl.export_policy", "--run", f"runs/{run_name}",
+                              "--out", str(tmp)],
                              cwd=TRAINING, env=dict(os.environ, JAX_PLATFORMS="cpu"), capture_output=True, text=True)
         if res.returncode:
+            shutil.rmtree(tmp, ignore_errors=True)
             raise RuntimeError("eksport nie powiódł się:\n" + (res.stderr or res.stdout)[-2000:])
+        shutil.rmtree(out, ignore_errors=True)
+        tmp.rename(out)                          # gotowe pliki pojawiają się dopiero po udanej walidacji
         print("\n".join(l for l in res.stdout.splitlines() if l.startswith(("validated", "wrote"))))
     return out
 

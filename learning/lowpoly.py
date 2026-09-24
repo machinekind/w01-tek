@@ -6,6 +6,8 @@ a few percent brings a frame under 0.1 s. Physics keeps running on the
 original model; only qpos is copied into this one for drawing.
 """
 
+import os
+import shutil
 from pathlib import Path
 
 import mujoco
@@ -34,7 +36,9 @@ def decimate_meshes(meshdir: Path, out: Path) -> None:
             d = trimesh.Trimesh(pts, faces, process=True)
             d.merge_vertices()
             pts, faces = d.vertices.astype(np.float64), d.faces.astype(np.int64)
-        trimesh.Trimesh(pts, faces, process=True).export(out / f.name)
+        tmp = out / (f.name + ".tmp")
+        trimesh.Trimesh(pts, faces, process=True).export(tmp, file_type="stl")
+        os.replace(tmp, out / f.name)            # plik pojawia się w całości albo wcale
 
 
 def render_model(scene_xml: Path, cache: Path) -> mujoco.MjModel:
@@ -44,4 +48,9 @@ def render_model(scene_xml: Path, cache: Path) -> mujoco.MjModel:
     meshdir = (Path(spec.modelfiledir) / spec.meshdir).resolve()
     decimate_meshes(meshdir, cache)
     spec.meshdir = str(cache)
-    return spec.compile()
+    try:
+        return spec.compile()
+    except ValueError:                           # uszkodzony cache (np. przerwana decymacja): zbuduj od nowa
+        shutil.rmtree(cache)
+        decimate_meshes(meshdir, cache)
+        return spec.compile()

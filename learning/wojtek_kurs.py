@@ -8,7 +8,9 @@ eksportu jako podprocesów. Bez JAX-a poza treningiem i eksportem.
 
 from __future__ import annotations
 
+import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -23,6 +25,7 @@ from wojtek_rl.np_policy import actuator_addresses, gravity_from_quat
 TRAINING = paths.PROJECT_DIR
 UPADEK_WYSOKOSC, UPADEK_GZ = 0.06, -0.4   # test upadku jak w środowisku (task.env.fall)
 PRESET = "locomotion_stiff_v1"
+SERWO = {"kp": 40.0, "kd": 1.6, "max_torque": 9.0}   # serwo PD przepisu PRESET (task.env.pd_kp/pd_kd/max_torque)
 
 
 # -- widok ---------------------------------------------------------------------
@@ -126,6 +129,7 @@ def podsumuj(p: dict) -> dict:
     xy = p["xy"]
     return {
         "przebyte [m]": float(np.linalg.norm(xy[-1] - xy[0])),
+        "obrót łącznie [rad]": float(np.sum(wz) * dt),
         "błąd prędkości RMS [m/s]": float(np.sqrt(np.mean(blad_v[ruch] ** 2))) if ruch.any() else float("nan"),
         "błąd obrotu RMS [rad/s]": float(np.sqrt(np.mean((wz[ruch] - cmd[ruch, 2]) ** 2))) if ruch.any() else float("nan"),
         "wysokość [m]": float(p["h"].mean()),
@@ -155,46 +159,92 @@ def obok_siebie(przebiegi: dict) -> list:
 
 # -- trening i eksport ---------------------------------------------------------
 
+def status(run_name: str):
+    """'complete', 'running' (trening trwa lub został przerwany) albo None, gdy runu nie ma."""
+    f = TRAINING / "runs" / run_name / "run.json"
+    return json.loads(f.read_text()).get("status") if f.exists() else None
+
+
+def jest_gpu() -> bool:
+    """Sprawdzenie bez JAX-a: import JAX-a w kernelu zająłby pamięć karty, którą trening potrzebuje w podprocesie."""
+    if shutil.which("nvidia-smi") is None:
+        return False
+    return subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True).returncode == 0
+
+
 def trenuj(run_name: str, kroki: int, envs: int = 2048, preset: str = PRESET, seed: int = 0,
            dodatkowe: tuple = ()) -> Path:
-    """Jeden trening PPO jako podproces; drukuje linie ewaluacji. Zwraca katalog runu."""
+    """Jeden trening PPO jako podproces; drukuje linie ewaluacji. Zwraca katalog runu.
+
+    Dokończony trening o tej nazwie nie startuje ponownie; przerwany (zerwana sesja,
+    Stop, błąd) jest kasowany i liczony od nowa. `dodatkowe` to nadpisania Hydry,
+    np. ("++task.env.reward.scales.action_rate=-1.0",).
+    """
     run_dir = TRAINING / "runs" / run_name
-    if (run_dir / "run.json").exists():
+    st = status(run_name)
+    if st == "complete":
         print("trening już jest:", run_dir)
         return run_dir
-    import jax
-
-    if not any(d.platform == "gpu" for d in jax.devices()):
+    if st is not None:
+        print(f"poprzedni trening {run_name} nie dokończył się; liczę od nowa")
+        shutil.rmtree(run_dir)
+    if not jest_gpu():
         print("brak GPU: Runtime → Change runtime type → GPU (trening na CPU nie ma sensu)")
         return run_dir
     overrides = [f"+experiment={preset}", f"run_name={run_name}", f"seed={seed}",
                  f"++ppo.num_timesteps={kroki}", f"++ppo.num_envs={envs}", "wandb.enable=false", *dodatkowe]
     print("polecenie: python -m wojtek_rl.train " + " ".join(overrides))
+    print("kompilacja trwa 1-3 min, pierwsza linia pojawi się po niej; potem jedna linia na ewaluację")
     run_dir.mkdir(parents=True, exist_ok=True)
     with open(run_dir / "train.log", "w") as log:
         proc = subprocess.Popen([sys.executable, "-m", "wojtek_rl.train", *overrides], cwd=TRAINING,
+                                env=dict(os.environ, PYTHONUNBUFFERED="1"),
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-        for line in proc.stdout:
-            log.write(line)
-            if line.startswith(("steps", "done")) or "Error" in line:
-                print(line, end="")
-        proc.wait()
+        try:
+            for line in proc.stdout:
+                log.write(line)
+                if line.startswith(("steps", "done")) or "Error" in line:
+                    print(line, end="")
+            proc.wait()
+        except KeyboardInterrupt:
+            proc.terminate()
+            proc.wait()
+            print("trening przerwany; kolejne trenuj() z tą nazwą zacznie od nowa")
+            raise
     if proc.returncode:
-        print(f"trening zakończył się błędem (kod {proc.returncode}); szczegóły: {run_dir / 'train.log'}")
+        tail = (run_dir / "train.log").read_text().splitlines()[-12:]
+        print(f"trening zakończył się błędem (kod {proc.returncode}). Koniec train.log:")
+        print("\n".join(tail))
     return run_dir
 
 
+def pokaz_krzywa(run_name: str) -> None:
+    """Ewaluacje z train.log w jednej tabeli: kroki, nagroda z epizodu, długość epizodu."""
+    rows = krzywa(run_name)
+    if not rows:
+        print("brak train.log dla", run_name)
+        return
+    print(f"{'kroki':>13s} {'nagroda':>9s} {'ep_len':>7s}")
+    for k, r, l in rows:
+        print(f"{k:>13,d} {r:>9.1f} {l:>7.0f}")
+
+
 def eksportuj(run_name: str) -> Path:
-    """policy.npz + policy_meta.json z ostatniego checkpointu (na CPU). Zwraca katalog."""
+    """policy.npz + policy_meta.json z ostatniego checkpointu (na CPU, 1-2 min). Zwraca katalog."""
     run_dir = TRAINING / "runs" / run_name
     out = run_dir / "deploy"
-    if not (run_dir / "run.json").exists():
+    st = status(run_name)
+    if st is None:
         raise FileNotFoundError(f"brak treningu {run_name}: najpierw trenuj()")
+    if st != "complete":
+        raise RuntimeError(f"trening {run_name} nie dokończył się: uruchom trenuj() ponownie")
     if not (out / "policy_meta.json").exists():
+        print("eksport (budowa środowiska na CPU i dwie walidacje, 1-2 min)...")
         res = subprocess.run([sys.executable, "-m", "wojtek_rl.export_policy", "--run", f"runs/{run_name}"],
                              cwd=TRAINING, env=dict(os.environ, JAX_PLATFORMS="cpu"), capture_output=True, text=True)
         if res.returncode:
             raise RuntimeError("eksport nie powiódł się:\n" + (res.stderr or res.stdout)[-2000:])
+        print("\n".join(l for l in res.stdout.splitlines() if l.startswith(("validated", "wrote"))))
     return out
 
 

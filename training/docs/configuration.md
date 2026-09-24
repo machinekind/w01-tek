@@ -791,7 +791,7 @@ so command-line values can still override it.
 
 | Preset | Base task | Purpose |
 |---|---|---|
-| `course_locomotion` | locomotion | The workshop notebook's preset (`learning/wojtek_rl_guide.ipynb`): `locomotion` with the gait clock removed from the actor, so the checkpoint exports and a bounded Colab run walks on command (measured: 52M steps on a T4, 15 min, 1.84 m in 4 s at `vx=0.5`, spins both ways). Budget 50M. |
+| `course_locomotion` | locomotion | The workshop notebook's preset (`learning/wojtek_rl_course/wojtek_rl_guide.ipynb`): `locomotion` with the gait clock removed from the actor, so the checkpoint exports and a bounded Colab run walks on command (measured: 52M steps on a T4, 15 min, 1.84 m in 4 s at `vx=0.5`, spins both ways). Budget 50M. |
 | `flat_tff_rnd_v1` | joystick | Flat locomotion, soft-gain (kp20/kd0.5) + feed-forward-torque-head + RND design, iteration 1. From scratch by construction (24-wide actions, phase-free critic). |
 | `flat_tff_sag_v1` | flat_tff_rnd_v1 | + slow-walk sampler + `target_sag=-10` (gravity compensation via reward). Superseded: breaks pure spins (exploration-time deadlock); use `flat_tff_sag_v2` with `++task.env.reward.target_sag_wz_fade=0.1`. |
 | `flat_tff_sag_v2` | flat_tff_rnd_v1 | + slow-walk sampler + `target_sag=-10` with the yaw fade. The preset's `fade=1.0` still eroded spins by 2B; the proven operating point is the near-binary override `++task.env.reward.target_sag_wz_fade=0.1` (run `wojtek_flat_tff_sag_v2b_s0`). |

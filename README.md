@@ -16,7 +16,7 @@ is the ROS 2 stack this workspace grew out of.
 
 - [Agent guide](CLAUDE.md)
 - [Training configuration reference](training/docs/configuration.md)
-- [Guided RL notebook](learning/README.md) — Colab, step by step: how Wojtek
+- [Guided RL notebook](learning/wojtek_rl_course/README.md) — Colab, step by step: how Wojtek
   is trained, and your policy against the deployed keeper
 - [ROS workspace guide](ros/README.md)
 

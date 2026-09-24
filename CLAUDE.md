@@ -29,6 +29,10 @@ keep the command, seed, and resulting run directory together.
   and do not treat an experiment's layout as precedent for the rest of the
   tree.  See
   [experiments/autonomous_architecture_ros2_v1/README.md](experiments/autonomous_architecture_ros2_v1/README.md).
+- `learning/` holds self-contained learning guides for tools and hardware
+  around Wojtek (the SO-101 arms with LeRobot's web GUI, and the Colab
+  notebook on training Wojtek's walking policy).  Nothing in `ros/` or
+  `training/` depends on it.
 - `skills/` contains opt-in local guides.  Claude users must explicitly
   symlink a skill or ask to read its `SKILL.md`; see [skills/README.md](skills/README.md).
 - Use **Wojtek** everywhere: prose, artifact names, run names, and new paths.
@@ -67,8 +71,9 @@ keep the command, seed, and resulting run directory together.
 - [MJWarp backend report](docs/plans/mjwarp-phase0-report.md) — backend buffer
   sizing and validation context.
 - [Demo guide](training/demo/README.md) — interactive navigation demo usage.
-- [Guided notebook](learning/README.md) — the Colab step-by-step tour of the
-  training stack (`learning/wojtek_rl_guide.ipynb`); committed without
+- [Guided notebook](learning/wojtek_rl_course/README.md) — the Colab step-by-step
+  tour of the training stack (`learning/wojtek_rl_course/wojtek_rl_guide.ipynb`);
+  committed without
   outputs.
 - [SCAN-Planner](training/docs/scan-planner.md) — the collision-aware local
   planner that executes the VLM's mid-level commands; read it before touching

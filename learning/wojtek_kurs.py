@@ -276,16 +276,15 @@ def trenuj(run_name: str, kroki: int, envs: int = 2048, preset: str = PRESET, se
         print(f"poprzedni trening {run_name} nie dokończył się; liczę od nowa")
         shutil.rmtree(run_dir)
     if not jest_gpu():
-        print("brak GPU: Runtime → Change runtime type → GPU (trening na CPU nie ma sensu)")
-        return run_dir
+        raise RuntimeError("brak GPU: Runtime → Change runtime type → T4 GPU, potem od kroku 0 "
+                           "(trening na CPU nie ma sensu; bez GPU zostają kroki 0-3)")
     env = dict(os.environ, PYTHONUNBUFFERED="1")
     env.pop("JAX_PLATFORMS", None)              # kernel trzyma JAX na CPU; trening ma dostać GPU
     proba = subprocess.run([sys.executable, "-c", "import jax; print(jax.default_backend())"],
                            env=env, capture_output=True, text=True)
     if proba.stdout.strip().splitlines()[-1:] != ["gpu"]:
         print(proba.stderr[-1500:])
-        print("JAX w podprocesie nie widzi GPU: Runtime → Restart session i uruchom instalację od nowa")
-        return run_dir
+        raise RuntimeError("JAX w podprocesie nie widzi GPU: Runtime → Restart session i uruchom od kroku 0")
     print("polecenie: python -m wojtek_rl.train " + " ".join(overrides))
     print("kompilacja trwa 1-3 min, pierwsza linia pojawi się po niej; potem jedna linia na ewaluację")
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -306,8 +305,8 @@ def trenuj(run_name: str, kroki: int, envs: int = 2048, preset: str = PRESET, se
             raise
     if proc.returncode:
         tail = (run_dir / "train.log").read_text().splitlines()[-12:]
-        print(f"trening zakończył się błędem (kod {proc.returncode}). Koniec train.log:")
         print("\n".join(tail))
+        raise RuntimeError(f"trening {run_name} zakończył się błędem (kod {proc.returncode}); koniec train.log wyżej")
     return run_dir
 
 
@@ -328,7 +327,7 @@ def eksportuj(run_name: str) -> Path:
     out = run_dir / "deploy"
     st = status(run_name)
     if st is None:
-        raise FileNotFoundError(f"brak treningu {run_name}: najpierw trenuj()")
+        raise FileNotFoundError(f"brak treningu {run_name}: najpierw trenuj() (wymaga GPU)")
     if st != "complete":
         raise RuntimeError(f"trening {run_name} nie dokończył się: uruchom trenuj() ponownie")
     if not (out / "policy_meta.json").exists():

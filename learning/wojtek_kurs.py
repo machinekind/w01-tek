@@ -198,7 +198,7 @@ def podsumuj(p: dict) -> dict:
     f = np.fft.rfftfreq(dq.shape[0], d=dt)
     xy = p["xy"]
     return {
-        "przebyte [m]": float(np.linalg.norm(xy[-1] - xy[0])),
+        "przebyte [m]": float(np.sum(np.linalg.norm(np.diff(xy, axis=0), axis=1))),   # długość drogi, nie przesunięcie
         "obrót łącznie [rad]": float(np.sum(wz) * dt),
         "błąd prędkości RMS [m/s]": float(np.sqrt(np.mean(blad_v[ruch] ** 2))) if ruch.any() else float("nan"),
         "błąd obrotu RMS [rad/s]": float(np.sqrt(np.mean((wz[ruch] - cmd[ruch, 2]) ** 2))) if ruch.any() else float("nan"),

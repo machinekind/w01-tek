@@ -216,9 +216,11 @@ def tabela(przebiegi: dict) -> str:
     nazwy = list(przebiegi)
     pods = {n: podsumuj(p) for n, p in przebiegi.items()}
     szer = max(len(k) for k in next(iter(pods.values())))
-    wiersze = [" " * szer + "".join(f"{n:>14s}" for n in nazwy)]
+    kol = {n: max(14, len(n) + 2) for n in nazwy}          # kolumna mieści nazwę przebiegu
+    wiersze = [" " * szer + "".join(f"{n:>{kol[n]}s}" for n in nazwy)]
     for k in next(iter(pods.values())):
-        kom = "".join(f"{pods[n][k]:>14.3f}" if isinstance(pods[n][k], float) else f"{pods[n][k]:>14s}" for n in nazwy)
+        kom = "".join(f"{pods[n][k]:>{kol[n]}.3f}" if isinstance(pods[n][k], float) else f"{pods[n][k]:>{kol[n]}s}"
+                      for n in nazwy)
         wiersze.append(f"{k:{szer}s}{kom}")
     return "\n".join(wiersze)
 

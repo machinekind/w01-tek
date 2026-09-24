@@ -24,8 +24,63 @@ from wojtek_rl.np_policy import actuator_addresses, gravity_from_quat
 
 TRAINING = paths.PROJECT_DIR
 UPADEK_WYSOKOSC, UPADEK_GZ = 0.06, -0.4   # test upadku jak w środowisku (task.env.fall)
-PRESET = "locomotion_stiff_v1"
-SERWO = {"kp": 40.0, "kd": 1.6, "max_torque": 9.0}   # serwo PD przepisu PRESET (task.env.pd_kp/pd_kd/max_torque)
+PRESET = "course_locomotion"
+
+
+def konfiguracja(preset: str = PRESET):
+    """Konfiguracja Hydry przepisu, złożona jak w `wojtek_rl.train` (bez treningu)."""
+    from hydra import compose, initialize_config_dir
+
+    with initialize_config_dir(config_dir=str(TRAINING / "wojtek_rl" / "conf"), version_base=None):
+        return compose(config_name="config", overrides=[f"+experiment={preset}"])
+
+
+def srodowisko(preset: str = PRESET):
+    """Pełna konfiguracja środowiska przepisu: domyślne wartości z env.py plus nakładka z YAML.
+
+    Tak samo składa ją `wojtek_rl.train`. Import środowiska ciągnie JAX; kernel
+    notebooka trzyma JAX na CPU (JAX_PLATFORMS), żeby nie zajmować pamięci karty
+    treningowi w podprocesie (`trenuj` zdejmuje tę zmienną).
+    """
+    os.environ.setdefault("JAX_PLATFORMS", "cpu")
+    from omegaconf import OmegaConf
+
+    from wojtek_rl.registry import TASKS, _apply_overrides
+
+    h = konfiguracja(preset)
+    cfg = TASKS[h.task.name][1]()
+    _apply_overrides(cfg, OmegaConf.to_container(h.task.env, resolve=True) or {})
+    return cfg
+
+
+def ustawienia(preset: str = PRESET) -> dict:
+    """Serwo i mapowanie akcji przepisu, tak jak środowisko nakłada je na model.
+
+    `serwo`: kp/kd/max_torque (0 w przepisie = wartości z XML); `skala`: 12 skal
+    akcji [rad]; `dol`/`gora`: limity celów po ograniczeniu odwodzenia i kolana.
+    """
+    env = srodowisko(preset)
+    m = mujoco.MjModel.from_xml_path(str(paths.SCENE_XML))
+    serwo = {"kp": float(env.pd_kp or m.actuator_gainprm[0, 0]),
+             "kd": float(env.pd_kd or -m.actuator_biasprm[0, 2]),
+             "max_torque": float(env.max_torque or m.actuator_forcerange[0, 1])}
+    skala = np.asarray(env.action_scale, np.float32)
+    skala = np.tile(skala, 4) if skala.ndim else np.full(12, float(skala), np.float32)
+    dol, gora = m.actuator_ctrlrange.T.copy()
+    if env.abduction_ctrl_limit:
+        lim = float(env.abduction_ctrl_limit)
+        dol[0::3], gora[0::3] = np.maximum(dol[0::3], -lim), np.minimum(gora[0::3], lim)
+    if env.knee_target_max:
+        gora[2::3] = np.minimum(gora[2::3], float(env.knee_target_max))
+    return {"serwo": serwo, "skala": skala, "dol": dol, "gora": gora}
+
+
+try:
+    SERWO = ustawienia()["serwo"]           # serwo PD przepisu PRESET
+except Exception:                           # noqa: BLE001  (np. brak Hydry): wartości z XML
+    _m = mujoco.MjModel.from_xml_path(str(paths.SCENE_XML))
+    SERWO = {"kp": float(_m.actuator_gainprm[0, 0]), "kd": float(-_m.actuator_biasprm[0, 2]),
+             "max_torque": float(_m.actuator_forcerange[0, 1])}
 
 
 # -- widok ---------------------------------------------------------------------
@@ -173,12 +228,13 @@ def jest_gpu() -> bool:
 
 
 def trenuj(run_name: str, kroki: int, envs: int = 2048, preset: str = PRESET, seed: int = 0,
-           dodatkowe: tuple = ()) -> Path:
+           dodatkowe: tuple = (), start: str | Path | None = None) -> Path:
     """Jeden trening PPO jako podproces; drukuje linie ewaluacji. Zwraca katalog runu.
 
     Dokończony trening o tej nazwie nie startuje ponownie; przerwany (zerwana sesja,
     Stop, błąd) jest kasowany i liczony od nowa. `dodatkowe` to nadpisania Hydry,
-    np. ("++task.env.reward.scales.action_rate=-1.0",).
+    np. ("++task.env.reward.scales.action_rate=-1.0",). `start` to katalog
+    checkpointu, od którego trening rusza zamiast od losowych wag (dostrajanie).
     """
     run_dir = TRAINING / "runs" / run_name
     st = status(run_name)
@@ -193,12 +249,15 @@ def trenuj(run_name: str, kroki: int, envs: int = 2048, preset: str = PRESET, se
         return run_dir
     overrides = [f"+experiment={preset}", f"run_name={run_name}", f"seed={seed}",
                  f"++ppo.num_timesteps={kroki}", f"++ppo.num_envs={envs}", "wandb.enable=false", *dodatkowe]
+    if start is not None:
+        overrides.append(f"restore={Path(start).resolve()}")
     print("polecenie: python -m wojtek_rl.train " + " ".join(overrides))
     print("kompilacja trwa 1-3 min, pierwsza linia pojawi się po niej; potem jedna linia na ewaluację")
     run_dir.mkdir(parents=True, exist_ok=True)
     with open(run_dir / "train.log", "w") as log:
-        proc = subprocess.Popen([sys.executable, "-m", "wojtek_rl.train", *overrides], cwd=TRAINING,
-                                env=dict(os.environ, PYTHONUNBUFFERED="1"),
+        env = dict(os.environ, PYTHONUNBUFFERED="1")
+        env.pop("JAX_PLATFORMS", None)          # kernel trzyma JAX na CPU; trening ma dostać GPU
+        proc = subprocess.Popen([sys.executable, "-m", "wojtek_rl.train", *overrides], cwd=TRAINING, env=env,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
         try:
             for line in proc.stdout:
@@ -257,3 +316,18 @@ def krzywa(run_name: str) -> list:
         return []
     return [(int(s.replace(",", "")), float(r), float(l)) for s, r, l in
             re.findall(r"steps\s+([\d,]+)\s+reward\s+([-\d.]+)\s+ep_len\s+([\d.]+)", log.read_text())]
+
+
+def checkpoint_z_hf(repo_id: str, revision: str | None = None) -> Path:
+    """Katalog checkpointu Brax opublikowanej polityki z Hugging Face (do `trenuj(start=...)`).
+
+    Repozytoria są prywatne: potrzebny HF_TOKEN w środowisku. Pobiera tylko pliki
+    checkpointu i wskazuje katalog z `ppo_network_config.json`.
+    """
+    from huggingface_hub import snapshot_download
+
+    root = Path(snapshot_download(repo_id, revision=revision, allow_patterns=["*checkpoint*/**", "run.json"]))
+    cfgs = sorted(root.rglob("ppo_network_config.json"))
+    if not cfgs:
+        raise FileNotFoundError(f"w {repo_id} nie ma katalogu checkpointu (ppo_network_config.json)")
+    return cfgs[-1].parent

@@ -192,6 +192,57 @@ TEST_F(Plant, dry_run_withholds_torque_but_keeps_physics_running)
   EXPECT_LT(plant_.basePose()[2], 0.5);      // and the robot drops
 }
 
+TEST_F(Plant, feed_forward_torque_acts_on_top_of_the_servo)
+{
+  // A soft servo holding zero. A feed-forward torque one way bends the
+  // joint that way; the opposite torque bends it back past where it was.
+  // That is the tau_ff head: the servo keeps its target, the torque adds.
+  plant_.applyServoSettings("leg_third_joint", {2.0, 0.1, 6.0});
+  plant_.latchActivationPose();
+  plant_.setCommand(0, 0.0);
+  plant_.setFeedForward(0, 1.0);
+  for (int i = 0; i < 800; ++i) {plant_.advance(kControlPeriod);}
+  const double forward = plant_.jointPosition(0);
+  plant_.setFeedForward(0, -1.0);
+  for (int i = 0; i < 800; ++i) {plant_.advance(kControlPeriod);}
+  const double back = plant_.jointPosition(0);
+  EXPECT_GT(forward, 0.05);
+  EXPECT_LT(back, forward - 0.1);
+}
+
+TEST_F(Plant, feed_forward_torque_stays_on_until_written_again)
+{
+  // The driver adds tau_ff every cycle; the plant keeps the last value the
+  // way the drive would, so a torque set once holds across steps.
+  plant_.applyServoSettings("leg_third_joint", {2.0, 0.1, 6.0});
+  plant_.latchActivationPose();
+  plant_.setCommand(0, 0.0);
+  plant_.setFeedForward(0, 1.0);
+  for (int i = 0; i < 400; ++i) {plant_.advance(kControlPeriod);}
+  const double early = plant_.jointPosition(0);
+  for (int i = 0; i < 400; ++i) {plant_.advance(kControlPeriod);}
+  EXPECT_GE(plant_.jointPosition(0), early - 0.01);
+}
+
+TEST_F(Plant, dry_run_withholds_the_feed_forward_torque_too)
+{
+  // Bench mode means no torque of any kind: with the head written, the
+  // plant falls exactly as it does without it.
+  MujocoPlant bare;
+  bare.load(writeModel(), "/nonexistent/meshes");
+  bare.setDryRun(true);
+  bare.latchActivationPose();
+
+  plant_.setDryRun(true);
+  plant_.latchActivationPose();
+  plant_.setFeedForward(0, 5.0);
+  for (int i = 0; i < 400; ++i) {
+    plant_.advance(kControlPeriod);
+    bare.advance(kControlPeriod);
+  }
+  EXPECT_NEAR(plant_.jointPosition(0), bare.jointPosition(0), 1e-9);
+}
+
 TEST_F(Plant, folded_knee_comes_from_the_models_own_ctrlrange)
 {
   // Not a constant copied from wojtek_policy.poses: the folding stop is a

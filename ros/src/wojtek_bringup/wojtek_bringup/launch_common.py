@@ -90,6 +90,10 @@ def _launch_setup(context, with_rviz, hardware):
     xacro_args = [
         f" kp:={pd['kp']} kd:={pd['kd']} max_torque:={drive_torque}",
         f" tau_ff:={'true' if tau_ff_on else 'false'}",
+        # The head's own clamp. The real drives take the summed cap above;
+        # the simulated plant clamps servo and head separately, like the
+        # training sim, and needs the head's share to do it.
+        f" tau_ff_scale:={tau_ff_scale if tau_ff_on else 0.0}",
         " use_imu:=", use_imu,
         " dry_run:=", LaunchConfiguration("dry_run"),
     ]

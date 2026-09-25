@@ -115,12 +115,12 @@ hardware_interface::CallbackReturn MujocoHardwareInterface::on_init(
     return hardware_interface::CallbackReturn::ERROR;
   }
 
-  // The physical unit is bolted on rotated (URDF imu_joint: rpy 0 pi 0), and
-  // policy_node undoes exactly that rotation. Emulating the mount here is
+  // The physical unit is bolted on rotated (URDF imu_joint: rpy 0 0 -pi/2),
+  // and policy_node / leg_odometry undo exactly that rotation. Emulating the mount here is
   // what keeps imu_mount_rpy on the tested path instead of the sim quietly
   // shipping an unrotated sensor.
   const auto rpy = parseDoubles(
-    param(info_.hardware_parameters, "imu_mount_rpy", "0 3.141592653589793 0"));
+    param(info_.hardware_parameters, "imu_mount_rpy", "0 0 -1.5707963"));
   if (rpy.size() != 3) {
     RCLCPP_FATAL(logger_, "imu_mount_rpy needs three numbers");
     return hardware_interface::CallbackReturn::ERROR;

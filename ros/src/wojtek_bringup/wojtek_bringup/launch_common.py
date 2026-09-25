@@ -660,6 +660,9 @@ def common_launch_description(
             # on the isolated RT cores with no load balancing they shared
             # one core with policy_node and real_io and took a fifth of it.
             DeclareLaunchArgument("gamepad_cpus", default_value=""),
+            # Fraction of the command box full stick reaches; 1.0 = the
+            # policy's trained top speed, far too fast indoors.
+            DeclareLaunchArgument("gamepad_speed", default_value="0.4"),
             IncludeLaunchDescription(
                 PathJoinSubstitution(
                     [
@@ -670,6 +673,7 @@ def common_launch_description(
                 ),
                 launch_arguments={
                     "cpus": LaunchConfiguration("gamepad_cpus"),
+                    "speed_scale": LaunchConfiguration("gamepad_speed"),
                 }.items(),
                 condition=IfCondition(LaunchConfiguration("gamepad")),
             ),

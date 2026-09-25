@@ -82,10 +82,17 @@ def test_a_slightly_off_centre_idle_pad_is_still_idle(node):
     assert node.published == []
 
 
+def test_full_stick_reaches_the_scaled_box_not_the_trained_edge(node):
+    """speed_scale (default 0.4) shrinks every axis of the command box: the
+    trained edge is the policy's top speed, too fast to drive indoors."""
+    assert node.drive_high == pytest.approx([0.4 * v for v in node.cmd_high])
+    assert node.drive_low == pytest.approx([0.4 * v for v in node.cmd_low])
+
+
 def test_deflected_stick_drives_and_release_zeros_then_stops(node):
     run(node, 1.0, lambda: joy(vx=1.0))
     assert node.published, "a deflected stick must publish"
-    assert all(m.linear.x == pytest.approx(node.cmd_high[0])
+    assert all(m.linear.x == pytest.approx(node.drive_high[0])
                for m in node.published)
     n_live = len(node.published)
     # Release: the driver keeps repeating the centred state.

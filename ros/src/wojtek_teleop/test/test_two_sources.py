@@ -119,7 +119,7 @@ def test_pad_drives_when_deflected_and_hands_back_on_release(graph):
     spin(1.3)
     got = since(helper, t0)
     assert got, "a deflected stick must drive"
-    assert all(m.linear.x == pytest.approx(teleop.cmd_high[0]) for m in got)
+    assert all(m.linear.x == pytest.approx(teleop.drive_high[0]) for m in got)
     # Release. Zeros for a while, then nothing at all, so another source
     # can take /cmd_vel without being fought.
     helper.stick_vx = 0.0

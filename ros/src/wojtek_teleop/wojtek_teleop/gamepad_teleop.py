@@ -39,7 +39,8 @@ have; the sticks command velocity whenever the stack accepts it. Two rails
 stay in place anyway:
   * sticks scale into the policy's trained command box, read from the
     contract of the `policy` parameter's reference (the same reference
-    policy_node gets; empty = conservative defaults), and
+    policy_node gets; empty = conservative defaults), shrunk by
+    speed_scale (default 0.4; the launches' gamepad_speed), and
   * a dead-man zeroes the motion if Joy messages stop (pad powered off / out
     of bluetooth range / joy driver gone) for more than cmd_timeout_s. The
     height set-point is held through stops, same rule as the consoles.
@@ -94,13 +95,22 @@ class GamepadTeleop(Node):
         self._deadzone = self.declare_parameter("deadzone", 0.1).value
         self._height_step = self.declare_parameter("height_step", 0.005).value
         self._cmd_timeout = self.declare_parameter("cmd_timeout_s", 0.5).value
+        # Fraction of the command box full stick deflection reaches (vx, vy
+        # and yaw alike). The box is what the policy CAN track, not what is
+        # comfortable to drive indoors: at 1.0 the pad walks the robot at
+        # its trained top speed. Raise it for open floor.
+        self._speed_scale = min(1.0, max(
+            0.0, float(self.declare_parameter("speed_scale", 0.4).value)))
         # Same reference policy_node gets (HF repo id or local directory);
         # empty = drive with the conservative default limits below.
         self.declare_parameter("policy", "")
 
         self._load_meta()
+        # What full stick reaches: the command box shrunk by speed_scale.
+        self.drive_low = [v * self._speed_scale for v in self.cmd_low]
+        self.drive_high = [v * self._speed_scale for v in self.cmd_high]
 
-        self._gate = PadDrive(self.cmd_low, self.cmd_high, self.height_range,
+        self._gate = PadDrive(self.drive_low, self.drive_high, self.height_range,
                               self.height_default, timeout_s=self._cmd_timeout,
                               silence_after_s=SILENCE_AFTER_S)
         self._last_state = IDLE
@@ -133,7 +143,10 @@ class GamepadTeleop(Node):
             "A toggles arm, Y stand up, B lie down, "
             f"LB/RB height +-{self._height_step * 1000:.0f} mm "
             f"({self.height_range[0]:.3f}..{self.height_range[1]:.3f} m), "
-            "D-pad tricks: up=paw_wave left=bow right=sit down=shake"
+            "D-pad tricks: up=paw_wave left=bow right=sit down=shake; "
+            f"speed_scale {self._speed_scale:g} -> full stick "
+            f"vx {self.drive_high[0]:.2f} m/s, vy {self.drive_high[1]:.2f} m/s, "
+            f"yaw {self.drive_high[2]:.2f} rad/s"
         )
 
     def _load_meta(self):

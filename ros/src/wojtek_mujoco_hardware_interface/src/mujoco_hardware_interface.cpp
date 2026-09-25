@@ -138,20 +138,28 @@ hardware_interface::CallbackReturn MujocoHardwareInterface::on_init(
   ground_truth_period_ = gt_hz > 0.0 ? 1.0 / gt_hz : 0.0;
 
   for (const auto & joint : info_.joints) {
-    if (joint.command_interfaces.size() != 1 ||
-      joint.command_interfaces[0].name != hardware_interface::HW_IF_POSITION)
-    {
+    // The pair the MD80 driver takes: [position] is the plain servo,
+    // [position, effort] adds the policy's feed-forward torque.
+    const auto & commands = joint.command_interfaces;
+    const bool position_first = !commands.empty() &&
+      commands[0].name == hardware_interface::HW_IF_POSITION;
+    const bool effort_or_nothing = commands.size() == 1 ||
+      (commands.size() == 2 &&
+      commands[1].name == hardware_interface::HW_IF_EFFORT);
+    if (!position_first || !effort_or_nothing) {
       RCLCPP_FATAL(
-        logger_, "joint '%s' needs exactly one position command interface",
-        joint.name.c_str());
+        logger_, "joint '%s' needs a position command interface, optionally "
+        "followed by effort", joint.name.c_str());
       return hardware_interface::CallbackReturn::ERROR;
     }
     joint_names_.push_back(joint.name);
+    joint_has_effort_.push_back(commands.size() == 2);
   }
   position_.assign(joint_names_.size(), 0.0);
   velocity_.assign(joint_names_.size(), 0.0);
   effort_.assign(joint_names_.size(), 0.0);
   command_.assign(joint_names_.size(), 0.0);
+  effort_command_.assign(joint_names_.size(), 0.0);
 
   if (info_.sensors.size() > 1) {
     RCLCPP_FATAL(logger_, "at most one sensor (the IMU) is supported");
@@ -262,6 +270,10 @@ MujocoHardwareInterface::export_command_interfaces()
   for (std::size_t i = 0; i < joint_names_.size(); ++i) {
     interfaces.emplace_back(
       joint_names_[i], hardware_interface::HW_IF_POSITION, &command_[i]);
+    if (joint_has_effort_[i]) {
+      interfaces.emplace_back(
+        joint_names_[i], hardware_interface::HW_IF_EFFORT, &effort_command_[i]);
+    }
   }
   return interfaces;
 }
@@ -277,6 +289,7 @@ hardware_interface::CallbackReturn MujocoHardwareInterface::on_activate(
   std::fill(velocity_.begin(), velocity_.end(), 0.0);
   std::fill(effort_.begin(), effort_.end(), 0.0);
   std::fill(command_.begin(), command_.end(), 0.0);
+  std::fill(effort_command_.begin(), effort_command_.end(), 0.0);
   RCLCPP_INFO(logger_, "activated: current pose is the zero for joint states");
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -325,13 +338,22 @@ hardware_interface::return_type MujocoHardwareInterface::write(
 {
   for (std::size_t i = 0; i < joint_names_.size(); ++i) {
     const double command = command_[i];
-    if (!std::isfinite(command)) {
-      continue;  // NaN placeholders right after activation: hold position.
+    // NaN placeholders right after activation: hold position.
+    if (std::isfinite(command)) {
+      // Commands arrive boot-relative in URDF convention; undo the sign to get
+      // back to the model's, where the activation pose is added.
+      plant_.setCommand(
+        actuator_of_joint_[i], command / joint_map_->sign(joint_names_[i]));
     }
-    // Commands arrive boot-relative in URDF convention; undo the sign to get
-    // back to the model's, where the activation pose is added.
-    plant_.setCommand(
-      actuator_of_joint_[i], command / joint_map_->sign(joint_names_[i]));
+    if (!joint_has_effort_[i]) {
+      continue;
+    }
+    // A torque takes the same sign and no offset. Non-finite means nothing
+    // has written the channel yet, so fall back to pure PD.
+    const double tau = effort_command_[i];
+    plant_.setFeedForward(
+      actuator_of_joint_[i],
+      std::isfinite(tau) ? tau / joint_map_->sign(joint_names_[i]) : 0.0);
   }
   return hardware_interface::return_type::OK;
 }

@@ -33,6 +33,7 @@ class _FakePolicy:
     source = "dir:/tmp/test_policy"
     directory = "/tmp/test_policy"
     pd = {"kp": 40.0, "kd": 1.6, "max_torque": 9.0}
+    meta = {}
 
 
 @pytest.fixture(autouse=True)
@@ -131,6 +132,27 @@ def test_sim_runs_the_robots_controller_configuration():
         if "spawner" in str(n._Node__node_executable)
     ]
     assert spawners_real == spawners_sim
+
+
+def test_tau_ff_spawns_the_effort_controller_on_both_sides(monkeypatch):
+    """The effort channel comes from the policy contract, not the plant: a
+    tau_ff policy must grow forward_effort_controller in the sim exactly as
+    on the robot, or the sim quietly runs PD-only."""
+    class _TauFfPolicy(_FakePolicy):
+        meta = {"tau_ff": {"enable": True, "scale": 3.0}}
+
+    monkeypatch.setattr(
+        launch_common, "load_policy", lambda *a, **k: _TauFfPolicy(),
+    )
+    for hardware in ("real", "sim"):
+        _, nodes = _nodes(hardware)
+        spawners = [
+            n._Node__arguments for n in nodes
+            if "spawner" in str(n._Node__node_executable)
+        ]
+        assert spawners, hardware
+        for args in spawners:
+            assert "forward_effort_controller" in args, hardware
 
 
 def test_sim_loads_the_simulated_plant():

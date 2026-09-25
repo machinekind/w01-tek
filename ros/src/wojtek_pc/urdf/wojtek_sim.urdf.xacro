@@ -28,6 +28,9 @@
   <xacro:arg name="kp" default="40.0" />
   <xacro:arg name="kd" default="1.6" />
   <xacro:arg name="max_torque" default="9.0" />
+  <!-- Mirrors the real xacro's effort channel, the feed-forward torque a
+       tau_ff policy adds on top of the servo. -->
+  <xacro:arg name="tau_ff" default="false" />
   <xacro:arg name="hw" default="mock" />
   <!-- Physics scene for hw:=mujoco. The launch resolves this from this
        package's share; the default here is for running the xacro by hand. -->
@@ -51,12 +54,16 @@
   <xacro:wojtek_body with_camera="true" />
 
   <!-- Same interface set as wojtek_bringup's wojtek_joint macro: a position
-       command (impedance target) and position/velocity/effort states. The
-       gains travel as params so the mujoco plugin can write them into the
-       actuators; the mock ignores them. -->
-  <xacro:macro name="wojtek_sim_joint" params="name kp kd max_torque">
+       command (impedance target) and position/velocity/effort states, plus
+       the effort command tau_ff adds. The gains travel as params so the
+       mujoco plugin can write them into the actuators; the mock ignores
+       them. -->
+  <xacro:macro name="wojtek_sim_joint" params="name kp kd max_torque tau_ff:=false">
     <joint name="${name}">
       <command_interface name="position" />
+      <xacro:if value="${tau_ff}">
+        <command_interface name="effort" />
+      </xacro:if>
       <state_interface name="position">
         <param name="initial_value">0.0</param>
       </state_interface>
@@ -77,8 +84,17 @@
       <xacro:if value="${'$(arg hw)' == 'mock'}">
         <plugin>mock_components/GenericSystem</plugin>
         <!-- Integrate velocity from the position commands instead of
-             reporting zero, so /joint_states is not obviously fake. -->
-        <param name="calculate_dynamics">true</param>
+             reporting zero, so /joint_states is not obviously fake. Except
+             with tau_ff: the mock's mode-switch check knows only position/
+             velocity/acceleration, so claiming the effort channel needs the
+             dynamics off. Velocities then read zero; the mock is for the
+             stack's logic, not gait, and a dead effort spawner costs more. -->
+        <xacro:unless value="$(arg tau_ff)">
+          <param name="calculate_dynamics">true</param>
+        </xacro:unless>
+        <xacro:if value="$(arg tau_ff)">
+          <param name="calculate_dynamics">false</param>
+        </xacro:if>
       </xacro:if>
       <xacro:unless value="${'$(arg hw)' == 'mock'}">
         <plugin>wojtek_mujoco_hardware_interface/MujocoHardwareInterface</plugin>
@@ -100,21 +116,21 @@
       </xacro:unless>
     </hardware>
 
-    <xacro:wojtek_sim_joint name="front_left_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
-    <xacro:wojtek_sim_joint name="front_left_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
-    <xacro:wojtek_sim_joint name="front_left_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
+    <xacro:wojtek_sim_joint name="front_left_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" />
+    <xacro:wojtek_sim_joint name="front_left_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" />
+    <xacro:wojtek_sim_joint name="front_left_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" />
 
-    <xacro:wojtek_sim_joint name="front_right_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
-    <xacro:wojtek_sim_joint name="front_right_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
-    <xacro:wojtek_sim_joint name="front_right_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
+    <xacro:wojtek_sim_joint name="front_right_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" />
+    <xacro:wojtek_sim_joint name="front_right_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" />
+    <xacro:wojtek_sim_joint name="front_right_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" />
 
-    <xacro:wojtek_sim_joint name="rear_right_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
-    <xacro:wojtek_sim_joint name="rear_right_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
-    <xacro:wojtek_sim_joint name="rear_right_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
+    <xacro:wojtek_sim_joint name="rear_right_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" />
+    <xacro:wojtek_sim_joint name="rear_right_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" />
+    <xacro:wojtek_sim_joint name="rear_right_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" />
 
-    <xacro:wojtek_sim_joint name="rear_left_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
-    <xacro:wojtek_sim_joint name="rear_left_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
-    <xacro:wojtek_sim_joint name="rear_left_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
+    <xacro:wojtek_sim_joint name="rear_left_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" />
+    <xacro:wojtek_sim_joint name="rear_left_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" />
+    <xacro:wojtek_sim_joint name="rear_left_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" />
 
     <!-- One component carries both the joints and the IMU, unlike the real
          robot where they are separate drivers on separate buses: the plugin

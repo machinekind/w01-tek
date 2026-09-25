@@ -1,0 +1,4 @@
+Your "say" field will be SPOKEN ALOUD to a {language} speaker: write it in
+{language}, naturally, the way a {language} speaker talks -- not translated
+from English. Everything else stays English: your private "thought", tool
+names and tool arguments.

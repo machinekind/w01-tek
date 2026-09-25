@@ -142,12 +142,12 @@
       <geom name="flat_11_visual" type="mesh" mesh="flat_11" material="flat_11_mat" contype="0" conaffinity="0" group="2"/>
       <geom name="flat_12_visual" type="mesh" mesh="flat_12" material="flat_12_mat" contype="0" conaffinity="0" group="2"/>
       <geom name="flat_13_visual" type="mesh" mesh="flat_13" material="flat_13_mat" contype="0" conaffinity="0" group="2"/>
-      <geom name="flat_14_visual" type="mesh" mesh="flat_14" material="flat_14_mat" contype="0" conaffinity="0" group="2"/>
-      <geom name="flat_15_visual" type="mesh" mesh="flat_15" material="flat_15_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_14_visual" type="mesh" mesh="flat_14" pos="0 0 0.003" material="flat_14_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_15_visual" type="mesh" mesh="flat_15" pos="0 0 0.003" material="flat_15_mat" contype="0" conaffinity="0" group="2"/>
       <geom name="flat_16_visual" type="mesh" mesh="flat_16" material="flat_16_mat" contype="0" conaffinity="0" group="2"/>
       <geom name="flat_17_visual" type="mesh" mesh="flat_17" material="flat_17_mat" contype="0" conaffinity="0" group="2"/>
       <geom name="flat_18_visual" type="mesh" mesh="flat_18" material="flat_18_mat" contype="0" conaffinity="0" group="2"/>
-      <geom name="flat_19_visual" type="mesh" mesh="flat_19" material="flat_19_mat" contype="0" conaffinity="0" group="2"/>
+      <geom name="flat_19_visual" type="mesh" mesh="flat_19" pos="0 0 0.003" material="flat_19_mat" contype="0" conaffinity="0" group="2"/>
       <geom name="flat_20_visual" type="mesh" mesh="flat_20" material="flat_20_mat" contype="0" conaffinity="0" group="2"/>
       <geom name="flat_21_visual" type="mesh" mesh="flat_21" material="flat_21_mat" contype="0" conaffinity="0" group="2"/>
       <geom name="flat_22_visual" type="mesh" mesh="flat_22" material="flat_22_mat" contype="0" conaffinity="0" group="2"/>

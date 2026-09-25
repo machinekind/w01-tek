@@ -1,0 +1,3 @@
+# Playground's tuned Go1 PPO network as-is. Any make_ppo_networks kwarg can
+# go here or on the CLI, e.g. network.policy_hidden_layer_sizes=[256,128].
+{}

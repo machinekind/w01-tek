@@ -1,0 +1,32 @@
+[
+ {
+  "cmd": "turn_left 180",
+  "wait": 8
+ },
+ {
+  "wav": "scenarios/wavs/q_trasa.wav",
+  "quiet": 2.5,
+  "wait": 60
+ },
+ {
+  "pause": 20
+ },
+ {
+  "wav": "scenarios/wavs/q_gdzie.wav",
+  "quiet": 2.5,
+  "wait": 45
+ },
+ {
+  "wav": "scenarios/wavs/q_drzwi.wav",
+  "quiet": 2.5,
+  "wait": 45
+ },
+ {
+  "pause": 100
+ },
+ {
+  "wav": "scenarios/wavs/q_stop.wav",
+  "quiet": 2.5,
+  "wait": 30
+ }
+]

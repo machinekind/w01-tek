@@ -1,0 +1,130 @@
+# @package _global_
+# Flat locomotion, iteration 1 of the soft-gain + feed-forward-torque +
+# RND design (2026-08-08). From scratch — the action space (12 -> 24), the
+# critic obs (phase removed) and the plant all differ from every existing
+# checkpoint, and new capabilities do not fine-tune into converged policies
+# anyway (dead exploration; see the training lessons).
+#
+# Design, relative to the locomotion_stiff_kp90_v1 keeper baseline:
+# - Soft plant: pd_kp=20 / pd_kd=0.5 (HALF the damping of the kp20/kd1.0
+#   reference the stiffness ladder measured against — watch the >5 Hz
+#   vibration metric in the battery), max_torque=12, action_scale 0.25 on
+#   all joints.
+# - Feed-forward torque head (task.env.tau_ff): 12 extra policy outputs,
+#   +-3 Nm, summed onto the PD servo like the MAB driver does. Priced by
+#   tau_ff_swing (|tau_ff| on airborne legs — force control belongs on
+#   stance) and a small quadratic tau_ff effort term (the torques term
+#   only sees the PD servo). NOTE the sim clamps PD and tau_ff separately;
+#   the deployed driver must do the same, not clamp the sum.
+# - Critic: phase dropped from obs.privileged — fully clock-free, both
+#   heads.
+# - Simplified reward set (14 -> 11 active): feet_apex REPLACES
+#   feet_air_time + high_step (per-swing peak clearance; the
+#   duration-averaged terms tolerate skimming), torques is the single
+#   effort term (torque_rate dropped; torque_limit dropped — kp20 cannot
+#   reach the 12 Nm cap through the servo and the tau_ff head has its own
+#   +-3 clamp).
+# - RND intrinsic bonus (rnd block): novelty on privileged_state,
+#   coef 0.02 of the RMS-normalized bonus vs ~0.1-0.3/step extrinsic.
+#   The zero-command penalties (stand_still, stand_feet_down) are what
+#   keep novelty-seeking from corrupting stance — do not drop them.
+#
+# Budget: from-scratch flat runs converge at the ~2B scale (kp40 keeper);
+# pin ++ppo.num_timesteps low for the bounded GPU check first.
+# Usage:
+#   ./training/run.sh train +experiment=flat_tff_rnd_v1 --cfg job --resolve
+#   ./training/run.sh train +experiment=flat_tff_rnd_v1 run_name=<name> seed=1
+defaults:
+  - override /task: joystick
+
+task:
+  env:
+    action_scale: [0.25, 0.25, 0.25]
+    pd_kp: 20.0
+    pd_kd: 0.5
+    max_torque: 12.0
+    abduction_ctrl_limit: 0.44
+    knee_target_max: 3.15
+    latency:
+      enable: true
+    encoder:
+      enable: true
+    tau_ff:
+      enable: true
+      scale: 3.0 # Nm bound on the head; well under the 12 Nm servo cap
+      rate_weight: 0.25 # light smoothing: the head's job is transient force
+    obs:
+      include:
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+      privileged: # keeper list minus phase: clock-free on both heads
+        - gyro
+        - gravity
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+        - linvel
+        - foot_contact
+    command:
+      vx: [-0.8, 1.2]
+      vy: [-0.5, 0.5]
+      wz: [-1.0, 1.0]
+      height: [0.125, 0.125]
+      zero_prob: 0.25
+      pure_wz_prob: 0.25
+      pure_vy_prob: 0.2
+    push:
+      vel: 0.8
+    reward:
+      tracking_sigma: 0.1
+      pose_leg_weight: 0.1
+      apex_target: 0.05
+      scales:
+        # Task
+        tracking_lin_vel: 4.0
+        tracking_ang_vel: 1.6
+        termination: -1.0
+        # Gait shaping: per-swing apex only (replaces feet_air_time +
+        # high_step; see header)
+        feet_apex: 5.0
+        feet_air_time: 0.0
+        high_step: 0.0
+        feet_phase: 0.0
+        contact_match: 0.0
+        # Posture
+        orientation: -5.0 # the actor has no IMU; this term IS its tilt sense
+        pose: -1.0
+        # Standing (the anti-RND-corruption pair; keep both)
+        stand_still: -2.5
+        stand_feet_down: -30.0
+        # Effort and smoothness
+        feet_slip: -0.35 # NOT stronger: -1.0 collapsed a policy to straight lines
+        action_rate: -0.25
+        torques: -6.0e-4 # single effort term
+        torque_rate: 0.0
+        torque_limit: 0.0
+        action_accel: 0.0
+        energy: 0.0
+        # Feed-forward head pricing
+        tau_ff_swing: -0.5 # high: ~0.5/step per Nm held on a swing leg
+        tau_ff: -1.0e-3
+        # Unused with the frozen height command
+        height_tracking: 0.0
+        lin_vel_z: 0.0
+        ang_vel_xy: 0.0
+
+dr:
+  joint_gains: { enable: true, gain_pct: 0.2, kd_pct: 0.2 }
+  motor_strength: { enable: true, range: [0.5, 1.1] }
+
+rnd:
+  enable: true
+  coef: 0.02
+
+ppo:
+  num_timesteps: 2000000000
+
+run_name: wojtek_flat_tff_rnd_v1

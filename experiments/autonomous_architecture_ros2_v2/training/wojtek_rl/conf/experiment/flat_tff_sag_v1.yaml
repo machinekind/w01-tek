@@ -1,0 +1,23 @@
+# @package _global_
+# Iteration 2 of the flat tau_ff + RND design (2026-08-09), off the
+# overnight winner's config: flat_tff_rnd_v1 + the slow-walk sampler that
+# fixed straight_slow/speed_steps (0.00 -> 0.54/0.81, run
+# wojtek_flat_tff_rnd_v1_slow_c) + gravity compensation via reward:
+# `target_sag` charges the stance-leg gap between commanded targets and
+# measured joint positions, which on the kp20 plant only feed-forward
+# torque can close (offsetting targets cannot — the offset IS a
+# target != position). Success metric: stance |q - target| vs the slow_c
+# baseline, at no courses regression.
+# Usage: ./training/run.sh train +experiment=flat_tff_sag_v1
+defaults:
+  - flat_tff_rnd_v1
+
+task:
+  env:
+    command:
+      pure_slow_prob: 0.15
+    reward:
+      scales:
+        target_sag: -10.0
+
+run_name: wojtek_flat_tff_sag_v1

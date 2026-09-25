@@ -1,0 +1,22 @@
+# @package _global_
+# QUIET WALKING, iteration 3 (2026-08-12): phase-B escalation. Sony
+# (2502.10983) trains walking first, then multiplies the contact-velocity
+# penalty 5x once tracking is established — the curriculum that avoids
+# the stand-still collapse a strong penalty causes from scratch. This
+# preset is that phase B: feet_landing -25 (5x flat_quiet_v1), meant to
+# be launched with restore= pointing at a converged quiet_v1/v2
+# checkpoint (the springy_phase_a -> _b precedent). RND re-learns its
+# predictor after restore; that is expected and harmless.
+# Usage:
+#   ./training/run.sh train +experiment=flat_quiet_v3 \
+#     restore=runs/wojtek_flat_quiet_v1_s0/checkpoints/<final>
+defaults:
+  - flat_quiet_v1
+
+task:
+  env:
+    reward:
+      scales:
+        feet_landing: -25.0
+
+run_name: wojtek_flat_quiet_v3

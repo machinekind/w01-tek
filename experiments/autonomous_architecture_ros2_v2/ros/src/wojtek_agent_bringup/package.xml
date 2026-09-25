@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>wojtek_agent_bringup</name>
+  <version>0.1.0</version>
+  <description>
+    Launch files for the agentic voice/brain stack (docs/plans/agentic-ros2.md).
+    Distinct from wojtek_bringup, which brings up the robot/locomotion side.
+  </description>
+  <maintainer email="maciejgruszczynski@surferseo.com">Maciej Gruszczynski</maintainer>
+  <license>Apache License 2.0</license>
+
+  <exec_depend>wojtek_voice</exec_depend>
+  <exec_depend>wojtek_brain</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

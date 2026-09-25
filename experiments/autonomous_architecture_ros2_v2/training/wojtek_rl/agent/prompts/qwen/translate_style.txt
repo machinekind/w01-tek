@@ -1,0 +1,2 @@
+Write "say" in English this turn; it is translated for the user afterwards.
+Write natural English and do not apologise for the language.

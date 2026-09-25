@@ -1,0 +1,176 @@
+# @package _global_
+# terrain_blind_v3 -- run two of the terrain family, trained from scratch, per
+# the v3 plan. Blind means
+# no exteroception: no height scan, the robot feels the ground through its own
+# joints, and the IMU is in the observations. Everything not listed below is
+# terrain_blind_v2's operating point, unchanged: the frozen obs layout, kp 40 /
+# kd 1.6, the DR settings, the sim contact budgets, latency and encoder noise,
+# and base-contact termination.
+# Run one (wojtek_terrain_blind_v2c_20260727) trained clean and scored 0 of
+# 2752 on the measurement suite because it refused every backward command.
+# What changed against v2, and why:
+#   command.pure_back_prob / back_vx -- draw clean backward-only commands, so
+#     backward stops being a rare contaminated corner of the vx range.
+#   reward.tracking_product -- linear and angular kernels gate each other, so
+#     standing still under a command collects roughly nothing.
+#   reward.tracking_relative -- tracking error scales with commanded speed, so
+#     a slow careful backward gait pays like a fast forward one.
+#   max_torque 32.0 -- the X8-32 peak, the real hardware ceiling.
+#   reward.torque_limit_frac 0.25 with torque_limit -0.2 -- the hinge starts
+#     charging at the 8 Nm rated torque, so it is the standing price on
+#     sustained torque rather than a rarely-touched saturation guard.
+#   reward.orientation_tol_deg 20.0 -- a tolerance cone, because the
+#     flat-referenced orientation penalty punishes the body pitch that
+#     climbing a riser requires. A nosedive is far outside the cone.
+#   reward.feet_apex 5.0 with apex_target 0.05 -- pays each swing's peak
+#     clearance at touchdown, on top of high_step (H6 runs both). A skimming
+#     gait catches its toes on risers.
+#   reward.feet_landing -0.5 -- penalizes downward foot speed just before
+#     contact: softer touchdowns on stair edges, gentler on real gearboxes.
+#   symmetry -- mirrored worlds, so a skill learned turning left exists
+#     turning right by construction.
+#   ppo.num_timesteps 2B -- from-scratch budget, matching the flat keeper
+#     lineage. Continuing from the checkpoint later is expected.
+#   terrain.flat_row -- the train arena gains a flat level-0 row: a place
+#     where a half-learned backward gait survives, and where demoted envs
+#     keep rehearsing. Every terrain row sits one level higher than in run
+#     one, so subtract one before comparing terrain_lvl_train curves.
+# Launch notes:
+#   ./training/run.sh build-terrain --arena train --flat-row   # generated,
+#     gitignored; the --flat-row build and terrain.flat_row must agree, and
+#     train.sh needs FLAT_ROW=1 for its in-job build.
+#   XLA_PYTHON_CLIENT_PREALLOC=false ./training/run.sh train \
+#     +experiment=terrain_blind_v3
+# PREALLOC=false is mandatory on terrain, not a tuning preference. Warp
+# allocates its EPA scratch outside the XLA pool on every narrowphase call,
+# and train.py's default XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 leaves it a tenth
+# of the card; the 2026-07-25 GPU report measured a mid-run OOM at 52M steps
+# that way. train.py pins ppo.num_resets_per_eval=0 whenever terrain is on,
+# because a rebuilt env loses the level it climbed to; this preset does not
+# set it.
+# DEPLOYMENT: the exported schema-2 contract carries max_torque=32, and the
+# launch clamp (wojtek_real.urdf.xacro + launch max_torque) follows the
+# policy's contract -- deploying this preset is the usual config change. A
+# clamp below the trained cap truncates the learned torque spikes and changes
+# the gait. 32 Nm peaks draw ~30 A phase current per motor; simultaneous
+# spikes across joints are a PSU/bus budget item for the deploy session.
+# Usage: ./run.sh train +experiment=terrain_blind_v3
+defaults:
+  - override /task: joystick
+
+task:
+  env:
+    action_scale: [0.25, 0.5, 0.5]
+    pd_kp: 40.0
+    pd_kd: 1.6
+    max_torque: 32.0
+    abduction_ctrl_limit: 0.44
+    knee_target_max: 3.15
+    latency:
+      enable: true
+    encoder:
+      enable: true
+    symmetry:
+      enable: true
+      mirror_prob: 0.5
+    obs:
+      # The terrain family's frozen obs layout: the kp40 line's joint, action
+      # and command channels plus the IMU (gyro and gravity, named as in
+      # conf/obs/full.yaml). It is deliberately incompatible with every flat
+      # checkpoint. Before this family can run on the robot, the deployment
+      # side has to wire the CANdle-hat BMI (PR #75) into the policy node.
+      include:
+        - gyro
+        - gravity
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+    command:
+      vx: [-0.8, 1.2]
+      vy: [-0.5, 0.5]
+      wz: [-1.5, 1.5]
+      height: [0.10, 0.16]
+      zero_prob: 0.25
+      pure_wz_prob: 0.25
+      pure_vy_prob: 0.2
+      arc_prob: 0.2
+      arc_vx: [0.3, 0.8]
+      # A draw probability, not a realized share: the zero overwrite
+      # runs last, so 0.2 lands at 0.15 of commands as clean backward.
+      pure_back_prob: 0.2
+      back_vx: [-0.8, -0.2]
+    push:
+      vel: 0.8
+    gait:
+      swing_height: 0.08
+      air_time_cap: 0.35
+    reward:
+      # With tracking_relative on, the kernels use tracking_rel_sigma;
+      # v2's tracking_sigma would be inert here, so it is dropped.
+      tracking_rel_sigma: 0.25
+      pose_leg_weight: 0.1
+      tracking_product: true
+      tracking_relative: true
+      torque_limit_frac: 0.25
+      orientation_tol_deg: 20.0
+      apex_target: 0.05
+      scales:
+        tracking_lin_vel: 4.0
+        tracking_ang_vel: 2.4
+        height_tracking: 1.0
+        lin_vel_z: 0.0
+        ang_vel_xy: 0.0
+        orientation: -5.0
+        torques: -6.0e-4
+        torque_rate: -0.02
+        torque_limit: -0.2
+        action_rate: -0.25
+        action_accel: 0.0
+        energy: 0.0
+        pose: -1.0
+        feet_air_time: 4.0
+        feet_slip: -0.35
+        feet_phase: 0.0
+        contact_match: 0.0
+        feet_apex: 5.0
+        feet_landing: -0.5
+        high_step: 4.0
+        stand_still: -2.5
+        stand_feet_down: -30.0
+        termination: -1.0
+    terrain:
+      enable: true
+      arena: train
+      flat_row: true
+    fall:
+      # A lying robot is the expensive simulation state and the source of
+      # every heightfield contact overflow; it carries no locomotion signal.
+      # The check is analytic (height lookup), so the chessboard gaps in the
+      # base collider cannot be rested on undetected.
+      on_base_contact: true
+    sim:
+      # Floor from the robot's collision set: 29 geoms that can pair with
+      # the heightfield (20 leg geoms + the 9-cell base chessboard,
+      # 2026-07-27 plant), 4 contacts each. The 2026-07-27 validation
+      # session measured a walking-scan peak of 12 contacts/env against the
+      # previous 88 pool with nothing tripped.
+      naconmax_per_env: 116
+      # The session's worst measured nefc_max was 228, in forced-fall
+      # states on the eval arena with the 2-box base; the 9-cell chessboard
+      # can put more (smaller) contacts down in fall states, so the margin
+      # is widened until check-terrain measures the new plant.
+      njmax: 640
+
+dr:
+  motor_strength: { enable: true, range: [0.5, 1.1] }
+  joint_gains: { enable: true, gain_pct: 0.2, kd_pct: 0.2 }
+
+ppo:
+  # terrain_lvl_train is the curriculum signal. The eval env starts fresh at
+  # every evaluation, so its terrain_lvl never climbs (configuration.md,
+  # Terrain curriculum).
+  log_training_metrics: true
+  num_timesteps: 2000000000
+
+run_name: wojtek_terrain_blind_v3

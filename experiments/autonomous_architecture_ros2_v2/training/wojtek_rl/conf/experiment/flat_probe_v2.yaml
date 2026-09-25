@@ -1,0 +1,19 @@
+# @package _global_
+# SELF-IDENT PROBE v2 (2026-08-16): probe_v1 + targeted FREE-LEG
+# transients. The identifiability map showed kd is readable only from
+# unloaded-leg motion (lying multisine 0.87 vs walking 0.98), and the
+# v1 probe stands on all fours — so kd stayed at 0.81. probe_free_
+# transient pays for joint-velocity change on airborne legs, pushing
+# the dance toward lift-a-leg-and-wave phases while the fall penalty
+# keeps three feet planted. One variable vs flat_probe_v1.
+# Usage: ./training/run.sh train +experiment=flat_probe_v2 seed=0
+defaults:
+  - flat_probe_v1
+
+task:
+  env:
+    reward:
+      scales:
+        probe_free_transient: 0.3
+
+run_name: wojtek_flat_probe_v2

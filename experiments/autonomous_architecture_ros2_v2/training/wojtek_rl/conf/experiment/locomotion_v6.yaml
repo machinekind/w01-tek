@@ -1,0 +1,25 @@
+# @package _global_
+# Iteration 6 (battery-driven). The "standing tremble" was a metric
+# artifact (height TRANSITIONS averaged into the standing qvel; true hold
+# stillness is ~0.15 rad/s) — battery now measures hold windows only.
+# v5's action filter regressed velocity/slip everywhere -> reverted.
+# v6 = v3 base + zero_prob 0.25 (the only clean survivor of v4's changes),
+# isolating whether extra stand/onset practice explains v4's velocity win.
+# Usage: ./run.sh train +experiment=locomotion_v6
+defaults:
+  - locomotion
+
+task:
+  env:
+    command:
+      zero_prob: 0.25
+    gait:
+      freq: [1.4, 3.6]
+    reward:
+      height_sigma: 5e-4
+      scales:
+        height_tracking: 2.0
+        stand_still: -1.0
+        tracking_lin_vel: 2.0
+
+run_name: fbb_loco_v6

@@ -1,0 +1,169 @@
+# @package _global_
+# terrain_blind_v4 -- run three of the terrain family, trained from scratch.
+# Everything not listed below is terrain_blind_v3's operating point, unchanged:
+# the frozen obs layout, kp 40 / kd 1.6, the 8-32 Nm torque envelope, the
+# backward command sampler, the 20-degree orientation cone, symmetry
+# augmentation, the flat row, DR, sim budgets, and base-contact termination.
+# Run two (wojtek_terrain_blind_v3_20260728) fixed backward walking and scored
+# 0 of 2752 on the scan: it stands on terrain. The 2026-07-29 forensics found
+# that honest walking on terrain earned ~0.25 reward/step while standing with
+# a leg raised earned ~1.8, so the policy stood. Three changes attack that:
+#   reward.tracking_rel_sigma 0.5, tracking_rel_floor_ang 0.7 -- v3's kernels
+#     rounded partial tracking to zero: rough-terrain speed wobble put the
+#     income out of reach and the yaw-wobble charge leaked into the linear
+#     term through the product gate. Wider kernels pay partial success.
+#   reward.shaping_tracking_gate -- feet_air_time, feet_apex and high_step
+#     paid on command, not on motion, which financed the stand-and-lift farm.
+#     Gated by the linear tracking kernel, a stride pays only while the
+#     command is actually being served.
+#   no_progress -- CaT-style probabilistic termination. An env below half of
+#     its commanded speed (1 s smoothed) risks being cut, up to 2% per step
+#     at a dead stop (~1 s expected survival); 2 s grace after every reset
+#     and command change; zero commands never cut. Losing the rest of the
+#     episode is the penalty, so no reward weight needs tuning, failed
+#     episodes stop burning 20 s of sim time, and the existing curriculum
+#     rule demotes them like falls.
+#   reward.tracking_far_weight 0.25 -- step 1 of the 2026-07-29 symmetry
+#     post-mortem plan. The far-field blend carried every historical
+#     dead-spin fix (F/F2/G/H) and was inert under tracking_relative until
+#     the 042ada4 wiring. Its known exploit, the reward floor a deadlocked
+#     policy could farm, is retired by the no-progress cut.
+# Launch notes:
+#   ./training/run.sh build-terrain --arena train --flat-row   # generated,
+#     gitignored; the --flat-row build and terrain.flat_row must agree, and
+#     train.sh needs FLAT_ROW=1 for its in-job build.
+#   XLA_PYTHON_CLIENT_PREALLOC=false ./training/run.sh train \
+#     +experiment=terrain_blind_v4
+# PREALLOC=false is mandatory on terrain, not a tuning preference (see the
+# terrain_blind_v3 header). train.py pins ppo.num_resets_per_eval=0 whenever
+# terrain is on.
+# DEPLOYMENT: same contract as terrain_blind_v3 -- the exported schema-2
+# contract carries max_torque=32 and the launch clamp follows it.
+# Usage: ./run.sh train +experiment=terrain_blind_v4
+defaults:
+  - override /task: joystick
+
+task:
+  env:
+    action_scale: [0.25, 0.5, 0.5]
+    pd_kp: 40.0
+    pd_kd: 1.6
+    max_torque: 32.0
+    abduction_ctrl_limit: 0.44
+    knee_target_max: 3.15
+    latency:
+      enable: true
+    encoder:
+      enable: true
+    symmetry:
+      enable: true
+      mirror_prob: 0.5
+    no_progress:
+      enable: true
+      grace_sec: 2.0
+      ema_sec: 1.0
+      risk_below: 0.5
+      p_max: 0.02
+    obs:
+      # The terrain family's frozen obs layout: the kp40 line's joint, action
+      # and command channels plus the IMU (gyro and gravity, named as in
+      # conf/obs/full.yaml). It is deliberately incompatible with every flat
+      # checkpoint. Before this family can run on the robot, the deployment
+      # side has to wire the CANdle-hat BMI (PR #75) into the policy node.
+      include:
+        - gyro
+        - gravity
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+    command:
+      vx: [-0.8, 1.2]
+      vy: [-0.5, 0.5]
+      wz: [-1.5, 1.5]
+      height: [0.10, 0.16]
+      zero_prob: 0.25
+      pure_wz_prob: 0.25
+      pure_vy_prob: 0.2
+      arc_prob: 0.2
+      arc_vx: [0.3, 0.8]
+      # A draw probability, not a realized share: the zero overwrite
+      # runs last, so 0.2 lands at 0.15 of commands as clean backward.
+      pure_back_prob: 0.2
+      back_vx: [-0.8, -0.2]
+    push:
+      vel: 0.8
+    gait:
+      swing_height: 0.08
+      air_time_cap: 0.35
+    reward:
+      tracking_rel_sigma: 0.5
+      tracking_rel_floor_ang: 0.7
+      tracking_far_weight: 0.25
+      tracking_far_sigma: 2.5
+      pose_leg_weight: 0.1
+      tracking_product: true
+      tracking_relative: true
+      shaping_tracking_gate: true
+      torque_limit_frac: 0.25
+      orientation_tol_deg: 20.0
+      apex_target: 0.05
+      scales:
+        tracking_lin_vel: 4.0
+        tracking_ang_vel: 2.4
+        height_tracking: 1.0
+        lin_vel_z: 0.0
+        ang_vel_xy: 0.0
+        orientation: -5.0
+        torques: -6.0e-4
+        torque_rate: -0.02
+        torque_limit: -0.2
+        action_rate: -0.25
+        action_accel: 0.0
+        energy: 0.0
+        pose: -1.0
+        feet_air_time: 4.0
+        feet_slip: -0.35
+        feet_phase: 0.0
+        contact_match: 0.0
+        feet_apex: 5.0
+        feet_landing: -0.5
+        high_step: 4.0
+        stand_still: -2.5
+        stand_feet_down: -30.0
+        termination: -1.0
+    terrain:
+      enable: true
+      arena: train
+      flat_row: true
+    fall:
+      # A lying robot is the expensive simulation state and the source of
+      # every heightfield contact overflow; it carries no locomotion signal.
+      # The check is analytic (height lookup), so the chessboard gaps in the
+      # base collider cannot be rested on undetected.
+      on_base_contact: true
+    sim:
+      # Floor from the robot's collision set: 29 geoms that can pair with
+      # the heightfield (20 leg geoms + the 9-cell base chessboard,
+      # 2026-07-27 plant), 4 contacts each. The 2026-07-27 validation
+      # session measured a walking-scan peak of 12 contacts/env against the
+      # previous 88 pool with nothing tripped.
+      naconmax_per_env: 116
+      # The session's worst measured nefc_max was 228, in forced-fall
+      # states on the eval arena with the 2-box base; the 9-cell chessboard
+      # can put more (smaller) contacts down in fall states, so the margin
+      # is widened until check-terrain measures the new plant.
+      njmax: 640
+
+dr:
+  motor_strength: { enable: true, range: [0.5, 1.1] }
+  joint_gains: { enable: true, gain_pct: 0.2, kd_pct: 0.2 }
+
+ppo:
+  # terrain_lvl_train is the curriculum signal. The eval env starts fresh at
+  # every evaluation, so its terrain_lvl never climbs (configuration.md,
+  # Terrain curriculum).
+  log_training_metrics: true
+  num_timesteps: 2000000000
+
+run_name: wojtek_terrain_blind_v4

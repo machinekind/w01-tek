@@ -1,0 +1,25 @@
+# @package _global_
+# QUIET WALKING, iteration 1 (2026-08-12): flat_tff_sag_v3 + the
+# feet_landing soft-landing penalty at a moderate scale. The quiet-
+# locomotion literature (Sony 2502.10983; QuietPaw 2503.05035) converges
+# on foot contact/impact velocity as the footstep-noise proxy; the env's
+# feet_landing term is exactly that gradient, shaped better than the
+# papers' at-contact penalties: downward foot speed^2, gated by proximity
+# to the floor (1 at the floor -> 0 at glide_height 3 cm), measured
+# PRE-contact so hard strikes are read before the solver absorbs them,
+# and `moving`-gated so it cannot pay for standing still.
+# One variable vs flat_tff_sag_v3: feet_landing 0 -> -5. Judged on the
+# quiet_eval touchdown-speed table (td_p90, free-fall ratio) against
+# wojtek_flat_tff_sag_v3_s1b, with the courses table guarding against
+# motion suppression (the recorded feet_slip -1.0 collapse mode).
+# Usage: ./training/run.sh train +experiment=flat_quiet_v1
+defaults:
+  - flat_tff_sag_v3
+
+task:
+  env:
+    reward:
+      scales:
+        feet_landing: -5.0
+
+run_name: wojtek_flat_quiet_v1

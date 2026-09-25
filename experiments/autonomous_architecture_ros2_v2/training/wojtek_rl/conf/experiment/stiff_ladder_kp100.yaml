@@ -1,0 +1,25 @@
+# @package _global_
+# Rung 6 of the stiffness ladder, an extension rung beyond the kp50-80
+# ladder (kp40/kd1.6 keeper -> kp50/60/70/80 -> kp90/100), restored from
+# the previous rung's (stiff_ladder_kp90) accepted checkpoint. kd=2.53
+# holds the keeper's damping ratio constant: kd = 1.6*sqrt(kp/40) =
+# 1.6*sqrt(100/40). max_torque stays 9.0, unchanged from the keeper.
+# Launched with restore=<kp90 rung's accepted checkpoint>; this preset
+# does not set restore.
+# Usage: ./training/run.sh train +experiment=stiff_ladder_kp100 restore=runs/<stiff_ladder_kp90_accepted>/checkpoints/<step>
+defaults:
+  - springy_phase_b
+
+task:
+  env:
+    pd_kp: 100.0
+    pd_kd: 2.53
+    max_torque: 9.0
+
+dr:
+  joint_gains: { enable: true, gain_pct: 0.2, kd_pct: 0.2 }
+
+ppo:
+  num_timesteps: 400000000
+
+run_name: wojtek_stiff_kp100

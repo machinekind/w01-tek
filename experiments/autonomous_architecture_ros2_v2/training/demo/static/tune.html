@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Wojtek — footprint tuner</title>
+<style>
+  body { margin: 0; background: #17171a; color: #ddd; font: 14px/1.5 -apple-system, sans-serif;
+         display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px; }
+  h1 { font-size: 16px; margin: 0; }
+  img { max-width: 92vw; border-radius: 10px; border: 1px solid #333; }
+  .row { display: flex; align-items: center; gap: 12px; width: min(720px, 92vw); }
+  .row label { width: 150px; color: #aaa; }
+  .row input[type=range] { flex: 1; }
+  .row .val { width: 90px; text-align: right; font-variant-numeric: tabular-nums; color: #ffd84d; }
+  .note { color: #777; width: min(720px, 92vw); }
+  code { color: #9ad; }
+</style>
+</head>
+<body>
+<h1>Twin-cylinder footprint tuner</h1>
+<div id="warn" style="display:none;color:#f66;font-weight:600"></div>
+<div style="display:flex;gap:8px;max-width:96vw">
+  <img id="view" alt="chase view" style="max-width:47vw">
+  <img id="top" alt="top view" style="max-width:47vw">
+</div>
+<div class="row">
+  <label>radius (cylinder)</label>
+  <input id="radius" type="range" min="0.05" max="0.40" step="0.005">
+  <span class="val" id="radius_v"></span>
+</div>
+<div class="row">
+  <label>d_off (center offset)</label>
+  <input id="d_off" type="range" min="0.00" max="0.40" step="0.005">
+  <span class="val" id="d_off_v"></span>
+</div>
+<div class="row">
+  <label>body length covered</label><span></span>
+  <span class="val" id="len_v"></span>
+</div>
+<div class="note">
+  Live on the same sim as the main UI — drive the robot from the main tab
+  (<code>forward 2</code>, click-to-walk) and watch the swinging legs against the
+  yellow columns here; this page never takes the viewer slot. Changes apply
+  immediately to the overlay, the planner's collision probes and the
+  turn-sweep check. The <b>map inflation</b> keeps its startup radius until the
+  chosen values are made default in <code>wojtek_rl/scan/footprint.py</code>
+  (<code>Footprint.d_off / .radius</code>) and
+  <code>wojtek_rl/scan/localmap.py</code> (<code>MapConfig.inflate_r</code>).
+</div>
+<script>
+const $ = id => document.getElementById(id);
+let timer = null;
+
+function show(j) {
+  $("radius").value = j.radius; $("d_off").value = j.d_off;
+  $("radius_v").textContent = (+j.radius).toFixed(3) + " m";
+  $("d_off_v").textContent = (+j.d_off).toFixed(3) + " m";
+  $("len_v").textContent = (+j.length).toFixed(3) + " m";
+}
+
+function push() {
+  // debounce slider spam to ~10 Hz
+  $("radius_v").textContent = (+$("radius").value).toFixed(3) + " m";
+  $("d_off_v").textContent = (+$("d_off").value).toFixed(3) + " m";
+  clearTimeout(timer);
+  timer = setTimeout(() => {
+    fetch("/api/footprint", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({radius: +$("radius").value, d_off: +$("d_off").value})})
+      .then(r => r.json()).then(j => { if (j.ok) show(j); });
+  }, 100);
+}
+$("radius").oninput = push;
+$("d_off").oninput = push;
+
+fetch("/api/footprint").then(r => r.json()).then(j => { if (j.ok) show(j); })
+  .catch(() => {
+    // Opened as a static file / preview: relative /api URLs point nowhere.
+    const w = $("warn");
+    w.style.display = "block";
+    w.textContent = "not connected to the sim — open this page as http://127.0.0.1:8010/tune";
+  });
+setInterval(() => {
+  $("view").src = "/api/chase.jpg?t=" + Date.now();
+  $("top").src = "/api/top.jpg?t=" + Date.now();
+}, 250);
+</script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+# Model/runtime deps not resolvable through rosdep; install into the
+# deployment venv.  The LLMs themselves are served by vLLM in separate
+# processes — these nodes are HTTP clients.
+httpx
+# Optional: encoder-based router (the rule router needs nothing).
+# transformers
+# torch
+
+# vlm_agent node: the demo agent stack it wraps.  wojtek_rl is not on
+# PyPI; the deployment payload puts the repo's training/ dir on
+# PYTHONPATH (or pip-installs it) next to numpy + pillow + httpx.
+numpy
+pillow

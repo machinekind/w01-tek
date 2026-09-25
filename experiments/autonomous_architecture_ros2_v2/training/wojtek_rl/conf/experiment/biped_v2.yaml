@@ -1,0 +1,15 @@
+# @package _global_
+# BIPEDAL STAND, iteration 2 (2026-08-20): v1 never discovered rearing
+# (all seeds 0% reared; it farmed partial attitude reward from ~30-55 deg
+# nose-up). Iteration 2 adds the reverse curriculum: half the resets start
+# IN the reared pose (a physically consistent snapshot that is passively
+# stable under held PD targets), so the policy learns to hold first and
+# the drop starts learn to reach a state whose value is already known.
+# Judge: fraction of the episode reared (ori_err < 0.05 at height) from
+# BOTH init branches, and a rendered rollout.
+# Usage: ./training/run.sh train +experiment=biped_v2 seed=0
+defaults:
+  - override /task: biped
+
+
+run_name: wojtek_biped_v2

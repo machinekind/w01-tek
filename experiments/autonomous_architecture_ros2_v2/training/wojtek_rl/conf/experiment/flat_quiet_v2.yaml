@@ -1,0 +1,22 @@
+# @package _global_
+# QUIET WALKING, iteration 2 (2026-08-12): the strong-penalty arm of the
+# quiet family — identical to flat_quiet_v1 except feet_landing -5 -> -15
+# (Sony 2502.10983 ends its curriculum at 5x its starting contact-velocity
+# scale; this arm probes the same direction from scratch). One variable vs
+# flat_quiet_v1. Risk to watch: motion suppression — the recorded
+# feet_slip -1.0 collapse (fast straight lines only) came from overpricing
+# contact motion; feet_landing is better shaped (pre-contact, floor-
+# proximity-gated, moving-gated) but the failure mode is the same family.
+# Judge td_p90 / free-fall ratio vs flat_quiet_v1 AND the courses table
+# for suppressed rows (spins, slow walk, tight turns).
+# Usage: ./training/run.sh train +experiment=flat_quiet_v2
+defaults:
+  - flat_quiet_v1
+
+task:
+  env:
+    reward:
+      scales:
+        feet_landing: -15.0
+
+run_name: wojtek_flat_quiet_v2

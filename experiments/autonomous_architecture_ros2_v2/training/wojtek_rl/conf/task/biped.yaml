@@ -1,0 +1,28 @@
+name: biped
+
+env:
+  # The biped stance actor OBSERVES THE IMU (gyro + gravity): tilt about
+  # the hind-foot support line is unobservable from encoders alone, and
+  # two sphere feet make the balance genuinely dynamic. This is the
+  # deliberate contract difference vs the locomotion family.
+  obs:
+    state:
+      - gyro
+      - gravity
+      - joint_pos
+      - joint_vel
+      - last_act
+    privileged:
+      - gyro
+      - gravity
+      - joint_pos
+      - joint_vel
+      - last_act
+      - linvel
+      - base_height
+      - actuator_force
+      - foot_contact
+
+ppo:
+  # Rear-up-and-hold is a 10 s problem; getup-scale budget with margin.
+  num_timesteps: 300000000

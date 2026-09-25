@@ -1,0 +1,71 @@
+# @package _global_
+# SELF-IDENT PROBE, iteration 1 (2026-08-16): a policy whose job is to
+# make the robot's own parameters observable, not to go anywhere. The
+# stage-1 identifiability study measured WHERE passive data is blind:
+# motor strength invisible everywhere (the torque cap never binds), kd
+# only visible in free-leg transients, mu only in slip events. This
+# preset pays for exactly those excitations on a ZERO command, with the
+# fall penalty as the only hard constraint — an ASID-style exploration
+# policy (arXiv 2404.12308 / SPI-Active 2505.14266) with engineered
+# information proxies instead of Fisher information.
+# The anti-RND stand pair is DISABLED on purpose (the probe must move at
+# zero command); this preset must never be confused with a keeper.
+# Judge: rerun ident_study with regime=probe; identification RMSE must
+# beat the keeper baseline (mu 0.67, mass 0.63, kp 0.88, kd 0.87-from-
+# multisine, motor 1.0 — especially motor).
+# Usage: ./training/run.sh train +experiment=flat_probe_v1 seed=0
+defaults:
+  - override /task: joystick
+
+task:
+  env:
+    action_scale: [0.25, 0.25, 0.25]
+    pd_kp: 40.0
+    pd_kd: 0.8
+    max_torque: 12.0
+    abduction_ctrl_limit: 0.44
+    knee_target_max: 3.15
+    latency:
+      enable: true
+    encoder:
+      enable: true
+    command:
+      vx: [0.0, 0.0]
+      vy: [0.0, 0.0]
+      wz: [0.0, 0.0]
+      height: [0.125, 0.125]
+      zero_prob: 1.0
+    reward:
+      scales:
+        tracking_lin_vel: 0.0
+        tracking_ang_vel: 0.0
+        feet_apex: 0.0
+        feet_air_time: 0.0
+        feet_phase: 0.0
+        contact_match: 0.0
+        stand_still: 0.0
+        stand_feet_down: 0.0
+        pose: -0.25
+        orientation: -5.0
+        feet_slip: 0.0
+        action_rate: -0.1
+        torques: 0.0
+        termination: -10.0
+        probe_sat: 2.0
+        probe_slip: 0.5
+        probe_transient: 0.05
+
+dr:
+  com_offset: { enable: true, xy: 0.02, z: 0.01 }
+  joint_gains: { enable: true, gain_pct: 0.2, kd_pct: 0.2 }
+  motor_strength: { enable: true, range: [0.5, 1.1] }
+  foot_friction: { enable: true, range: [0.3, 2.2] }
+
+rnd:
+  enable: true
+  coef: 0.02
+
+ppo:
+  num_timesteps: 500000000
+
+run_name: wojtek_flat_probe_v1

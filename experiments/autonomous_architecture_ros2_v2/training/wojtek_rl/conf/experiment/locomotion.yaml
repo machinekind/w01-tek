@@ -1,0 +1,29 @@
+# @package _global_
+# Unified locomotion: stand <-> walk <-> trot in one policy, scheduled by
+# commanded speed (walk below ~0.35 m/s, trot above ~0.55, amble between),
+# plus a commanded stance height (0.09-0.17 m, measured stable envelope).
+# Zero-velocity commands train standing at height; resamples every 5 s
+# train the transitions. Usage: ./run.sh train +experiment=locomotion
+defaults:
+  - override /task: joystick
+  - override /obs: no_imu # deployable stack: encoders + phase clock, no IMU
+
+task:
+  env:
+    command:
+      vx: [-0.8, 1.2]
+      vy: [-0.5, 0.5]
+      wz: [-1.0, 1.0]
+      height: [0.09, 0.17]
+      zero_prob: 0.15
+    gait:
+      freq: [1.4, 3.2]
+      swing_height: 0.035
+      trot_band: [0.35, 0.55]
+    push:
+      vel: 0.5
+
+ppo:
+  num_timesteps: 300000000
+
+run_name: fbb_loco_v1

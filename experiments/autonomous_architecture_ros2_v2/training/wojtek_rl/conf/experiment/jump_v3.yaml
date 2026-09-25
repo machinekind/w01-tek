@@ -1,0 +1,23 @@
+# @package _global_
+# Real jump, natural motion. fbb_jump_v2 topped out at a 2 cm / 20 ms hop:
+# 0.5 rad action range allowed no wind-up, 6 Nm barely beats body weight,
+# and the smoothness costs outweighed the launch rewards. v3: hardware-true
+# torque (12 of the MD80's 15 Nm), deep slow crouch (bigger stroke, longer
+# countdown), stronger smoothness costs so the motion stays calm outside
+# the launch itself. Usage: ./run.sh train +experiment=jump_v3
+defaults:
+  - override /task: jump
+
+task:
+  env:
+    forcerange: 12.0
+    action_scale: 0.8
+    countdown_steps: 40 # 0.8 s deliberate wind-up
+    reward:
+      scales:
+        flight: 15.0
+        launch_vel: 5.0
+        action_rate: -0.4
+        action_accel: -0.2
+
+run_name: fbb_jump_v3

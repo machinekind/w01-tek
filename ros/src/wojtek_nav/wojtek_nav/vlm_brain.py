@@ -28,6 +28,13 @@ failure to design against, and a thin target never "fills the view", so
 import json
 import math
 
+# Where the node looks by default: a vLLM on the local machine (or the
+# VLM_URL the launch reads from the environment) serving the 8B, the size
+# the pointing benchmark found as accurate as the 30B-A3B and less prone
+# to inventing objects (scripts/point_bench.py, 2026-09-25).
+DEFAULT_URL = "http://127.0.0.1:8000/v1"
+DEFAULT_MODEL = "Qwen/Qwen3-VL-8B-Instruct"
+
 SYSTEM = (
     "You are the navigation brain of a small quadruped robot. You see one photo "
     "from its forward camera, mounted 20 cm above the floor. Answer with exactly "
@@ -80,6 +87,16 @@ def verify_prompt(instruction, label):
         "in this photo? Answer {\"visible\": true} only if you can see it. A different object of "
         "another kind, colour or size does not count."
     )
+
+
+def chat_url(base):
+    """The chat-completions endpoint from however the server was named:
+    `http://host:8000`, `http://host:8000/v1` and a trailing slash all
+    land on `.../v1/chat/completions` (VLM_URL in .env is a base URL)."""
+    base = base.strip().rstrip("/")
+    if not base.endswith("/v1"):
+        base += "/v1"
+    return base + "/chat/completions"
 
 
 def parse_answer(text):

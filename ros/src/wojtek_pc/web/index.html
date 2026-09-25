@@ -57,6 +57,16 @@
              padding: 10px; font-size: 14px; }
   #navout { font-family: ui-monospace, monospace; font-size: 12px;
             color: var(--dim); margin-top: 8px; }
+  #instr { flex: 1; min-width: 160px; background: #10131a; color: var(--fg);
+           border: 1px solid var(--edge); border-radius: 8px;
+           padding: 10px; font-size: 14px; }
+  button.stop { background: var(--warn); border-color: var(--warn); color: #fff; }
+  #annot { display: block; width: 100%; border-radius: 8px;
+           border: 1px solid var(--edge); background: #10131a; margin-top: 10px; }
+  #brainout { font-family: ui-monospace, monospace; font-size: 12px;
+              color: var(--dim); margin-top: 8px; white-space: pre-wrap; }
+  #brainout .live { color: var(--ok); }
+  #brainout .bad { color: var(--warn); }
 </style>
 </head>
 <body>
@@ -92,10 +102,21 @@
 </div>
 
 <div class="card">
-  <h2>VLM seat <span style="text-transform:none">(camera + text commands; needs text_commander running)</span></h2>
+  <h2>VLM brain <span style="text-transform:none">(instruction &rarr; pixel goals; needs nav:=true + vlm:=true)</span></h2>
   <img id="cam" alt="" hidden>
-  <div id="camempty">no camera frames (sim camera off or Pillow missing)</div>
+  <div id="camempty">no camera frames (camera off, or no /compressed stream)</div>
   <div class="row" style="margin-top:10px">
+    <input id="instr" placeholder="podejdź do fioletowego słupa ..." autocomplete="off">
+    <button id="instrgo">go</button>
+    <button id="instrstop" class="stop">STOP</button>
+  </div>
+  <div id="brainout">brain: (no status yet)</div>
+  <img id="annot" alt="" hidden>
+</div>
+
+<div class="card">
+  <h2>Text commands <span style="text-transform:none">(the blind contract, wojtek#92; needs text_commander running)</span></h2>
+  <div class="row">
     <button data-nav="forward">forward</button>
     <button data-nav="left">left</button>
     <button data-nav="right">right</button>
@@ -138,13 +159,21 @@ function connect() {
     $("driveon").checked = false;           // server dead-mans anyway
     setTimeout(connect, 1000);
   };
-  // Text frames are the JSON protocol; binary frames are camera JPEGs.
+  // Text frames are the JSON protocol; binary frames are pictures, one tag
+  // byte (0 camera, 1 the brain's annotated picture) and then the JPEG.
+  ws.binaryType = "arraybuffer";
   ws.onmessage = e => {
-    if (e.data instanceof Blob) onFrame(e.data);
+    if (e.data instanceof ArrayBuffer) {
+      const u8 = new Uint8Array(e.data);
+      onFrame(u8[0], new Blob([u8.subarray(1)], {type: "image/jpeg"}));
+    }
     else onMessage(JSON.parse(e.data));
   };
 }
-function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
+function send(obj) {
+  if (!(ws && ws.readyState === 1)) return false;
+  ws.send(JSON.stringify(obj)); return true;
+}
 function setStatus(text) { $("status").textContent = text; }
 
 function onMessage(m) {
@@ -165,6 +194,8 @@ function onMessage(m) {
   else if (m.t === "svc") onSvc(m);
   else if (m.t === "telemetry") onTelemetry(m);
   else if (m.t === "jog_on") onJogOn(m);
+  else if (m.t === "vlm") onVlm(m.status);
+  else if (m.t === "nav") onNav(m);
 }
 
 // ---- services --------------------------------------------------------------
@@ -320,23 +351,69 @@ setInterval(() => {
   drawPad(); sendCmd();
 }, 50);
 
-// ---- VLM seat: camera frames + nav commands ---------------------------------
-// The camera <img> swaps object URLs per JPEG (revoking the old one so the
-// tab doesn't leak); the nav panel publishes on wojtek/nav_command via the
-// server -- driving happens only if text_commander is running (wojtek#92),
-// and its 2 s dead-man means "keep clicking to keep walking", same as the
-// future VLM must.
-let camUrl = null;
-function onFrame(blob) {
+// ---- VLM brain: camera, instruction, status, annotated picture --------------
+// Pictures: each <img> swaps object URLs per JPEG (revoking the old one so
+// the tab doesn't leak). Tag 0 is the live camera, tag 1 the picture the
+// brain last answered on, with the model's point drawn by the brain.
+const picUrls = {};
+function onFrame(tag, blob) {
+  const el = $(tag === 1 ? "annot" : "cam");
   const url = URL.createObjectURL(blob);
-  const cam = $("cam");
-  cam.src = url;
+  el.src = url;
   // revoke the superseded URL right away (not in onload -- a handler that
   // gets overwritten before firing would leak its URL forever)
-  if (camUrl) URL.revokeObjectURL(camUrl);
-  camUrl = url;
-  cam.hidden = false; $("camempty").hidden = true;
+  if (picUrls[tag]) URL.revokeObjectURL(picUrls[tag]);
+  picUrls[tag] = url;
+  el.hidden = false;
+  if (tag === 0) $("camempty").hidden = true;
 }
+// The instruction goes to wojtek/vlm/instruction (vlm_brain_node); STOP
+// sends an empty instruction (the brain halts) and wojtek/nav/cancel
+// (goto and the resolver drop their goal even with no brain running).
+// The brain keeps its task when this page goes away: goto's own dead-man
+// and costmap veto are the safety there, not this websocket.
+let navWords = {goto: null, pixel: null};
+function sendInstruction() {
+  const text = $("instr").value.trim();
+  if (!text) return;
+  $("brainout").textContent = send({t: "vlm_instruction", text})
+    ? `sent: ${text}` : "NOT sent -- console disconnected";
+}
+$("instrgo").onclick = sendInstruction;
+$("instr").onkeydown = e => { if (e.key === "Enter") sendInstruction(); };
+// A stop the page could not deliver must never read as delivered.
+$("instrstop").onclick = () => {
+  $("brainout").textContent = send({t: "vlm_stop"})
+    ? "STOP sent" : "STOP NOT SENT -- console disconnected, use the pad or the robot";
+};
+function onVlm(s) {
+  const out = $("brainout");
+  if (!s) { out.textContent = "brain: (no status yet -- is vlm:=true up?)"; return; }
+  const parts = [];
+  if (s.instruction) parts.push(`task: ${s.instruction}`);
+  parts.push(`step ${s.step ?? "-"}  ${s.action ?? ""}`);
+  if (s.answer) parts.push(JSON.stringify(s.answer));
+  if (s.latency_s != null) parts.push(`${s.latency_s}s`);
+  if (s.result) parts.push(`-> ${s.result}`);
+  if (s.deg != null) parts.push(`${s.deg}° (total ${Math.round(s.turned_total ?? 0)}°)`);
+  if (s.metres != null) parts.push(`${s.metres} m`);
+  if (s.distance_to_target_m != null) parts.push(`target ${s.distance_to_target_m} m`);
+  if (s.error) parts.push(`ERROR ${s.error}`);
+  out.textContent = parts.join("  ") + `\ngoto: ${navWords.goto ?? "-"}   pixel: ${navWords.pixel ?? "-"}`;
+  const finished = s.action === "finished";
+  out.className = finished ? (s.result === "done" ? "live" : "bad") : "";
+}
+function onNav(m) {
+  navWords = {goto: m.goto, pixel: m.pixel};
+  const out = $("brainout");
+  const lines = out.textContent.split("\n");
+  out.textContent = `${lines[0]}\ngoto: ${m.goto ?? "-"}   pixel: ${m.pixel ?? "-"}`;
+}
+
+// ---- text commands (wojtek#92) ------------------------------------------------
+// The panel publishes on wojtek/nav_command via the server -- driving
+// happens only if text_commander is running, and its 2 s dead-man means
+// "keep clicking to keep walking".
 function sendNav(command) {
   command = command.trim();
   if (!command) return;

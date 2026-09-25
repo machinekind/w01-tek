@@ -42,6 +42,13 @@
 #                               /benchmark/yaw_error_deg). Needs the physics
 #                               plant, so don't combine with hw:=mock.
 #   ./sim.sh --no-build         skip the workspace freshness pass (see below)
+#   ./sim.sh model_xml:=scene_nav.xml leg_odom:=true nav:=true vlm:=true
+#                               the VLM session: corridor scene, leg odometry,
+#                               costmap + goto + pixel resolver, and the brain
+#                               talking to the model server at VLM_URL (from
+#                               the host environment or ../.env; see
+#                               .env.example) -- type instructions into the
+#                               web console's brain panel
 #
 # The source is this repo (bind mount) but the build overlay lives in the
 # container, so after a pull the workspace can be stale -- and after a package
@@ -152,6 +159,50 @@ if $MAC; then
 elif [ -n "${DISPLAY:-}" ]; then
   command -v xhost >/dev/null 2>&1 && xhost +local:docker >/dev/null 2>&1 || true
   HAVE_X=true
+fi
+
+# Personal values the session needs inside the container, from the host
+# environment or else the gitignored repo-root .env (see .env.example):
+# HF_ORGANIZATION names the keeper org of the pinned default policy --
+# without it the launch dies at once with "empty policy reference" --
+# HF_TOKEN downloads it, VLM_URL / VLLM_API_KEY point the VLM brain
+# (vlm:=true) at the model server. Read by name, not sourced, so nothing
+# else in .env leaks into the container. `docker exec` passes no host
+# environment on its own, which is why this is here.
+for var in HF_ORGANIZATION HF_TOKEN WOJTEK_POLICY VLM_URL VLM_MODEL VLLM_API_KEY; do
+  if [ -z "${!var:-}" ]; then
+    for envfile in ../../.env ../.env; do
+      [ -f "$envfile" ] || continue
+      # `|| true`: a key absent from the file is the normal case, not an
+      # error for set -e/pipefail to kill the script on (it did, silently).
+      val=$({ grep -E "^${var}=" "$envfile" || true; } | tail -1 | cut -d= -f2- | tr -d '"'"'")
+      if [ -n "$val" ]; then export "$var=$val"; break; fi
+    done
+  fi
+  # The training tools take a host path in WOJTEK_POLICY too (an export
+  # dir, a policy.npz); the container cannot see host paths, so only a
+  # Hugging Face reference (org/name[@rev]) goes in.
+  if [ "$var" = WOJTEK_POLICY ]; then case "${WOJTEK_POLICY:-}" in
+    /*|.*|~*) echo ">> WOJTEK_POLICY is a host path -- not forwarded; the launch runs the pin (or pass policy:=)"
+              unset WOJTEK_POLICY ;;
+  esac; fi
+  [ -n "${!var:-}" ] && DOCKER_ENV+=(-e "$var=${!var}")
+done
+# A launch needs a policy from somewhere: an explicit policy:=, the override
+# file (ros/policy_override, one reference, the same file deploy.sh writes
+# on the robot), or the pin, which needs the org. Otherwise it stops at once
+# inside the container with "empty policy reference", so say it here.
+if [ -z "${HF_ORGANIZATION:-}" ] && [ -z "${WOJTEK_POLICY:-}" ] && [ ! -s ../policy_override ] \
+   && ! printf '%s\n' ${EXTRA[@]+"${EXTRA[@]}"} | grep -q '^policy:='; then
+  echo "!! No policy: neither HF_ORGANIZATION nor WOJTEK_POLICY is set (host env or" >&2
+  echo "!! repo-root .env), ros/policy_override is absent, and no policy:= was given." >&2
+  echo "!! The launch would stop at once. Set one of them (plus HF_TOKEN for a private repo)." >&2
+  exit 1
+fi
+if [ -n "${WOJTEK_POLICY:-}" ]; then
+  echo ">> policy:   ${WOJTEK_POLICY} (WOJTEK_POLICY)"
+elif [ -s ../policy_override ]; then
+  echo ">> policy:   $(head -1 ../policy_override) (ros/policy_override)"
 fi
 
 if [ "$VIZ" = auto ]; then

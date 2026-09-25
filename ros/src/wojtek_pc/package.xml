@@ -38,10 +38,14 @@
   <!-- web_console.py: the browser twin of the Qt console (no X11 needed;
        works on macOS / phones). One port: HTTP page + JSON websocket. -->
   <depend>python3-websockets</depend>
-  <!-- web_console.py VLM panel: colour camera frames JPEG-encoded for the
-       browser. Soft dependency in code (no Pillow = no frames, console
-       still works), declared so the container image carries it. -->
+  <!-- web_console.py: the brain's annotated picture JPEG-encoded for the
+       browser, and the raw-camera fallback (camera_compressed:=false);
+       sim_camera_node: the JPEG sibling of the colour image. Soft
+       dependency in code (no Pillow = no such frames, everything else
+       works), declared so the container image carries it. -->
   <depend>python3-pil</depend>
+  <!-- sim.launch.py vlm:=true includes wojtek_nav's brain.launch.py. -->
+  <exec_depend>wojtek_nav</exec_depend>
 
   <!-- Gamepad teleop moved to wojtek_teleop (robot-side, no GUI deps);
        "./sim.sh gamepad mode" launches it from there. -->

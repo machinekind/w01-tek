@@ -167,11 +167,52 @@ is seen, never a guessed goal. The policy is `wojtek_nav/vlm_brain.py`
 (pure, desk-tested); the node talks to any OpenAI-compatible endpoint with
 JSON-schema structured output (vLLM, Ollama) and to the two nodes above.
 
+```bash
+# 1. On the GPU box: vLLM serving Qwen3-VL-8B-Instruct on port 8000 (docker;
+#    --bare for an installed vllm, --check to ask whether one is up).
+ros/src/wojtek_nav/scripts/serve_vlm.sh
+# 2. On the PC: VLM_URL=http://<that box>:8000 in ros/.env (see .env.example), then
+./ros/sim.sh model_xml:=scene_nav.xml leg_odom:=true nav:=true vlm:=true   # the sim session
+ros2 run wojtek_bringup robot --web-console --vlm    # the robot (PC side; the RPi stack
+                                                     # needs perception:=true nav:=true --
+                                                     # in the service's ExecStart, or via
+                                                     # --dry-run on the bench)
+# 3. Type the instruction into the web console's brain panel (http://localhost:8080),
+#    or from a shell:
+ros2 topic pub -1 /wojtek/vlm/instruction std_msgs/String "data: podejdź do fioletowego słupa"
+ros2 topic pub -1 /wojtek/vlm/instruction std_msgs/String "data: stop"     # or the panel's STOP
 ```
-ros2 run wojtek_nav vlm_brain_node --ros-args \
-    -p instruction:="podejdź do fioletowego słupa" \
-    -p url:=http://127.0.0.1:11434/v1 -p model:=qwen3-vl:30b-a3b-instruct
-```
+
+`brain.launch.py` is the one node with its arguments (`url`, `model`,
+`instruction`, `image_topic`, `compressed`); `url` takes the server's
+base URL with or without `/v1`, and defaults to `VLM_URL` from the
+environment. The default model is the 8B on vLLM, for the reason the
+benchmark below gives. `ros2 run wojtek_nav vlm_brain_node --ros-args -p
+url:=... -p model:=qwen3-vl:30b-a3b-instruct` still runs it against an
+Ollama.
+
+**What crosses the robot's wifi.** The brain runs on the PC, next to the
+model, and reads the camera node's own JPEG
+(`/camera/camera/color/image_raw/compressed`, image_transport's plugin
+on the robot at quality 80, the sim camera's own sibling in the sim):
+~100 KB a frame at 1280x720 where the raw image is 2.7 MB, the stream
+that pulled 19 MB/s out of the Pi and stretched the policy's tick gaps
+(`ros/hw_tests/perf`). The web console takes the same JPEG. The robot
+needs the plugin installed (`ros/deploy/deck/README.md`, step 4);
+`compressed:=false` reads the raw image on a robot without it.
+
+**Stopping.** An empty instruction or `stop` on `/wojtek/vlm/instruction`
+cancels the task: the brain publishes `/wojtek/nav/cancel`
+(`std_msgs/Empty`), which goto and the pixel resolver both read -- goto
+drops its setpoint now (one zero Twist, then idle) rather than at its 3 s
+dead-man, the resolver stops re-sending (`cancelled`) -- and zeroes any
+turn of its own. The console's STOP sends the cancel directly as well, so
+it works with no brain running; and the brain reads that topic too, so a
+cancel from anywhere (a hand-typed `ros2 topic pub`) ends its task rather
+than being answered with a search turn. A new instruction mid-task does the same
+and then starts the new one (`replaced`). A model that cannot be reached
+or a camera that goes quiet ends the task with `error` in the status
+and the same halt, not a dead node.
 
 Every step: a fresh colour frame → the model answers `goal` (a pixel) /
 `turn` / `not_visible` / `done` under the schema → a `goal` is **verified**
@@ -184,8 +225,9 @@ answer. **Arrival is the executive's call**: `done` when goto reached the
 setpoint and the resolved object point is within `done_within_m` (1.1 m);
 the model's own `done` is not trusted (a thin pillar never "fills the
 view"). Status JSON on `/wojtek/vlm/status`, the picture with the model's
-point on `/wojtek/vlm/annotated`; a new task on `/wojtek/vlm/instruction`
-replaces the running one.
+point on `/wojtek/vlm/annotated` -- both shown live in the web console's
+brain panel, next to goto's and the resolver's status words; a new task
+on `/wojtek/vlm/instruction` replaces the running one.
 
 Measured (sim, 2026-09-25, `scene_nav.xml`, qwen3-vl:30b-a3b-instruct on
 Ollama on the DGX): "podejdź do fioletowego słupa" from a pose facing
@@ -221,8 +263,10 @@ cd ros/src/wojtek_nav && PYTHONPATH=$PWD:$PYTHONPATH python3 -m pytest test/ -q
 
 Launch composition (the nodes in order, the decimated pair published
 where image_transport looks for it, the cloud landing on the topic both
-observation sources read, CPU pins), the costmap file's invariants
-(rolling window in odom, footprint covers the measured robot,
-marking/clearing split by floor height, ranges match the camera), and
-the go-to controller on a desk (reaches, turns first, obeys the limits,
-blocks and resumes, dead-man, turns while blocked).
+observation sources read, CPU pins; the brain launch's defaults and its
+`VLM_URL`), the costmap file's invariants (rolling window in odom,
+footprint covers the measured robot, marking/clearing split by floor
+height, ranges match the camera), the go-to controller on a desk
+(reaches, turns first, obeys the limits, blocks and resumes, dead-man,
+cancel, turns while blocked), the pixel resolver's maths and its goal
+tracker, and the brain's policy (answers in, actions out, no model).

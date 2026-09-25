@@ -14,6 +14,9 @@ Inputs
                           stamp; the colour image itself is not needed
                           here, only its intrinsics.
   wojtek/nav/status       goto's latched status word.
+  wojtek/nav/cancel       std_msgs/Empty: drop the goal in flight (status
+                          `cancelled`, no more re-sends). goto reads the
+                          same message and stops on its own.
   TF odom->camera frames  at the picture's stamp (leg_odometry + URDF).
 
 Outputs
@@ -24,7 +27,8 @@ Outputs
                           point itself, for the map view and the eval.
   wojtek/nav/pixel_status std_msgs/String, latched: resolving / no_frame /
                           no_depth / no_tf / sent / reached / blocked /
-                          timeout / replaced -- what the VLM loop reads.
+                          timeout / replaced / cancelled -- what the VLM
+                          loop reads.
 
 A new pixel goal replaces the one in flight. The resolver never talks to
 /cmd_vel: goto keeps the veto and the reflexes.
@@ -46,7 +50,7 @@ from rclpy.qos import (
 )
 from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image
-from std_msgs.msg import String
+from std_msgs.msg import Empty, String
 from tf2_ros import Buffer, TransformListener
 import tf2_geometry_msgs  # noqa: F401 -- registers PointStamped with tf2
 
@@ -121,6 +125,7 @@ class PixelGoalNode(Node):
         self.create_subscription(String, "wojtek/nav/status",
                                  lambda m: setattr(self, "_goto_status", m.data), latched)
         self.create_subscription(PointStamped, "wojtek/nav/pixel_goal", self._on_pixel, 10)
+        self.create_subscription(Empty, "wojtek/nav/cancel", self._on_cancel, 10)
         self._pub_goal = self.create_publisher(PoseStamped, "wojtek/nav/goal", 10)
         self._pub_target = self.create_publisher(PointStamped, "wojtek/nav/pixel_target", latched)
         self._pub_status = self.create_publisher(String, "wojtek/nav/pixel_status", latched)
@@ -147,6 +152,14 @@ class PixelGoalNode(Node):
         self._pending = (msg, self._now_s())
         self._set_status("resolving")
         self._try_resolve()
+
+    def _on_cancel(self, _msg):
+        live = self._pending is not None or (self._goal is not None and not self._tracker.done)
+        self._pending = None
+        self._goal = None
+        self._tracker.cancel()
+        if live:
+            self._set_status("cancelled")
 
     # -- the resolver ----------------------------------------------------
 

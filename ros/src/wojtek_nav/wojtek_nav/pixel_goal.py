@@ -131,6 +131,10 @@ class GoalTracker:
         self._blocked_since = None
         self._seen_active = False
 
+    def cancel(self):
+        """The job is over because someone said so: no more re-sends."""
+        self.done = True
+
     def step(self, status, now):
         """-> "send" (re-publish the setpoint now), "reached", "blocked",
         "timeout", or None (nothing to do this tick)."""

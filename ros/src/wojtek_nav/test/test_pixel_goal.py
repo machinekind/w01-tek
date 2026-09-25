@@ -157,6 +157,16 @@ def test_tracker_waits_out_a_transient_block():
     assert t.done
 
 
+def test_tracker_cancel_stops_the_resends():
+    t = GoalTracker(repeat_s=1.0, blocked_hold_s=5.0, max_s=60.0)
+    t.start(now=0.0)
+    assert t.step(status="driving", now=0.0) == "send"
+    t.cancel()
+    assert t.done
+    assert t.step(status="driving", now=1.0) is None
+    assert t.step(status="reached", now=2.0) is None
+
+
 def test_tracker_gives_up_after_max_s():
     t = GoalTracker(repeat_s=1.0, blocked_hold_s=5.0, max_s=10.0)
     t.start(now=100.0)

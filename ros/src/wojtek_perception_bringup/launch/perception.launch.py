@@ -65,7 +65,16 @@ def _setup(context, *args, **kwargs):
     # Single-value overrides layered on top of the camera parameter file, so
     # a one-off experiment does not need an edited config. An empty argument
     # means "whatever the file says".
-    overrides = {"enable_color": arg("enable_color").lower() in ("true", "1")}
+    overrides = {
+        "enable_color": arg("enable_color").lower() in ("true", "1"),
+        # The colour image's JPEG sibling (image_transport's compressed
+        # plugin, encoded in C++ only while somebody subscribes) is what
+        # leaves the robot for the VLM brain and the web console on the PC:
+        # ~100 KB a frame at 1280x720 instead of the raw 2.7 MB. 80 is the
+        # quality the deck's stream uses; the plugin's default 95 triples
+        # the size for nothing a VLM can see.
+        f".{camera_name}.color.image_raw.compressed.jpeg_quality": 80,
+    }
     for name, param in (
         ("depth_profile", "depth_module.depth_profile"),
         ("color_profile", "rgb_camera.color_profile"),

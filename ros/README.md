@@ -21,9 +21,16 @@ work in the shell — the workspace is a lab you walk into, not a set of wrapper
 scripts:
 
 ```bash
+cp ../.env.example ../.env && $EDITOR ../.env   # once: HF_ORGANIZATION (+ HF_TOKEN)
 ./build.sh      # build the image (once)
 ./dev.sh        # shell inside the container; ROS + the workspace already sourced
 ```
+
+The repo-root `.env` matters on the PC too: the launches run the pinned
+default policy, and its Hugging Face reference is `HF_ORGANIZATION/...`.
+Without the org every launch stops at once with "empty policy reference"
+(or needs an explicit `policy:=`). `dev.sh` and `sim.sh` carry that
+variable, `HF_TOKEN` and the VLM brain's `VLM_URL` into the container.
 
 Then, from that shell:
 
@@ -111,14 +118,39 @@ floor again, hand the launch the old scene:
 ./sim.sh model_xml:=/ros2_ws/install/wojtek_pc/share/wojtek_pc/config/scene_mjx.xml
 ```
 
-**Text commands (the VLM contract, #92)**: the web console also shows the
-robot's colour camera and a `forward / left / right / stop` command panel —
-the browser is a human dry-run of the future VLM, which will watch
-`/camera/camera/color/image_raw` and publish `/wojtek/nav_command` and
-nothing else. The panel drives only through that contract, via the
-`text_commander` bridge node (`wojtek_teleop`), which `sim.launch.py`
-starts automatically — safe as a resident, it publishes nothing until
-commanded. The CLI works too:
+**The VLM brain**: the web console's first camera card is the brain panel.
+Type an instruction ("podejdź do fioletowego słupa"), press go, and
+`wojtek_nav`'s brain asks a vision-language model where in the picture
+the target is, verifies the answer, and hands the pixel to the robot's own
+resolver and setpoint driver, which walk there with the costmap as veto.
+The panel shows the brain's status, goto's and the resolver's words, and
+the picture the model last answered on with its point drawn; STOP halts
+the whole chain. It needs the nav stack underneath and a model server:
+
+```bash
+ros/src/wojtek_nav/scripts/serve_vlm.sh          # on the GPU box: vLLM + Qwen3-VL-8B, port 8000
+# VLM_URL=http://<that box>:8000 in ros/.env, then
+./sim.sh model_xml:=scene_nav.xml leg_odom:=true nav:=true vlm:=true
+ros2 run wojtek_bringup robot --web-console --vlm            # the robot (PC side)
+```
+
+On the robot the stack must come up with `perception:=true nav:=true`:
+put them in the service's launch arguments
+(`deploy/rpi/wojtek-robot-local.conf`), or for a bench test `robot
+--dry-run --web-console --vlm perception:=true nav:=true` passes them
+itself. That path has not been run on the robot yet (see the nav README).
+
+Everything about it -- the contract, what crosses the robot's wifi (the
+camera's JPEG, not the raw image), stopping -- is in
+[`src/wojtek_nav/README.md`](src/wojtek_nav/README.md).
+
+**Text commands (the blind contract, #92)**: the console's second panel
+is a `forward / left / right / stop` command panel — a human dry-run of a
+VLM that watches the camera and publishes `/wojtek/nav_command` and
+nothing else; no obstacle awareness. It drives only through that contract,
+via the `text_commander` bridge node (`wojtek_teleop`), which
+`sim.launch.py` starts automatically — safe as a resident, it publishes
+nothing until commanded. The CLI works too:
 
 ```bash
 ros2 topic pub -1 /wojtek/nav_command std_msgs/String "data: forward"
@@ -243,6 +275,9 @@ Flags:
                 runs ON the RPi against the real robot (pair the pad with
                 the robot), locally with --sim; add --no-console to
                 replace the console entirely
+--vlm           the VLM brain for this session (PC side; --vlm-url /
+                --vlm-model override VLM_URL and the 8B default); the
+                stack underneath needs perception:=true nav:=true
 ```
 The stack comes up DISARMED. **Arming is manual** (that's when torque reaches the
 motors) — from another shell in the same container:

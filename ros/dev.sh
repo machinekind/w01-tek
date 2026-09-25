@@ -49,4 +49,34 @@ elif docker info 2>/dev/null | grep -q 'Runtimes:.*nvidia'; then
 fi
 
 "${COMPOSE[@]}" up -d
-exec docker exec -it wojtek_robot bash
+
+# Personal values the launches read, carried in from the host environment or
+# the gitignored repo-root .env (see .env.example): the keeper org of the
+# pinned default policy and the token that downloads it, the VLM brain's
+# model server. Same list and same rule as sim.sh; `docker exec` passes no
+# host environment on its own.
+DOCKER_ENV=()
+for var in HF_ORGANIZATION HF_TOKEN WOJTEK_POLICY VLM_URL VLM_MODEL VLLM_API_KEY; do
+  if [ -z "${!var:-}" ]; then
+    for envfile in ../../.env ../.env; do
+      [ -f "$envfile" ] || continue
+      # `|| true`: a key absent from the file is the normal case, not an
+      # error for set -e/pipefail to kill the script on (it did, silently).
+      val=$({ grep -E "^${var}=" "$envfile" || true; } | tail -1 | cut -d= -f2- | tr -d '"'"'")
+      if [ -n "$val" ]; then export "$var=$val"; break; fi
+    done
+  fi
+  # The training tools take a host path in WOJTEK_POLICY too (an export
+  # dir, a policy.npz); the container cannot see host paths, so only a
+  # Hugging Face reference (org/name[@rev]) goes in.
+  if [ "$var" = WOJTEK_POLICY ]; then case "${WOJTEK_POLICY:-}" in
+    /*|.*|~*) echo ">> WOJTEK_POLICY is a host path -- not forwarded; the launch runs the pin (or pass policy:=)"
+              unset WOJTEK_POLICY ;;
+  esac; fi
+  [ -n "${!var:-}" ] && DOCKER_ENV+=(-e "$var=${!var}")
+done
+if [ -z "${HF_ORGANIZATION:-}" ] && [ -z "${WOJTEK_POLICY:-}" ] && [ ! -s ../policy_override ]; then
+  echo "!! neither HF_ORGANIZATION nor WOJTEK_POLICY set (repo-root .env), no ros/policy_override: launches need an explicit policy:=" >&2
+fi
+
+exec docker exec -it ${DOCKER_ENV[@]+"${DOCKER_ENV[@]}"} wojtek_robot bash

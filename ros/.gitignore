@@ -49,3 +49,6 @@ deploy/rpi/cache/
 
 .policies/
 
+
+# Core dumps from crashing tests in the container (seen: test_depth_camera).
+core

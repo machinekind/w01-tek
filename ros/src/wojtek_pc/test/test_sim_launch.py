@@ -221,4 +221,5 @@ def test_sim_launch_keeps_the_arguments_its_callers_pass():
     assert {
         "rviz", "policy", "camera", "camera_depth_hz", "camera_color_hz",
         "boot_pose", "hw", "model_xml", "console", "gamepad",
+        "vlm", "vlm_url", "vlm_model",
     } <= declared

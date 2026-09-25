@@ -10,6 +10,9 @@ Inputs
                        VLM meant. An unstamped base_link goal means "now".
   wojtek/nav/costmap   nav_msgs/OccupancyGrid (latched), the rolling window
                        from nav2_costmap_2d; probed at a few points ahead.
+  wojtek/nav/cancel    std_msgs/Empty. Drop the setpoint NOW (one zero
+                       Twist, then idle) instead of at the dead-man: the
+                       brain's stop, the console's stop button.
   TF odom->base_link   the robot's pose (leg_odometry).
 
 Outputs
@@ -36,7 +39,7 @@ from rclpy.qos import (
     QoSProfile,
     ReliabilityPolicy,
 )
-from std_msgs.msg import String
+from std_msgs.msg import Empty, String
 from tf2_ros import Buffer, TransformListener
 import tf2_geometry_msgs  # noqa: F401 -- registers PoseStamped with tf2
 
@@ -67,6 +70,7 @@ class GotoNode(Node):
         self._grid = None
         self._last_status = None
         self._moving = False
+        self._cancelled_at = None   # node time of the last cancel
 
         latched = QoSProfile(
             depth=1, reliability=ReliabilityPolicy.RELIABLE,
@@ -74,6 +78,7 @@ class GotoNode(Node):
         )
         self.create_subscription(PoseStamped, "wojtek/nav/goal", self._on_goal, 10)
         self.create_subscription(OccupancyGrid, "wojtek/nav/costmap", self._on_grid, latched)
+        self.create_subscription(Empty, "wojtek/nav/cancel", self._on_cancel, 10)
         self._pub_cmd = self.create_publisher(Twist, "cmd_vel", 10)
         self._pub_status = self.create_publisher(String, "wojtek/nav/status", latched)
         self.create_timer(1.0 / DRIVE_TICK_HZ, self._tick)
@@ -86,6 +91,13 @@ class GotoNode(Node):
     # -- inputs ----------------------------------------------------------
 
     def _on_goal(self, msg):
+        # The resolver re-sends its setpoint on its own clock; one stamped
+        # before a cancel can land here after it (two subscribers, no
+        # ordering). Such a goal is the cancelled one and must not restart
+        # the robot. An unstamped goal means "now" and is taken.
+        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        if self._cancelled_at is not None and 0.0 < stamp <= self._cancelled_at:
+            return
         try:
             if msg.header.frame_id and msg.header.frame_id != self._odom_frame:
                 # At the message's stamp (zero stamp = latest), so a goal
@@ -98,6 +110,12 @@ class GotoNode(Node):
 
     def _on_grid(self, msg):
         self._grid = msg
+
+    def _on_cancel(self, _msg):
+        # The tick sees an idle controller next and, if the robot was
+        # moving, sends the one zero Twist on that edge.
+        self._cancelled_at = self._now()
+        self._ctrl.cancel()
 
     # -- the loop --------------------------------------------------------
 

@@ -27,16 +27,26 @@ Control logic that matters for safety stays HERE, not in the browser:
     CMD_TIMEOUT_S the server zeroes /cmd_vel. The local Qt console does not
     need this; a phone on the robot's wifi does.
 
-The page is also the VLM's seat (wojtek#92): it shows the robot's colour
-camera (camera_spec.COLOR_TOPIC, JPEG over binary websocket frames -- the
-JSON protocol is untouched, the browser tells them apart by frame type) and
-carries a nav-command panel that publishes forward/left/right/stop on
-wojtek/nav_command. That panel drives ONLY through the VLM contract
-(nav_command -> text_commander -> /cmd_vel, dead-man included), never
-/cmd_vel directly -- so a human in the browser is a faithful dry-run of the
-future VLM, and needs `ros2 run wojtek_teleop text_commander` running to
-have any effect. Camera encode needs Pillow; without it (or without the
-camera topic) the page simply shows no frames and everything else works.
+The page is also the VLM's seat. Two panels:
+
+  * The brain panel: an instruction typed here goes to wojtek/vlm/instruction
+    (wojtek_nav's vlm_brain_node), the brain's status JSON
+    (wojtek/vlm/status), goto's and the pixel resolver's status words
+    (wojtek/nav/status, wojtek/nav/pixel_status) and the picture the model
+    last answered on (wojtek/vlm/annotated) come back. STOP sends an empty
+    instruction (the brain halts) AND wojtek/nav/cancel directly, so goto
+    drops its setpoint even when no brain is running.
+  * The text-command panel (wojtek#92): forward/left/right/stop on
+    wojtek/nav_command -> text_commander -> /cmd_vel, the blind contract a
+    human can dry-run; needs `ros2 run wojtek_teleop text_commander`.
+
+The camera: the camera node's own JPEG (camera_spec.COLOR_COMPRESSED_TOPIC,
+image_transport's compressed plugin on the robot, the sim camera's own
+sibling) passed through as-is -- tens of kilobytes a frame across the
+robot's wifi where the raw image was megabytes -- throttled to camera_hz.
+camera_compressed:=false takes the raw image and encodes here (Pillow).
+Binary websocket frames carry pictures, one tag byte first (0 camera,
+1 the brain's annotated picture); the JSON protocol stays text-only.
 
 Threading mirrors the Qt console: rclpy spins in a background thread and
 events cross into the asyncio (websocket) loop via call_soon_threadsafe.
@@ -47,6 +57,7 @@ import io
 import json
 import os
 import threading
+import time
 import xml.etree.ElementTree as ET
 
 import rclpy
@@ -55,9 +66,9 @@ from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
-                       qos_profile_sensor_data)
-from sensor_msgs.msg import Image, Imu, JointState
-from std_msgs.msg import String
+                       ReliabilityPolicy, qos_profile_sensor_data)
+from sensor_msgs.msg import CompressedImage, Image, Imu, JointState
+from std_msgs.msg import Empty, String
 from std_srvs.srv import SetBool, Trigger
 
 from wojtek_policy.policy_source import load_meta
@@ -87,7 +98,10 @@ DRIVE_TICK_HZ = 20.0     # /cmd_vel publish rate while driving
 TELEMETRY_HZ = 10.0      # joints/imu push rate to the browser
 CMD_TIMEOUT_S = 0.5      # dead-man: zero /cmd_vel if the page goes silent
 DEFAULT_JOINT_LIMIT = 3.14
-JPEG_QUALITY = 80        # ~40 KB per 848x480 frame at the sim's ~5 Hz
+JPEG_QUALITY = 80        # ~40 KB per 848x480 frame (raw fallback, annotated)
+DEFAULT_CAMERA_HZ = 10.0 # most camera frames a second sent to the browsers
+FRAME_CAMERA = b"\x00"   # binary frame tags, first byte of every picture
+FRAME_ANNOTATED = b"\x01"
 
 
 class ConsoleNode(Node):
@@ -113,6 +127,11 @@ class ConsoleNode(Node):
         # VLM-contract text commands; only text_commander (wojtek#92) acts on
         # these -- the page's nav panel never touches /cmd_vel itself.
         self._pub_nav = self.create_publisher(String, "wojtek/nav_command", 10)
+        # The brain panel: instructions to vlm_brain_node, and the cancel
+        # goto and the pixel resolver read directly (a STOP must work with
+        # no brain running too).
+        self._pub_instruction = self.create_publisher(String, "wojtek/vlm/instruction", 10)
+        self._pub_cancel = self.create_publisher(Empty, "wojtek/nav/cancel", 10)
 
         # Same reference policy_node gets (HF repo id or local directory);
         # empty = the conservative default limits below.
@@ -140,19 +159,47 @@ class ConsoleNode(Node):
                              durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.create_subscription(String, "robot_description", self._on_urdf, latched)
 
-        # Colour camera for the VLM panel. The sim publishes best-effort
+        # Colour camera for the VLM panel. Cameras publish best-effort
         # (qos_profile_sensor_data); a default-QoS subscription would match
         # nothing and receive NOTHING, so mirror the sensor-data profile.
-        # Without Pillow no frame could ever be encoded, so don't subscribe
-        # at all -- the page shows its no-camera text, console works as is.
-        if PILImage is not None:
+        # The JPEG sibling by default (see the module docstring: this is
+        # what keeps the robot's wifi and the Pi's cores out of trouble);
+        # the raw image only on request, and only with Pillow to encode it.
+        self.declare_parameter("camera_compressed", True)
+        self.declare_parameter("camera_hz", DEFAULT_CAMERA_HZ)
+        self._frame_period = 1.0 / max(0.1, float(self.get_parameter("camera_hz").value))
+        self._last_frame = 0.0
+        if self.get_parameter("camera_compressed").value:
+            self.create_subscription(
+                CompressedImage, camera_spec.COLOR_COMPRESSED_TOPIC,
+                self._on_jpeg, qos_profile_sensor_data)
+        elif PILImage is not None:
             self.create_subscription(
                 Image, camera_spec.COLOR_TOPIC, self._on_color,
                 qos_profile_sensor_data)
         else:
             self.get_logger().warning(
                 "Pillow not installed -- no camera frames for the web "
-                "console (pip install pillow)")
+                "console (pip install pillow, or camera_compressed:=true)")
+
+        # The brain's side of the page: its latched status JSON, the two
+        # nav status words it acts on, and the annotated picture.
+        latched_reliable = QoSProfile(
+            depth=1, reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.vlm_status = None
+        self.nav_status = {"goto": None, "pixel": None}
+        self.create_subscription(
+            String, "wojtek/vlm/status", self._on_vlm_status, latched_reliable)
+        self.create_subscription(
+            String, "wojtek/nav/status",
+            lambda m: self._on_nav_status("goto", m), latched_reliable)
+        self.create_subscription(
+            String, "wojtek/nav/pixel_status",
+            lambda m: self._on_nav_status("pixel", m), latched_reliable)
+        if PILImage is not None:
+            self.create_subscription(
+                Image, "wojtek/vlm/annotated", self._on_annotated, 1)
 
         # latest telemetry, pushed to browsers on a slow tick (not per message)
         self.imu_rpy_gyro = None
@@ -207,20 +254,55 @@ class ConsoleNode(Node):
         yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
         self.imu_rpy_gyro = ((roll, pitch, yaw), (w.x, w.y, w.z))
 
+    def _want_frame(self):
+        """The has_clients gate keeps the resident console free when no page
+        is open; the throttle keeps a 30 fps robot camera from becoming
+        30 websocket frames a second on a phone."""
+        if not self.has_clients():
+            return False
+        now = time.monotonic()
+        if now - self._last_frame < self._frame_period:
+            return False
+        self._last_frame = now
+        return True
+
+    def _on_jpeg(self, msg):
+        """The camera node's JPEG, passed through untouched."""
+        if not self._want_frame():
+            return
+        if "jpeg" not in msg.format.lower():
+            self.get_logger().warning(
+                f"compressed camera format {msg.format!r} is not JPEG", once=True)
+            return
+        self.emit(FRAME_CAMERA + bytes(msg.data))
+
     def _on_color(self, msg):
-        """Colour frame -> JPEG -> browsers, in the ROS thread.
+        """Raw colour frame -> JPEG -> browsers, in the ROS thread.
 
         Encoding lives on this side of the thread split so the asyncio
-        (drive dead-man) loop never carries per-frame work; the has_clients
-        gate keeps the resident console free when no page is open.
+        (drive dead-man) loop never carries per-frame work.
         """
+        if not self._want_frame():
+            return
+        jpeg = self._encode(msg, "camera")
+        if jpeg is not None:
+            self.emit(FRAME_CAMERA + jpeg)
+
+    def _on_annotated(self, msg):
+        """The brain's picture with its point drawn: every one matters (one
+        per model call, seconds apart), so no throttle."""
         if not self.has_clients():
             return
+        jpeg = self._encode(msg, "annotated")
+        if jpeg is not None:
+            self.emit(FRAME_ANNOTATED + jpeg)
+
+    def _encode(self, msg, what):
         if msg.encoding != camera_spec.COLOR_ENCODING:
             self.get_logger().warning(
-                f"unsupported camera encoding {msg.encoding!r} "
+                f"unsupported {what} encoding {msg.encoding!r} "
                 f"(want {camera_spec.COLOR_ENCODING})", once=True)
-            return
+            return None
         try:
             # frombuffer with explicit raw args: zero-copy read of msg.data
             img = PILImage.frombuffer(
@@ -230,9 +312,24 @@ class ConsoleNode(Node):
         except Exception as e:  # noqa: BLE001 -- a bad frame must not kill
             # the spin thread (main() swallows spin exceptions on teardown,
             # so an escape here would stop ALL console callbacks silently)
-            self.get_logger().warning(f"dropping camera frame: {e}", once=True)
-            return
-        self.emit(buf.getvalue())
+            self.get_logger().warning(f"dropping {what} frame: {e}", once=True)
+            return None
+        return buf.getvalue()
+
+    def _on_vlm_status(self, msg):
+        try:
+            self.vlm_status = json.loads(msg.data)
+        except ValueError:
+            self.vlm_status = {"raw": msg.data[:200]}
+        self.emit({"t": "vlm", "status": self.vlm_status})
+
+    def _on_nav_status(self, key, msg):
+        self.nav_status[key] = msg.data
+        self.emit({"t": "nav", **self.nav_status})
+
+    def vlm_snapshot(self):
+        """What a page that just connected should see."""
+        return [{"t": "vlm", "status": self.vlm_status}, {"t": "nav", **self.nav_status}]
 
     def _on_urdf(self, msg):
         limits = {}
@@ -294,6 +391,12 @@ class ConsoleNode(Node):
     def publish_nav(self, command):
         self._pub_nav.publish(String(data=str(command)))
 
+    def publish_instruction(self, text):
+        self._pub_instruction.publish(String(data=str(text)))
+
+    def publish_cancel(self):
+        self._pub_cancel.publish(Empty())
+
     def publish_targets(self, names, positions):
         msg = JointState()
         msg.header.stamp = self.get_clock().now().to_msg()
@@ -327,7 +430,7 @@ class Server:
         self.loop.call_soon_threadsafe(self._broadcast, obj)
 
     def _broadcast(self, obj):
-        """dict -> JSON text frame; bytes (camera JPEG) -> binary frame --
+        """dict -> JSON text frame; bytes (tag + JPEG) -> binary frame --
         the browser splits on frame type, the JSON protocol stays text-only."""
         if self.clients:
             data = obj if isinstance(obj, bytes) else json.dumps(obj)
@@ -338,6 +441,8 @@ class Server:
         self.clients.add(ws)
         await ws.send(json.dumps({"t": "config", **self.node.config()}))
         await ws.send(json.dumps({"t": "avail", "svc": self.node.availability()}))
+        for frame in self.node.vlm_snapshot():
+            await ws.send(json.dumps(frame))
         try:
             async for raw in ws:
                 try:
@@ -394,6 +499,16 @@ class Server:
             command = str(msg.get("command", "")).strip()
             if command:
                 self.node.publish_nav(command)
+        elif t == "vlm_instruction":
+            # The brain's task. Published as typed: the brain treats an
+            # empty string as a stop, so an empty box is the stop button.
+            self.node.publish_instruction(str(msg.get("text", "")).strip())
+        elif t == "vlm_stop":
+            # Both halves, on purpose: the brain halts (and cancels what it
+            # sent), and goto/the resolver hear the cancel even if no brain
+            # is running or it is stuck in a model call.
+            self.node.publish_cancel()
+            self.node.publish_instruction("")
         elif t == "jog_set":
             if self.jog_target is not None:
                 for n, v in (msg.get("targets") or {}).items():
@@ -458,16 +573,44 @@ class Server:
             await asyncio.sleep(1.0)
 
     # ---- HTTP: serve the page on the same port -------------------------------
-    def process_request(self, path, request_headers):
-        if request_headers.get("Upgrade", "").lower() == "websocket":
+    def process_request(self, *args):
+        """Plain GETs get the page; a websocket upgrade continues.
+
+        Two signatures, because `websockets.serve` changed under us: the
+        asyncio server of websockets >= 14 (what pip's mujoco dependency
+        drags into the container, 17.x today) calls
+        (connection, request) and wants a Response back; the legacy server
+        (Debian's 10.x on a plain apt install) calls (path, headers) and
+        takes a (status, headers, body) tuple. Same decision either way.
+        """
+        if len(args) == 2 and hasattr(args[1], "headers"):
+            connection, request = args
+            path, headers = request.path, request.headers
+            if headers.get("Upgrade", "").lower() == "websocket":
+                return None
+            status, ctype, body = self._http_answer(path)
+            response = connection.respond(status, body.decode("utf-8"))
+            # respond() pre-sets text/plain, and this Headers type APPENDS
+            # on assignment rather than replacing: drop it first or the
+            # browser gets two Content-Type lines and may render the page
+            # as text.
+            try:
+                del response.headers["Content-Type"]
+            except KeyError:
+                pass
+            response.headers["Content-Type"] = ctype
+            response.headers["Cache-Control"] = "no-store"
+            return response
+        path, headers = args
+        if headers.get("Upgrade", "").lower() == "websocket":
             return None  # continue with the websocket handshake
+        status, ctype, body = self._http_answer(path)
+        return (status, [("Content-Type", ctype), ("Cache-Control", "no-store")], body)
+
+    def _http_answer(self, path):
         if path in ("/", "/index.html"):
-            return (http.HTTPStatus.OK,
-                    [("Content-Type", "text/html; charset=utf-8"),
-                     ("Cache-Control", "no-store")],
-                    self.page)
-        return (http.HTTPStatus.NOT_FOUND, [("Content-Type", "text/plain")],
-                b"not found\n")
+            return http.HTTPStatus.OK, "text/html; charset=utf-8", self.page
+        return http.HTTPStatus.NOT_FOUND, "text/plain", b"not found\n"
 
 
 def main():

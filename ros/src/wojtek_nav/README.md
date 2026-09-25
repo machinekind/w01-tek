@@ -73,6 +73,89 @@ against a noiseless floor here), the extrinsics error, and the CPU cost on
 the RPi -- three C++ nodes at 15 fps and 6k points is a fraction of a core
 on the PC, unmeasured on the robot.
 
+## Nav2 without a map (`nav2.launch.py`)
+
+The planner and the follower on top of the same perception, when a goal a
+few metres out has to be reached AROUND what the camera has seen rather
+than stopped in front of it. Stock nav2 (NavFn planner, regulated pure
+pursuit follower, the default replanning-and-recovery tree), configured
+from `config/nav2.yaml`; the file argues every number that is not already
+argued in `costmap.yaml`.
+
+```bash
+ros2 launch wojtek_pc sim.launch.py model_xml:=scene_nav.xml leg_odom:=true nav2:=true
+ros2 launch wojtek_nav nav2.launch.py                    # standalone, against /wojtek/nav/points + odometry
+ros2 topic pub -1 /goal_pose geometry_msgs/PoseStamped "{header: {frame_id: odom}, pose: {position: {x: 3.0}}}"
+```
+
+```
+/wojtek/nav/points ──► local_costmap  (6x6 m, odom)  ──► controller_server (RPP) ──► /cmd_vel
+                   └─► global_costmap (10x10 m, odom) ──► planner_server (NavFn) ──► /plan
+/goal_pose (RViz "2D Goal Pose"), /navigate_to_pose action ──► bt_navigator ──► behavior_server (spin, back up, wait)
+```
+
+Why no map. Both costmaps are rolling windows in `odom`, the "global"
+one merely larger (10 m, where the leg odometry's drift is still inside a
+cell). No `map_server`, no static layer, no AMCL, no `map` frame: nothing
+here answers "where is the robot in the building", only "how do I get to
+that point without hitting what I have seen". The VLM keeps the strategy.
+
+Why not both drivers. `nav2:=true` turns the standalone costmap and
+`goto_node` OFF (the bringup passes `costmap:=false goto:=false` to
+`costmap.launch.py`, which keeps only the point-cloud pipeline). Nav2 has
+its own costmaps, and `goto_node`'s dead-man publishes a zero `/cmd_vel`
+that would fight the follower. Without `nav2:=true` nothing changes:
+`nav:=true` is the costmap and `goto_node`, the fallback.
+
+The goal is a point. `yaw_goal_tolerance` is over pi: the VLM gives no
+heading, so any final orientation counts, and the follower never turns
+in place at the end. `xy_goal_tolerance` is `goto_node`'s 0.15 m.
+
+Origin: J. Delicat's first Nav2 configuration (`archive/deli/nav2`,
+2026-08-07), with the map, the lidar sources, DWB, the collision monitor
+and the waypoint follower taken out.
+
+The local costmap has no inflation layer. Nav2's collision checker scores
+the footprint's edges and calls the inscribed cost a hit, and inflation
+paints that cost 0.24 m (the inscribed radius) around every obstacle: the
+0.76 x 0.48 polygon becomes a 0.69 m circle, and in the 1.8 m corridor a
+turn in place passes only within 0.2 m of the centreline. With inflation
+in place (first sim session): 21 "detected collision ahead" over four
+goals, three "Failed to make progress", one goal lost with Spin and BackUp
+both refusing beside a wall 0.66 m away. Without it: the exact polygon, 4
+warnings over two goals, no recoveries. The planner keeps its gradient in
+the global costmap; the follower's cost-regulated speed scaling is off.
+
+### Verified (sim, 2026-09-25)
+
+`scene_nav.xml`, `wojtek-stiff-height-locomotion`, depth 15 fps, goals
+over `/navigate_to_pose` from the spawn (0, 0) facing +x:
+
+| goal (odom) | line to it | result | time | final error |
+|---|---|---|---|---|
+| (3.0, 0.4) | free | succeeded | 17 s | 0.17 m |
+| (0.5, 0.4) back | free, 180 deg turn | succeeded | 49 s (25 s of recoveries, with inflation) | 0.16 m |
+| (3.0, -0.4) | crosses the crate | succeeded | 16 s | 0.14 m |
+| (0.5, 0.4) back | crosses the crate, 180 deg turn | succeeded | 24 s | 0.16 m |
+
+For the two crate goals the ground truth (`odom -> base_link_gt` at 5 Hz)
+never put the footprint polygon over the crate box; the body centre stayed
+>= 0.51 m from it, and `/plan` passed the crate at y = +0.38 where the
+straight line runs at -0.09. Leg odometry drifted ~0.25 m against the
+truth over ~12 m of walking and turning; inside a 5 cm cell per window,
+as costmap.yaml assumes.
+
+Seen and left open (perception, not Nav2): after several goals the
+rolling costmap held lethal cells on open floor around (0.1, 0.7), a
+stale memory of something that was no longer in view -- the robot's own
+legs while turning, or the floor through a moment of pitch, are the two
+suspects. `publish_voxel_map` in costmap.yaml is how to look.
+
+Not yet run on the robot. Open before that: the CPU cost of two ray-tracing
+costmaps on the RPi (`nav_cpus`, or the planner on the DGX), the phantom
+marks above, and the recovery behaviours -- backing up blind and spinning
+in a corridor are the stock tree's answers, not necessarily a quadruped's.
+
 ## The setpoint driver (`goto_node`)
 
 The contract, decided 2026-09-25: the VLM does the strategy, the robot

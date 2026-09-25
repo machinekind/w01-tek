@@ -589,12 +589,38 @@ def common_launch_description(
         DeclareLaunchArgument(
             "nav_cpus", default_value="0,1" if hardware == "real" else "",
         ),
+        # Nav2 without a map (wojtek_nav/nav2.launch.py) on top of the same
+        # point cloud: nav2:=true implies the perception pipeline and turns
+        # the standalone costmap and goto_node off -- Nav2 keeps its own
+        # costmaps, and two drivers on one /cmd_vel would fight. goto_node
+        # stays the fallback for a session without nav2.
+        DeclareLaunchArgument("nav2", default_value="false"),
         IncludeLaunchDescription(
             PathJoinSubstitution(
                 [FindPackageShare("wojtek_nav"), "launch", "costmap.launch.py"]
             ),
+            launch_arguments={
+                "cpus": LaunchConfiguration("nav_cpus"),
+                "costmap": PythonExpression(
+                    ["'", LaunchConfiguration("nav2"), "'.lower() not in ('true', '1')"]
+                ),
+                "goto": PythonExpression(
+                    ["'", LaunchConfiguration("nav2"), "'.lower() not in ('true', '1')"]
+                ),
+            }.items(),
+            condition=IfCondition(
+                PythonExpression([
+                    "'", LaunchConfiguration("nav"), "'.lower() in ('true', '1') or '",
+                    LaunchConfiguration("nav2"), "'.lower() in ('true', '1')",
+                ])
+            ),
+        ),
+        IncludeLaunchDescription(
+            PathJoinSubstitution(
+                [FindPackageShare("wojtek_nav"), "launch", "nav2.launch.py"]
+            ),
             launch_arguments={"cpus": LaunchConfiguration("nav_cpus")}.items(),
-            condition=IfCondition(LaunchConfiguration("nav")),
+            condition=IfCondition(LaunchConfiguration("nav2")),
         ),
         # The deck panel (wojtek_deck): a browser cockpit for a handheld on
         # the robot's wifi. On in the simulation (open http://localhost:8090),

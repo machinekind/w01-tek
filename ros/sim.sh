@@ -196,6 +196,11 @@ if $BUILD; then
     cd /ros2_ws
     source /opt/ros/${ROS_DISTRO:-jazzy}/setup.bash
     src_pkgs=" $(colcon list --base-paths src --names-only | tr "\n" " ") "
+    # A file removed from a package leaves a dangling symlink behind in a
+    # --symlink-install overlay, and both scene loaders copy the whole
+    # config/ directory: a stale scene_slam.xml link took the whole
+    # simulation down ("cannot open ...").
+    find install -xtype l -delete 2>/dev/null || true
     for d in build install; do
       for p in "$d"/*/; do
         [ -d "$p" ] || continue

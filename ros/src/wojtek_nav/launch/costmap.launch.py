@@ -88,7 +88,7 @@ def _setup(context, *args, **kwargs):
         )
         depth_topic, info_topic = f"/{NAMESPACE}/depth/image", f"/{NAMESPACE}/depth/camera_info"
 
-    actions += [
+    actions.append(
         Node(
             package="depth_image_proc",
             executable="point_cloud_xyz_node",
@@ -101,18 +101,21 @@ def _setup(context, *args, **kwargs):
             ],
             prefix=prefix,
             output="screen",
-        ),
-        Node(
-            package="nav2_costmap_2d",
-            executable="nav2_costmap_2d",
-            # The executable names its node "costmap" itself; the namespace
-            # is ours, so its topics land under /wojtek/nav/.
-            namespace=NAMESPACE,
-            parameters=[arg("params_file")],
-            prefix=prefix,
-            output="screen",
-        ),
-    ]
+        )
+    )
+    if arg("costmap").lower() in ("true", "1"):
+        actions.append(
+            Node(
+                package="nav2_costmap_2d",
+                executable="nav2_costmap_2d",
+                # The executable names its node "costmap" itself; the namespace
+                # is ours, so its topics land under /wojtek/nav/.
+                namespace=NAMESPACE,
+                parameters=[arg("params_file")],
+                prefix=prefix,
+                output="screen",
+            )
+        )
     if arg("goto").lower() in ("true", "1"):
         actions.append(
             Node(
@@ -154,6 +157,12 @@ def generate_launch_description():
                             "deprojection; 1 = none. 4 turns 424x240 into "
                             "106x60, ~6k points -- the costmap ray-traces "
                             "each one.",
+            ),
+            DeclareLaunchArgument(
+                "costmap", default_value="true",
+                description="Run the standalone costmap (/wojtek/nav/costmap). "
+                            "false leaves only the point-cloud pipeline, for "
+                            "nav2.launch.py, which keeps its own costmaps.",
             ),
             DeclareLaunchArgument(
                 "goto", default_value="true",

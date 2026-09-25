@@ -41,6 +41,7 @@ def _context(**overrides):
         "depth_info_topic": "/camera/camera/depth/camera_info",
         "points_topic": "/wojtek/nav/points",
         "decimation": "4",
+        "costmap": "true",
         "goto": "true",
         "goal_timeout": "3.0",
         "cpus": "",

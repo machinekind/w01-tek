@@ -31,7 +31,7 @@ echo '<key>' >> ~/.ssh/authorized_keys
 chmod 600 ~/.ssh/authorized_keys
 ```
 
-**3. Install the helpers from the PC.** This is what puts the five icons on
+**3. Install the helpers from the PC.** This is what puts the six icons on
 the Deck's desktop, `Deck SSH on` among them.
 
 ```bash
@@ -70,6 +70,8 @@ this step comes back every time.
 controller for itself and hands the browser a pad that sends nothing. The
 notification names the pad the browser will get. Skip this step if the demo
 is camera only. Closing Steam also takes away the Deck's on-screen keyboard.
+`Wojtek GO` is this step and step 6 in one tap, for when the robot is
+already up.
 
 **4. Put the Deck and the PC on one network.** The robot's access point is
 `wojtek-link`. Check from the PC:
@@ -137,14 +139,17 @@ In the simulation, the gateway starts by itself:
 ./ros/sim.sh --foxglove telemetry:=true policy:=<policy reference>
 ```
 
-**6. Open the panel.**
+**6. Open the panel.** Tap `Wojtek Panel` on the Deck. The icon finds
+the machine serving the page by itself: the robot first, then the address
+the PC last gave it, then any host on the Deck's networks with port 8090
+open. A notification names what it picked. From the PC the same, or a
+particular page:
 
 ```bash
-./ros/deck.sh panel http://10.42.0.2:8090/                   # from the robot
-./ros/deck.sh panel 'http://<pc>:8090/?telemetry=on'         # from the simulation
+./ros/deck.sh panel                                          # this PC's simulation
+./ros/deck.sh panel http://10.42.0.2:8090/                   # the robot
+./ros/deck.sh panel 'http://<pc>:8090/?telemetry=on'         # the simulation, with the bridge
 ```
-
-`./ros/deck.sh panel` with no argument points the Deck at this PC.
 
 ## Put the panel on the robot, once
 
@@ -281,6 +286,8 @@ The panel prints the refusal in its log.
 | what you see | what it is | what to do |
 |---|---|---|
 | `./ros/deck.sh` finds nothing | the Deck's sshd died with its session | tap `Deck SSH on` |
+| the icon says "nothing serves the panel" | no gateway on port 8090 on any network the Deck is on | start the robot or the simulation, then tap `Panel RELOAD` |
+| the panel opens on the wrong machine | the robot's gateway is up and wins over the PC | `./ros/deck.sh panel` from the PC, which names the machine |
 | `ERR_CONNECTION_REFUSED` | the gateway is not running | check `~/gateway.log` on the robot |
 | `PAD` stays grey | Steam is running | tap `Steam off (pad)`, then press a pad button on the page |
 | `PAD` stays grey with Steam closed | the browser reveals a pad only after a press | press A |
@@ -300,10 +307,13 @@ remembers it. Everything runs as the user: a user-level sshd, flatpak
 Chrome, and `systemd-run --user` for anything that must outlive the shell
 that started it.
 
-**No fixed address.** The Deck takes what DHCP gives it. No address is
-written down in this tree. `./ros/deck.sh` looks for the one host on the
-subnet answering on the ssh port. `DECK_HOST` in `ros/.env` skips that
-search.
+**No fixed address.** The Deck takes what DHCP gives it, and the PC is
+often on two networks at once. No address is written down in this tree.
+`./ros/deck.sh` looks for the one host on any of the PC's networks answering
+on the ssh port, and gives the Deck the PC address on the Deck's own
+network. `DECK_HOST` in `ros/.env` skips that search while it answers. The
+Deck, in turn, looks for the machine serving the panel each time the icon
+is tapped; see the top of `deck_panel.sh` for the order.
 
 **No keyboard.** A full-screen browser window cannot be left without one,
 which is why the panel window has a frame and the page carries `FULL` and
@@ -320,13 +330,13 @@ both orders and picks one when the pad connects.
 |---|---|---|
 | `../../deck.sh` | PC | login, install, panel, stop, reload, steam, shot, run |
 | `deck_link.sh` | Deck | ssh up, Steam off and on, screenshot |
-| `deck_panel.sh` | Deck | opens Chrome on the panel with the flags it needs |
+| `deck_panel.sh` | Deck | finds the machine serving the panel, then opens Chrome on it with the flags it needs |
 | `panel_ctl.sh` | Deck | start, stop, reload, from an icon or over ssh |
-| `*.desktop` | Deck | the five icons |
+| `*.desktop` | Deck | the six icons |
 
 `./ros/deck.sh install` puts all of it on the Deck. It also writes
-`~/.config/wojtek/panel-url`, which is where the panel icon learns which
-machine serves the page.
+`~/.config/wojtek/panel-url`, the PC's address as a hint for the panel
+icon; the icon uses it only when it answers and the robot does not.
 
 ## Chrome's flags
 

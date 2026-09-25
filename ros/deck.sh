@@ -17,8 +17,9 @@
 #
 #   DECK_HOST=user@address       # see .env.example
 #
-# Without it, this looks for the one host on your subnet answering on the ssh
-# port and remembers it in ~/.config/wojtek/deck-host until it stops
+# Without it, this looks for the one host on any network this PC is on
+# answering on the ssh port -- wifi and cable both, since the Deck may sit
+# on either -- and remembers it in ~/.config/wojtek/deck-host until it stops
 # answering. Nothing about the machine is committed: this repository is
 # public (see CLAUDE.md).
 #
@@ -44,35 +45,52 @@ SSH_OPTS=(-p "$DECK_SSH_PORT" -o ConnectTimeout=6 -o StrictHostKeyChecking=accep
 SCP_OPTS=(-P "$DECK_SSH_PORT" -o ConnectTimeout=6 -o StrictHostKeyChecking=accept-new)
 DECK_DIR="${HERE}/deploy/deck"
 
-port_open() { nc -z -G 1 "$1" "$DECK_SSH_PORT" 2>/dev/null; }
+# Two seconds, not one: a phone hotspot has shown half a second of latency.
+port_open() { nc -z -G 2 "$1" "$DECK_SSH_PORT" 2>/dev/null; }
 
-# This PC's own address, which is what the panel on the Deck has to reach to
-# find the simulation. It moves with the network too, so it is read now
-# rather than stored.
-my_ip() {
+# Every IPv4 address this PC has, one per line. This machine is often on two
+# networks at once (home wifi and the robot's access point, or a cable to
+# the Deck's router), and the Deck may be on either of them.
+my_ips() {
     if command -v ipconfig >/dev/null 2>&1; then          # macOS
-        ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null
+        local i a
+        for i in $(ifconfig -lu); do
+            a="$(ipconfig getifaddr "$i" 2>/dev/null)" && [ -n "$a" ] && echo "$a"
+        done
     else                                                   # Linux
-        ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1
+        ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1
     fi
 }
 
-# Whole subnet at once: one address at a time takes minutes, and the Deck is
-# the only thing here listening on that port.
+# This PC's address as the Deck sees it: the one on the Deck's own /24. The
+# panel on the Deck has to reach this address to find the simulation, and an
+# address on the other network would be a dead link. Read now, not stored,
+# because it moves with the network.
+my_ip_toward() {
+    local deck="$1" a
+    while read -r a; do
+        [ "${a%.*}" = "${deck%.*}" ] && { echo "$a"; return 0; }
+    done < <(my_ips)
+    my_ips | head -1
+}
+
+# Every /24 this PC is on, all at once: one address at a time takes minutes,
+# and the Deck is the only thing here listening on that port.
 search() {
-    local base found
-    base="$(my_ip)"
-    [ -z "$base" ] && { echo "this machine has no network address" >&2; return 1; }
-    base="${base%.*}"
+    local nets found
+    nets="$(my_ips | sed 's/\.[0-9]*$//' | sort -u)"
+    [ -z "$nets" ] && { echo "this machine has no network address" >&2; return 1; }
     found="$(
-        for i in $(seq 1 254); do
-            (port_open "$base.$i" && echo "$base.$i") &
+        for net in $nets; do
+            for i in $(seq 1 254); do
+                (port_open "$net.$i" && echo "$net.$i") &
+            done
         done
         wait
     )"
     found="$(echo "$found" | head -1)"
     [ -z "$found" ] && {
-        echo "nothing on $base.0/24 answers on port $DECK_SSH_PORT." >&2
+        echo "nothing on $(echo $nets | sed 's/ /.0\/24, /g').0/24 answers on port $DECK_SSH_PORT." >&2
         echo "The Deck's sshd is started by hand and dies on reboot: tap" >&2
         echo "'Deck SSH on' on its desktop, then try again." >&2
         return 1
@@ -143,18 +161,23 @@ install)
     ' || exit 1
     # Where the panel should look for the simulation. The icon cannot know
     # this, and it must not be baked into a committed file, so it is written
-    # here and read there.
-    "$0" url "http://$(my_ip):8090/"
+    # here and read there. It is a hint, not an order: the icon checks that
+    # it answers, and looks for the robot first.
+    "$0" url "http://$(my_ip_toward "$h"):8090/"
     ;;
 
 url)
-    url="${1:-http://$(my_ip):8090/}"
+    h="$(host)" || exit 1
+    url="${1:-http://$(my_ip_toward "$h"):8090/}"
     on_deck "mkdir -p ~/.config/wojtek && printf '%s\n' '$url' > ~/.config/wojtek/panel-url" || exit 1
     echo ">> the Deck's panel icon now opens $url"
     ;;
 
 panel)
-    url="${1:-http://$(my_ip):8090/}"
+    # With a url, the Deck opens that. Without one it opens this PC's
+    # simulation, at the address the Deck can reach.
+    h="$(host)" || exit 1
+    url="${1:-http://$(my_ip_toward "$h"):8090/}"
     echo ">> panel -> $url"
     on_deck "~/panel_ctl.sh start '$url'"
     ;;

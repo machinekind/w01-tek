@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Wojtek GO
+Comment=Close Steam for the pad, then open the panel wherever it is served
+Exec=/bin/bash -c '$HOME/deck_link.sh steam-off; $HOME/panel_ctl.sh start'
+Icon=/home/deck/.local/share/icons/wojtek-panel.svg
+Terminal=false

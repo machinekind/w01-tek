@@ -3,8 +3,8 @@
 > **Status: EXPERIMENTAL. Not production; nothing here is deployed to the robot.**
 > Nothing here is deployed by `ros/deploy.sh`, and no package here is a
 > dependency of `wojtek_bringup`. It runs on the DGX. Tested against the
-> simulation standing in for the robot, and receive-only against the real
-> robot and camera Pi; nothing has been sent to the robot yet.
+> simulation standing in for the robot, then on the real robot and camera
+> Pi: receive only first, then the brain's tasks from the page (below).
 
 The robot's brain runs on the DGX (the model, the pixel resolver, the
 operator page); the robot's computer runs the control loop, the policy,
@@ -100,15 +100,34 @@ ssh -t <user>@<camera Pi> 'bash wojtek_camera/run.sh'
 
 ## Run it
 
-In the robot's Docker image on the DGX (it has rclpy and websockets):
+On the DGX, one command brings up the whole DGX side: the relay, the pixel
+resolver, the brain and the operator page, on the DGX's own domain (44),
+localhost only. The page listens on 127.0.0.1 only; reach it through SSH.
 
 ```bash
-docker run -d --name wojtek_link --network host --ipc host \
-  -e ROS_LOCALHOST_ONLY=1 -e ROS_DOMAIN_ID=44 -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
-  -v "$PWD/experiments/wojtek_link:/link" docker-wojtek_robot:latest sleep infinity
-docker exec -it wojtek_link bash -lc 'source /opt/ros/jazzy/setup.bash; cd /link; \
-  PYTHONPATH=$PWD:$PYTHONPATH python3 -m wojtek_link.relay_node --url ws://<robot>:8765 \
-    --camera-url ws://<camera Pi>:8765'                                                           # receive only
+# the addresses, once, in the gitignored .env (this directory's or the repo root's):
+#   WOJTEK_BRIDGE_URL=ws://<robot>:8765
+#   WOJTEK_CAMERA_URL=ws://<camera Pi>:8765
+experiments/wojtek_link/run.sh up            # receive only: nothing reaches the robot
+experiments/wojtek_link/run.sh up --send     # the page's tasks and STOP drive the robot
+experiments/wojtek_link/run.sh status        # both links, the page, what runs
+experiments/wojtek_link/run.sh down          # stops only what `up` started
+experiments/wojtek_link/run.sh test          # the model-free tests, in the image
+ssh -L 8501:127.0.0.1:8501 <DGX>             # then http://localhost:8501
+```
+
+`run.sh` runs the relay as below in its own container (`wojtek_link`), and
+the resolver and the brain in the `wojtek_robot` container (its built
+workspace: create it once with `./ros/dev.sh`). `WOJTEK_REPO` points it at
+a checkout with `experiments/wojtek_vlm_gui` when this directory is a copy.
+It refuses to start without `WOJTEK_BRIDGE_URL`, or a second time. Tested
+on the DGX against the sim: up, a second up refused, `down` leaving the sim
+running, `up --send` with goals reaching the sim.
+
+The relay by hand, in the robot's Docker image (it has rclpy and websockets):
+
+```bash
+python3 -m wojtek_link.relay_node --url ws://<robot>:8765 --camera-url ws://<camera Pi>:8765   # receive only
 # ... --send                  the DGX's goals, cancels and /cmd_vel reach the robot
 # ... --in-camera             the camera through the ROBOT's bridge instead: the sim test only
 ```
@@ -200,6 +219,29 @@ The first contact with the real robot (2026-09-27, receive only: no
 | the resolver on the DGX | 1 of 4 pixels resolved (an object 0.74 m ahead-left on the floor); 3 `no_depth` (the camera stood 0.13 m from a wall, inside the D435's minimum range); the goal stayed on the DGX |
 | stopping the relay | clean, 16 of 16 SIGINT/SIGTERM stops after the spinner fix (before it, 2 of 8 aborted at teardown) |
 
+The first tasks on the real robot (2026-09-27, `--send`, a person at the
+pad). The robot was stood up with the pad: the page's arm, stand, policy
+and lie-down buttons are ROS services, which the relay does not carry, so
+the page answers them with "not available". Tasks and STOP cross. Each
+task ran under a 2 m fence around its start that would have frozen the
+robot; it never tripped.
+
+| task | what happened |
+|---|---|
+| "podejdź do drzwi" | the door not in view: search turns, about a full circle; one "door" answer failed its own verification. At 26 s the door was seen, but its pixel had no depth, so the brain stepped towards it (1.0 m, goto `reached`). At 44 s it looked again and resolved the door 0.62 m away, inside the 0.7 m standoff: done at 45 s. Out: 181 `/cmd_vel`, 12 goals, nothing dropped |
+| "podejdź do banana" | seen at once, 2.08 m away; goto walked 1.3 m in 5 s, then stood 0.16 m short of the setpoint for 15 s, turning in place (-65 deg), until STOP from the page at 26 s |
+| "znajdź banana i podejdź do niego" | two search turns (about 200 deg), seen at 12 s, 2.03 m away; walked 1.4 m, then 15 s creeping and turning at the setpoint; `reached` at 46 s, 0.77 m from the banana: done |
+
+**The slow finish is goto against the real gait.** goto slows into a goal at
+0.6 x the distance (`goto.py`), so 0.16 m out it commands 0.1 m/s, which the
+real gait does not walk; it reports `reached` only inside 0.15 m
+(`reach_tolerance`). The robot stands just outside, correcting its heading.
+The sim's gait walks small commands, which is why the sim never showed it.
+Not changed here: navigation stays as it is on the robot.
+
+The robot's link dropped once between tasks (a keepalive timeout on the
+wifi, back after 1.5 s); a drop mid-walk is caught by goto's 3 s dead-man.
+
 **The robot's bridge is open to its whole network.** It offers
 `clientPublish`, `services`, `parameters` and `assets` to any client, and
 the robot now sits on a shared wifi: anyone there with Foxglove could
@@ -223,6 +265,7 @@ and whether the bridge's client publisher can match that is untested.
 | `wojtek_link/topics.py` | what crosses, what never does, the invariants (pure) |
 | `wojtek_link/protocol.py` | the Foxglove WebSocket frames the relay reads and writes (pure) |
 | `wojtek_link/clock.py` | the robot's clock offset read off the traffic (pure) |
+| `run.sh` | the DGX side in one command: up [--send] / down / status / test |
 | `wojtek_link/relay_node.py` | the relay: rclpy on one thread, one websocket per link on asyncio |
 | `camera_pi/` | what runs on the camera Pi: the driver's and the bridge's parameters, `run.sh` |
 | `tests/` | model-free: the frames, the offset, the lists, the static-frame rule, the camera Pi's files |

@@ -81,8 +81,10 @@ print("  camera mount from the robot: %s | out %s | dropped %s" % (s["camera_mou
 }
 
 cmd_status() {
+  local ct st
   for ct in "$LINK_CT" "$ROBOT_CT"; do
-    echo "container $ct: $(docker inspect -f '{{.State.Status}}' "$ct" 2>/dev/null || echo absent)"
+    st="$(docker inspect -f '{{.State.Status}}' "$ct" 2>/dev/null | tr -d '\n')" || true
+    echo "container $ct: ${st:-absent}"
   done
   if running "$LINK_CT"; then
     docker exec "$LINK_CT" bash -c 'ps -eo args | grep -E "^python3 -m [w]ojtek_(link.relay_node|vlm_gui.server)" | sed "s/^/  /" | cut -c1-160' || true

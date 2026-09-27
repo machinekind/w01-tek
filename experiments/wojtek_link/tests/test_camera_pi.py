@@ -57,4 +57,9 @@ def test_the_run_script_parses_and_keeps_the_graph_local():
     subprocess.run([bash, "-n", str(CAMERA_PI / "run.sh")], check=True)
     text = (CAMERA_PI / "run.sh").read_text()
     assert "export ROS_LOCALHOST_ONLY=1" in text   # the camera Pi's graph never joins the LAN's
-    assert not re.search(r"\b(apt|apt-get|sudo|systemctl)\b", text)
+    # it installs and reconfigures nothing: sudo, apt or systemctl only ever in advice it prints
+    for line in text.splitlines():
+        code = line.strip()
+        if code.startswith("#") or not re.search(r"\b(apt|apt-get|sudo|systemctl|usermod)\b", code):
+            continue
+        assert code.startswith("echo "), line

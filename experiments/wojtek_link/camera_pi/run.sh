@@ -45,6 +45,24 @@ fi
 echo "camera Pi: domain $ROS_DOMAIN_ID, localhost only; isolated cores: '${iso}';" \
      "driver ${cam_pin[*]:-unpinned}, bridge ${bridge_pin[*]:-unpinned}"
 
+# librealsense opens the camera's /dev/video* nodes (root:video 0660).
+# Without access it enumerates nothing and says "No RealSense devices were
+# found!" after a wall of "Permission denied", which reads like an unplugged
+# camera (seen on the camera Pi 2026-09-27; the robot's install.sh puts rpi in
+# the video group and installs ros/deploy/rpi/99-wojtek-realsense.rules).
+if (( EUID != 0 )) && compgen -G "/dev/video*" > /dev/null; then
+  access=0
+  for v in /dev/video*; do
+    if [[ -r "$v" && -w "$v" ]]; then access=1; break; fi
+  done
+  if (( access == 0 )); then
+    echo "$(id -un) cannot open /dev/video* (not in the 'video' group?). Either:" >&2
+    echo "  this once, nothing changed on the Pi:  sudo bash $0" >&2
+    echo "  for good, as on the robot's Pi:        sudo usermod -aG video,plugdev $(id -un)  (then log in again)" >&2
+    exit 1
+  fi
+fi
+
 # The executables themselves, not `ros2 run`: a signal then reaches the node.
 rs="$(ros2 pkg prefix realsense2_camera)/lib/realsense2_camera/realsense2_camera_node"
 fb="$(ros2 pkg prefix foxglove_bridge)/lib/foxglove_bridge/foxglove_bridge"

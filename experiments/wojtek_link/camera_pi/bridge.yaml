@@ -1,0 +1,24 @@
+# The camera Pi's foxglove_bridge: READ ONLY, the camera and nothing else.
+#
+# capabilities: no clientPublish, services, parameters or assets. Nobody on
+# the LAN can publish into the camera Pi's graph, call a service or read a
+# file through it. connectionGraph is read-only and there only because an
+# empty list aborts foxglove_bridge 3.5.0 ("parameter_value_from failed for
+# parameter 'capabilities'", measured).
+#
+# topic_whitelist: exactly wojtek_link.topics.CAMERA_PI (a test checks it).
+#
+# send_buffer_limit: ~0.5 s of this stream. When the wifi stalls the bridge
+# drops frames instead of piling up seconds of stale ones for the DGX.
+/**:
+  ros__parameters:
+    port: 8765
+    capabilities: ['connectionGraph']
+    topic_whitelist:
+      - '^/camera/camera/color/image_raw/compressed$'
+      - '^/camera/camera/color/camera_info$'
+      - '^/camera/camera/depth/image_rect_raw$'
+      - '^/camera/camera/depth/camera_info$'
+      - '^/tf_static$'
+    send_buffer_limit: 1000000
+    use_compression: false            # deflate on 1.8 MB/s would cost the Pi a core

@@ -3,7 +3,8 @@
 > **Status: EXPERIMENTAL. Not production; nothing here is deployed to the robot.**
 > Nothing here is deployed by `ros/deploy.sh`, and no package here is a
 > dependency of `wojtek_bringup`. It runs on the DGX. Tested against the
-> simulation standing in for the robot; not yet run against the robot.
+> simulation standing in for the robot, and receive-only against the real
+> robot and camera Pi; nothing has been sent to the robot yet.
 
 The robot's brain runs on the DGX (the model, the pixel resolver, the
 operator page); the robot's computer runs the control loop, the policy,
@@ -184,6 +185,28 @@ robot was not contacted.
 | clocks | camera Pi vs DGX `clock_offset_ms` -9.4 (both NTP-synced) |
 | the depth | 68 % valid pixels; the camera was 0.13 m from a wall, which the JPEG shows |
 | static frames | the driver's `camera_link -> camera_{color,depth}_frame -> *_optical_frame`, all accepted |
+
+The first contact with the real robot (2026-09-27, receive only: no
+`--send`, nothing advertised to the robot), with the camera Pi as above:
+
+| check | result |
+|---|---|
+| the robot's bridge | foxglove_bridge 3.5.0, 38 topics, every IN and OUT topic present; `clientPublish` on (and services, parameters, assets: see below) |
+| receive only | `out {}`, nothing advertised; both links up |
+| odometry on the DGX | 28.9 Hz, 18 kB/s from the robot |
+| the mount | `base_link -> camera_link` 0.32 / 0 / 0.07 m, pitch 0.262 rad, from the robot's URDF: fork PR #9 is on the robot |
+| the whole chain | `base_link -> camera_color_optical_frame` 0.32 / 0.015 / 0.07 m (the robot's mount + the camera Pi's driver), nothing refused |
+| clocks vs the DGX | robot 21.6 ms, camera Pi -4.5 ms (plus delivery): within 30 ms of each other |
+| the resolver on the DGX | 1 of 4 pixels resolved (an object 0.74 m ahead-left on the floor); 3 `no_depth` (the camera stood 0.13 m from a wall, inside the D435's minimum range); the goal stayed on the DGX |
+| stopping the relay | clean, 16 of 16 SIGINT/SIGTERM stops after the spinner fix (before it, 2 of 8 aborted at teardown) |
+
+**The robot's bridge is open to its whole network.** It offers
+`clientPublish`, `services`, `parameters` and `assets` to any client, and
+the robot now sits on a shared wifi: anyone there with Foxglove could
+publish `/cmd_vel` or joint targets, or call the arm services. The relay
+only ever uses `clientPublish` for the OUT list. Narrowing the robot's
+bridge (`capabilities`, `client_topic_whitelist`, `service_whitelist`) is a
+change on the robot, left to its owners.
 
 **Seen on the way, and the reason for the next step:** with no costmap on
 the robot, goto drives straight. In the link-loss run the robot walked into

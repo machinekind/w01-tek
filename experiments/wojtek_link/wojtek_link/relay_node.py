@@ -364,7 +364,17 @@ def main() -> None:
     node = LinkNode(robot, camera, loop)
     executor = SingleThreadedExecutor()
     executor.add_node(node)
-    threading.Thread(target=executor.spin, name="wojtek_link_spin", daemon=True).start()
+    # Spun in short slices and joined before the ROS side is torn down: a
+    # thread still inside spin() at teardown aborted the process now and
+    # then ("terminate called without an active exception", 2 of 8 stops).
+    stop_spin = threading.Event()
+
+    def spin() -> None:
+        while not stop_spin.is_set():
+            executor.spin_once(timeout_sec=0.1)
+
+    spinner = threading.Thread(target=spin, name="wojtek_link_spin", daemon=True)
+    spinner.start()
     node.get_logger().info(f"relay: robot {robot.url}, IN {sorted(robot.wanted)}, "
                            f"OUT {sorted(topics.OUT) if args.send else 'off (receive only)'}")
     if camera is not None:
@@ -377,7 +387,17 @@ def main() -> None:
     except asyncio.CancelledError:
         pass
     finally:
+        # What the websockets left running (their keepalives, a closing
+        # handshake) ends here, not in "Task was destroyed but it is
+        # pending!" at loop.close() -- seen with two links on the robot.
+        left = [t for t in asyncio.all_tasks(loop) if not t.done()]
+        for t in left:
+            t.cancel()
+        if left:
+            loop.run_until_complete(asyncio.wait(left, timeout=2.0))
         node.get_logger().info("relay stopping: link closed, nothing more goes to the robot")
+        stop_spin.set()
+        spinner.join(timeout=2.0)
         executor.shutdown(timeout_sec=1.0)
         node.destroy_node()
         rclpy.try_shutdown()

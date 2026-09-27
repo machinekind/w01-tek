@@ -81,6 +81,11 @@ and the relay reads them as a second link (`--camera-url`):
   and a frame the robot's URDF names always wins.
 - **The two links are independent**: the camera Pi dropping out leaves
   the robot's link up (and the other way round); each reconnects alone.
+- **The camera needs `/dev/video*`**: the camera Pi's login user is not in
+  the video group, so `run.sh` stops with the two ways out. `sudo bash
+  run.sh` changes nothing on the Pi; for good, the groups and
+  `ros/deploy/rpi/99-wojtek-realsense.rules` as the robot's `install.sh`
+  gives `rpi` (without the rule, a non-root driver cannot reset the camera).
 - `run.sh` pins the driver and the bridge to an isolated core each when
   the image isolates some (the Wojtek image's `isolcpus` is for a control
   loop the camera Pi does not run); `WOJTEK_CAMERA_PIN=0` turns that off.
@@ -166,9 +171,19 @@ The camera link (2026-09-27, DGX): a second bridge with `camera_pi/bridge.yaml`
 | `camera_pi/run.sh` (the DGX, no D435) | both params files parse, both nodes up, SIGTERM and SIGHUP stop both |
 | unit tests | 25 passed |
 
-Not verifiable without a D435: the JPEG quality parameter's effect (the
-frame size to look for on the camera Pi is ~40 KB, `camera.kB_s_in` about
-1800 at the set rates).
+The real camera Pi (2026-09-27): `sudo bash run.sh` on it (its login user
+is not in the video group, see below), the relay on the DGX with
+`--camera-url` only; its robot URL pointed at a closed local port, so the
+robot was not contacted.
+
+| check | result |
+|---|---|
+| the driver | `RealSense Node Is Up!`, depth 424x240 at 6 fps, colour 640x480 at 15 fps, the initial reset done; pinned to the isolated cores 2 and 3 |
+| on the DGX | depth 6.1 Hz, 204 KB a frame; colour JPEG 15.1 Hz, 26 KB a frame (quality 80); 1672 kB/s on the camera link |
+| a picture's age on landing | median 150-170 ms, max 1.2 s over 12 s (the wifi); the resolver works on stamps, so this is freshness, not error |
+| clocks | camera Pi vs DGX `clock_offset_ms` -9.4 (both NTP-synced) |
+| the depth | 68 % valid pixels; the camera was 0.13 m from a wall, which the JPEG shows |
+| static frames | the driver's `camera_link -> camera_{color,depth}_frame -> *_optical_frame`, all accepted |
 
 **Seen on the way, and the reason for the next step:** with no costmap on
 the robot, goto drives straight. In the link-loss run the robot walked into

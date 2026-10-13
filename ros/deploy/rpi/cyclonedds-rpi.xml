@@ -1,42 +1,27 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <!-- RPi profile: pin CycloneDDS to loopback PLUS whichever external link
      exists. Auto-select is unusable here: the eth-AP failover moves
-     10.42.0.2 between eth0 and uap0, and a participant bound to the iface
+     10.42.0.2 between eth0 and wlan0, and a participant bound to the iface
      that just vanished keeps failing its socket writes forever (seen live:
-     standalone boot bound to the wifi AP, cable plugged, AP torn down, every
+     standalone boot bound to wlan0-AP, cable plugged, AP torn down, every
      node spamming "ddsi_udp_conn_write failed" and the local pad pipeline
      dead, because discovery died with the iface).
 
      lo is required and always present, so the on-robot control loop
      (joy, teleop, policy, real_io, ros2_control) never depends on which
-     external link is up. eth0/uap0 are best-effort: bound when present at
+     external link is up. eth0/wlan0 are best-effort: bound when present at
      stack start, giving the PC (cable) or phone/console (AP) a window in.
      A link flip mid-run still only degrades OUTSIDE visibility; restart the
      service (or re-dock) to rebind. Installed to /etc/cyclonedds-rpi.xml by
      install.sh; wojtek-robot.service and the ~/.bashrc env block point
-     CYCLONEDDS_URI here.
-
-     wlan0 is deliberately NOT listed: it is the upstream wifi station, and
-     robot topics must not be multicast onto that foreign network. -->
-<!-- 2026-09-27: the fleet lives on the venue wifi (the perception Pi and
-     the DGX that runs the brain hand this robot its goals over DDS), so
-     wlan0 (the wifi station) is bound too, with AllowMulticast=spdp:
-     discovery may multicast, every topic flows unicast, nothing is
-     multicast onto the venue network. Also: the Pi 4's radio cannot hold
-     an AP and a station at once (brcmfmac leaves the station dead after
-     the AP starts, -52 errors, see wojtek-net-switch.sh), so on a robot
-     that lives on the venue wifi the AP switch is disabled:
-         sudo systemctl disable wojtek-net; sudo systemctl stop wojtek-net
-     (install.sh re-enables it on a provision). -->
+     CYCLONEDDS_URI here. -->
 <CycloneDDS xmlns="https://cdds.io/config" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
     <Domain Id="any">
         <General>
-            <AllowMulticast>spdp</AllowMulticast>
             <Interfaces>
                 <NetworkInterface name="lo" multicast="true"/>
                 <NetworkInterface name="eth0" presence_required="false"/>
-                <NetworkInterface name="uap0" presence_required="false"/>
-                <NetworkInterface name="wlan0" presence_required="false" multicast="true"/>
+                <NetworkInterface name="wlan0" presence_required="false"/>
             </Interfaces>
         </General>
     </Domain>

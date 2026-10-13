@@ -229,3 +229,23 @@ def test_sim_launch_keeps_the_arguments_its_callers_pass():
         "boot_pose", "hw", "model_xml", "console", "gamepad",
         "vlm", "vlm_url", "vlm_model",
     } <= declared
+
+
+def _policy_default(launch_file):
+    spec = importlib.util.spec_from_file_location("a_launch", launch_file)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    ld = module.generate_launch_description()
+    (arg,) = [a for a in ld.entities if getattr(a, "name", None) == "policy"]
+    return "".join(s.text for s in arg.default_value)
+
+
+def test_only_the_sim_takes_its_policy_from_the_environment(monkeypatch):
+    """WOJTEK_POLICY in the repo-root .env picks the desk's policy. The
+    robot's launch ignores it: the robot runs its override file or the pin,
+    and nothing in a shell can change that."""
+    monkeypatch.setenv("WOJTEK_POLICY", "org/from-env")
+    sim_launch = PKG_DIR / "launch" / "sim.launch.py"
+    assert _policy_default(sim_launch) == "org/from-env"
+    robot_launch = PKG_DIR.parent / "wojtek_bringup" / "launch" / "robot.launch.py"
+    assert _policy_default(robot_launch) != "org/from-env"

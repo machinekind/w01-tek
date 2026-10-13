@@ -11,10 +11,12 @@
 #
 #   HF_ORGANIZATION, HF_TOKEN  the pinned default policy's org and the token
 #                              that downloads it
-#   WOJTEK_POLICY              a policy over the pin: a Hugging Face reference
-#                              only (org/name[@rev]); the training tools put
-#                              paths in the same variable, and the container
-#                              cannot see host paths, so those are dropped
+#   WOJTEK_POLICY              a policy over the pin for the sim launch (the
+#                              robot's launch never reads it): a Hugging Face
+#                              reference only (org/name[@rev]); the training
+#                              tools put paths in the same variable, and the
+#                              container cannot see host paths, so those are
+#                              dropped
 #   VLM_URL, VLM_MODEL         the VLM brain's model server (Ollama)
 #   ROS_LOCALHOST_ONLY         1 on a host whose Docker multicast loopback is
 #                              broken (a headless GPU box: `ros2 node list`

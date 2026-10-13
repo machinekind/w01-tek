@@ -31,6 +31,10 @@ default policy, and its Hugging Face reference is `HF_ORGANIZATION/...`.
 Without the org every launch stops at once with "empty policy reference"
 (or needs an explicit `policy:=`). `dev.sh` and `sim.sh` carry that
 variable, `HF_TOKEN` and the VLM brain's `VLM_URL` into the container.
+`WOJTEK_POLICY=<org/name[@rev]>` in the same `.env` makes every sim session
+run that policy instead of the pin, with no `policy:=`. It is a desk
+setting only: the robot never reads the variable. The robot runs the
+reference `./deploy.sh --policy` left in its override file, else the pin.
 
 Then, from that shell:
 

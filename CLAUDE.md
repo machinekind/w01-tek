@@ -168,5 +168,7 @@ gitignored policy store (`ros/policies/`).  `ros/deploy.sh` resolves the
 pinned default (see `wojtek_policy/policy_source.py`) into the store and
 syncs the store to the RPi, which has no internet.  `ros/deploy.sh --policy
 <ref>` fetches a one-off reference, syncs it, and makes the robot run it, and
-a plain `ros/deploy.sh` returns the robot to the pin.
+a plain `ros/deploy.sh` returns the robot to the pin.  On the PC,
+`WOJTEK_POLICY` in the gitignored `.env` makes the simulation run that
+reference instead of the pin; the robot launch never reads it.
 Changing the deployed policy is a config change, not a code change.

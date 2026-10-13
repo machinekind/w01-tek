@@ -126,21 +126,35 @@ def policy_override_file() -> Path:
 def active_policy() -> str:
     """The reference a bringup comes up with when no policy:= is given.
 
-    WOJTEK_POLICY in the environment wins: the PC's way (repo-root .env,
-    carried into the dev container by sim.sh / dev.sh; the training tools
-    read the same name). Then the override file, when it exists and is
-    non-empty: deployment state on the robot, written by `./deploy.sh
-    --policy <ref>` and removed by a plain `./deploy.sh`. Otherwise the pin.
+    The override file wins when it exists and is non-empty. Otherwise the
+    pin answers. The file is deployment state on the robot, written by
+    `./deploy.sh --policy <ref>` and removed by a plain `./deploy.sh`. The
+    PC never has one, so PC launches run the pin.
+
+    WOJTEK_POLICY in the environment is deliberately not read here. This is
+    what the robot runs, and the robot follows only its override file and
+    the pin, so a stray variable in a shell can never change which policy
+    walks. The desk's shortcut is desk_policy().
     """
-    env = os.environ.get("WOJTEK_POLICY", "").strip()
-    if env:
-        return env
     path = policy_override_file()
     if path.is_file():
         ref = path.read_text().strip()
         if ref:
             return ref
     return default_policy()
+
+
+def desk_policy() -> str:
+    """The reference a PC launch (the simulation) comes up with by default.
+
+    WOJTEK_POLICY in the environment wins: the repo-root .env names a policy
+    once and every sim session runs it (sim.sh / dev.sh carry the variable
+    into the container; the training tools read the same name). Otherwise
+    active_policy(), which on the PC is the pin. Only sim.launch.py asks
+    this; robot.launch.py takes active_policy().
+    """
+    env = os.environ.get("WOJTEK_POLICY", "").strip()
+    return env or active_policy()
 
 
 def resolve_policy(ref: str) -> ResolvedPolicy:

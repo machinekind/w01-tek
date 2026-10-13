@@ -105,6 +105,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 from wojtek_bringup.launch_common import common_launch_description, resolve_scene
+from wojtek_policy.policy_source import desk_policy
 
 
 def _camera_node(context):
@@ -146,11 +147,15 @@ def _camera_node(context):
 
 def generate_launch_description():
     # RViz on by default (this is the desk workflow), recording opt-in, and
-    # everything else -- nodes, parameters, the arming procedure, and the
-    # default policy (launch_common.DEFAULT_POLICY) -- shared verbatim with the
-    # robot bringup, so what you watch here is what the robot comes up with.
+    # everything else -- nodes, parameters, the arming procedure -- shared
+    # verbatim with the robot bringup, so what you watch here is what the
+    # robot comes up with. The one desk-only default is the policy:
+    # WOJTEK_POLICY from the repo-root .env names it, else the pin
+    # (policy_source.desk_policy). The robot's launch never reads that
+    # variable.
     ld = common_launch_description(
         with_rviz=True, bag_default="false", hardware="sim", with_gamepad=True,
+        policy_default=desk_policy(),
     )
     for action in (
         # D435-compatible virtual camera: a separate node now, because the

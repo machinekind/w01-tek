@@ -1,7 +1,7 @@
 // The operator page. Talks to server.py over one websocket (protocol in
 // wire.py): JSON text frames for the log, the nav words, the robot's load
 // and replies; binary frames (one tag byte first) for the camera JPEG, the
-// brain's annotated JPEG and the raw depth.
+// brain's annotated JPEG (numbered for its ask line) and the raw depth.
 "use strict";
 
 const TAG_CAMERA = 0, TAG_ANNOTATED = 1, TAG_DEPTH = 2;
@@ -107,16 +107,17 @@ function addMsg(kind, title, detail, img) {
   const h = document.createElement("div"); h.className = "title"; h.textContent = title;
   d.append(t, h);
   if (detail) { const x = document.createElement("div"); x.className = "detail"; x.textContent = detail; d.append(x); }
-  if (img) {
-    const im = document.createElement("img");
-    im.src = img; im.alt = "the picture the brain answered on";
-    im.addEventListener("click", () => im.classList.toggle("zoom"));
-    im.addEventListener("load", () => { if (stick) chat.scrollTop = chat.scrollHeight; });
-    d.append(im);
-  }
+  if (img) addImg(d, img, stick);
   chat.append(d);
   if (stick) chat.scrollTop = chat.scrollHeight; else $("jump").hidden = false;
   return d;
+}
+function addImg(d, url, stick) {
+  const im = document.createElement("img");
+  im.src = url; im.alt = "the picture the brain answered on";
+  im.addEventListener("click", () => im.classList.toggle("zoom"));
+  im.addEventListener("load", () => { if (stick) chat.scrollTop = chat.scrollHeight; });
+  d.append(im);
 }
 function addDivider(text) {
   const d = document.createElement("div"); d.className = "divider"; d.textContent = text; chat.append(d);
@@ -159,7 +160,18 @@ function describe(s) {
 let current = null;      // the instruction whose lines are on screen
 let shown = 0;           // how many of its lines are
 let lastAsked = null;    // the operator's last sent text, to not echo it twice
-let pendingImg = null;   // the brain's picture, pinned to the next "ask"
+// The server numbers each picture for its ask line, so the two meet by
+// number whichever comes first: on a page load mid-task, after a
+// reconnect, or when a line beats its picture by a moment.
+let picture = null;      // the brain's newest picture, {n, url}, until its ask line shows it
+let waiting = null;      // the newest ask line still without its picture, {n, el}
+function onPicture(buf) {
+  const n = new DataView(buf).getUint32(1, true);
+  const url = URL.createObjectURL(new Blob([new Uint8Array(buf, 5)], { type: "image/jpeg" }));
+  if (waiting && waiting.n === n) { addImg(waiting.el, url, nearBottom()); waiting = null; return; }
+  if (picture) URL.revokeObjectURL(picture.url);   // never shown: free it
+  picture = { n, url };
+}
 function onLog(m) {
   if (m.instruction !== current || m.lines.length < shown) {
     current = m.instruction; shown = 0;
@@ -169,8 +181,9 @@ function onLog(m) {
   for (const line of m.lines.slice(shown)) {
     const [kind, title] = describe(line.s || { action: line.action });
     let img = null;
-    if (line.action === "ask" && pendingImg) { img = pendingImg; pendingImg = null; }
-    addMsg(kind, title, line.text, img);
+    if (line.action === "ask" && picture && line.picture === picture.n) { img = picture.url; picture = null; }
+    const d = addMsg(kind, title, line.text, img);
+    if (line.action === "ask" && line.picture != null && !img) waiting = { n: line.picture, el: d };
   }
   shown = m.lines.length;
 }
@@ -270,7 +283,7 @@ function connect() {
     }
     const buf = ev.data, tag = new Uint8Array(buf, 0, 1)[0];
     if (tag === TAG_CAMERA) onCamera(new Uint8Array(buf, 1));
-    else if (tag === TAG_ANNOTATED) pendingImg = URL.createObjectURL(new Blob([new Uint8Array(buf, 1)], { type: "image/jpeg" }));
+    else if (tag === TAG_ANNOTATED) onPicture(buf);
     else if (tag === TAG_DEPTH) onDepth(buf);
   };
 }

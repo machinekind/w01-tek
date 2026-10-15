@@ -162,6 +162,69 @@ def test_a_stop_word_typed_as_a_task_is_a_stop_and_a_freeze_even_with_no_brain(m
     assert _is_zero(pubs[limits.CMD_VEL_TOPIC].publish.call_args.args[0])
 
 
+def _record_instructions(pubs):
+    sent = []
+    pubs[limits.INSTRUCTION_TOPIC].publish.side_effect = lambda m: sent.append(m.data)
+    return sent
+
+
+def _stop_on_the_second_poll(client, node, stop):
+    """The brain is not there on the first look; on the second the
+    operator's STOP lands, and from then on the brain listens."""
+    client._wait_s = 5.0   # the wait must not run out before the second look
+    polls = {"n": 0}
+
+    def count_subscribers(_topic):
+        polls["n"] += 1
+        if polls["n"] == 1:
+            return 0
+        if polls["n"] == 2:
+            stop()
+        return 1
+
+    node.count_subscribers.side_effect = count_subscribers
+
+
+def _nothing_carries(pubs, text):
+    for pub in pubs.values():
+        for call in pub.publish.call_args_list:
+            assert getattr(call.args[0], "data", None) != text
+
+
+def test_a_stop_during_the_subscriber_wait_drops_the_task_instead_of_sending_it_after():
+    client, node, pubs = _client(listening=False)
+    sent = _record_instructions(pubs)
+    _stop_on_the_second_poll(client, node, lambda: client.freeze(start_hold=lambda _p: None))
+
+    ok, msg = client.send("go to the pillar")
+
+    assert not ok and "STOP" in msg
+    assert sent == [""]   # the stop's empty instruction, and nothing after it
+    pubs[limits.CANCEL_TOPIC].publish.assert_called_once()
+    _nothing_carries(pubs, "go to the pillar")
+
+
+def test_a_service_stop_during_the_subscriber_wait_also_drops_the_task():
+    # Disarm and Lie down call stop() directly, not freeze().
+    client, node, pubs = _client(listening=False)
+    sent = _record_instructions(pubs)
+    _stop_on_the_second_poll(client, node, client.stop)
+
+    ok, _ = client.send("go to the pillar")
+
+    assert not ok
+    assert sent == [""]
+    _nothing_carries(pubs, "go to the pillar")
+
+
+def test_a_stop_before_the_task_does_not_block_the_next_task():
+    client, _, pubs = _client()
+    client.freeze(start_hold=lambda _p: None)
+    ok, _ = client.send("go to the box")
+    assert ok
+    assert pubs[limits.INSTRUCTION_TOPIC].publish.call_args.args[0].data == "go to the box"
+
+
 def test_status_messages_land_in_the_log_in_order_and_per_task():
     client, _, _ = _client()
 
@@ -180,19 +243,55 @@ def test_status_messages_land_in_the_log_in_order_and_per_task():
     assert snap["finished"] is None and not snap["idle"]
 
 
-def test_the_annotated_picture_is_pinned_to_the_next_ask():
-    client, _, _ = _client()
+def _picture(client):
     msg = Image()
     msg.encoding, msg.height, msg.width = "rgb8", 2, 3
     msg.data = bytes(range(2 * 3 * 3))
     client._on_annotated(msg)
-    client._on_status(String(data=json.dumps({"action": "ask", "step": 1, "instruction": "x", "t": 0})))
-    client._on_status(String(data=json.dumps({"action": "verify", "step": 1, "instruction": "x", "t": 0})))
+
+
+def _line(client, action, step):
+    client._on_status(String(data=json.dumps({"action": action, "step": step, "instruction": "x", "t": 0})))
+
+
+def test_the_annotated_picture_is_numbered_for_its_ask_line():
+    client, _, _ = _client()
+    _picture(client)
+    _line(client, "ask", 1)
+    _line(client, "verify", 1)
 
     lines = client.latest()["lines"]
-    img = lines[0]["_image"]
+    assert lines[0]["_picture"] == 1
+    assert "_picture" not in lines[1]
+    number, img = client.latest_annotated()
+    assert number == 1
     assert isinstance(img, np.ndarray) and img.shape == (2, 3, 3) and img[1, 2, 2] == 17
-    assert "_image" not in lines[1]
+    assert client.seq()["annotated"] == 1
+
+
+def test_a_picture_alone_is_not_sent_until_its_ask():
+    client, _, _ = _client()
+    _picture(client)
+    assert client.seq()["annotated"] == 0
+    assert client.latest_annotated() is None
+
+
+def test_a_picture_goes_to_one_ask_only():
+    client, _, _ = _client()
+    _picture(client)
+    _line(client, "ask", 1)
+    _line(client, "ask", 2)
+    lines = client.latest()["lines"]
+    assert "_picture" not in lines[1] and client.seq()["annotated"] == 1
+    _picture(client)
+    _line(client, "ask", 3)
+    assert client.latest()["lines"][2]["_picture"] == 2
+
+
+def test_the_picture_is_subscribed_before_the_status():
+    _, node, _ = _client()
+    topics = [c.args[1] for c in node.create_subscription.call_args_list]
+    assert topics.index(limits.ANNOTATED_TOPIC) < topics.index(limits.VLM_STATUS_TOPIC)
 
 
 def test_a_picture_in_another_encoding_is_ignored():

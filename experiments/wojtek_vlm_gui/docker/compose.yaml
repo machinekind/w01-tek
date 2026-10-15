@@ -28,7 +28,9 @@ services:
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - ROS_DOMAIN_ID=42
       - CYCLONEDDS_URI=file:///config/cyclonedds.xml
-      # On hosts where CycloneDDS multicast loopback is broken, export
-      # ROS_LOCALHOST_ONLY=1 for BOTH containers.
+      # On hosts where CycloneDDS multicast loopback is broken, set
+      # ROS_LOCALHOST_ONLY=1 in the repo-root .env (or export it). run.sh
+      # reads it from the same places ros/sim.sh does, so both containers
+      # get the same value.
       - ROS_LOCALHOST_ONLY=${ROS_LOCALHOST_ONLY:-0}
       - PYTHONUNBUFFERED=1

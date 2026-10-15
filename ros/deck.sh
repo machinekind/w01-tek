@@ -166,11 +166,14 @@ install)
     "$0" url "http://$(my_ip_toward "$h"):8090/"
     ;;
 
+# Leave a hint on the Deck for its panel icon. deck_panel.sh decides what
+# the icon opens, and it tries the robot first.
 url)
     h="$(host)" || exit 1
     url="${1:-http://$(my_ip_toward "$h"):8090/}"
     on_deck "mkdir -p ~/.config/wojtek && printf '%s\n' '$url' > ~/.config/wojtek/panel-url" || exit 1
-    echo ">> the Deck's panel icon now opens $url"
+    echo ">> the Deck keeps $url as a hint for its panel icon"
+    echo "   the icon tries the robot first, then this address; ./deck.sh panel <url> opens one page for sure"
     ;;
 
 panel)

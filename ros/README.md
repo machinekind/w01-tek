@@ -132,17 +132,36 @@ the picture the model last answered on with its point drawn; STOP halts
 the whole chain. It needs the nav stack underneath and a model server:
 
 ```bash
-ollama serve                                     # on the GPU box: qwen3-vl:30b-a3b-instruct, port 11434
-# VLM_URL=http://<that box>:11434 in the repo-root .env, then
+# On the GPU box: Ollama with the model (it listens on that box only)
+ollama pull qwen3-vl:30b-a3b-instruct && ollama serve
+# On the PC: a tunnel to it; the box's name stays in your ssh config
+ssh -f -N -L 11435:127.0.0.1:11434 <gpu box>
+curl -s http://127.0.0.1:11435/api/tags | head -c 200   # the model tag must be listed
+# repo-root .env: VLM_URL=http://host.docker.internal:11435 on a Mac,
+#                 VLM_URL=http://127.0.0.1:11435 on Linux; then
 ./sim.sh model_xml:=scene_nav.xml leg_odom:=true nav:=true vlm:=true
 ros2 run wojtek_bringup robot --web-console --vlm            # the robot (PC side)
 ```
 
-On the robot the stack must come up with `perception:=true nav:=true`:
-put them in the service's launch arguments
-(`deploy/rpi/wojtek-robot-local.conf`), or for a bench test `robot
---dry-run --web-console --vlm perception:=true nav:=true` passes them
-itself. That path has not been run on the robot yet (see the nav README).
+Ollama answers only on its own machine, so a plain `ollama serve` on
+another box gives the PC "connection refused". The tunnel above gets
+around that. The other way is `OLLAMA_HOST=0.0.0.0:11434 ollama serve` on
+the box with `VLM_URL=http://<that box>:11434`, but that opens the model
+to everyone on the network with no password, so use it only on a network
+you trust. (Where Ollama runs as a system service, `ollama serve` reports
+the port as taken; set `OLLAMA_HOST` in the service instead.) The Mac and
+Linux URLs differ because the container on a Mac has its own network and
+reaches the PC through `host.docker.internal`, while on Linux it shares
+the PC's network.
+
+On the robot the camera is the deck one: `deck_camera:=true`, already in
+the service's launch arguments (`deploy/rpi/wojtek-robot-local.conf`),
+publishes the depth and the colour JPEG that the nav stack and the brain
+read. Add `nav:=true` next to it there, or for a bench test `robot
+--dry-run --web-console --vlm deck_camera:=true nav:=true` passes both
+itself. Do not add `perception:=true` as well: it starts a second
+RealSense driver on the same camera (the launch refuses the pair). That
+path has not been run on the robot yet (see the nav README).
 
 Everything about it -- the contract, what crosses the robot's wifi (the
 camera's JPEG, not the raw image), stopping -- is in
@@ -285,7 +304,9 @@ Flags:
                 replace the console entirely
 --vlm           the VLM brain for this session (PC side; --vlm-url /
                 --vlm-model override VLM_URL and the 30B default); the
-                stack underneath needs perception:=true nav:=true
+                stack underneath needs the camera and the nav stack:
+                nav:=true, plus deck_camera:=true on the robot (the sim
+                renders its own)
 ```
 The stack comes up DISARMED. **Arming is manual** (that's when torque reaches the
 motors) — from another shell in the same container:

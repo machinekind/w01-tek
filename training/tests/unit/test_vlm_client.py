@@ -135,6 +135,41 @@ def _install_fake_post(monkeypatch, response: httpx.Response):
     return calls
 
 
+def _install_fake_post_sequence(monkeypatch, outcomes):
+    """Like _install_fake_post, but each call takes the next outcome: an
+    Exception instance is raised, anything else is returned. The last
+    outcome repeats once the list runs out."""
+    calls = []
+
+    async def fake_post(self, url, *, json=None, headers=None, **kw):
+        calls.append({"url": url, "json": json, "headers": headers})
+        outcome = outcomes[min(len(calls), len(outcomes)) - 1]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    return calls
+
+
+def _record_sleeps(monkeypatch):
+    """Swap asyncio.sleep for a stub that only writes down each wait, so the
+    retry tests finish at once. The client uses asyncio only to sleep, and
+    asyncio.run does not call sleep itself."""
+    sleeps = []
+
+    async def fake_sleep(delay, *a, **k):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    return sleeps
+
+
+_FORWARD_BODY = {
+    "choices": [{"message": {"content": '{"action":"forward","amount":0.5,"reasoning":"clear"}'}}]
+}
+
+
 def test_decide_success_returns_vlm_decision(monkeypatch):
     body = {
         "choices": [
@@ -154,11 +189,80 @@ def test_decide_success_returns_vlm_decision(monkeypatch):
 
 def test_decide_raises_on_non_200(monkeypatch):
     response = httpx.Response(500, text="internal server error, something broke badly")
-    _install_fake_post(monkeypatch, response)
+    calls = _install_fake_post(monkeypatch, response)
+    sleeps = _record_sleeps(monkeypatch)
 
     client = OpenAIVlmClient(base_url="http://localhost:11434", model="qwen3-vl:30b-a3b-instruct")
     with pytest.raises(RuntimeError, match="500"):
         asyncio.run(client.decide("go to the bed", "abc123", [], 1, 20, POSE))
+    # The default client fails fast: one request, no waiting.
+    assert len(calls) == 1
+    assert sleeps == []
+
+
+def test_default_client_does_not_retry_connect_errors(monkeypatch):
+    calls = _install_fake_post_sequence(
+        monkeypatch, [httpx.ConnectError("All connection attempts failed")]
+    )
+    sleeps = _record_sleeps(monkeypatch)
+
+    client = OpenAIVlmClient(base_url="http://localhost:11434", model="qwen3-vl:30b-a3b-instruct")
+    with pytest.raises(RuntimeError, match="unreachable") as exc:
+        asyncio.run(client.decide("go to the bed", "abc123", [], 1, 20, POSE))
+    assert client.base_url in str(exc.value)
+    assert len(calls) == 1
+    assert sleeps == []
+
+
+def test_retries_ride_out_connect_errors_then_succeed(monkeypatch):
+    calls = _install_fake_post_sequence(
+        monkeypatch,
+        [
+            httpx.ConnectError("All connection attempts failed"),
+            httpx.ConnectError("All connection attempts failed"),
+            httpx.Response(200, json=_FORWARD_BODY),
+        ],
+    )
+    sleeps = _record_sleeps(monkeypatch)
+
+    client = OpenAIVlmClient(
+        base_url="http://localhost:11434", model="qwen3-vl:30b-a3b-instruct", retries=3
+    )
+    decision = asyncio.run(client.decide("go to the bed", "abc123", [], 1, 20, POSE))
+    assert decision.action == "forward"
+    assert len(calls) == 3
+    assert sleeps == [12.0, 24.0]
+
+
+def test_retries_give_up_after_the_last_5xx(monkeypatch):
+    calls = _install_fake_post(monkeypatch, httpx.Response(503, text="model is loading"))
+    sleeps = _record_sleeps(monkeypatch)
+
+    client = OpenAIVlmClient(
+        base_url="http://localhost:11434", model="qwen3-vl:30b-a3b-instruct", retries=3
+    )
+    with pytest.raises(RuntimeError, match="503"):
+        asyncio.run(client.decide("go to the bed", "abc123", [], 1, 20, POSE))
+    assert len(calls) == 4
+    assert sleeps == [12.0, 24.0, 36.0]
+
+
+def test_4xx_is_never_retried(monkeypatch):
+    calls = _install_fake_post(monkeypatch, httpx.Response(404, text="model not found"))
+    sleeps = _record_sleeps(monkeypatch)
+
+    client = OpenAIVlmClient(
+        base_url="http://localhost:11434", model="qwen3-vl:30b-a3b-instruct", retries=3
+    )
+    with pytest.raises(RuntimeError, match="404"):
+        asyncio.run(client.decide("go to the bed", "abc123", [], 1, 20, POSE))
+    assert len(calls) == 1
+    assert sleeps == []
+
+
+def test_negative_retries_is_rejected():
+    with pytest.raises(ValueError):
+        OpenAIVlmClient(retries=-1)
 
 
 def test_decide_request_contains_image_and_system_prompt(monkeypatch):
@@ -214,3 +318,4 @@ def test_defaults_are_the_30b_on_ollama_with_the_room_prompt():
     assert client.model == DEFAULT_VLM_MODEL == "qwen3-vl:30b-a3b-instruct"
     assert client.system_prompt == SYSTEM_PROMPT
     assert client.actions == ACTIONS
+    assert client.retries == 0

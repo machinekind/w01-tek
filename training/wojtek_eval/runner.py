@@ -215,6 +215,7 @@ def main(argv=None) -> None:
         args.base_url, args.model,
         system_prompt=EVAL_SYSTEM_PROMPT, actions=EVAL_ACTIONS,
         temperature=args.temperature,
+        retries=3,  # a long unattended run waits out a server restart (12/24/36 s waits)
     )
 
     async def _main():

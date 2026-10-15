@@ -19,14 +19,19 @@ goal*:
                ALONG THE PIXEL'S BEARING, then look again
              ──blocked──► look again (fresh depth: odometry drifts over a
                long walk, and the target may be right there); blocked
-               twice in a row ──► search
+               again by the goal from that very look ──► search (a turn,
+               a walk or any other result in between starts the count
+               again)
 
   approach ──reached──► look again
            ──blocked──► look again; the next approach detours 40 deg off
              the bearing, alternating sides
+           a detoured approach, reached or blocked, first turns back
+             onto the bearing and then looks again
   any move that covers < min_progress_m counts as a stall; max_stalls in a
-  row, or more than max_blind approaches in a row that never bring the
-  target into the depth window, end the task as `gave_up` with the reason.
+  row, more than max_blind approaches in a row that never bring the
+  target into the depth window, or the task running longer than max_s,
+  end the task as `gave_up` with the reason.
 
 The benchmark behind these choices (scripts/point_bench.py on nine sim
 frames): pointing is fine, hallucinated goals on absent objects are the
@@ -173,17 +178,23 @@ class Explorer:
 
     Actions: ("look",) ask the model with a fresh frame; ("verify", label)
     ask the yes/no question about the current answer; ("goal", (u, v))
-    hand the pixel to the resolver; ("search", deg) turn in place;
+    hand the pixel to the resolver; ("search", deg) turn in place by deg,
+    positive left (a search step, or the turn back after a detour);
     ("explore", metres) walk straight ahead; ("approach", metres, (u, v),
     detour_deg) walk along the bearing of pixel (u, v), turned detour_deg
     off it (positive left); ("done",) and ("gave_up", reason) end the loop.
+
+    The task gives up, with the reason, after max_steps looks, max_stalls
+    moves in a row that went nowhere, more than max_blind approaches in a
+    row with no depth on the target, or once it has run longer than max_s
+    seconds (out_of_time).
     """
 
     TERMINAL = ("done", "gave_up")
 
     def __init__(self, turn_deg=45.0, done_within_m=1.1, approach_m=1.0,
                  explore_m=1.0, max_steps=30, max_blind=8, min_progress_m=0.25,
-                 max_stalls=3, detour_deg=40.0):
+                 max_stalls=3, detour_deg=40.0, max_s=600.0):
         self.turn_deg = float(turn_deg)
         self.done_within_m = float(done_within_m)
         self.approach_m = float(approach_m)
@@ -193,17 +204,20 @@ class Explorer:
         self.min_progress_m = float(min_progress_m)
         self.max_stalls = int(max_stalls)
         self.detour_deg = float(detour_deg)
+        self.max_s = float(max_s)
         self.steps = 0
         self.turned_deg = 0.0
         self.blind = 0        # approaches in a row with the target beyond depth
         self.stalls = 0       # moves in a row that covered < min_progress_m
         self.detour = 0.0     # deg off the bearing for the next approach
-        self.goal_blocks = 0  # resolved goals in a row that ended blocked
+        self.goal_blocks = 0  # blocked goals back to back, with only a look between them
         self._point = None
         self._moving = None   # "approach" / "explore": the move in flight
 
     def _search(self):
         """Turn, and once a whole circle has shown nothing, step forward."""
+        # The robot moves now, so a later block is a first one again.
+        self.goal_blocks = 0
         if abs(self.turned_deg) >= 360.0:
             self.turned_deg = 0.0
             self._moving = "explore"
@@ -225,6 +239,7 @@ class Explorer:
         if kind == "turn" and isinstance(answer.get("deg"), (int, float)) and answer["deg"]:
             deg = float(answer["deg"])
             self.turned_deg += deg
+            self.goal_blocks = 0  # the model's own turn skips _search
             return ("search", deg)
         # not_visible, done (not the model's call), unparsable, a bad point
         return self._search()
@@ -241,13 +256,16 @@ class Explorer:
         """pixel_goal_node's status word for the goal, and the robot's
         distance to the resolved object point (None if unknown)."""
         point, self._point = self._point, None
+        if result != "blocked":
+            # Only a block straight after the look that followed a block
+            # counts as the second one.
+            self.goal_blocks = 0
         if result in ("reached", "blocked"):
             # The depth resolved: the target is inside the window again.
             self.blind = 0
             if distance_m is not None and distance_m < self.done_within_m:
                 return ("done",)
         if result == "reached":
-            self.goal_blocks = 0
             return ("look",)
         if result == "blocked":
             # The setpoint was fixed in odom from a picture metres back; the
@@ -258,8 +276,7 @@ class Explorer:
             self.goal_blocks += 1
             if self.goal_blocks == 1:
                 return ("look",)
-            self.goal_blocks = 0
-            return self._search()
+            return self._search()  # which starts the count again
         if result == "no_depth" and point is not None:
             self.blind += 1
             if self.blind > self.max_blind:
@@ -281,16 +298,35 @@ class Explorer:
                                    f"less than {self.min_progress_m:g} m each")
         else:
             self.stalls = 0
+        # A detoured approach ends with the body pointing detour_deg off
+        # the target's bearing, and the target 45-55 deg off the nose: out
+        # of the colour picture (45 deg each side of centre in the sim, 35
+        # on the D435). So turn back onto the bearing before the look.
+        # Otherwise the look says not_visible and the search turns left,
+        # away from a target that the left detour has put on the right.
+        # An explore walks straight ahead: nothing to turn back from.
+        back = -self.detour if moving == "approach" else 0.0
         if result == "reached":
             self.detour = 0.0
-            return ("look",)
-        if moving == "approach":
+        elif moving == "approach":
             # Something stands on the bearing. Looking again gives the
             # same bearing, so the next approach goes round it: left
             # first, then right, alternating while it stays blocked.
             self.detour = -self.detour if self.detour else self.detour_deg
-            return ("look",)
-        return self._search()
+        else:
+            return self._search()
+        # Not a search step: the turn back does not count towards the circle.
+        return ("search", back) if back else ("look",)
 
     def turn_done(self):
         return ("look",)
+
+    def out_of_time(self, action, elapsed_s):
+        """The next action once `elapsed_s` seconds of the task have
+        passed. A step that already ended the task keeps its own result
+        even if it ran past the budget: a `done` that came late is still
+        a `done`, and a `gave_up` keeps its own reason. Anything else past
+        `max_s` gives up, and says that time ran out."""
+        if action[0] in self.TERMINAL or elapsed_s < self.max_s:
+            return action
+        return ("gave_up", f"time budget spent: {self.max_s:g} s without reaching the target")

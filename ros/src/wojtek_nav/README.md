@@ -11,7 +11,7 @@ stock image_pipeline + nav2 composed by a launch; the driver is ours.
 ```bash
 ros2 launch wojtek_nav costmap.launch.py                                   # standalone, against a running camera + odometry
 ros2 launch wojtek_pc sim.launch.py model_xml:=scene_nav.xml leg_odom:=true nav:=true   # a sim session
-ros2 launch wojtek_bringup robot.launch.py perception:=true nav:=true      # the robot (not run yet)
+ros2 launch wojtek_bringup robot.launch.py deck_camera:=true nav:=true     # the robot (not run yet)
 ```
 
 ```
@@ -25,7 +25,7 @@ TF odom->base_link (leg_odometry), base_link->camera (URDF / driver) ──┘  
 | piece | where |
 |---|---|
 | odometry (`odom->base_link`) | `wojtek_odometry`; on the robot by default, in the sim with `leg_odom:=true` |
-| depth stream | `wojtek_perception_bringup` (robot), `sim_camera_node` (sim); the RAW depth, 90 deg of view |
+| depth stream | the deck camera's RealSense node on the robot (`deck_camera:=true`, started by `wojtek_bringup`, raw depth at 424x240), `sim_camera_node` (sim); the RAW depth, 90 deg of view |
 | camera extrinsics | the design mount in both worlds: the sim URDF (`with_camera`) and the robot's (`with_camera_mount`, `body.urdf.xacro`), the robot's still to be confirmed with a tape measure (see the perception README) |
 | costmap settings | `config/costmap.yaml` -- what the map is for and what every number follows from |
 | test world | `wojtek_pc/config/scene_nav.xml`: a corridor with two branches, a crate, a pillar, a 0.15 m box |
@@ -176,14 +176,26 @@ ollama pull qwen3-vl:30b-a3b-instruct && ollama serve
 # 2. On the PC: VLM_URL=http://<that box>:11434 in the repo-root .env (see .env.example), then
 ./ros/sim.sh model_xml:=scene_nav.xml leg_odom:=true nav:=true vlm:=true   # the sim session
 ros2 run wojtek_bringup robot --web-console --vlm    # the robot (PC side; the RPi stack
-                                                     # needs perception:=true nav:=true --
-                                                     # in the service's ExecStart, or via
-                                                     # --dry-run on the bench)
+                                                     # needs nav:=true in the service's
+                                                     # launch arguments, its deck_camera:=true
+                                                     # is the camera -- or --dry-run
+                                                     # deck_camera:=true nav:=true on the bench)
 # 3. Type the instruction into the web console's brain panel (http://localhost:8080),
 #    or from a shell:
 ros2 topic pub -1 /wojtek/vlm/instruction std_msgs/String "data: podejdź do fioletowego słupa"
 ros2 topic pub -1 /wojtek/vlm/instruction std_msgs/String "data: stop"     # or the panel's STOP
 ```
+
+On the robot the camera is the deck panel's (`deck_camera:=true`, already
+in the service's launch arguments, `ros/deploy/rpi/wojtek-robot-local.conf`):
+colour at 640x480 and the raw depth at 424x240, which is what the costmap,
+the pixel resolver and the brain read. Add only `nav:=true` there. Do not
+add `perception:=true` next to it. That starts a second RealSense driver
+on the same camera under the same name, with d435.yaml's point cloud,
+alignment and sync on, and that set crashes the driver on the Pi (see the
+deck camera's note in `wojtek_bringup/launch_common.py`). Keep
+`deck_camera_depth` at its default (true): without the depth the costmap
+and the pixel resolver have nothing to read.
 
 `brain.launch.py` is the one node with its arguments (`url`, `model`,
 `instruction`, `image_topic`, `compressed`); `url` takes the server's
@@ -205,7 +217,9 @@ needs the plugin installed (`ros/deploy/deck/README.md`, step 4);
 cancels the task: the brain publishes `/wojtek/nav/cancel`
 (`std_msgs/Empty`), which goto and the pixel resolver both read -- goto
 drops its setpoint now (one zero Twist, then idle) rather than at its 3 s
-dead-man, the resolver stops re-sending (`cancelled`) -- and zeroes any
+dead-man, and ignores goals for half a second after it so a re-send
+already on its way cannot start the robot again; the resolver stops
+re-sending (`cancelled`) -- and zeroes any
 turn of its own. The console's STOP sends the cancel directly as well, so
 it works with no brain running; and the brain reads that topic too, so a
 cancel from anywhere (a hand-typed `ros2 topic pub`) ends its task rather
@@ -223,12 +237,15 @@ beyond the depth window (`no_depth`: 0 % of the patch past 3 m) is
 approached 1 m **along the pixel's bearing** (the viewing ray through the
 colour camera_info and TF, fixed in `odom` once) and looked at again; a
 `blocked` approach looks again and detours 40° off the bearing, left then
-right. A `blocked` goal looks again once (a fresh picture re-resolves the
+right. A detoured walk ends with the body 40° off the target, out of the
+picture, so the robot turns back onto the bearing before it looks. A
+`blocked` goal looks again once (a fresh picture re-resolves the
 target from where the robot stands: the leg odometry under-reads a long
 walk by up to ~30 % in the sim, so a setpoint fixed metres back can put
-the robot at the target with odom saying otherwise), and turns if it is
-blocked again. **Arrival is the executive's call**: `done` when goto reached
-or was blocked at the setpoint and the resolved object point is within
+the robot at the target with odom saying otherwise), and turns if the goal
+from that fresh look is blocked again. **Arrival is the executive's
+call**: `done` when goto reached or was blocked at the setpoint and the
+resolved object point is within
 `done_within_m` (1.1 m);
 the model's own `done` is not trusted (a thin pillar never "fills the
 view"). Status JSON on `/wojtek/vlm/status`, the picture with the model's
@@ -242,7 +259,9 @@ depth window, or `max_stalls` (3) moves in a row that covered less than
 `min_progress_m` (0.25 m) each end the task as `gave_up`, the reason
 latched in the status's `error` (e.g. `no progress: 3 moves in a row
 covered less than 0.25 m each` -- what a robot that was never armed
-gets).
+gets). When the time runs out the reason reads `time budget spent: 600 s
+without reaching the target`; a step that finishes the task after the
+budget has run out keeps its own result (a late `done` stays `done`).
 
 Measured (sim, 2026-09-25, `scene_nav.xml`, qwen3-vl:30b-a3b-instruct on
 Ollama on the DGX): "podejdź do fioletowego słupa" from a pose facing

@@ -1,0 +1,48 @@
+# @package _global_
+# QUIET, LOW-IMPACT WALKING on the v6.27 legs (2026-10-22). The goal is
+# not a long stride for its own sake: a lower body oscillation frequency,
+# less mechanical work and softer touchdowns -- the loads the legs and
+# the hip motor flanges see. Each lever is priced directly, with the
+# doses the stock robot's quiet family measured (flat_quiet_v1..v6,
+# QUIET-REPORT-2026-08-12):
+#   * feet_landing -15: downward foot speed^2 before contact (Sony
+#     2502.10983, QuietPaw 2503.05035); from scratch it collapses into
+#     skating, so this is a PHASE-B preset: restore from a converged
+#     walking checkpoint (wojtek_legs_v627_loco_v3 or _v4_imu).
+#   * the spin exemption that kept pivots alive: fade 0.1, spins pay 35%.
+#   * base_accel -0.02 with the same fade: squared vertical and angular
+#     acceleration of the body, the instrument behind az_p99/vibration.
+#   * energy_cmd 1.0: command-normalized mechanical power, the term that
+#     took the stock walk from 16 W to 10 W (v5).
+#   * a slower gait clock, 0.7-1.6 Hz instead of 0.9-2.0: the step rate
+#     IS the body's excitation frequency; the band scales as the square
+#     root of leg length (Walk These Ways conditions on 0.5-4 Hz and the
+#     stride follows the frequency).
+# Judged on the battery: vibration index, tilt_rate_rms, foot-force
+# proxy (peak base accel), mean power, duty factor and stride span,
+# against wojtek_legs_v627_loco_v3; falls and spin rate guard against
+# motion suppression.
+# Usage:
+#   ./run.sh train +experiment=legs_v627_quiet run_name=<name> \
+#     restore=runs/wojtek_legs_v627_loco_v3/checkpoints/000302284800
+defaults:
+  - legs_v627_locomotion
+
+task:
+  env:
+    gait:
+      freq: [0.7, 1.6]
+    reward:
+      feet_landing_wz_fade: 0.1
+      feet_landing_wz_floor: 0.35
+      base_accel_wz_fade: 0.1
+      base_accel_wz_floor: 0.35
+      scales:
+        feet_landing: -15.0
+        base_accel: -0.02
+        energy_cmd: 1.0
+
+ppo:
+  num_timesteps: 1000000000
+
+run_name: wojtek_legs_v627_quiet

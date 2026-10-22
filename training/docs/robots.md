@@ -297,6 +297,32 @@ map, `clamp_knee`, and the default policy when no `policy:=` is given. With
 ros2 launch wojtek_pc sim.launch.py robot:=wojtek_v2 policy:=<a legs_v627 policy>
 ```
 
-`real_io_node` still holds the stock legs' home and folded poses and their
-passive-joint table. Its zero, stand-up and lie-down services are not ready
-for the v6.27 legs.
+`real_io_node` takes the same `robot` name and picks the legs' poses from
+`wojtek_policy/poses.py` (`poses.for_robot`): the home stance (the model's
+`home` keyframe), the folded boot/zeroing pose and the passive-joint table
+for RViz (fourth/fifth as a
+polynomial of the lever joint, the free foot joint at zero). The zero,
+stand-up and lie-down services and the four pad tricks therefore work on
+the v6.27 legs; the tricks are the clips from the mechanical team's
+2026-10-19 analysis (`wojtek_policy/data/tricks_legs_v627.json`: bow, sit
+and shake in the flange-friendly M3 variant, paw_wave in M2 because the M3
+lean tips the robot over at a 0.035 rad zeroing error). A
+simulated plant lies down the same way: the launch hands it the legs'
+folded targets (`folded_ctrl`), and the plant lets the robot settle with
+its servos off, as the unpowered robot does.
+
+The folded pose is the pose the unpowered robot rests in, because that is
+where it zeroes its encoders at power-on. Simulated by switching the hip and
+lever actuators off on the standing robot while the abduction servos keep
+the legs parallel to the body (the operator's hands: the abduction has no
+stop, and left free the legs splay 0.14-1.3 rad depending on how the robot
+comes down). The body drops onto the floor, the levers rest on their
+folding limit (+-0.25), the front hips reach their range stop (2.695) and
+the rear hips stop 0.3 rad short of theirs on the thigh-floor contact
+(-2.39); this repeats to 0.03 rad. Where the real linkage and thighs rest
+has to be measured on the robot; the numbers are the model's. Verified in
+plain MuJoCo on 2026-10-22: `lie_down` to this pose leaves 1.3 N*m on the
+hips, the 4 s stand-up ramp from it reaches 0.343 m level with 14 N*m at
+the knee crank (also from the free-lying pose with splayed legs), the
+simulated plant comes to rest within 0.03 rad of it, and every trick
+ends standing (peak 19 N*m in paw_wave).

@@ -101,6 +101,10 @@ hardware_interface::CallbackReturn MujocoHardwareInterface::on_init(
     return hardware_interface::CallbackReturn::ERROR;
   }
   initial_pose_ = param(info_.hardware_parameters, "initial_pose", "home");
+  // The folded pose as actuator targets (wojtek_policy.poses, via the
+  // launch), so the plant lies down the way real_io_node's lie_down does
+  // for these legs. Empty keeps the plant's stock rule.
+  folded_ctrl_ = parseDoubles(param(info_.hardware_parameters, "folded_ctrl", ""));
   dry_run_ = isTrue(param(info_.hardware_parameters, "dry_run", "false"));
 
   const auto joint_map_yaml = param(info_.hardware_parameters, "joint_map_yaml");
@@ -209,7 +213,7 @@ hardware_interface::CallbackReturn MujocoHardwareInterface::on_configure(
         joint_names_[i],
         {std::stod(kp->second), std::stod(kd->second), std::stod(max_torque->second)});
     }
-    plant_.reset(initial_pose_);
+    plant_.reset(initial_pose_, folded_ctrl_);
   } catch (const std::exception & e) {
     RCLCPP_FATAL(logger_, "%s", e.what());
     return hardware_interface::CallbackReturn::ERROR;

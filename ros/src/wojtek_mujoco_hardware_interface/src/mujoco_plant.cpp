@@ -177,38 +177,118 @@ double MujocoPlant::foldedKneeRad() const
   throw std::runtime_error("model has no knee (third) actuator");
 }
 
-void MujocoPlant::reset(const std::string & pose)
+void MujocoPlant::reset(const std::string & pose, const std::vector<double> & folded_ctrl)
 {
+  if (!folded_ctrl.empty() && static_cast<int>(folded_ctrl.size()) != model_->nu) {
+    throw std::runtime_error(
+      "folded_ctrl has " + std::to_string(folded_ctrl.size()) + " values, the model has " +
+      std::to_string(model_->nu) + " actuators");
+  }
+  if (pose != "home" && pose != "folded") {
+    throw std::runtime_error("initial_pose must be 'home' or 'folded', got " + pose);
+  }
   const int home = mj_name2id(model_, mjOBJ_KEY, "home");
   if (home < 0) {
     throw std::runtime_error("model has no 'home' keyframe");
   }
   mj_resetDataKeyframe(model_, data_, home);
-  mj_forward(model_, data_);
   leftover_ = 0.0;
+
+  // The pose's actuator targets: the keyframe's for home; for folded the
+  // legs' own vector, or the stock rule (hips straight, knees on the stop).
+  std::vector<double> targets(model_->nu);
+  for (int i = 0; i < model_->nu; ++i) {
+    targets[i] = model_->key_ctrl[home * model_->nu + i];
+  }
+  if (pose == "folded") {
+    if (!folded_ctrl.empty()) {
+      targets = folded_ctrl;
+    } else {
+      const double knee = foldedKneeRad();
+      for (int i = 0; i < model_->nu; ++i) {
+        const auto & name = actuator_names_[i];
+        const bool is_knee = name.size() > 12 &&
+          name.compare(name.size() - 12, 12, "_third_joint") == 0;
+        targets[i] = is_knee ? knee : 0.0;
+      }
+    }
+  }
+
+  // 1. Put the actuated joints exactly on the targets and let the servos
+  //    settle the passive loop joints onto them with gravity off: the pose
+  //    the real robot is held in (home) or aligned to by hand (folded)
+  //    before the drives are powered, with the four-bar closure consistent.
+  //    The keyframe's own qpos is the settled stance, which already sags
+  //    under the servo -- latching that as "home" would count the sag
+  //    twice, once in the offset and once more under gravity.
+  for (int i = 0; i < model_->nu; ++i) {
+    data_->qpos[qpos_adr_[i]] = targets[i];
+    data_->ctrl[i] = targets[i];
+  }
+  std::fill(data_->qvel, data_->qvel + model_->nv, 0.0);
+  const mjtNum gravity[3] = {model_->opt.gravity[0], model_->opt.gravity[1], model_->opt.gravity[2]};
+  std::fill(model_->opt.gravity, model_->opt.gravity + 3, 0.0);
+  stepFor(1.0);
+  std::copy(gravity, gravity + 3, model_->opt.gravity);
+  std::fill(data_->qvel, data_->qvel + model_->nv, 0.0);
   if (pose == "home") {
+    mj_forward(model_, data_);
+    data_->time = 0.0;
     return;
   }
-  if (pose != "folded") {
-    throw std::runtime_error("initial_pose must be 'home' or 'folded', got " + pose);
+
+  // 2. Lying. With the legs' own folded_ctrl: do what the unpowered robot
+  //    does. Stand at home, switch the hip and lever servos off and let the
+  //    robot come down under gravity while the abduction servos keep the
+  //    legs where the operator holds them (the abduction has no stop), then
+  //    switch everything off and let it rest. Gravity, the joint stops and
+  //    the floor place it, as they do at power-on; folded_ctrl is where
+  //    real_io_node assumes it rests, and the difference is the zeroing
+  //    error the real robot has too.
+  //    Without folded_ctrl (the stock rule): settle from home under the
+  //    servos holding the folded targets, as before.
+  std::vector<mjtNum> gain(model_->actuator_gainprm, model_->actuator_gainprm + model_->nu * mjNGAIN);
+  std::vector<mjtNum> bias(model_->actuator_biasprm, model_->actuator_biasprm + model_->nu * mjNBIAS);
+  auto servo_off = [&](int i) {
+      model_->actuator_gainprm[i * mjNGAIN + 0] = 0.0;
+      model_->actuator_biasprm[i * mjNBIAS + 1] = 0.0;
+      model_->actuator_biasprm[i * mjNBIAS + 2] = 0.0;
+    };
+  if (!folded_ctrl.empty()) {
+    mj_resetDataKeyframe(model_, data_, home);
+    for (int i = 0; i < model_->nu; ++i) {
+      data_->ctrl[i] = targets[i];
+      const auto & name = actuator_names_[i];
+      const bool abduction = name.size() > 12 &&
+        name.compare(name.size() - 12, 12, "_first_joint") == 0;
+      if (!abduction) {
+        servo_off(i);
+      }
+    }
+    stepFor(3.0);
+    for (int i = 0; i < model_->nu; ++i) {
+      servo_off(i);
+    }
+    stepFor(1.0);
+  } else {
+    for (int i = 0; i < model_->nu; ++i) {
+      data_->ctrl[i] = targets[i];
+    }
+    stepFor(2.0);
   }
-  // Settle into the boot pose instead of hand-writing a qpos: the four-bar
-  // closure has to stay consistent, and gravity plus the folded targets get
-  // there the same way the real robot does.
-  const double knee = foldedKneeRad();
-  for (int i = 0; i < model_->nu; ++i) {
-    const auto & name = actuator_names_[i];
-    const bool is_knee = name.size() > 12 &&
-      name.compare(name.size() - 12, 12, "_third_joint") == 0;
-    data_->ctrl[i] = is_knee ? knee : 0.0;
-  }
-  const int steps = static_cast<int>(2.0 / model_->opt.timestep);
-  for (int i = 0; i < steps; ++i) {
-    mj_step(model_, data_);
-  }
+  std::copy(gain.begin(), gain.end(), model_->actuator_gainprm);
+  std::copy(bias.begin(), bias.end(), model_->actuator_biasprm);
   std::fill(data_->qvel, data_->qvel + model_->nv, 0.0);
   data_->time = 0.0;
   mj_forward(model_, data_);
+}
+
+void MujocoPlant::stepFor(double seconds)
+{
+  const int steps = static_cast<int>(seconds / model_->opt.timestep);
+  for (int i = 0; i < steps; ++i) {
+    mj_step(model_, data_);
+  }
 }
 
 void MujocoPlant::latchActivationPose()

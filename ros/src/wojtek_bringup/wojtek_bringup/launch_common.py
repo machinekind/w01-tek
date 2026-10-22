@@ -44,7 +44,7 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
-from wojtek_policy import robots
+from wojtek_policy import poses, robots
 from wojtek_policy.policy_source import active_policy, load_policy
 
 
@@ -145,10 +145,16 @@ def _launch_setup(context, with_rviz, hardware):
         pc_share = get_package_share_directory("wojtek_pc")
         xacro_file = os.path.join(pc_share, "urdf", "wojtek_sim.urdf.xacro")
         # The plant starts in the pose real_io_node is told the robot is in;
-        # anything else and zeroing would start from a lie.
+        # anything else and zeroing would start from a lie. The folded pose
+        # is the legs' (wojtek_policy.poses), handed over as the ctrl vector
+        # the plant settles under, the same numbers real_io_node ramps to.
+        folded = " ".join(
+            f"{v:.6f}" for v in poses.for_robot(profile.training_robot).folded_ctrl
+        )
         xacro_args += [
             " hw:=", LaunchConfiguration("hw"),
             " boot_pose:=", LaunchConfiguration("boot_pose"),
+            f" folded_ctrl:='{folded}'",
             " model_xml:=" + sim_model_xml(context),
             " joint_map_yaml:=" + joint_map_yaml,
         ]
@@ -222,6 +228,9 @@ def _launch_setup(context, with_rviz, hardware):
                 {
                     "dry_run": LaunchConfiguration("dry_run"),
                     "boot_pose": LaunchConfiguration("boot_pose"),
+                    # The legs' poses, passive-joint table and trick clips
+                    # follow the profile, like the joint map.
+                    "robot": profile.name,
                     "joint_map_yaml": joint_map_yaml,
                 }
             ],

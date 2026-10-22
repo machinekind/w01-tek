@@ -132,7 +132,7 @@ Runtime wytrenowanej polityki RL + node ROS. Działa na RPi i w symulacji.
 * `wojtek_policy/policy.py` — `WojtekPolicy`: czysty numpy runtime (bez importów ROS, testowalny unit-testami). Ładuje `policy.npz` (wagi MLP z SiLU + tanh) i `policy_meta.json`; składa wektor obserwacji wg `obs_layout` z meta (dzięki temu jeden runtime obsługuje rodziny polityk z IMU i bez — "springy" jest proprioceptywna), liczy `targets = clip(anchor + tanh_mlp(obs)·action_scale, target_low, target_high)`. Ma clampy bezpieczeństwa na kolano (singularność czworoboku — snap-through może złamać mechanizm) i abdukcję.
 * `wojtek_policy/policy_node.py` — node ROS (opis niżej).
 * `wojtek_policy/joint_map.py` — `JointMap`: afiniczne mapowanie konwencji MuJoCo↔URDF (`q_urdf = sign·q_mjc + offset`), wczytywane z `config/joint_map.yaml`.
-* `wojtek_policy/poses.py` — nazwane pozy współdzielone przez real i sim: `FOLDED_KNEE_RAD = 0.425` (poza boot/zerowania), `folded_ctrl()`, oraz `PASSIVE_FROM_KNEE` — wielomiany 8. stopnia dające kąty pasywnych przegubów czworoboku (fourth/fifth) z kąta kolana (dopasowane do domknięcia MJCF, błąd ≤ 7e-5 rad).
+* `wojtek_policy/poses.py` — nazwane pozy współdzielone przez real i sim, osobny zestaw na każdy komplet nóg (`poses.for_robot(<training_robot>)`, wybierany przez profil robota z `robots.py`): poza home (keyframe `home` modelu), poza folded = boot/zerowania (stock: biodra proste, kolana na zderzaku `FOLDED_KNEE_RAD = 0.425`; nogi v6.27: poza, w której leży robot bez momentów z nogami trzymanymi równolegle — przednie biodra na ograniczniku, tylne 0,3 rad przed nim na kontakcie uda z podłożem, dźwignie na granicy złożenia, odwodzenie 0 umownie, bo nie ma oparcia i trzeba je ustawić ręcznie przed zerowaniem; liczby z modelu, do zmierzenia na robocie), obwiednia ctrlrange oraz tabela przegubów pasywnych czworoboku (fourth/fifth) jako wielomiany 8. stopnia od kąta kolana/dźwigni (dopasowane do domknięcia MJCF, błąd ≤ 8e-5 rad; v6.27 ma dodatkowo swobodny `foot_joint` publikowany jako 0). Klipy sztuczek analogicznie: `tricks.for_robot()` (stock: keyframe'y w kodzie; v6.27: próbki z `wojtek_policy/data/tricks_legs_v627.json`, wariant M3 z analizy mechaników 19.10).
 * `config/` — `joint_map.yaml`; `test/test_policy.py`. Wagi polityki nie są wendorowane: `policy_node` ładuje je po referencji (`policy:=`).
 
 **Node: `policy_node`** (nazwa: `wojtek_policy`) — pętla 50 Hz (z `ctrl_dt` w meta): sensory → cele pozycyjne stawów.
@@ -175,7 +175,7 @@ Bring-up realnego robota: ros2_control + adapter + procedura operacyjna.
 | srv | `/wojtek/stand_up`, `/wojtek/lie_down` — wolne rampy cosinusowe do pozy home/folded | `std_srvs/Trigger` |
 | srv | `/wojtek/zero` — "robot jest TERAZ fizycznie w pozie boot", przelicza offset | `std_srvs/Trigger` |
 
-Parametry: `policy_dir`, `joint_map_yaml`, `max_arm_jump_rad` (0.15 — odmowa ARM, gdy robot daleko od home), `dry_run` (loguje komendy zamiast publikować), `boot_pose`, `folded_knee_rad`, `ramp_duration_s` (4.0), `ramp_rate_hz` (50).
+Parametry: `robot` (nazwa profilu z `robots.py`; wybiera pozy, tabelę przegubów pasywnych i klipy sztuczek dla nóg), `joint_map_yaml`, `max_arm_jump_rad` (0.15 — odmowa ARM, gdy robot daleko od home), `dry_run` (loguje komendy zamiast publikować), `boot_pose`, `folded_knee_rad` (tylko nogi stock), `ramp_duration_s` (4.0), `ramp_rate_hz` (50).
 
 Zabezpieczenia: startuje DISARMED; arm/rampa/zero wzajemnie się wykluczają; filtr non-finite tuż przed napędami (ostatnia linia obrony — topic komend jest otwarty dla każdego).
 

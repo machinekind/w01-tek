@@ -206,6 +206,26 @@ TEST_F(Plant, reset_rejects_a_pose_it_does_not_know)
   EXPECT_NO_THROW(plant_.reset("folded"));
 }
 
+TEST_F(Plant, folded_pose_can_be_given_as_the_legs_own_ctrl_vector)
+{
+  // Other legs fold differently (the v6.27 legs lie with the hips on their
+  // stop), so the launch hands the plant the folded targets of the legs it
+  // runs. With them the robot comes down from the stand with the servos
+  // off and ends on the floor; a vector of the wrong length is refused.
+  plant_.reset("home");
+  const double standing = plant_.basePose()[2];
+  std::vector<double> folded(plant_.actuatorNames().size(), plant_.foldedKneeRad());
+  EXPECT_NO_THROW(plant_.reset("folded", folded));
+  EXPECT_LT(plant_.basePose()[2], standing);
+  std::vector<double> too_long(plant_.actuatorNames().size() + 1, 0.0);
+  EXPECT_THROW(plant_.reset("folded", too_long), std::runtime_error);
+  // Home puts the actuated joints exactly on the home targets, so a drive
+  // powered up there reads zero offset against them.
+  plant_.reset("home");
+  plant_.latchActivationPose();
+  EXPECT_NEAR(plant_.jointPosition(0), 0.0, 1e-9);
+}
+
 TEST_F(Plant, imu_is_reported_in_the_frame_the_sensor_is_mounted_in)
 {
   // Let it come to rest on the floor first: in free fall the accelerometer

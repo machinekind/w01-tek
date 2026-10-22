@@ -36,6 +36,11 @@
        in. Wired from the launch's boot_pose, the same argument real_io_node
        takes: the two must agree or zeroing starts from a lie. -->
   <xacro:arg name="boot_pose" default="home" />
+  <!-- The folded pose as the 12 actuator targets (MuJoCo convention, actuator
+       order) the plant settles under when boot_pose is "folded". The launch
+       fills it from wojtek_policy.poses for the robot's legs. Empty = the
+       stock rule (hips straight, knees at the model's ctrlrange stop). -->
+  <xacro:arg name="folded_ctrl" default="" />
   <!-- Bench mode, the simulated analogue of the real one: physics runs but
        commands are not applied, so the robot goes limp. Ignored by the mock,
        which has no torque to withhold. -->
@@ -99,6 +104,7 @@
              wojtek_policy reads. No second copy of the fitted values. -->
         <param name="joint_map_yaml">$(arg joint_map_yaml)</param>
         <param name="initial_pose">$(arg boot_pose)</param>
+        <param name="folded_ctrl">$(arg folded_ctrl)</param>
         <param name="dry_run">$(arg dry_run)</param>
         <!-- Emulate the physical mount (URDF imu_joint: rpy 0 0 0, i.e. the
              sensor is upright, see body.urdf.xacro). The simulated IMU must

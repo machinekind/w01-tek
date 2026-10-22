@@ -85,10 +85,17 @@ public:
   /// ctrlrange lower bound instead of a duplicated constant.
   double foldedKneeRad() const;
 
-  /// "home" (the standing keyframe) or "folded" (lying flat, knees on the
-  /// stop -- the real robot's boot pose). Folded is reached by settling from
-  /// home under gravity so the four-bar closure stays consistent.
-  void reset(const std::string & pose);
+  /// "home" (standing exactly at the home targets, the pose the robot is
+  /// held in when its drives are powered) or "folded" (lying, the real
+  /// robot's boot pose). With `folded_ctrl` (one target per actuator,
+  /// MuJoCo convention: the legs' folded pose from wojtek_policy.poses) the
+  /// robot comes down from the stand with the hip and knee servos OFF and
+  /// the abduction servos holding the targets' abduction (the operator's
+  /// hands), then rests with every servo off -- gravity, the joint stops
+  /// and the floor place it the way they do at power-on. Empty means the
+  /// stock rule: settle from home under the servos holding hips straight
+  /// and knees at the model's own ctrlrange stop.
+  void reset(const std::string & pose, const std::vector<double> & folded_ctrl = {});
 
   /// Take the current joint positions as the zero the states are reported
   /// against (what powering the drives up in this pose would give).
@@ -99,6 +106,9 @@ public:
   int advance(double seconds);
 
   double timestep() const {return model_->opt.timestep;}
+
+  /// Step physics for `seconds` of simulated time.
+  void stepFor(double seconds);
   double simTime() const {return data_->time;}
 
   /// Joint position/velocity/effort in MuJoCo convention, relative to the

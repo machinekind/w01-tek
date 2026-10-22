@@ -15,8 +15,8 @@ Two sets exist:
   "legs_v627"   the v6.27/v6.37a four-bar legs (training variant
                 legs_v627; v6.37a has the same kinematics). Home = the
                 levelled stance of the built training model; folded = the
-                pose the unpowered robot rests in with its legs held
-                parallel (the owner's rule of 2026-10-22); passive joints
+                shins-flat pose on 35 mm standoffs under the base (the
+                owner's definition of 2026-10-22); passive joints
                 (fourth/fifth) from the lever (third) joint, the free foot
                 joint at zero.
 """
@@ -99,44 +99,42 @@ V627_HOME_CTRL = np.array([
 
 # Folded = lying, the boot/zeroing pose. The robot zeroes its encoders at
 # power-on, lying, before any torque exists, so this is the pose the
-# unpowered robot rests in: body on the floor, every HIP against its range
-# stop (+-2.69479, the model's joint limit and a physical stop), every LEVER
-# folded against its limit (+-0.25; the model's range ends at 0.244 and the
-# soft limit lets it past by 0.01), the shins flat under the thighs, front
-# and rear alike (owner, 2026-10-22: nothing holds the rear up without
-# torque, so the rear legs lie like the front ones). The ABDUCTION has no
-# stop and is zero here by convention: align the legs parallel to the body
-# by hand before /wojtek/zero (RViz shows the pose). In MuJoCo the hips and
-# levers land on these stops from any start when the actuators are switched
-# off on the standing robot; the rear hips only stop short when the legs are
-# held parallel, because the primitive collision shapes let the thighs fold
-# under the body -- an artefact, not the robot. Where the real linkage
-# rests has to be measured on the robot; these numbers are the model's.
-# Verified in MuJoCo: lie_down to this pose ends with 1.4 N*m left on the
-# hips, a 4 s cosine ramp from it stands the robot up to 0.35 m level with
-# 14-17 N*m peak at the knee crank, also from the splayed free-lying pose.
+# unpowered robot rests in. The owner's definition (2026-10-22): the shin
+# folded against the thigh (lever on its folding limit, 0.244), the leg
+# turned at the hip until the line the shin and the foot pad rest on is
+# horizontal, and the body carried on four 35 mm standoffs under the base
+# -- which is exactly where the base bottom sits above that line
+# (computed on the v6.37a meshes: hip axis 96 mm, base bottom 35 mm above
+# the floor). The hip then stands at +-2.903 rad, 0.21 rad PAST the joint
+# range of the exported model (2.695): the real hip stop has to allow it,
+# or the shins cannot lie flat on any standoffs -- measure on the robot.
+# The abduction has no stop and is zero by convention: with the body on
+# the standoffs the legs carry no load and stay where they are put.
+# Front and rear legs are alike (the same part, mounted mirrored).
 V627_FOLDED_CTRL = np.array([
-    0.0, -2.69479, -0.25,
-    0.0, -2.69479, -0.25,
-    0.0, 2.69479, 0.25,
-    0.0, 2.69479, 0.25,
+    0.0, -2.903, -0.244346,
+    0.0, -2.903, -0.244346,
+    0.0, 2.903, 0.244346,
+    0.0, 2.903, 0.244346,
 ])
 
-# Actuator ctrlrange of the built legs_v627 model, policy convention: the
-# envelope every ramp and clip target must stay inside. The hip range ends
-# at the physical hip stop; the lever range stops 13 degrees short of the
-# four-bar dead points.
+# Envelope every ramp and clip target must stay inside, policy convention:
+# the built legs_v627 model's actuator ctrlrange, except the hip, which
+# opens to +-2.95 so the lying pose above is reachable (the model's 2.695
+# is the CAD export's range, and the lying pose needs 2.903; the sim's
+# joint limit still clamps there until the model is re-exported). The
+# lever range stops 13 degrees short of the four-bar dead points.
 V627_CTRL_LOW = np.array([
-    -3.1416, -2.69479, -2.83267,
-    -3.1416, -2.69479, -2.83267,
+    -3.1416, -2.95, -2.83267,
+    -3.1416, -2.95, -2.83267,
     -3.1416, 1.53589, 0.244346,
     -3.1416, 1.53589, 0.244346,
 ])
 V627_CTRL_HIGH = np.array([
     3.1416, -1.53589, -0.244346,
     3.1416, -1.53589, -0.244346,
-    3.1416, 2.69479, 2.83267,
-    3.1416, 2.69479, 2.83267,
+    3.1416, 2.95, 2.83267,
+    3.1416, 2.95, 2.83267,
 ])
 
 # Passive four-bar joints of the v6.27 legs as a function of the lever

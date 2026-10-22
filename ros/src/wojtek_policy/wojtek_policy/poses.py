@@ -98,26 +98,26 @@ V627_HOME_CTRL = np.array([
 ])
 
 # Folded = lying, the boot/zeroing pose. The robot zeroes its encoders at
-# power-on, lying, before any torque exists, so this must be the pose the
-# unpowered robot rests in. Simulated on 2026-10-22 by switching the hip and
-# lever actuators off on the standing robot while the abduction servos keep
-# the legs parallel to the body (what the operator does by hand: the
-# abduction has no stop, and left free the legs splay 0.14-1.3 rad depending
-# on how the robot comes down, so it is zero here by convention). The robot
-# drops onto the floor (base 83 mm up, nose 11 degrees down): the LEVERS
-# rest on their folding limit (+-0.25; the model's range ends at 0.244, the
-# soft limit lets them past by 0.01), the FRONT hips reach their range stop
-# (2.695, a physical stop), the REAR hips stop 0.3 rad short of theirs on
-# the thigh-floor contact (-2.39). Repeats to 0.03 rad between runs and
-# between the v6.27 and v6.37a models. Where the real linkage and thighs
-# come to rest has to be measured on the robot; these numbers are the
-# model's. Verified in MuJoCo: lie_down to this pose ends with 1.3 N*m left
-# on the hips (no fight with the floor), a 4 s cosine ramp from it stands
-# the robot up to 0.343 m level (14 N*m peak at the knee crank), and from
-# the free-lying pose with splayed legs the same ramp also stands up.
+# power-on, lying, before any torque exists, so this is the pose the
+# unpowered robot rests in: body on the floor, every HIP against its range
+# stop (+-2.69479, the model's joint limit and a physical stop), every LEVER
+# folded against its limit (+-0.25; the model's range ends at 0.244 and the
+# soft limit lets it past by 0.01), the shins flat under the thighs, front
+# and rear alike (owner, 2026-10-22: nothing holds the rear up without
+# torque, so the rear legs lie like the front ones). The ABDUCTION has no
+# stop and is zero here by convention: align the legs parallel to the body
+# by hand before /wojtek/zero (RViz shows the pose). In MuJoCo the hips and
+# levers land on these stops from any start when the actuators are switched
+# off on the standing robot; the rear hips only stop short when the legs are
+# held parallel, because the primitive collision shapes let the thighs fold
+# under the body -- an artefact, not the robot. Where the real linkage
+# rests has to be measured on the robot; these numbers are the model's.
+# Verified in MuJoCo: lie_down to this pose ends with 1.4 N*m left on the
+# hips, a 4 s cosine ramp from it stands the robot up to 0.35 m level with
+# 14-17 N*m peak at the knee crank, also from the splayed free-lying pose.
 V627_FOLDED_CTRL = np.array([
-    0.0, -2.39, -0.25,
-    0.0, -2.39, -0.25,
+    0.0, -2.69479, -0.25,
+    0.0, -2.69479, -0.25,
     0.0, 2.69479, 0.25,
     0.0, 2.69479, 0.25,
 ])

@@ -312,17 +312,27 @@ folded targets (`folded_ctrl`), and the plant lets the robot settle with
 its servos off, as the unpowered robot does.
 
 The folded pose is the pose the unpowered robot rests in, because that is
-where it zeroes its encoders at power-on. Simulated by switching the hip and
-lever actuators off on the standing robot while the abduction servos keep
-the legs parallel to the body (the operator's hands: the abduction has no
-stop, and left free the legs splay 0.14-1.3 rad depending on how the robot
-comes down). The body drops onto the floor, the levers rest on their
-folding limit (+-0.25), the front hips reach their range stop (2.695) and
-the rear hips stop 0.3 rad short of theirs on the thigh-floor contact
-(-2.39); this repeats to 0.03 rad. Where the real linkage and thighs rest
-has to be measured on the robot; the numbers are the model's. Verified in
-plain MuJoCo on 2026-10-22: `lie_down` to this pose leaves 1.3 N*m on the
-hips, the 4 s stand-up ramp from it reaches 0.343 m level with 14 N*m at
-the knee crank (also from the free-lying pose with splayed legs), the
-simulated plant comes to rest within 0.03 rad of it, and every trick
+where it zeroes its encoders at power-on: body on the floor, every hip on
+its range stop (+-2.695), every lever folded against its limit (+-0.25),
+shins flat under the thighs, front and rear alike. The abduction has no
+stop and is zero by convention: align the legs parallel to the body by
+hand before `/wojtek/zero`. In MuJoCo the hips and levers land on these
+stops from any start once the actuators are switched off on the standing
+robot (the legs splay 0.14-1.3 rad while doing so); with the legs held
+parallel the primitive collision shapes let the thighs fold under the body
+and the rear hips stop 0.3 rad short, which is an artefact of the shapes,
+not the robot. Where the real linkage rests has to be measured on the
+robot. The simulated plant therefore places the robot in the folded pose
+(a gravity-free ramp from the stand, lowered onto the floor, servos
+holding) instead of letting it fall into it; it logs the resulting offset
+(0.02 rad). Lying on, the model keeps pushing the front legs outward,
+0.11 rad after a few seconds, because its body rests on the thigh shapes
+and not on the floor. A simulated run that zeroes lying therefore carries
+that abduction error into everything after, and the v3 policy and the
+tricks are visibly worse for it; for policy and trick tests in the
+simulation start standing (`boot_pose:=home`), and on the robot align the
+abduction to better than 0.03 rad before zeroing. Verified in plain MuJoCo on
+2026-10-22: `lie_down` to this pose leaves 1.4 N*m on the hips, the 4 s
+stand-up ramp from it reaches 0.35 m level with 14-17 N*m at the knee crank
+(also from the splayed free-lying pose), and every trick
 ends standing (peak 19 N*m in paw_wave).

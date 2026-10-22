@@ -47,12 +47,12 @@ def test_v627_poses_follow_the_mirrored_mounting():
         assert rear[0, 0] == 0.0 and front[0, 0] == 0.0
         # Rear hip and lever run negative, front positive.
         assert np.all(rear[0, 1:] < 0) and np.all(front[0, 1:] > 0)
-    # The lying pose: front hips on their range stop, rear hips 0.3 rad short
-    # of theirs (thigh on the floor), levers just inside their folding limit,
-    # abduction zero by convention (it has no stop; aligned by hand).
+    # The lying pose: every hip on its range stop, levers just inside their
+    # folding limit, abduction zero by convention (it has no stop; aligned
+    # by hand).
     f = p.folded_ctrl
     assert np.allclose(f[[7, 10]], p.ctrl_high[[7, 10]], atol=1e-9)
-    assert np.all(f[[1, 4]] > p.ctrl_low[[1, 4]] + 0.25)
+    assert np.allclose(f[[1, 4]], p.ctrl_low[[1, 4]], atol=1e-9)
     assert np.allclose(np.abs(f[2::3]), 0.25, atol=1e-9) and 0.25 > 0.244346
     assert np.all(f[0::3] == 0.0)
     # The free foot joints are published at zero.

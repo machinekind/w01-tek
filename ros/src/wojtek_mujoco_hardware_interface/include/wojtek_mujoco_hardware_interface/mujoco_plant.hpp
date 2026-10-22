@@ -86,15 +86,13 @@ public:
   double foldedKneeRad() const;
 
   /// "home" (standing exactly at the home targets, the pose the robot is
-  /// held in when its drives are powered) or "folded" (lying, the real
-  /// robot's boot pose). With `folded_ctrl` (one target per actuator,
-  /// MuJoCo convention: the legs' folded pose from wojtek_policy.poses) the
-  /// robot comes down from the stand with the hip and knee servos OFF and
-  /// the abduction servos holding the targets' abduction (the operator's
-  /// hands), then rests with every servo off -- gravity, the joint stops
-  /// and the floor place it the way they do at power-on. Empty means the
-  /// stock rule: settle from home under the servos holding hips straight
-  /// and knees at the model's own ctrlrange stop.
+  /// held in when its drives are powered) or "folded" (lying, the pose the
+  /// unpowered robot rests in and is assumed to be in at power-on). Folded
+  /// is reached from the stand by a gravity-free servo ramp, lowered onto
+  /// the floor and held there by the servos. `folded_ctrl` is one target
+  /// per actuator (MuJoCo convention: the legs' folded pose from
+  /// wojtek_policy.poses); empty means the stock rule, hips straight and
+  /// knees at the model's own ctrlrange stop.
   void reset(const std::string & pose, const std::vector<double> & folded_ctrl = {});
 
   /// Take the current joint positions as the zero the states are reported
@@ -114,6 +112,8 @@ public:
   /// Joint position/velocity/effort in MuJoCo convention, relative to the
   /// latched activation pose (position only -- rates have no offset).
   double jointPosition(int actuator) const;
+  /// Absolute joint position in MuJoCo convention (no activation offset).
+  double jointPositionAbsolute(int actuator) const {return data_->qpos[qpos_adr_[actuator]];}
   double jointVelocity(int actuator) const;
   double jointEffort(int actuator) const;
 

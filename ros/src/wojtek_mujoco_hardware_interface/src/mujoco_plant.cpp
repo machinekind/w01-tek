@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <cstdio>
 #include <filesystem>
@@ -214,70 +215,75 @@ void MujocoPlant::reset(const std::string & pose, const std::vector<double> & fo
     }
   }
 
-  // 1. Put the actuated joints exactly on the targets and let the servos
-  //    settle the passive loop joints onto them with gravity off: the pose
-  //    the real robot is held in (home) or aligned to by hand (folded)
-  //    before the drives are powered, with the four-bar closure consistent.
-  //    The keyframe's own qpos is the settled stance, which already sags
-  //    under the servo -- latching that as "home" would count the sag
-  //    twice, once in the offset and once more under gravity.
-  for (int i = 0; i < model_->nu; ++i) {
-    data_->qpos[qpos_adr_[i]] = targets[i];
-    data_->ctrl[i] = targets[i];
-  }
-  std::fill(data_->qvel, data_->qvel + model_->nv, 0.0);
+  // Both poses are built in free space with gravity off, then lowered onto
+  // the floor: the pose the real robot is held in (home) or lies in
+  // (folded) when its drives are powered, with the four-bar closure
+  // consistent. The keyframe's own qpos is the settled stance, which
+  // already sags under the servo; latching that as "home" would count the
+  // sag twice, once in the offset and once more under gravity.
+  const bool free_base = model_->njnt > 0 && model_->jnt_type[0] == mjJNT_FREE;
+  const int base = free_base ? model_->jnt_qposadr[0] : -1;
+  auto level_base = [&](double lift) {
+      if (!free_base) {return;}
+      data_->qpos[base + 2] += lift;
+      data_->qpos[base + 3] = 1.0;
+      data_->qpos[base + 4] = data_->qpos[base + 5] = data_->qpos[base + 6] = 0.0;
+    };
   const mjtNum gravity[3] = {model_->opt.gravity[0], model_->opt.gravity[1], model_->opt.gravity[2]};
   std::fill(model_->opt.gravity, model_->opt.gravity + 3, 0.0);
-  stepFor(1.0);
-  std::copy(gravity, gravity + 3, model_->opt.gravity);
+  std::vector<double> home_ctrl(model_->nu);
+  for (int i = 0; i < model_->nu; ++i) {
+    home_ctrl[i] = model_->key_ctrl[home * model_->nu + i];
+    data_->qpos[qpos_adr_[i]] = home_ctrl[i];
+    data_->ctrl[i] = home_ctrl[i];
+  }
+  level_base(1.0);
   std::fill(data_->qvel, data_->qvel + model_->nv, 0.0);
-  if (pose == "home") {
-    mj_forward(model_, data_);
-    data_->time = 0.0;
-    return;
-  }
-
-  // 2. Lying. With the legs' own folded_ctrl: do what the unpowered robot
-  //    does. Stand at home, switch the hip and lever servos off and let the
-  //    robot come down under gravity while the abduction servos keep the
-  //    legs where the operator holds them (the abduction has no stop), then
-  //    switch everything off and let it rest. Gravity, the joint stops and
-  //    the floor place it, as they do at power-on; folded_ctrl is where
-  //    real_io_node assumes it rests, and the difference is the zeroing
-  //    error the real robot has too.
-  //    Without folded_ctrl (the stock rule): settle from home under the
-  //    servos holding the folded targets, as before.
-  std::vector<mjtNum> gain(model_->actuator_gainprm, model_->actuator_gainprm + model_->nu * mjNGAIN);
-  std::vector<mjtNum> bias(model_->actuator_biasprm, model_->actuator_biasprm + model_->nu * mjNBIAS);
-  auto servo_off = [&](int i) {
-      model_->actuator_gainprm[i * mjNGAIN + 0] = 0.0;
-      model_->actuator_biasprm[i * mjNBIAS + 1] = 0.0;
-      model_->actuator_biasprm[i * mjNBIAS + 2] = 0.0;
-    };
-  if (!folded_ctrl.empty()) {
-    mj_resetDataKeyframe(model_, data_, home);
-    for (int i = 0; i < model_->nu; ++i) {
-      data_->ctrl[i] = targets[i];
-      const auto & name = actuator_names_[i];
-      const bool abduction = name.size() > 12 &&
-        name.compare(name.size() - 12, 12, "_first_joint") == 0;
-      if (!abduction) {
-        servo_off(i);
+  stepFor(1.0);
+  if (pose == "folded") {
+    // Reach the lying pose from the stand with a servo ramp (a jump of the
+    // actuated joints would let the loop closure re-close on the wrong
+    // branch).
+    const double ramp = 1.0;
+    const int steps = static_cast<int>(ramp / model_->opt.timestep);
+    for (int k = 0; k <= steps; ++k) {
+      const double s = 0.5 - 0.5 * std::cos(M_PI * std::min(1.0, k * model_->opt.timestep / ramp));
+      for (int i = 0; i < model_->nu; ++i) {
+        data_->ctrl[i] = (1.0 - s) * home_ctrl[i] + s * targets[i];
       }
+      mj_step(model_, data_);
     }
-    stepFor(3.0);
-    for (int i = 0; i < model_->nu; ++i) {
-      servo_off(i);
-    }
-    stepFor(1.0);
-  } else {
-    for (int i = 0; i < model_->nu; ++i) {
-      data_->ctrl[i] = targets[i];
-    }
-    stepFor(2.0);
+    stepFor(0.5);
   }
-  std::copy(gain.begin(), gain.end(), model_->actuator_gainprm);
-  std::copy(bias.begin(), bias.end(), model_->actuator_biasprm);
+  std::fill(data_->qvel, data_->qvel + model_->nv, 0.0);
+  level_base(0.0);
+  mj_forward(model_, data_);
+  // Lower the robot until its lowest collision shape is 2 mm above the floor.
+  int plane = -1;
+  for (int g = 0; g < model_->ngeom && plane < 0; ++g) {
+    if (model_->geom_type[g] == mjGEOM_PLANE) {
+      plane = g;
+    }
+  }
+  if (plane >= 0 && free_base) {
+    double lowest = 2.0;
+    for (int g = 0; g < model_->ngeom; ++g) {
+      if (g == plane || !(model_->geom_contype[g] || model_->geom_conaffinity[g])) {
+        continue;
+      }
+      lowest = std::min(lowest, mj_geomDistance(model_, data_, g, plane, 2.0, nullptr));
+    }
+    data_->qpos[base + 2] -= lowest - 0.002;
+    mj_forward(model_, data_);
+  }
+  std::copy(gravity, gravity + 3, model_->opt.gravity);
+  if (pose == "folded") {
+    // Lying, the servos hold the pose under gravity. They stay on: with the
+    // primitive collision shapes the motorless model folds its rear thighs
+    // under the body instead of lying flat like the robot, so letting it
+    // fall would start the simulation from a pose the robot is not in.
+    stepFor(1.0);
+  }
   std::fill(data_->qvel, data_->qvel + model_->nv, 0.0);
   data_->time = 0.0;
   mj_forward(model_, data_);

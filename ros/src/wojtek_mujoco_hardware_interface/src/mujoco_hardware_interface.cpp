@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -214,6 +215,31 @@ hardware_interface::CallbackReturn MujocoHardwareInterface::on_configure(
         {std::stod(kp->second), std::stod(kd->second), std::stod(max_torque->second)});
     }
     plant_.reset(initial_pose_, folded_ctrl_);
+    {
+      // Where the plant actually starts, against the pose the stack assumes
+      // (real_io_node's boot_pose): the zeroing error of this run.
+      const auto & names = plant_.actuatorNames();
+      std::ostringstream worst;
+      double worst_err = 0.0;
+      for (std::size_t i = 0; i < names.size(); ++i) {
+        const double target = folded_ctrl_.empty() || initial_pose_ != "folded"
+          ? std::numeric_limits<double>::quiet_NaN() : folded_ctrl_[i];
+        if (std::isfinite(target)) {
+          const double err = plant_.jointPositionAbsolute(static_cast<int>(i)) - target;
+          if (std::abs(err) > std::abs(worst_err)) {
+            worst_err = err;
+            worst.str("");
+            worst << names[i];
+          }
+        }
+      }
+      const auto pose = plant_.basePose();
+      RCLCPP_INFO(
+        logger_, "plant starts %s: base z %.3f m%s", initial_pose_.c_str(), pose[2],
+        std::isfinite(worst_err) && !worst.str().empty()
+        ? (", largest offset from the folded pose " + std::to_string(worst_err) + " rad at " + worst.str()).c_str()
+        : "");
+    }
   } catch (const std::exception & e) {
     RCLCPP_FATAL(logger_, "%s", e.what());
     return hardware_interface::CallbackReturn::ERROR;

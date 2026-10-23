@@ -286,12 +286,16 @@ through. Both leg macros use the same link and joint names, so the
 
 The `legs_v627` URDF shares the MuJoCo model's zero pose (no gear-correction
 offsets, which `joint_map.yaml` removes for the stock legs), but keeps the
-drives' sense of rotation on every hip and knee, as the stock URDF does: the
-drives did not change with the legs. The model's axes follow the mechanism,
-mirrored between front and rear, so `joint_map_v627.yaml` flips the hip of
-`rear_left`/`front_right` and the knee of `rear_right`/`front_left` (offsets
-zero). The identity map used before 2026-10-23 turned those four drives the
-wrong way at the first stand-up on the robot.
+drives' sense of rotation on every hip and knee. The hip drives are the
+body's and did not change with the legs, so the hips turn as in the stock
+URDF; the knee drives sit on the new thighs the same way on every leg, all
+four about +y of the body (the stock ones are mirrored left/right). The
+model's axes follow the mechanism, mirrored between front and rear, so
+`joint_map_v627.yaml` flips the hip of `rear_left`/`front_right` and the
+knee of both front legs (offsets zero). Both facts were measured on the
+robot on 2026-10-23: the identity map turned four drives the wrong way at
+the first stand-up, the stock knee mirroring turned the right levers
+backwards at the second.
 
 `real.launch.py`, `robot.launch.py` and `sim.launch.py` take `robot:=wojtek`,
 the default, or `robot:=wojtek_v2`. The profile sets the xacro `legs`, the joint

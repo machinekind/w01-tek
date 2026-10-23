@@ -73,12 +73,11 @@ WOJTEK = RobotProfile(
 # The v6.27 four-bar legs on the same body (the v6.37a legs on the robot
 # have the same kinematics). Training calls them legs_v627.
 #   joint_map: no gear-correction offsets (the URDF and the training model
-#     share the zero pose), but the hip of two legs and the knee of the other
-#     two run the opposite way: the URDF keeps the drives' sense of rotation
-#     (the drives did not change with the legs), the model has the
-#     mechanism's own, mirrored between front and rear. The identity map
-#     that stood here turned four drives the wrong way on the robot
-#     (2026-10-23).
+#     share the zero pose), but the URDF keeps the drives' sense of rotation
+#     and the model has the mechanism's own, mirrored between front and
+#     rear: the hip's sign follows the body's unchanged drives, the knee's
+#     the way the knee drives sit on the new thighs (all the same way).
+#     Both measured on the robot 2026-10-23; see joint_map_v627.yaml.
 #   default_policy: wojtek_legs_v627_quiet_v1 (2026-10-23), encoder-only
 #     observations like the stock pin, trained for a low body oscillation,
 #     low mechanical work and soft touchdowns (training/docs/robots.md and

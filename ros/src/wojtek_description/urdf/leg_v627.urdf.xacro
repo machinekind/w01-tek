@@ -91,12 +91,16 @@
       <parent link="${prefix}_third_link" />
       <child link="${prefix}_fourth_link" />
       <origin xyz="0 0 0" rpy="0 0 0" />
-      <!-- Drives' sense again (see the second joint); the model's axis is
-           -dir here, so the map's sign for this joint is -dir. -->
-      <axis xyz="0 0 1" />
-      <limit effort="22" velocity="20"
-        lower="${min(-dir*lim*0.244346095, -dir*lim*2.83266938)}"
-        upper="${max(-dir*lim*0.244346095, -dir*lim*2.83266938)}" />
+      <!-- Drives' sense again, but NOT the stock leg's: the stock knee
+           drives are mirrored left/right (left about +y, right about -y of
+           the body), the v6.37a knee drives sit the same way on every leg
+           and all four turn about +y of the body (measured on the robot
+           2026-10-23: with the stock mirroring the right levers ran
+           backwards). In the leg frame that is lim*dir; against the model's
+           -dir the map's sign is -lim: +1 rear, -1 front. Every knee then
+           folds at -0.244 and stands at about -2.0 in the URDF. -->
+      <axis xyz="0 0 ${lim*dir}" />
+      <limit effort="22" velocity="20" lower="-2.83266938" upper="-0.244346095" />
     </joint>
 
     <!-- Rod (wodzik), L4 = 291.0 mm, passive. -->

@@ -643,12 +643,17 @@ def common_launch_description(
     ]
     if hardware == "real":
         args += [
-            # CAN link to the drives: CANdle HAT over SPI at 8M by default (the
-            # drives' flashed baudrate since 2026-07-17). bus:=usb can_baud:=1 =
-            # the legacy USB dongle, only after flashing the drives back to 1M
-            # (ros/hw_tests: candle_bus_test baud).
+            # CAN link to the drives: CANdle HAT over SPI. can_baud must match
+            # the drives' flashed baudrate: 1M since 2026-10-05 (was 8M from
+            # 2026-07-17). On the current harness -- termination only in the
+            # two CANdles at the bus ends, every in-line connector carrying the
+            # far terminator -- 8M lost frames and even flash writes whenever a
+            # plug moved, and a lost terminator silenced ALL drives; 1M rides
+            # it out. 1M feeds the CANdle update loop at ~110 Hz, which is why
+            # controller_manager runs at 100 Hz (real_controllers.yaml).
+            # Re-flash with ros/hw_tests: candle_bus_test baud.
             DeclareLaunchArgument("bus", default_value="spi"),
-            DeclareLaunchArgument("can_baud", default_value="8"),
+            DeclareLaunchArgument("can_baud", default_value="1"),
             # IMU is the Adafruit 5543 (LSM6DS3TR-C + LIS3MDL) straight on I2C1
             # -- imu_i2c_hardware_interface.
             DeclareLaunchArgument("imu_bus", default_value="/dev/i2c-1"),

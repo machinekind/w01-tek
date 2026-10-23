@@ -53,7 +53,7 @@
        /dev/spidev0.0 inside the driver), "usb" = the legacy CANdle dongle at
        usb_port. can_baud (Mbps) must match the drives' flashed baudrate:
        1 since 2026-10-05 (8 from the 2026-07-17 HAT migration until then;
-       the harness could not hold 8M -- see launch_common.py). The launch
+       the harness could not hold 8M, see launch_common.py). The launch
        passes it; see ros/hw_tests/README.md for the per-drive baud tool. -->
   <xacro:macro name="wojtek_ros2_control" params="kp kd max_torque usb_port bus:=spi can_baud:=1 dry_run:=false tau_ff:=false">
     <ros2_control name="MD80HardwareInterface" type="system">

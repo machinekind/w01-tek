@@ -9,8 +9,17 @@ nodes -- no RViz, no GUI. Run visualization/debug on the PC separately:
                                                [max_torque:=2.0] [dry_run:=true]
                                                [boot_pose:=home|folded] [bag:=true]
                                                [gamepad:=true] [perception:=true]
+                                               [nav:=true]
                                                [telemetry:=true] [foxglove:=true]
                                                [deck:=true deck_cpus:=0,1]
+                                               [control_cpus:=3 policy_cpus:=2]
+                                               [mock_hw:=true]
+
+mock_hw:=true swaps the MD80 drives and the I2C IMU for ros2_control's
+GenericSystem with the same joints, interfaces and sensor, every other node
+untouched: the way to run the whole stack with the motors unpowered
+(ros/hw_tests/perf). control_cpus/policy_cpus pin the control loop and the
+policy to cores, as the service does.
 
 The servo settings the MD80s run with (impedance kp/kd, torque cap) come
 from the loaded policy's contract: policy_meta.json carries the pd block

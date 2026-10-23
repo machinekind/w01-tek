@@ -266,6 +266,16 @@ button:disabled { color: var(--on-image-3); border-color: var(--line-image-2); c
 /* Policy running: the system's filled button, inverted for the dark
    context -- white fill, ink text. */
 button.on, button.on:hover:not(:disabled) { background: var(--on-image-1); border-color: var(--on-image-1); color: var(--ink); }
+/* Hold-to-confirm: the fill grows in from the left over the hold time, so
+   the thumb sees the action coming and can let go. */
+button.hold {
+  color: var(--on-image-2);
+  background: linear-gradient(var(--red), var(--red)) no-repeat left / 0% 100%, var(--scrim);
+}
+button.hold.holding {
+  color: #fff; border-color: var(--red);
+  background-size: 100% 100%, auto; transition: background-size 1.5s linear;
+}
 /* Armed: the red fill. */
 button.armed { background: var(--red); border-color: var(--red); color: #fff; min-width: 100px; }
 button.armed:hover:not(:disabled) { background: var(--red-deep); border-color: var(--red-deep); color: #fff; }

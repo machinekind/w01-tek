@@ -80,7 +80,13 @@ is camera only. Closing Steam also takes away the Deck's on-screen keyboard.
 
 **5. Start what serves the page.**
 
-On the robot, camera and panel, no control stack:
+On the robot nothing: the service starts the camera and the gateway with
+the control stack (`deck:=true deck_camera:=true` in
+`wojtek-robot.service`), so the page is up whenever the robot is, and
+comes back after a restart. Check with `ss -ltn | grep 8090` on the
+robot. The commands below are the same two nodes by hand, for a robot
+whose service does not carry them, or for the panel without the control
+stack:
 
 ```bash
 ssh rpi@10.42.0.2
@@ -88,17 +94,42 @@ source /opt/ros/jazzy/setup.bash && source ~/wojtek_ws/install/setup.bash
 
 setsid nohup taskset -c 0,1 ros2 run realsense2_camera realsense2_camera_node \
   --ros-args -p enable_depth:=false -p enable_color:=true \
-  -p rgb_camera.color_profile:="1280x720x15" -p pointcloud.enable:=false \
+  -p rgb_camera.color_profile:="640x480x15" -p pointcloud.enable:=false \
   -p align_depth.enable:=false -p enable_rgbd:=false -p enable_sync:=false \
   > ~/cam.log 2>&1 < /dev/null &
 
-PYTHONPATH=$HOME/py_deps setsid nohup taskset -c 0,1 \
+PYTHONPATH=$HOME/py_deps:$PYTHONPATH \
+CYCLONEDDS_URI="file:///etc/cyclonedds-rpi.xml,<CycloneDDS><Domain><Internal><SocketReceiveBufferSize max=\"8MB\"/></Internal></Domain></CycloneDDS>" \
+setsid nohup taskset -c 0,1 \
   ros2 run wojtek_deck deck_gateway \
-  --ros-args -p port:=8090 -p assets_dir:=/home/rpi/deck_assets \
+  --ros-args -p port:=8090 \
+  -p policy:=/home/rpi/policy \
   > ~/gateway.log 2>&1 < /dev/null &
 ```
 
 Cores 0 and 1 are the only ones these may use. The control loop owns 2 and 3.
+`py_deps` goes in front of the existing `PYTHONPATH`, never in place of it.
+setup.bash put ROS's own python path there, and without it `ros2` dies
+before the gateway starts (`No package metadata was found for ros2cli` in
+`~/gateway.log`). `policy:=` is the reference the service runs with, so
+the gateway drives inside the contract's command box.
+
+The camera runs at 640x480, not the sensor's full 1280x720, and the
+gateway asks for an 8 MB DDS receive buffer. Both are about the Pi's
+budget, and the day that taught it (2026-09-12): at 1280x720 the camera
+node and the gateway together left the Pi 2% idle, the control loop's
+command stream to the MD80 drives got gaps, and the drives dropped to
+idle with nothing in any log. The legs went soft, the controller stayed
+"active". At full size a frame is also 2.7 MB, about 1900 UDP fragments,
+and with the default buffer one lost fragment discards the frame; under
+load the gateway saw no frames at all. The panel's detector runs on the
+Deck from the stream it gets, so it loses nothing at 640x480.
+
+If the legs go soft with a live controller, check `top` on the robot
+before blaming the drives: under 30% idle is the warning sign. After a
+motor power cycle with the controller running, restart the service
+(`sudo systemctl restart wojtek-robot.service`): the drives come back
+idle and nothing re-enables them.
 
 In the simulation, the gateway starts by itself:
 
@@ -121,7 +152,7 @@ The robot needs this only the first time, or after it is reflashed. Check
 whether it is already there:
 
 ```bash
-ssh rpi@10.42.0.2 'ls -d ~/wojtek_ws/install/wojtek_deck ~/py_deps ~/deck_assets'
+ssh rpi@10.42.0.2 'ls -d ~/wojtek_ws/install/wojtek_deck ~/py_deps ~/wojtek_ws/deck_assets'
 ```
 
 `./ros/deploy.sh` does not carry the package. It builds
@@ -157,11 +188,36 @@ downloading machine runs Python 3.13 or newer.
 
 ```bash
 ./ros/src/wojtek_deck/fetch_assets.sh     # only if ros/deck_assets is empty
-rsync -az ros/deck_assets/ rpi@10.42.0.2:deck_assets/
+rsync -az ros/deck_assets/ rpi@10.42.0.2:wojtek_ws/deck_assets/
 ```
 
-Now step 5 above works. All three live in the robot's home directory, so a
-reboot keeps them.
+The store sits next to the workspace's `src/` and `install/`, which is
+where the gateway looks when it is started by the service without an
+`assets_dir` of its own. (The robot from before this step has it in
+`~/deck_assets` with a symlink at `~/wojtek_ws/deck_assets`; either
+works.) Now step 5 above works, and a reboot keeps all three.
+
+**4. Give the camera node its JPEG plugin.** The gateway streams the
+camera node's own compressed frames (`compressed_image_transport`,
+encoding in C++, only while the gateway subscribes), so it receives 40 KB
+a frame instead of a 0.9 MB raw image and encodes nothing. That is what
+makes 30 fps fit the Pi. The robot has no route to the package server, so
+the `.deb` comes over from the PC; its dependencies are already on the
+robot.
+
+```bash
+# On the PC. The pool keeps only the current build: list it, take the
+# arm64 file it shows, do not trust an older version string.
+curl -s http://packages.ros.org/ros2/ubuntu/pool/main/r/ros-jazzy-compressed-image-transport/ \
+  | grep -oE 'ros-jazzy-compressed-image-transport_[^"]+_arm64\.deb' | sort -u | tail -1
+curl -s -o cit.deb "http://packages.ros.org/ros2/ubuntu/pool/main/r/ros-jazzy-compressed-image-transport/<that file>"
+scp cit.deb rpi@10.42.0.2:/tmp/
+ssh rpi@10.42.0.2 'sudo dpkg -i /tmp/cit.deb'
+```
+
+Without the plugin the gateway still works from the raw image: start it
+with `compressed:=false` (and expect the camera at 15 fps to be the
+limit; the raw path costs a third of a core in the gateway alone).
 
 ## Read the top band
 
@@ -180,7 +236,8 @@ The Deck has no keyboard, so these two are the only way to do either.
 
 | input | action |
 |---|---|
-| left stick | forward, back, turn |
+| left stick | forward, back, turn, at half the trained range |
+| right trigger | the other half, in proportion to the pull (the `SPD` readout shows the current range) |
 | right stick | strafe |
 | A | arm and disarm |
 | Y | stand up |
@@ -193,6 +250,28 @@ The buttons along the bottom of the page do the same things with a finger.
 The robot stops when the sticks go quiet for half a second. The gateway
 holds that timer, so a dropped wifi link stops the robot rather than
 latching the last command.
+
+The `restart` button on the page restarts the robot's control stack
+(`wojtek-robot.service`). Hold it for a second and a half; a tap does
+nothing. The gateway refuses unless the robot is lying, because the stack
+assumes the folded pose when it starts. It is the button for the motor
+power cycle: switch the motors off and on under a running controller and
+the drives come back idle, keep answering, and nothing re-enables them,
+so the legs go soft with everything reporting fine. Lie, then hold
+`restart`, then wait for `LINK` to settle and the stack to come back, about
+30 s. On the robot the gateway is a node of that same launch, so the
+restart takes it down with the stack: `LINK` drops and the camera image
+freezes. The page reconnects on its own (it retries every second, and
+closes a socket that has gone silent for 6 s) once the service is back,
+and points the camera stream at the gateway afresh. The log line
+`restart_stack: restart requested ...` is the last thing the gateway sends
+before it goes; a later `restart_stack refused` means `sudo`/`systemctl`
+turned the request down before anything stopped.
+
+The robot's own Xbox pad can stay plugged in. Its teleop publishes only
+while its sticks are deflected and goes quiet two seconds after they
+return to centre, so an idle pad does not talk over the Deck. Two people
+driving at once still fight; nothing arbitrates that.
 
 Arming refuses while any joint sits more than 0.15 rad from the home pose.
 The panel prints the refusal in its log.
@@ -209,6 +288,7 @@ The panel prints the refusal in its log.
 | a dash in every instrument | the bridge is not running | leave `?telemetry=on` off |
 | the panel covers the whole screen | it is in full screen | tap `FULL`, which now reads `WINDOW` |
 | nothing on screen responds | the page is stuck | run `./ros/deck.sh reload` |
+| the robot stutters while driving | two sources on `/cmd_vel` | `ros2 topic info -v /cmd_vel` on the robot; only one node may drive |
 
 A reboot of the robot wipes `/tmp` and stops both processes. The installed
 files live in `$HOME` and survive it. Start again from step 5.

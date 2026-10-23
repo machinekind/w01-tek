@@ -1,0 +1,229 @@
+{
+ "configById": {
+  "3D!robot": {
+   "followTf": "base_link",
+   "layers": {
+    "grid": {
+     "layerId": "foxglove.Grid",
+     "visible": true,
+     "frameId": "odom",
+     "size": 10,
+     "divisions": 20,
+     "position": [
+      0,
+      0,
+      0
+     ],
+     "rotation": [
+      0,
+      0,
+      0
+     ],
+     "order": 1
+    }
+   },
+   "topics": {
+    "/robot_description": {
+     "visible": true
+    }
+   },
+   "cameraState": {
+    "distance": 1.6,
+    "perspective": true,
+    "phi": 55,
+    "thetaOffset": 35,
+    "targetOffset": [
+     0,
+     0,
+     0
+    ],
+    "target": [
+     0,
+     0,
+     0
+    ],
+    "targetOrientation": [
+     0,
+     0,
+     0,
+     1
+    ],
+    "fovy": 45,
+    "near": 0.01,
+    "far": 5000
+   },
+   "scene": {
+    "transforms": {
+     "showLabel": false
+    }
+   }
+  },
+  "Image!color": {
+   "imageMode": {
+    "imageTopic": "/camera/camera/color/image_raw/compressed"
+   }
+  },
+  "Image!depth": {
+   "imageMode": {
+    "imageTopic": "/camera/camera/depth/image_rect_raw",
+    "colorMode": "colormap",
+    "colorMap": "turbo",
+    "minValue": 0,
+    "maxValue": 3000
+   }
+  },
+  "Plot!targets": {
+   "title": "Joint targets (policy -> drives), rad",
+   "paths": [
+    {
+     "value": "/wojtek/joint_targets.position[:]",
+     "enabled": true,
+     "timestampMethod": "receiveTime"
+    }
+   ],
+   "xAxisVal": "timestamp",
+   "isSynced": true,
+   "showLegend": true,
+   "legendDisplay": "floating",
+   "showXAxisLabels": true,
+   "showYAxisLabels": true,
+   "followingViewWidth": 15
+  },
+  "Plot!joints": {
+   "title": "Joint positions (drives), rad",
+   "paths": [
+    {
+     "value": "/wojtek/joint_states_abs.position[:]",
+     "enabled": true,
+     "timestampMethod": "receiveTime"
+    }
+   ],
+   "xAxisVal": "timestamp",
+   "isSynced": true,
+   "showLegend": true,
+   "legendDisplay": "floating",
+   "showXAxisLabels": true,
+   "showYAxisLabels": true,
+   "followingViewWidth": 15
+  },
+  "Plot!timing": {
+   "title": "Policy tick: inference / period (ms)",
+   "paths": [
+    {
+     "value": "/wojtek/policy_timing.inference_ms",
+     "enabled": true,
+     "timestampMethod": "receiveTime"
+    },
+    {
+     "value": "/wojtek/policy_timing.period_ms",
+     "enabled": true,
+     "timestampMethod": "receiveTime"
+    }
+   ],
+   "xAxisVal": "timestamp",
+   "isSynced": true,
+   "showLegend": true,
+   "legendDisplay": "floating",
+   "showXAxisLabels": true,
+   "showYAxisLabels": true,
+   "followingViewWidth": 30
+  },
+  "Plot!cpu": {
+   "title": "CPU per core (%)",
+   "paths": [
+    {
+     "value": "/wojtek/sysinfo.cpu_percent[:]",
+     "enabled": true,
+     "timestampMethod": "receiveTime"
+    }
+   ],
+   "xAxisVal": "timestamp",
+   "isSynced": true,
+   "showLegend": true,
+   "legendDisplay": "floating",
+   "showXAxisLabels": true,
+   "showYAxisLabels": true,
+   "followingViewWidth": 30
+  },
+  "Plot!cmdvel": {
+   "title": "Velocity command",
+   "paths": [
+    {
+     "value": "/cmd_vel.linear.x",
+     "enabled": true,
+     "timestampMethod": "receiveTime"
+    },
+    {
+     "value": "/cmd_vel.linear.y",
+     "enabled": true,
+     "timestampMethod": "receiveTime"
+    },
+    {
+     "value": "/cmd_vel.angular.z",
+     "enabled": true,
+     "timestampMethod": "receiveTime"
+    }
+   ],
+   "xAxisVal": "timestamp",
+   "isSynced": true,
+   "showLegend": true,
+   "legendDisplay": "floating",
+   "showXAxisLabels": true,
+   "showYAxisLabels": true,
+   "followingViewWidth": 30
+  },
+  "DiagnosticSummary!diag": {
+   "minLevel": 0,
+   "pinnedIds": [],
+   "hardwareIdFilter": "",
+   "topicToRender": "/diagnostics",
+   "sortByLevel": true
+  }
+ },
+ "globalVariables": {},
+ "userNodes": {},
+ "playbackConfig": {
+  "speed": 1
+ },
+ "layout": {
+  "direction": "row",
+  "splitPercentage": 50,
+  "first": {
+   "direction": "column",
+   "splitPercentage": 50,
+   "first": "3D!robot",
+   "second": {
+    "direction": "row",
+    "splitPercentage": 50,
+    "first": "Image!color",
+    "second": "Image!depth"
+   }
+  },
+  "second": {
+   "direction": "column",
+   "splitPercentage": 50,
+   "first": {
+    "direction": "column",
+    "splitPercentage": 50,
+    "first": "Plot!targets",
+    "second": "Plot!joints"
+   },
+   "second": {
+    "direction": "row",
+    "splitPercentage": 50,
+    "first": {
+     "direction": "column",
+     "splitPercentage": 50,
+     "first": "Plot!timing",
+     "second": "Plot!cpu"
+    },
+    "second": {
+     "direction": "column",
+     "splitPercentage": 40,
+     "first": "Plot!cmdvel",
+     "second": "DiagnosticSummary!diag"
+    }
+   }
+  }
+ }
+}

@@ -34,7 +34,7 @@ class _FakePolicy:
     source = "dir:/tmp/test_policy"
     directory = "/tmp/test_policy"
     pd = {"kp": 40.0, "kd": 1.6, "max_torque": 9.0}
-    meta = {}
+    meta = {}  # no tau_ff block: the plain PD contract
 
 
 @pytest.fixture(autouse=True)
@@ -63,18 +63,28 @@ def _context(hardware, **overrides):
         "rviz": "false", "rviz_config": "/tmp/x.rviz",
         "launch-prefix": "",
         "robot": "wojtek",
+        # Opt-in extras _launch_setup performs even when they stay off.
         "telemetry": "false", "sysinfo_cpus": "",
         "foxglove": "false", "foxglove_cpus": "",
         "deck": "false", "deck_port": "8090", "deck_cpus": "",
+        "deck_camera": "false", "deck_camera_profile": "640x480x30",
+        "deck_camera_depth": "true", "deck_camera_depth_profile": "424x240x15",
+        "deck_stream_hz": "30.0",
+        # Core pinning, empty = no taskset (the sim's default).
+        "control_cpus": "", "policy_cpus": "", "ui_cpus": "",
     }
     if hardware == "real":
         defaults.update({
+            "leg_odom": "true",
+            # The real drives and IMU, not ros2_control's GenericSystem
+            # (mock_hw:=true is the perf harness's stand-in).
+            "mock_hw": "false",
             "bus": "spi", "can_baud": "8",
             "imu_bus": "/dev/i2c-1",
             "imu_addr_ag": "0x6A", "imu_addr_mag": "0x1C",
         })
     else:
-        defaults.update({"hw": "mock", "model_xml": ""})
+        defaults.update({"hw": "mock", "model_xml": "", "leg_odom": "false"})
     defaults.update(overrides)
     ctx.launch_configurations.update(defaults)
     return ctx
@@ -176,6 +186,32 @@ def test_ground_truth_and_static_tf_never_publish_the_same_transform():
             and (a.condition is None or a.condition.evaluate(ctx))
         ]
         assert len(static) == expected, f"hw:={hw}"
+
+
+def test_leg_odometry_takes_the_edge_and_the_truth_steps_aside():
+    """leg_odom:=true in the sim: the same odometry node as on the robot
+    owns odom->base_link, the static identity stays out, and the plant is
+    told to broadcast its ground truth as base_link_gt -- one owner per
+    edge, the truth still in TF for the drift meters."""
+    ctx = _context("sim", hw="mujoco", leg_odom="true")
+    actions = launch_common._launch_setup(ctx, with_rviz=False, hardware="sim")
+    nodes = [a for a in actions if isinstance(a, Node)]
+    odom = _by_executable(nodes, "leg_odometry_node")
+    assert _params(odom, ctx)[0]["publish_tf"] is True
+    static = [
+        n for n in nodes
+        if "static_transform_publisher" in str(n._Node__node_executable)
+        and (n.condition is None or n.condition.evaluate(ctx))
+    ]
+    assert static == []
+    description = _params(_by_executable(nodes, "ros2_control_node"), ctx)[0]
+    assert "base_link_gt" in description["robot_description"]
+
+    # And on the robot the odometry's parameters are the sim's: one node,
+    # one configuration, whichever plant is underneath.
+    ctx_real, real = _nodes("real")
+    assert _params(_by_executable(real, "leg_odometry_node"), ctx_real) == \
+        _params(odom, ctx)
 
 
 def test_sim_launch_keeps_the_arguments_its_callers_pass():

@@ -18,11 +18,7 @@ setup(
     zip_safe=True,
     maintainer="Jakub Chmielewski",
     maintainer_email="kchmielewski707@gmail.com",
-    description="Perception pipeline bringup (RealSense D435 + depth reduction) for wojtek.",
+    description="Perception pipeline bringup (RealSense D435) for wojtek.",
     license="Apache-2.0",
-    entry_points={
-        "console_scripts": [
-            "cloud_reduce_node = wojtek_perception_bringup.cloud_reduce_node:main",
-        ],
-    },
+    entry_points={"console_scripts": []},
 )

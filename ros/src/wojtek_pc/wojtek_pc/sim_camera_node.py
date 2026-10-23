@@ -9,7 +9,7 @@ truth; this is a view of it, not a second simulation.
 
 The camera contract (topics, encodings, intrinsics, frames) is
 wojtek_pc.camera_spec, shared with the real perception stack, so
-cloud_reduce/the planner/the VLM see in simulation exactly what they see on
+depth consumers/the VLM see in simulation exactly what they see on
 the robot.
 
   subscribes  /sim/qpos  (Float64MultiArray, from the hardware plugin)

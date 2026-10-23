@@ -1,0 +1,8 @@
+# rai_interfaces (HRIMessage, AudioMessage, RAIDetectionArray), pinned by
+# commit SHA -- never a branch or a tag -- so an image build is reproducible.
+# Bump deliberately together with the rai-core pin in docker/Dockerfile.
+repositories:
+  rai_interfaces:
+    type: git
+    url: https://github.com/RobotecAI/rai_interfaces.git
+    version: f03dc0f217679980447dfead177979f485eb44f6

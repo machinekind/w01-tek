@@ -173,7 +173,14 @@ TEST_F(Plant, servo_settings_from_the_policy_contract_reach_the_actuator)
 
   MujocoPlant stiff;
   stiff.load(writeModel(), "/nonexistent/meshes");
-  stiff.applyServoSettings("leg_third_joint", {200.0, 5.0, 20.0});
+  // Thirty times the soft gain, and a damping the 4 ms step can integrate:
+  // the actuator's velocity bias is explicit under MuJoCo's Euler, so
+  // kd*dt over the link's inertia (~0.0027 kg*m^2) must stay under 2. The
+  // old {200, 5} blew up numerically and settled farther out than the
+  // soft servo, which is what this test had been failing on.
+  stiff.applyServoSettings("leg_third_joint", {60.0, 1.0, 20.0});
+  // Same start as the soft plant: the keyframe.
+  stiff.reset("home");
   stiff.latchActivationPose();
   stiff.setCommand(0, 0.0);
   for (int i = 0; i < 2000; ++i) {stiff.advance(kControlPeriod);}
@@ -190,6 +197,75 @@ TEST_F(Plant, dry_run_withholds_torque_but_keeps_physics_running)
   }
   EXPECT_GT(plant_.simTime(), 0.0);          // time passes
   EXPECT_LT(plant_.basePose()[2], 0.5);      // and the robot drops
+}
+
+TEST_F(Plant, feed_forward_torque_acts_on_top_of_the_servo)
+{
+  // A soft servo holding zero. A feed-forward torque one way bends the
+  // joint that way; the opposite torque bends it back past where it was.
+  // That is the tau_ff head: the servo keeps its target, the torque adds.
+  plant_.applyServoSettings("leg_third_joint", {2.0, 0.1, 6.0});
+  plant_.latchActivationPose();
+  plant_.setCommand(0, 0.0);
+  plant_.setFeedForward(0, 1.0);
+  for (int i = 0; i < 800; ++i) {plant_.advance(kControlPeriod);}
+  const double forward = plant_.jointPosition(0);
+  plant_.setFeedForward(0, -1.0);
+  for (int i = 0; i < 800; ++i) {plant_.advance(kControlPeriod);}
+  const double back = plant_.jointPosition(0);
+  EXPECT_GT(forward, 0.05);
+  EXPECT_LT(back, forward - 0.1);
+}
+
+TEST_F(Plant, feed_forward_torque_stays_on_until_written_again)
+{
+  // The driver adds tau_ff every cycle; the plant keeps the last value the
+  // way the drive would, so a torque set once holds across steps.
+  plant_.applyServoSettings("leg_third_joint", {2.0, 0.1, 6.0});
+  plant_.latchActivationPose();
+  plant_.setCommand(0, 0.0);
+  MujocoPlant bare;
+  bare.load(writeModel(), "/nonexistent/meshes");
+  bare.applyServoSettings("leg_third_joint", {2.0, 0.1, 6.0});
+  bare.latchActivationPose();
+  bare.setCommand(0, 0.0);
+  plant_.setFeedForward(0, 1.0);
+  for (int i = 0; i < 400; ++i) {
+    plant_.advance(kControlPeriod);
+    bare.advance(kControlPeriod);
+  }
+  const double early = plant_.jointPosition(0) - bare.jointPosition(0);
+  for (int i = 0; i < 400; ++i) {
+    plant_.advance(kControlPeriod);
+    bare.advance(kControlPeriod);
+  }
+  const double late = plant_.jointPosition(0) - bare.jointPosition(0);
+  // The lift over a plant without the head is there in both windows: a
+  // one-shot torque would have let it decay back towards the bare plant.
+  EXPECT_GT(early, 0.05);
+  EXPECT_GE(late, early - 0.01);
+}
+
+TEST_F(Plant, dry_run_withholds_the_feed_forward_torque_too)
+{
+  // Bench mode means no torque of any kind: with the head written, the
+  // plant falls exactly as it does without it.
+  MujocoPlant bare;
+  bare.load(writeModel(), "/nonexistent/meshes");
+  bare.setDryRun(true);
+  bare.latchActivationPose();
+
+  plant_.setDryRun(true);
+  plant_.latchActivationPose();
+  // Written before every advance, the way the driver's write() does it:
+  // a single write would be wiped by the dry-run advance before any step
+  // saw it, and the guard in setFeedForward would go untested.
+  for (int i = 0; i < 400; ++i) {
+    plant_.setFeedForward(0, 5.0);
+    plant_.advance(kControlPeriod);
+    bare.advance(kControlPeriod);
+  }
+  EXPECT_NEAR(plant_.jointPosition(0), bare.jointPosition(0), 1e-9);
 }
 
 TEST_F(Plant, folded_knee_comes_from_the_models_own_ctrlrange)

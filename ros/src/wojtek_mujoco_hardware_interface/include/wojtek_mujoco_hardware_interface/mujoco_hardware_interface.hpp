@@ -80,6 +80,11 @@ private:
   /// Actuator index in the model per exported joint.
   std::vector<int> actuator_of_joint_;
   std::vector<double> position_, velocity_, effort_, command_;
+  /// The feed-forward torque head (tau_ff policies): an `effort` command on
+  /// every joint next to `position`, clamped to +-tau_ff_scale_ per joint
+  /// before it reaches the plant, the way the training sim clamps it.
+  bool tau_ff_ = false;
+  std::vector<double> tau_ff_command_, tau_ff_scale_;
 
   /// IMU states in the driver's layout: magnetometer xyz (0-2), gyro xyz
   /// (3-5), accel xyz (6-8), orientation xyzw (9-12).
@@ -103,6 +108,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr qpos_pub_;
   std_msgs::msg::Float64MultiArray qpos_msg_;
   double ground_truth_period_ = 0.01;
+  std::string ground_truth_child_frame_ = "base_link";
   double since_ground_truth_ = 0.0;
   double sim_time_at_window_ = 0.0;
   double wall_in_window_ = 0.0;

@@ -55,12 +55,39 @@ function setDrive(state) {
 let gw = null, bridge = null;
 function connectGateway() {
   gw = new WebSocket(`ws://${location.host}/ws`);
-  gw.onopen = () => { lamp("link", true); log("gateway connected", "ok"); };
+  gw.onopen = () => {
+    lamp("link", true); log("gateway connected", "ok");
+    lastStatus = performance.now();
+    // The MJPEG <img> does not resume on its own once the gateway went
+    // away (a restart of the robot service takes it along), so every
+    // reconnect points it at the stream afresh. Not when a still image
+    // was asked for (?detsrc=).
+    if (!params.get("detsrc")) cam.src = `/stream.mjpg?${Date.now()}`;
+  };
   gw.onclose = () => { lamp("link", false); setDrive("idle"); setTimeout(connectGateway, 1000); };
   gw.onmessage = e => onGateway(JSON.parse(e.data));
 }
 function send(o) { if (gw && gw.readyState === 1) gw.send(JSON.stringify(o)); }
+// The gateway sends a status frame twice a second. When none arrives for
+// a while the socket is dead even if the browser has not noticed: on a
+// handheld whose wifi drops packets a lost peer can look open for minutes,
+// with LINK lit and nothing behind it. Closing it makes onclose reconnect.
+const STATUS_SILENCE_MS = 6000;
+let lastStatus = 0;
+setInterval(() => {
+  if (gw && gw.readyState === 1 && lastStatus && performance.now() - lastStatus > STATUS_SILENCE_MS) {
+    log("gateway silent -- reconnecting", "bad");
+    // Do not wait for the dead socket's close handshake, which needs the
+    // peer that is gone: detach it and open a new one right away.
+    const dead = gw;
+    dead.onclose = null; dead.onmessage = null;
+    try { dead.close(); } catch { /* already gone */ }
+    lamp("link", false); setDrive("idle");
+    connectGateway();
+  }
+}, 1000);
 function onGateway(m) {
+  if (m.t === "status") lastStatus = performance.now();
   if (m.t === "hello") {
     height = m.height_default;
     $("policy").textContent = m.policy || "";
@@ -70,6 +97,7 @@ function onGateway(m) {
     if (!bridge && telemetry) startBridge(params.get("bridge") || `ws://${location.hostname}:${m.bridge_port}`);
   } else if (m.t === "avail") {
     for (const b of document.querySelectorAll("[data-call]")) b.disabled = !m.svc[b.dataset.call];
+    for (const b of document.querySelectorAll("[data-hold]")) b.disabled = !m.svc[b.dataset.hold];
   } else if (m.t === "svc") {
     if (m.success) {
       if (m.key === "arm") { armed = !!m.value; $("btn-arm").textContent = armed ? "armed" : "arm"; $("btn-arm").classList.toggle("armed", armed); }
@@ -309,6 +337,17 @@ function shape(v) {
   const s = Math.abs(v) < DEADZONE ? 0 : Math.min(1, (Math.abs(v) - DEADZONE) / (1 - DEADZONE));
   return v < 0 ? -s : s;
 }
+// The sticks reach half the trained command box by default, which is a
+// walking pace in a room. The right trigger adds the other half in
+// proportion to how far it is pulled, so full pull is the full box. On a
+// keyboard Shift is the trigger.
+const SLOW = 0.5;
+let scale = SLOW;
+function speedScale(turbo) {
+  scale = SLOW + (1 - SLOW) * Math.max(0, Math.min(1, turbo));
+  $("scale").textContent = Math.round(scale * 100);
+  return scale;
+}
 let padIndex = null, padPrev = {}, padButtons = null;
 // Button numbers in the browser's "standard" layout (A B X Y, bumpers, d-pad).
 const STANDARD_BUTTONS = { 0: "arm", 1: "lie_down", 3: "stand_up", 4: "h-", 5: "h+",
@@ -320,11 +359,28 @@ const STANDARD_BUTTONS = { 0: "arm", 1: "lie_down", 3: "stand_up", 4: "h-", 5: "
 // 16..19 up down left right); the sticks sit on axes 0-3 like the standard.
 const RAW_DECK_BUTTONS = { 3: "arm", 4: "lie_down", 6: "stand_up", 9: "h-", 10: "h+",
                            16: "trick_paw_wave", 17: "trick_shake", 18: "trick_bow", 19: "trick_sit" };
+// Where the right trigger is, 0..1. The standard layout has it as button 7
+// with an analog value. The kernel's Steam Deck driver reports the triggers
+// as hat axes (HAT2X is the right one), which the joystick interface numbers
+// after the sticks and the other hats: axis 8, resting at -1, full at +1.
+// The first pull is written to the panel's log so a wrong guess shows.
+const STANDARD_TURBO = { button: 7 };
+const RAW_DECK_TURBO = { axis: 8, rest: -1, full: 1 };
+let padTurbo = null, turboSeen = false;
+function triggerValue(gp, src) {
+  if (!src) return 0;
+  let v = 0;
+  if (src.button !== undefined) { const b = gp.buttons[src.button]; v = b ? (b.value || (b.pressed ? 1 : 0)) : 0; }
+  else if (src.axis !== undefined) { const a = gp.axes[src.axis]; v = a === undefined ? 0 : (a - src.rest) / (src.full - src.rest); }
+  if (v > 0.2 && !turboSeen) { turboSeen = true; log(`turbo: trigger read ${v.toFixed(2)} (${JSON.stringify(src)})`); }
+  return v;
+}
 window.addEventListener("gamepadconnected", e => {
   if (padIndex !== null) return;
   const gp = e.gamepad;
   const standard = gp.mapping === "standard";
   padIndex = gp.index; padButtons = standard ? STANDARD_BUTTONS : RAW_DECK_BUTTONS;
+  padTurbo = standard ? STANDARD_TURBO : RAW_DECK_TURBO;
   lamp("pad", true); log(`pad: ${gp.id}${standard ? "" : " (raw layout)"}`);
 });
 window.addEventListener("gamepaddisconnected", e => {
@@ -349,11 +405,13 @@ function padFrame() {
   padPrev = pressed;
   // left stick: forward and turn; right stick: strafe. Left/CCW is
   // positive in ROS, screen right is positive on the pad, so both flip.
-  return { vx: -shape(gp.axes[1]), vy: -shape(gp.axes[2]), yaw: -shape(gp.axes[0]) };
+  const s = speedScale(triggerValue(gp, padTurbo));
+  return { vx: -s * shape(gp.axes[1]), vy: -s * shape(gp.axes[2]), yaw: -s * shape(gp.axes[0]) };
 }
 
 const keys = new Set();
-const KEYMAP = { KeyW: 1, KeyS: 1, KeyA: 1, KeyD: 1, KeyQ: 1, KeyE: 1, ArrowUp: 1, ArrowDown: 1, ArrowLeft: 1, ArrowRight: 1 };
+const KEYMAP = { KeyW: 1, KeyS: 1, KeyA: 1, KeyD: 1, KeyQ: 1, KeyE: 1, ArrowUp: 1, ArrowDown: 1, ArrowLeft: 1, ArrowRight: 1,
+                 ShiftLeft: 1, ShiftRight: 1 };
 window.addEventListener("keydown", e => {
   if (e.target.tagName === "INPUT") return;
   if (e.code === "Space") { keys.clear(); send({ t: "stop" }); e.preventDefault(); return; }
@@ -362,13 +420,13 @@ window.addEventListener("keydown", e => {
 window.addEventListener("keyup", e => keys.delete(e.code));
 window.addEventListener("blur", () => keys.clear());
 function keyFrame() {
-  if (!keys.size) return null;
   const k = c => keys.has(c) ? 1 : 0;
-  return {
-    vx: k("KeyW") + k("ArrowUp") - k("KeyS") - k("ArrowDown"),
-    vy: k("KeyA") - k("KeyD"),
-    yaw: k("KeyQ") + k("ArrowLeft") - k("KeyE") - k("ArrowRight"),
-  };
+  const s = speedScale(k("ShiftLeft") || k("ShiftRight"));
+  const vx = k("KeyW") + k("ArrowUp") - k("KeyS") - k("ArrowDown");
+  const vy = k("KeyA") - k("KeyD");
+  const yaw = k("KeyQ") + k("ArrowLeft") - k("KeyE") - k("ArrowRight");
+  if (!vx && !vy && !yaw) return null;
+  return { vx: s * vx, vy: s * vy, yaw: s * yaw };
 }
 
 let wasDriving = false;
@@ -380,6 +438,21 @@ setInterval(() => {
 document.addEventListener("visibilitychange", () => { if (document.hidden) { keys.clear(); send({ t: "stop" }); } });
 
 for (const b of document.querySelectorAll("[data-call]")) b.onclick = () => call(b.dataset.call);
+// Hold-to-confirm buttons: the action fires after the finger has stayed
+// down for HOLD_MS. A tap does nothing. Used for the one thing on the page
+// that restarts the robot's control stack.
+const HOLD_MS = 1500;
+for (const b of document.querySelectorAll("[data-hold]")) {
+  let timer = null;
+  const cancel = () => { clearTimeout(timer); timer = null; b.classList.remove("holding"); };
+  b.addEventListener("pointerdown", e => {
+    if (b.disabled) return;
+    e.preventDefault();
+    b.classList.add("holding");
+    timer = setTimeout(() => { cancel(); send({ t: "call", key: b.dataset.hold }); log(`${b.dataset.hold}: requested`); }, HOLD_MS);
+  });
+  for (const ev of ["pointerup", "pointerleave", "pointercancel"]) b.addEventListener(ev, cancel);
+}
 for (const b of document.querySelectorAll("[data-height]")) b.onclick = () => send({ t: "height", delta: parseFloat(b.dataset.height) });
 // Deliberately not data-calls: these two talk to the browser, not the robot.
 document.getElementById("reload").onclick = () => location.reload();

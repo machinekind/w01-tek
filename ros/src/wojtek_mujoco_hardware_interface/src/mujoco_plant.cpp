@@ -342,13 +342,24 @@ double MujocoPlant::jointVelocity(int actuator) const
 
 double MujocoPlant::jointEffort(int actuator) const
 {
-  return data_->actuator_force[actuator];
+  // The joint's whole torque, servo plus feed-forward head, as the drive
+  // measures it (md.getTorque()) and as the training env accounts it
+  // (actuator_force + tau_ff). Both are zero in dry run: advance() clears
+  // them, and setFeedForward() withholds the head.
+  return data_->actuator_force[actuator] + data_->qfrc_applied[dof_adr_[actuator]];
 }
 
 void MujocoPlant::setCommand(int actuator, double q_relative)
 {
   data_->ctrl[actuator] = dry_run_ ? activation_qpos_[actuator]
     : activation_qpos_[actuator] + q_relative;
+}
+
+void MujocoPlant::setFeedForward(int actuator, double tau)
+{
+  // The same slot the training env writes: the joint's generalized force,
+  // which for a hinge is the torque about its axis.
+  data_->qfrc_applied[dof_adr_[actuator]] = dry_run_ ? 0.0 : tau;
 }
 
 ImuSample MujocoPlant::imu(

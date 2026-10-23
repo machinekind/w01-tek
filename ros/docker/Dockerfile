@@ -31,6 +31,8 @@ COPY ./src/wojtek_teleop/package.xml ./src/wojtek_teleop/package.xml
 COPY ./src/wojtek_deck/package.xml ./src/wojtek_deck/package.xml
 COPY ./src/magnetometer_broadcaster/package.xml ./src/magnetometer_broadcaster/package.xml
 COPY ./src/wojtek_perception_bringup/package.xml ./src/wojtek_perception_bringup/package.xml
+COPY ./src/wojtek_odometry/package.xml ./src/wojtek_odometry/package.xml
+COPY ./src/wojtek_nav/package.xml ./src/wojtek_nav/package.xml
 COPY ./src/wojtek_mujoco_hardware_interface/package.xml ./src/wojtek_mujoco_hardware_interface/package.xml
 COPY ./src/wojtek_benchmark/package.xml ./src/wojtek_benchmark/package.xml
 
@@ -55,9 +57,21 @@ RUN apt-get update && \
     (rosdep init || true) && \
     rosdep update --rosdistro "$ROS_DISTRO" && \
     rosdep install --from-paths src -y -i && \
-    pip3 install --break-system-packages mujoco huggingface_hub pupil-apriltags && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+
+# Python-only dependencies, in their own layer so a pip failure does not
+# throw away the apt/rosdep one above. huggingface_hub wants a newer idna
+# than Debian's, and pip cannot uninstall python3-idna ("RECORD file not
+# found"): idna alone is installed over it. Not --ignore-installed for the
+# rest, which would shadow Debian's numpy that ROS is built against. One
+# known overlap remains: mujoco wants websockets>=13 and pip does manage to
+# replace Debian's python3-websockets 10.4 (a rosdep of wojtek_pc), so dpkg
+# lists a package whose files are pip's 17.x; web_console runs on either.
+# The three are unpinned: a resolver change upstream shows up as a failed
+# pip layer, not a broken image.
+RUN pip3 install --break-system-packages --ignore-installed idna && \
+    pip3 install --break-system-packages mujoco huggingface_hub pupil-apriltags
 
 # The real source, now that the slow network-installs above are cached.
 # Everything from here on re-runs on every src/ change, but that's just the
@@ -71,7 +85,8 @@ RUN /bin/bash -c "source /opt/ros/$ROS_DISTRO/setup.bash && \
             imu_i2c_hardware_interface \
             wojtek_telemetry \
             wojtek_teleop wojtek_policy wojtek_bringup wojtek_pc magnetometer_broadcaster \
-            wojtek_perception_bringup wojtek_mujoco_hardware_interface \
+            wojtek_perception_bringup wojtek_odometry wojtek_nav \
+            wojtek_mujoco_hardware_interface \
             wojtek_benchmark wojtek_deck \
         --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF"
 

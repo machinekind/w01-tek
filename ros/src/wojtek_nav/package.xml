@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>wojtek_nav</name>
+  <version>0.1.0</version>
+  <description>
+    Navigation for wojtek, starting with what it stands on: a rolling local
+    costmap in the odom frame, built from the depth camera, with memory of
+    what the fixed 70-degree camera can no longer see.
+
+    Launch plus configuration only: it composes third-party nodes
+    (image_proc decimation, depth_image_proc deprojection, nav2_costmap_2d)
+    around this package's settings, the way wojtek_perception_bringup
+    composes the camera driver. The odometry it builds on is
+    wojtek_odometry's; the streams are the camera bringup's.
+  </description>
+  <maintainer email="kchmielewski707@gmail.com">Jakub Chmielewski</maintainer>
+  <license>Apache License 2.0</license>
+
+  <!-- The three perception nodes the launch runs, configured from config/. -->
+  <exec_depend>image_proc</exec_depend>
+  <exec_depend>depth_image_proc</exec_depend>
+  <exec_depend>nav2_costmap_2d</exec_depend>
+  <!-- goto_node, the setpoint driver on top of the costmap, and
+       pixel_goal_node, the VLM's pixel resolved against the depth image. -->
+  <depend>rclpy</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <!-- vlm_brain_node: the picture goes to the model as a JPEG, the answer
+       comes back drawn on it. -->
+  <exec_depend>python3-pil</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

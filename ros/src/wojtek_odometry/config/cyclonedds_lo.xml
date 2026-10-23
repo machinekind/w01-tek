@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- Loopback-only profile for the all-in-one-container SIMULATION session.
+
+     Auto-select is a liability here: it binds whichever external NIC is up
+     when a node starts, all the container's nodes then discover each other
+     over that address, and the moment the interface flaps (cable pulled,
+     wifi roams) every local pub/sub dies with ddsi_udp_conn_write spam --
+     seen live 2026-08-22. The simulation never needs to leave the machine,
+     so pin it to lo and be immune.
+
+     Use by exporting, in EVERY shell that talks to the sim (the launch and
+     any manual ros2 CLI):
+       export CYCLONEDDS_URI=file:///ros2_ws/src/wojtek_odometry/config/cyclonedds_lo.xml
+     A shell left on the compose default (auto-select) may bind only an
+     external NIC and will NOT see the lo-only participants. -->
+<CycloneDDS xmlns="https://cdds.io/config" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+    <Domain Id="any">
+        <General>
+            <Interfaces>
+                <NetworkInterface name="lo" multicast="true"/>
+            </Interfaces>
+        </General>
+    </Domain>
+</CycloneDDS>

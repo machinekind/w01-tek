@@ -43,6 +43,15 @@ stay in place anyway:
   * a dead-man zeroes the motion if Joy messages stop (pad powered off / out
     of bluetooth range / joy driver gone) for more than cmd_timeout_s. The
     height set-point is held through stops, same rule as the consoles.
+
+/cmd_vel is shared with the other drive sources (deck gateway, consoles,
+text commander), and policy_node keeps whichever message came last. So this
+node publishes only while somebody drives: the joy driver repeats an idle
+pad's state forever, but centred sticks are not input. When the sticks go
+back to centre (or the joy stream stops) the motion is zeroed for
+silence_after_s and the node then goes quiet, so a pad lying next to the
+robot does not overwrite another source's commands twenty times a second.
+The rule lives in pad_drive.py, tested without ROS.
 """
 import rclpy
 from geometry_msgs.msg import Twist
@@ -51,6 +60,7 @@ from sensor_msgs.msg import Joy
 from std_srvs.srv import SetBool, Trigger
 
 from wojtek_policy.policy_source import load_meta
+from wojtek_teleop.pad_drive import IDLE, LIVE, ZEROING, PadDrive
 
 # Fallbacks when no policy reference is set (or it fails to load) -- same
 # values and same role as in web_console.py / operator_console.py.
@@ -60,6 +70,7 @@ DEFAULT_HEIGHT_RANGE = (0.09, 0.17)
 DEFAULT_HEIGHT = 0.125
 
 DRIVE_TICK_HZ = 20.0     # /cmd_vel publish rate (same as the consoles)
+SILENCE_AFTER_S = 2.0    # zeroing burst length before going quiet
 
 
 class GamepadTeleop(Node):
@@ -89,10 +100,10 @@ class GamepadTeleop(Node):
 
         self._load_meta()
 
-        self._cmd = (0.0, 0.0, 0.0)   # normalized [-1, 1] (vx, vy, yaw)
-        self._height = self.height_default
-        self._joy_stamp = None
-        self._deadman_hit = False
+        self._gate = PadDrive(self.cmd_low, self.cmd_high, self.height_range,
+                              self.height_default, timeout_s=self._cmd_timeout,
+                              silence_after_s=SILENCE_AFTER_S)
+        self._last_state = IDLE
         self._arm_btn_prev = 0
         self._stand_btn_prev = 0
         self._lie_btn_prev = 0
@@ -165,13 +176,16 @@ class GamepadTeleop(Node):
     def _axis(self, msg, idx):
         return msg.axes[idx] if 0 <= idx < len(msg.axes) else 0.0
 
+    def _now(self):
+        return self.get_clock().now().nanoseconds / 1e9
+
     def _on_joy(self, msg):
-        self._cmd = (
+        self._gate.joy(
+            self._now(),
             self._shape(self._axis(msg, self._ax_vx)),
             self._shape(self._axis(msg, self._ax_vy)),
             self._shape(self._axis(msg, self._ax_yaw)),
         )
-        self._joy_stamp = self.get_clock().now()
 
         # A: toggle arm on the press edge.
         btn = msg.buttons[self._btn_arm] if self._btn_arm < len(msg.buttons) else 0
@@ -195,10 +209,9 @@ class GamepadTeleop(Node):
         h_up = msg.buttons[self._btn_height_up] if self._btn_height_up < len(msg.buttons) else 0
         if (h_dn and not self._height_btn_prev[0]) or (
                 h_up and not self._height_btn_prev[1]):
-            lo, hi = self.height_range
             step = self._height_step if h_up else -self._height_step
-            self._height = min(max(self._height + step, lo), hi)
-            self.get_logger().info(f"height set-point {self._height:.3f} m")
+            height = self._gate.step_height(self._now(), step)
+            self.get_logger().info(f"height set-point {height:.3f} m")
         self._height_btn_prev = (h_dn, h_up)
 
         # D-pad: one trick per direction, on the press edge (the hat
@@ -267,40 +280,30 @@ class GamepadTeleop(Node):
 
     # ---- drive tick ------------------------------------------------------------
     def _tick(self):
-        # Publish nothing until the pad has spoken at least once: this node is
-        # resident in the robot service (gamepad:=true), so at boot with no
-        # pad connected a padless teleop spamming zeroed /cmd_vel would
-        # override whatever else (web console) drives. The dead-man below
-        # only makes sense once there was input to lose.
-        if self._joy_stamp is None:
-            return
-        age_s = (self.get_clock().now() - self._joy_stamp).nanoseconds / 1e9
-        stale = age_s > self._cmd_timeout
-        if stale and age_s > self._cmd_timeout + 2.0:
-            # Pad gone for good (powered off / out of range): after the
-            # zeroing burst below, go silent so another source (web console)
-            # can take over /cmd_vel without being fought.
-            return
-        if stale:
-            # Dead-man: zero the motion, hold the stance height. Publishing
-            # (not going silent immediately) keeps the last non-zero stick
-            # from sticking in policy_node, which latches the last received
-            # command.
-            vx = vy = yaw = 0.0
-            if not self._deadman_hit:
+        # The gate decides whether this node is driving at all (see
+        # pad_drive.py): the pad speaks through the joy driver even when
+        # nobody holds it, and an idle pad must not overwrite whatever else
+        # (deck, console) drives /cmd_vel.
+        now = self._now()
+        out = self._gate.tick(now)
+        state = self._gate.state
+        if state != self._last_state:
+            if state == ZEROING and self._gate.pad_lost(now):
                 self.get_logger().warning("joy input stale -- zeroing /cmd_vel")
-        else:
-            # Normalized [-1,1] -> the trained (asymmetric) command box:
-            # positive stick scales by high, negative by low.
-            lo, hi = self.cmd_low, self.cmd_high
-            vx, vy, yaw = (v * hi[i] if v >= 0 else v * -lo[i]
-                           for i, v in enumerate(self._cmd))
-        self._deadman_hit = stale
-
+            elif state == ZEROING:
+                self.get_logger().info("sticks released -- zeroing /cmd_vel")
+            elif state == LIVE:
+                self.get_logger().info("pad drives /cmd_vel")
+            elif state == IDLE:
+                self.get_logger().info("pad idle -- /cmd_vel released")
+            self._last_state = state
+        if out is None:
+            return
+        vx, vy, yaw, height = out
         t = Twist()
         t.linear.x, t.linear.y, t.angular.z = float(vx), float(vy), float(yaw)
         # Standing-height command; policy_node treats 0 as "use the default".
-        t.linear.z = float(self._height)
+        t.linear.z = float(height)
         self._pub_cmd.publish(t)
 
 

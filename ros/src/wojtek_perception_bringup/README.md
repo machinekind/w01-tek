@@ -1,8 +1,8 @@
 # wojtek_perception_bringup
 
-Prototype. Brings up the RealSense D435 depth stream, its post-processing
-settings, and the reduction of that depth into a coarse terrain-reference
-cloud.
+Prototype. Brings up the RealSense D435 depth stream and its
+post-processing settings (plus colour/RGBD for the VLM). The sensor only:
+what is built on the streams is the navigation stack's.
 
 ```bash
 ros2 launch wojtek_perception_bringup perception.launch.py
@@ -10,19 +10,26 @@ ros2 launch wojtek_perception_bringup perception.launch.py --show-args
 ```
 
 ```
-realsense2_camera ──depth 424x240@15──► cloud_reduce ──8x8 ordered cloud──► (planner / policy)
-   (plain node)   │     ~3 MB/s          (rclpy)   /cloud_reduce/terrain_points
-                  ├──── colour 1280x720@15 ───────────────────────────────► (VLM, later)
+realsense2_camera ──depth 424x240@15──► (viz; the driver's own cloud)
+   (plain node)   │     ~3 MB/s          /camera/camera/depth/image_rect_raw
+                  ├──── colour 1280x720@15 ──────────────────────► (VLM, SLAM)
                   │     ~41 MB/s          /camera/camera/color/image_raw
-                  └──── RGBD 1280x720@15 ─────────────────────────────────► (nothing yet)
+                  ├──── aligned depth 1280x720@15 ───────────────► (SLAM)
+                  │                       /camera/camera/aligned_depth_to_color/image_raw
+                  └──── RGBD 1280x720@15 ────────────────────────► (VLM)
                         ~69 MB/s          /camera/camera/rgbd
 ```
+
+(Two in-package consumers used to sit in this diagram and are gone: the
+depth->8x8 grid reduction for the SCAN-planner -- ~0.8 of a Pi 4 core,
+removed 2026-08 with that path -- and `cloud_accumulate_node`, the
+odom-frame accumulated cloud, removed 2026-09 once the SLAM's own map
+superseded it. The grid's bench results stay recorded below.)
 
 848x480 comes off the depth sensor; `decimation_filter.filter_magnitude: 2`
 halves each dimension before anything is published, so what crosses DDS is
 424x240x16 bit at 15 Hz. Both rates are constrained by what the D435
-actually offers (depth 6/15/30/60/90, colour 6/15/30/60): 15 is the nearest
-depth rate at or above the planner's 10 Hz replan, and 6 is the slowest
+actually offers (depth 6/15/30/60/90, colour 6/15/30/60), and 6 is the slowest
 colour rate the sensor has, which is still ~12x what the VLM's ~0.3-0.5 Hz
 decision loop needs.
 
@@ -34,25 +41,27 @@ cannot keep up. At 1280x720 expect proportionally worse. That is an accepted
 trade for now; the fix, when one is needed, is a C++ consumer in the driver's
 own process (see the composition note in the launch file), not more bandwidth.
 
-**The planner keeps using the RAW depth topic, not the aligned one.**
+**Geometry consumers use the RAW depth topic, not the aligned one.**
 Alignment reprojects depth into the colour intrinsics, and measured on this
 unit that narrows the horizontal field of view from 90.8 deg to 70.0 deg
 (fx 418.0 -> 605.6) -- a quarter of the view, lost at the sides where
-obstacles are.
+obstacles are. The one consumer that needs the aligned product is the SLAM:
+it registers depth to colour by definition, because its features are
+colour-image features. That is a cost it pays for loop closure, not a
+recommendation for anything else.
 
 ## Why this is a `*_bringup`
 
-It composes more than one package: the third-party `realsense2_camera`
-driver plus this package's own reduction node, with shared `config/`. A
-single-node subsystem does not need one -- `wojtek_teleop` carries its own
-`gamepad.launch.py` and that is the right shape for it.
+It composes the third-party `realsense2_camera` driver and `tf2_ros`
+with this package's measured `config/`. A single-node subsystem does not
+need one -- `wojtek_teleop` carries its own `gamepad.launch.py` and that
+is the right shape for it.
 
 The launch runs standalone and is includable. The one singleton in it is the
 camera->body static transform, so that is opt-out (`extrinsics:=false`) for
-the case where the robot bringup already owns that TF edge; the reduction is
-opt-out too (`reduce:=false`).
+the case where the robot bringup already owns that TF edge.
 
-Both config files are ordinary ROS parameter files (`/**: ros__parameters:`)
+The config files are ordinary ROS parameter files (`/**: ros__parameters:`)
 loaded by the nodes themselves, so `--params-file` and `ros2 param dump`
 work on them like on any other node's config. Launch arguments layer single
 overrides on top (`depth_profile:=`, `color_profile:=`, `enable_color:=`):
@@ -64,10 +73,9 @@ and the last one wins.
 | piece | state |
 |---|---|
 | camera settings | measured on hardware, see `config/d435.yaml` |
-| depth -> 8x8 grid reduction | implemented, unit-tested |
 | camera -> body extrinsics | **placeholder numbers**, must be measured |
-| occupancy map / planner hook-up | not here yet |
-| RPi validation | not run |
+| odom-frame accumulated cloud | REMOVED 2026-09 (superseded by the SLAM's map) |
+| depth -> 8x8 grid reduction | REMOVED 2026-08 (fed only the dropped SCAN-planner path) |
 
 ## What has actually been verified
 
@@ -79,11 +87,11 @@ Bench numbers behind `config/d435.yaml`, measured on serial `030522071460`
 | `visual_preset: 3` (HIGH_ACCURACY) vs default | temporal noise at 3-4 m: 97 -> 33 mm |
 | `temporal_filter.filter_smooth_delta: 100` vs the default 20 | 2-3 m: 39 -> 10 mm; at 20 the filter is measurably *worse* than none at range |
 | `laser_power` 150 -> 360 | ~15% on the default preset, nothing on HIGH_ACCURACY |
-| reduction to an 8x8 grid | noise 1.8x better (not 80x -- stereo noise is spatially correlated), fill 74% -> 100% |
+| reduction to an 8x8 grid (removed) | noise 1.8x better (not 80x -- stereo noise is spatially correlated), fill 74% -> 100% |
 
 Depth error grows with the square of range (`sigma ~= 0.002*z^2` m on this
 unit at HIGH_ACCURACY), which is why `clip_distance` is 3.0: past that the
-radial error exceeds the planner's 0.05 m map cell.
+radial error exceeds a 0.05 m map cell.
 
 ## Traps
 
@@ -93,12 +101,12 @@ radial error exceeds the planner's 0.05 m map cell.
   believing a setting took effect.
 - **No component container, on purpose.** Zero-copy needs two C++ nodes in
   one process. The RPi hosts no container (nothing else in this workspace
-  creates one; `ros2_control_node` is a standalone process), and the only
-  consumer of the depth image is this package's rclpy reduction, which
-  cannot be composed at all. So the depth crosses DDS on loopback:
-  424x240x2 B at 15 Hz is ~3 MB/s, which is affordable. Rewriting the
-  reduction in C++ for a higher frame rate is the change that would make a
-  container worth introducing.
+  creates one; `ros2_control_node` is a standalone process). So the depth
+  crosses DDS on loopback: 424x240x2 B at 15 Hz is ~3 MB/s, which is
+  affordable. The SLAM nodes are C++ and composable, so moving them into
+  the driver's process is the change that would make a container worth
+  introducing -- once the SLAM runs on the robot at a rate where the
+  serialisation shows up.
 - **Pitch beats sensor noise.** 1 deg of camera pitch error puts a floor
   point 52 mm off at 3 m; the sensor's own noise there is ~33 mm. A constant
   mounting error reads downstream as a permanent phantom obstacle. Measure
@@ -120,14 +128,12 @@ radial error exceeds the planner's 0.05 m map cell.
 ```bash
 cd ros/src/wojtek_perception_bringup
 source /opt/ros/jazzy/setup.bash
-PYTHONPATH=$PWD:$PYTHONPATH python3 -m pytest test/ -q   # 20 tests, no camera needed
+PYTHONPATH=$PWD:$PYTHONPATH python3 -m pytest test/ -q   # no camera needed
 ```
 
 (`PYTHONPATH=$PWD` alone replaces the ROS paths instead of extending them,
 and then `rclpy`/`launch` do not import.)
 
-Covers the reduction maths (median vs flying pixels, range gating, sparse
-patches, encoding and camera_info mismatches) and the launch file's
-composition logic (which nodes get created, the parameter files they load,
-the argument overrides on top of them, and that the measured settings are
-still in the config).
+Covers the launch file's composition logic (which nodes get created, the
+parameter files they load, the argument overrides on top of them, and that
+the measured settings are still in the config).

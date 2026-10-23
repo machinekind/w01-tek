@@ -1,0 +1,51 @@
+# RAI vendor configuration (rai-core reads ./config.toml from the cwd).
+# Model and vendor NAMES only; credentials come from the environment
+# (OPENAI_API_KEY, AWS_*, GOOGLE_API_KEY) which run.sh forwards by name.
+#
+# Default: Ollama on the remote GPU dev box, reached through the SSH tunnel
+# `run.sh tunnel` opens on localhost:11435 (the container shares the host
+# network). Switch [vendor] to "openai" for the hosted API instead.
+[vendor]
+simple_model = "ollama"
+complex_model = "ollama"
+embeddings_model = "ollama"
+
+[ollama]
+# Tool calling + vision are both required (the camera tool hands the model
+# an image). Change with `run.sh pull <model>` on the inference box.
+# Use the *-instruct tags: the bare qwen3-vl:30b / qwen3-vl:8b tags are the
+# thinking builds, and Ollama 0.34 ignores think=false for them, so every
+# ReAct step pays 150-4500 hidden thinking tokens (8-70 s). Measured with
+# `run.sh bench` (2026-09-12): instruct 0.5-3 s per step, same tool calls.
+simple_model = "qwen3-vl:30b-a3b-instruct"
+complex_model = "qwen3-vl:30b-a3b-instruct"
+embeddings_model = "qwen3-embedding:0.6b"
+base_url = "http://localhost:11435"
+
+[openai]
+simple_model = "gpt-4o-mini"
+complex_model = "gpt-4o"
+embeddings_model = "text-embedding-3-small"
+base_url = "https://api.openai.com/v1/"
+
+[aws]
+simple_model = "anthropic.claude-3-haiku-20240307-v1:0"
+complex_model = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+embeddings_model = "amazon.titan-embed-text-v1"
+region_name = "us-east-1"
+
+[google]
+simple_model = "gemini-3-flash"
+complex_model = "gemini-3-pro"
+embeddings_model = "text-embedding-004"
+
+[tracing]
+project = "wojtek_rai"
+
+[tracing.langfuse]
+use_langfuse = false
+host = "http://localhost:3000"
+
+[tracing.langsmith]
+use_langsmith = false
+host = "https://api.smith.langchain.com"

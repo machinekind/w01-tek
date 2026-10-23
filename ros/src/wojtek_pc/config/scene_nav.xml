@@ -1,0 +1,128 @@
+<!--
+  The world a navigation session drives through: a corridor with branches.
+
+  What this scene is for is perception, not scenery. The robot's camera
+  looks ~90 degrees forward from a fixed head, so the two things worth
+  testing are (a) does an obstacle stay in the costmap after it leaves the
+  view, and (b) can the robot get past one. A corridor with side branches
+  exercises both: every branch mouth is seen once, from one direction, and
+  then is behind the robot; every obstacle in the main run has to be
+  rounded, which turns the body and takes the obstacle out of the frame
+  while the robot is still next to it.
+
+  Layout (metres, spawn at the origin facing +x):
+
+      y
+      ^         +---------+  branch N (x 2.5..4.0, up to y 3.5)
+      |         |         |
+    1 +---------+         +-------------------------------+
+      |  [crate]   (pillar)        [low box]              |   main corridor
+   -1 +-------------------+          +--------------------+   (1.8 m wide)
+      |                   |          |
+      |                   +----------+  branch S (x 5.5..7.0, down to y -3.0)
+      +--------------------------------------------------> x
+           0     2     4     6     8
+
+  Walls are 0.1 m thick and 1.0 m high: the camera sits ~0.21 m up and
+  looks 15 degrees down, so at 2 m the top of its view is ~0.75 m -- a
+  taller wall would only cost fill rate. The obstacles differ on purpose:
+  a crate at body height, a round pillar (a shape a planner cannot round
+  by squaring a corner), and a LOW box, which is the interesting case for
+  a legged robot -- 0.15 m is a step, not a wall, and where that line sits
+  is a navigation decision, not a perception one.
+
+  Both halves of the simulation load this file (the plant inside
+  ros2_control and the camera renderer), so everything here is solid.
+  Static bodies with no joints: qpos keeps the robot-only layout the
+  plugin publishes.
+
+  Surfaces wear flat colours with random dots (MuJoCo's mark="random"),
+  one tile stretched over the whole surface, so nothing in the depth or
+  colour image repeats -- the pathological case for anything matching
+  images is a checkerboard, which is exactly what the training scene's
+  floor is.
+
+    ros2 launch wojtek_pc sim.launch.py model_xml:=scene_nav.xml leg_odom:=true
+-->
+<mujoco model="wojtek_nav_scene">
+  <include file="wojtek_mjx.xml"/>
+  <statistic center="0 0 0.15" extent="0.8"/>
+  <visual>
+    <headlight diffuse="0.5 0.5 0.5" ambient="0.5 0.5 0.5" specular="0 0 0"/>
+    <global azimuth="120" elevation="-20"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+    <texture type="2d" name="nav_floor" builtin="flat" mark="random" random="0.03"
+             rgb1="0.55 0.52 0.47" markrgb="0.15 0.13 0.12" width="1024" height="1024"/>
+    <material name="nav_floor" texture="nav_floor" texuniform="true" texrepeat="0.125 0.125" reflectance="0"/>
+    <texture type="2d" name="wall_main" builtin="flat" mark="random" random="0.04"
+             rgb1="0.80 0.78 0.70" markrgb="0.25 0.20 0.15" width="1000" height="500"/>
+    <material name="wall_main" texture="wall_main" texuniform="true" texrepeat="0.125 0.5"/>
+    <texture type="2d" name="wall_branch" builtin="flat" mark="random" random="0.04"
+             rgb1="0.62 0.72 0.80" markrgb="0.10 0.15 0.30" width="1016" height="508"/>
+    <material name="wall_branch" texture="wall_branch" texuniform="true" texrepeat="0.125 0.5"/>
+    <texture type="2d" name="wall_end" builtin="flat" mark="random" random="0.04"
+             rgb1="0.66 0.76 0.62" markrgb="0.12 0.28 0.10" width="1008" height="504"/>
+    <material name="wall_end" texture="wall_end" texuniform="true" texrepeat="0.25 0.5"/>
+    <texture type="2d" name="crate" builtin="flat" mark="random" random="0.05"
+             rgb1="0.72 0.55 0.30" markrgb="0.30 0.20 0.08" width="512" height="512"/>
+    <material name="crate" texture="crate" texuniform="true" texrepeat="2 2"/>
+    <material name="pillar" rgba="0.45 0.42 0.55 1"/>
+  </asset>
+
+  <worldbody>
+    <geom name="floor" type="plane" size="0 0 0.01" material="nav_floor" condim="3" conaffinity="15"/>
+    <camera name="track" mode="trackcom" pos="0.9 -1.3 0.5" xyaxes="0.83 0.55 0 -0.15 0.23 0.96"/>
+
+    <!-- Main corridor: x from -1 to 9, y from -0.9 to 0.9. Each side wall
+         is cut where a branch opens off it. -->
+    <body name="room">
+      <geom name="wall_s_a" type="box" size="3.25 0.05 0.5" pos="2.25 -0.95 0.5"
+            material="wall_main" contype="1" conaffinity="15" group="2"/>
+      <geom name="wall_s_b" type="box" size="1.0 0.05 0.5" pos="8.0 -0.95 0.5"
+            material="wall_main" contype="1" conaffinity="15" group="2"/>
+      <geom name="wall_n_a" type="box" size="1.75 0.05 0.5" pos="0.75 0.95 0.5"
+            material="wall_main" contype="1" conaffinity="15" group="2"/>
+      <geom name="wall_n_b" type="box" size="2.5 0.05 0.5" pos="6.5 0.95 0.5"
+            material="wall_main" contype="1" conaffinity="15" group="2"/>
+      <geom name="wall_far" type="box" size="0.05 1.0 0.5" pos="9.05 0 0.5"
+            material="wall_end" contype="1" conaffinity="15" group="2"/>
+      <geom name="wall_back" type="box" size="0.05 1.0 0.5" pos="-1.05 0 0.5"
+            material="wall_end" contype="1" conaffinity="15" group="2"/>
+
+      <!-- North branch, off the corridor at x 2.5..4.0 -->
+      <geom name="branch_n_w" type="box" size="0.05 1.3 0.5" pos="2.45 2.25 0.5"
+            material="wall_branch" contype="1" conaffinity="15" group="2"/>
+      <geom name="branch_n_e" type="box" size="0.05 1.3 0.5" pos="4.05 2.25 0.5"
+            material="wall_branch" contype="1" conaffinity="15" group="2"/>
+      <geom name="branch_n_end" type="box" size="0.85 0.05 0.5" pos="3.25 3.55 0.5"
+            material="wall_end" contype="1" conaffinity="15" group="2"/>
+
+      <!-- South branch, off the corridor at x 5.5..7.0 -->
+      <geom name="branch_s_w" type="box" size="0.05 1.05 0.5" pos="5.45 -2.0 0.5"
+            material="wall_branch" contype="1" conaffinity="15" group="2"/>
+      <geom name="branch_s_e" type="box" size="0.05 1.05 0.5" pos="7.05 -2.0 0.5"
+            material="wall_branch" contype="1" conaffinity="15" group="2"/>
+      <geom name="branch_s_end" type="box" size="0.85 0.05 0.5" pos="6.25 -3.05 0.5"
+            material="wall_end" contype="1" conaffinity="15" group="2"/>
+    </body>
+
+    <!-- Obstacles in the main run. Each leaves a passable gap on one side;
+         none of them is centred, so "go straight" is never the answer. -->
+    <body name="crate" pos="2.0 -0.45 0">
+      <geom name="crate_geom" type="box" size="0.3 0.3 0.25" pos="0 0 0.25"
+            material="crate" contype="1" conaffinity="15" group="2"/>
+    </body>
+    <body name="pillar" pos="5.0 0.35 0">
+      <geom name="pillar_geom" type="cylinder" size="0.2 0.4" pos="0 0 0.4"
+            material="pillar" contype="1" conaffinity="15" group="2"/>
+    </body>
+    <!-- 0.15 m: a step for a legged robot, a wall for a wheeled one. -->
+    <body name="low_box" pos="7.8 -0.2 0">
+      <geom name="low_box_geom" type="box" size="0.25 0.4 0.075" pos="0 0 0.075"
+            material="crate" contype="1" conaffinity="15" group="2"/>
+    </body>
+  </worldbody>
+</mujoco>

@@ -27,14 +27,18 @@ import numpy as np
 # -- image geometry ----------------------------------------------------------
 DEPTH_WIDTH, DEPTH_HEIGHT = 424, 240
 DEPTH_FX = DEPTH_FY = 209.0          # 418 at 848x480, halved by decimation
-# Colour is for the VLM: contract = topic + encoding, resolution is a knob.
-COLOR_WIDTH, COLOR_HEIGHT = 640, 360
+# Colour is for the VLM and for SLAM: contract = topic + encoding, resolution
+# is a knob -- with one constraint. Both images render from the same MJCF
+# camera, so depth is pixel-registered to colour by construction, and
+# RTAB-Map takes such a pair only when colour is an integer multiple of
+# depth. 2x the 424x240 depth; 640x360 was not a multiple.
+COLOR_WIDTH, COLOR_HEIGHT = 848, 480
 COLOR_ENCODING = "rgb8"
 
 # Vertical FOV the render must use so that fy comes out at DEPTH_FY.
 FOVY_DEG = math.degrees(2.0 * math.atan(DEPTH_HEIGHT / (2.0 * DEPTH_FY)))
 
-# -- depth validity window (matches config/cloud_reduce.yaml on the robot) ---
+# -- depth validity window (the D435 pipeline's usable range) ----------------
 DEPTH_MIN_M = 0.3
 DEPTH_MAX_M = 3.0
 
@@ -76,7 +80,7 @@ def depth_to_mm(depth_m, min_m=DEPTH_MIN_M, max_m=DEPTH_MAX_M):
 
     Anything outside [min_m, max_m] -- including the renderer's far-plane
     value for sky pixels and any non-finite garbage -- becomes 0, the
-    RealSense "no return" convention that cloud_reduce already filters.
+    RealSense "no return" convention that depth consumers already filter.
     """
     depth_m = np.asarray(depth_m)
     valid = np.isfinite(depth_m) & (depth_m >= min_m) & (depth_m <= max_m)

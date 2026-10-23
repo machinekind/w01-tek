@@ -1,6 +1,7 @@
 # Architektura ROS stacka (`ros/src`)
 
-Stan na 2026-07-31 (branch `jakuc/CANdle_hat+BMI_9DOF` + #91 kamera, #92 text_commander).
+Stan na 2026-07-31 (branch `jakuc/CANdle_hat+BMI_9DOF` + #91 kamera, #92 text_commander);
+sekcje 8–9 (odometria, SLAM) dopisane 2026-09-21 na `jakuc/autonomy`.
 
 Stack dzieli się na trzy warstwy:
 
@@ -105,8 +106,6 @@ flowchart LR
     TXT["text_commander\n(wojtek_teleop, #92)"]
     WEB["web_console\n(przeglądarka :8080)"]
 
-    PERC["cloud_reduce\n(wojtek_perception_bringup)"]
-
     SIM -- "/joint_states (aktuowane + pasywne)" --> POL
     SIM -- "/imu/data (ground truth)" --> POL
     POL -- "/wojtek/joint_targets" --> SIM
@@ -116,8 +115,7 @@ flowchart LR
     SIM -- "/camera/camera/color/image_raw" --> WEB
     SIM -- "TF odom→base_link" --> RVIZ
     SIM -- "/joint_states" --> RSP
-    SIM -- "/camera/camera/depth/* (wirtualny D435)" --> PERC
-    PERC -- "/cloud_reduce/terrain_points (8x8)" --> RVIZ
+    SIM -- "/camera/camera/depth/* (wirtualny D435)" --> RVIZ
     RSP --> RVIZ
 ```
 
@@ -146,9 +144,9 @@ Runtime wytrenowanej polityki RL + node ROS. Działa na RPi i w symulacji.
 | srv | `/wojtek/enable` | `std_srvs/SetBool` |
 | srv | `/wojtek/reset` | `std_srvs/Trigger` |
 
-Parametry: `policy_dir`, `joint_map_yaml`, `imu_mount_rpy` (rotacja IMU→base_link; real: `[0, π, 0]`, sim: zera), `clamp_knee`, `auto_enable`, `soft_start_s` (blend od pozy mierzonej do wyjścia polityki), `watchdog_timeout_s` (0.2 s — przy nieświeżych danych **wstrzymuje publikację**; MD80 trzyma ostatni cel), `gravity_from_accel` (filtr komplementarny zamiast kwaternionu IMU, dla IMU bez fuzji).
+Parametry: `policy_dir`, `joint_map_yaml`, `imu_mount_rpy` (rotacja IMU→base_link; real: `[0, π, 0]`, sim: zera), `clamp_knee`, `auto_enable`, `soft_start_s` (blend od pozy mierzonej do wyjścia polityki), `watchdog_timeout_s` (0.2 s — przy nieświeżych danych **wstrzymuje publikację**; MD80 trzyma ostatni cel), `cmd_timeout_s` (0.5 s — dead-man na `/cmd_vel`: po takiej ciszy źródła komenda prędkości czyta się jako zero, wysokość zostaje; 0 wyłącza; `command_gate.py`), `gravity_from_accel` (filtr komplementarny zamiast kwaternionu IMU, dla IMU bez fuzji).
 
-Zabezpieczenia: watchdog świeżości per-sensor (polityka bez IMU przeżywa dropout IMU), odrzucanie NaN w wejściach (NaN zatruwałby stan przez pętlę `last_action`), reset stanu polityki na krawędzi hold→run.
+Zabezpieczenia: watchdog świeżości per-sensor (polityka bez IMU przeżywa dropout IMU), dead-man na `/cmd_vel` (martwe źródło komend zatrzymuje robota po `cmd_timeout_s`, nie zostawia go idącego), odrzucanie NaN w wejściach (NaN zatruwałby stan przez pętlę `last_action`), reset stanu polityki na krawędzi hold→run.
 
 ## 2. `wojtek_bringup` — strona robota (Python, ament_python)
 
@@ -210,7 +208,7 @@ wirtualną kamerę.
 | pub | `/camera/camera/color/camera_info` | `sensor_msgs/CameraInfo` |
 | srv | `/sim/reset` | `std_srvs/Trigger` |
 
-Wirtualna kamera D435 (#91): tematy, kodowanie i frame'y identyczne z realnym stosem `wojtek_perception_bringup`, więc `cloud_reduce`/planner/VLM działają w symulacji bez zmian. Render offscreen (MuJoCo `Renderer`, EGL) na osobnym wątku z prywatną `MjData` — fizyka nie zwalnia; stemple obrazów = stemple TF `odom→base_link` z tego samego ticku fizyki. Kamera jest wstrzykiwana do modelu przy starcie przez `MjSpec` (pozycja/FOV z `wojtek_pc/camera_spec.py`, jedno źródło prawdy dla MJCF, URDF i CameraInfo; patrz #93 dla docelowego przeniesienia do `build_model.py`). TF `base_link→camera_link→camera_depth_optical_frame` daje URDF (`with_camera` w `body.urdf.xacro`), nie plik konfiguracyjny. Bez działającego backendu GL kamera degraduje się do off z warningiem — fizyka działa dalej. QoS: sensor data (best effort). Głębia: 0 = brak zwrotu (jak RealSense), okno 0.3–3.0 m.
+Wirtualna kamera D435 (#91): tematy, kodowanie i frame'y identyczne z realnym stosem `wojtek_perception_bringup`, więc konsumenci głębi/VLM działają w symulacji bez zmian (redukcja do siatki 8x8 usunięta 2026-08 razem ze ścieżką SCAN-plannera). Render offscreen (MuJoCo `Renderer`, EGL) na osobnym wątku z prywatną `MjData` — fizyka nie zwalnia; stemple obrazów = stemple TF `odom→base_link` z tego samego ticku fizyki. Kamera jest wstrzykiwana do modelu przy starcie przez `MjSpec` (pozycja/FOV z `wojtek_pc/camera_spec.py`, jedno źródło prawdy dla MJCF, URDF i CameraInfo; patrz #93 dla docelowego przeniesienia do `build_model.py`). TF `base_link→camera_link→camera_depth_optical_frame` daje URDF (`with_camera` w `body.urdf.xacro`), nie plik konfiguracyjny. Bez działającego backendu GL kamera degraduje się do off z warningiem — fizyka działa dalej. QoS: sensor data (best effort). Głębia: 0 = brak zwrotu (jak RealSense), okno 0.3–3.0 m.
 
 Parametry: `model_xml` (puste = przygotuj MJX z share z przepisaniem meshdir), `joint_map_yaml`, `publish_rate_hz` (100), `realtime_factor`, `initial_pose` (`home`/`folded` — folded uzyskiwane przez fizyczne "osiadanie" z home, żeby domknięcie czworoboku było spójne), `folded_knee_rad`, `camera` (true; wyłącznik dla słabszych maszyn), `camera_depth_hz` (15), `camera_color_hz` (5), `depth_min_m`/`depth_max_m` (0.3/3.0).
 
@@ -269,6 +267,14 @@ zmienia.
 **Node: `gamepad_teleop`** — lewy drążek vx/yaw, prawy strafe, A = arm,
 Y/B = stand_up/lie_down, D-pad = wysokość; skalowanie do boxa komend z
 kontraktu polityki, dead-man `cmd_timeout_s` (0.5 s) po zaniku `joy`.
+Publikuje tylko, gdy ktoś jedzie: driver `joy` powtarza stan
+bezczynnego pada bez końca, ale drążki w martwej strefie nie są wejściem.
+Po ich puszczeniu (albo po zaniku `joy`) leci zerowy Twist przez 2 s i
+węzeł milknie, tą samą regułą co `text_commander` i bramka Decka — inaczej
+pad leżący obok robota nadpisywałby komendy Decka 20 razy na sekundę.
+Krok wysokości (LB/RB) liczy się jako wejście, żeby nowa nastawa doszła do
+polityki przy drążkach w spoczynku. Czysta logika (`PadDrive`,
+`pad_drive.py`) jest testowana bez ROS-a (`test/test_pad_drive.py`).
 
 **Node: `text_commander`** (#92) — zamraża ROS-owy kontrakt przyszłego
 VLM-a: VLM konsumuje `/camera/camera/color/image_raw`, publikuje
@@ -289,6 +295,72 @@ od powłoki rclpy i testowana bez ROS-a (`test/test_text_commander.py`).
 Parametry: `v_forward` (0.3 m/s), `w_turn` (0.5 rad/s), `command_timeout`
 (2.0 s — dead-man: VLM musi mówić, żeby Wojtek szedł). Test z CLI:
 `ros2 topic pub -1 /wojtek/nav_command std_msgs/String "data: forward"`.
+
+## 8. `wojtek_odometry` — odometria nóg + IMU (Python, ament_python)
+
+Źródło `odom` dla nawigacji: stopa w stance jest przyszpilona do podłogi,
+więc jakobian każdej nogi w stance mierzy prędkość korpusu; średnia po
+zbiorze stance obracana orientacją z IMU i całkowana do pozy planarnej
+(roll/pitch wprost z IMU, z = 0). Kontakt z **wysokości stopy** po
+wypoziomowaniu IMU (moment kolana tylko jako próg odciążenia — zmierzone,
+że sam moment nie oddziela stance od swing). Szczegóły i zmierzony dryf
+(1–3 % dystansu w symie) w README pakietu.
+
+| Kierunek | Interfejs | Typ |
+|---|---|---|
+| sub | `/wojtek/joint_states_abs`, `/joint_states` (moment), `/imu_sensor_broadcaster/imu` | |
+| pub | `/wojtek/odom` (twist w ramce korpusu) | `nav_msgs/Odometry` |
+| pub TF | `odom→base_link` (gdy `publish_tf`) | |
+
+**Kto jest właścicielem `odom→base_link`** decyduje jeden argument
+bringupu, `leg_odom`: na robocie domyślnie ta odometria; w symulacji
+domyślnie ground truth z pluginu MuJoCo, a `leg_odom:=true` przełącza na
+odometrię i przesuwa prawdę do `odom→base_link_gt` (parametr
+`ground_truth_child_frame` pluginu) — mapa budowana na odometrii
+dziedziczy wtedy jej prawdziwy dryf, a prawda zostaje w TF dla mierników
+(`odom_vs_ground_truth`, `odom_trace`, parametr `ground_truth_frame`).
+
+## 9. `wojtek_nav` — percepcja lokalna: costmapa (launch + config)
+
+Cel nie jest mapą świata, tylko **percepcją wokół robota**: co jest
+przeszkodą teraz i przez najbliższe metry. Stąd wszystko żyje w ramce
+`odom` (ramka `map` niepotrzebna), a produktem jest **costmapa lokalna** w
+oknie przesuwnym — statyczna względem świata, przesuwająca się z robotem,
+z **pamięcią**: kamera 70° bez obrotu głowy jest ślepa na boki i do tyłu,
+więc komórka raz zajęta zostaje, dopóki nie wyjedzie z okna albo nie
+zostanie wyczyszczona ray-tracingiem z tego, co robot faktycznie widzi.
+
+Zbudowane (25.09.2026): `costmap.launch.py` = trzy gotowe węzły C++
+(`image_proc/crop_decimate` co 4. piksel → `depth_image_proc/point_cloud_xyz`
+→ `nav2_costmap_2d`, okno 6×6 m, komórka 5 cm, `autostart_node`, bez
+lifecycle managera). Dwa źródła obserwacji na jednej chmurze: `depth_mark`
+znaczy od 6 cm nad podłogą w górę, `depth_clear` czyści promieniami aż do
+podłogi — jedno źródło nie umie obu rzeczy naraz. Wysokości w `odom`, czyli
+wypoziomowane IMU przez odometrię. Sprawdzone w symie (`scene_nav.xml`):
+skrzynia 2 m przed robotem zostaje w costmapie po obrocie o 92°, który
+wyprowadza ją z pola widzenia; okno jedzie z robotem. Bringup: `nav:=true`.
+
+Strategię zostawia się VLM-owi: on daje **następny setpoint** (`PoseStamped`
+na `/wojtek/nav/goal`, ~1 m przed robotem, co ~1 s; w dowolnej ramce, którą
+TF przeliczy do `odom` **w chwili stempla obrazu**, więc punkt nie ucieka
+przez czas inferencji). `goto_node` idzie do niego po prostej — bez
+plannera: objazd to decyzja VLM-a z obrazu. Robotowi zostaje **weto**:
+komórki na linii przed nim sprawdzane w costmapie, lethal/inscribed = stop
+i status `blocked` (także o rzecz, którą minął i której już nie widzi);
+obrót w miejscu ku celowi zostaje dozwolony. Dead-man 3 s, jeden zerowy
+`/cmd_vel` na stop i cisza — protokół `text_commander`. Status
+`idle/turning/driving/blocked/reached` na `/wojtek/nav/status`.
+Sprawdzone w symie: cel przez skrzynię → stop 1 m przed nią; cel obok →
+dojście z dokładnością 6 cm. Przy takim horyzoncie dryf odometrii nóg
+(2–3 % dystansu) nie ma znaczenia: w oknie kilku metrów to centymetry, a
+każdy nowy setpoint koryguje kurs.
+
+SLAM RGB-D (RTAB-Map, `wojtek_slam`) był zbudowany i zmierzony w symie
+(pętla 13,5 m: odometria 0,091 m RMSE, SLAM 0,085 m, 38 poprawnych
+domknięć), ale zszedł ze ścieżki: bez pętli w trasie nie poprawia pozy, a
+kosztuje rdzeń na RPi 4. Rozwiązanie leży na gałęzi `jakuc/slam-archive`
+do odtworzenia, gdy wróci temat trwałej mapy.
+
 
 ---
 

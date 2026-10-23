@@ -7,7 +7,9 @@ target, any laptop or phone works), and the one robot-side process it needs.
 handheld (browser)                          robot (RPi)
   page + charts + pad  --ws /ws-->            deck_gateway   --> /cmd_vel, services
                        <--mjpg /stream.mjpg-- deck_gateway   <-- camera colour
-                       <--ws :8765----------- foxglove_bridge <-- every topic
+                       <--ws :8765----------- foxglove_bridge <-- every topic but the
+                                                                  raw colour image and
+                                                                  the depth JPEG
   detector (in the page)                      deck_gateway   <-- /det/ assets
 ```
 

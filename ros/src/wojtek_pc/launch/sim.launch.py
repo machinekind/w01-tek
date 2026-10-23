@@ -9,9 +9,10 @@ virtual camera, RViz, the operator console and optionally a gamepad.
                                        [console:=web|qt|none] [gamepad:=true]
                                        [telemetry:=true] [deck:=false]
                                        [robot:=wojtek|wojtek_v2]
+                                       [leg_odom:=true nav:=true]
 
 This is `robot.launch.py` with the hardware plugin swapped -- same
-controller_manager at 400 Hz, same broadcasters, same real_io_node, same
+controller_manager at 200 Hz, same broadcasters, same real_io_node, same
 policy_node parameters (see wojtek_bringup/launch_common.py, which both
 launches share). So the startup procedure is the robot's procedure:
 
@@ -52,11 +53,22 @@ camera:=false turns off the D435-compatible virtual camera (on by default;
 the off-switch for weak machines). It needs a physics-backed plant, so it is
 inert with hw:=mock. camera_depth_hz/camera_color_hz tune the render rates.
 
+leg_odom:=true hands odom->base_link to the leg odometry, the same node
+with the same parameters the robot runs, and moves the plant's ground truth
+to base_link_gt (still in TF, for the drift meters). Anything built on the
+robot's own pose -- the local costmap, a map -- then inherits the odometry's
+honest drift instead of reading the simulator's mind.
+
+A navigation session: model_xml:=scene_nav.xml leg_odom:=true nav:=true --
+the corridor scene, the legs' odometry, and wojtek_nav's rolling costmap on
+top (/wojtek/nav/costmap). See wojtek_nav/README.md.
+
 The world the camera draws is config/scene_sim.xml: the training scene plus
 a ball, a fire hydrant, a traffic light, a stop sign, a clock and a person
 standing around the spawn, so the deck panel's detector has something to
 name. The plant loads the same file, so they are solid. model_xml:= takes
-you back to the empty floor (config/scene_mjx.xml) or anywhere else.
+you back to the empty floor (model_xml:=scene_mjx.xml), into the walled
+navigation room (model_xml:=scene_nav.xml), or anywhere else by path.
 
 robot:=wojtek_v2 simulates the v6.27 legs (wojtek_policy/robots.py). The
 profile swaps the URDF legs, the joint map and the knee clamp, and the plant

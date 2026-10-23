@@ -1,0 +1,16 @@
+# Pin the IMU I2C controller's interrupt to the RT core at boot.
+# Installed and enabled by deploy/rpi/install.sh (RT tuning phase); see
+# wojtek-i2c-irq.sh for the measurements behind it.
+[Unit]
+Description=Wojtek: pin the IMU i2c IRQ to the RT core
+# Best-effort ordering: applied before the robot stack starts, but the pin
+# is valid whenever it runs -- no hard dependency either way.
+Before=wojtek-robot.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/wojtek-i2c-irq.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

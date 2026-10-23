@@ -87,7 +87,7 @@ DRIVE_TICK_HZ = 20.0     # /cmd_vel publish rate while driving
 TELEMETRY_HZ = 10.0      # joints/imu push rate to the browser
 CMD_TIMEOUT_S = 0.5      # dead-man: zero /cmd_vel if the page goes silent
 DEFAULT_JOINT_LIMIT = 3.14
-JPEG_QUALITY = 80        # ~25 KB per 640x360 frame at the sim's ~5 Hz
+JPEG_QUALITY = 80        # ~40 KB per 848x480 frame at the sim's ~5 Hz
 
 
 class ConsoleNode(Node):

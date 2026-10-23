@@ -28,6 +28,14 @@
   <xacro:arg name="kp" default="40.0" />
   <xacro:arg name="kd" default="1.6" />
   <xacro:arg name="max_torque" default="9.0" />
+  <!-- Feed-forward torque head (tau_ff policies), the same switch the real
+       xacro takes: an `effort` command interface on every joint on top of
+       `position`. The launch sets both from the loaded policy's contract.
+       It hands over max_torque already widened to the drive cap, servo plus
+       head; the plant clamps the two separately, as the training sim does,
+       so the head's scale comes along to give the servo its own cap back. -->
+  <xacro:arg name="tau_ff" default="false" />
+  <xacro:arg name="tau_ff_scale" default="0.0" />
   <xacro:arg name="hw" default="mock" />
   <!-- Physics scene for hw:=mujoco. The launch resolves this from this
        package's share; the default here is for running the xacro by hand. -->
@@ -58,6 +66,11 @@
   <!-- The URDF/MuJoCo sign and offset table for these legs, from
        wojtek_policy's config. The default is the stock legs' map. -->
   <xacro:arg name="joint_map_yaml" default="$(find wojtek_policy)/config/joint_map.yaml" />
+  <!-- Frame the plant broadcasts the TRUE base pose as (odom->this). The
+       default makes the ground truth the odometry; leg_odom:=true in the
+       launch moves it to base_link_gt so leg_odometry can own
+       odom->base_link and the map inherits its honest drift. -->
+  <xacro:arg name="ground_truth_frame" default="base_link" />
 
   <!-- In sim the robot model owns the camera extrinsics (ground truth) -
        robot_state_publisher latches base_link->camera_link->optical frames
@@ -68,9 +81,12 @@
        command (impedance target) and position/velocity/effort states. The
        gains travel as params so the mujoco plugin can write them into the
        actuators; the mock ignores them. -->
-  <xacro:macro name="wojtek_sim_joint" params="name kp kd max_torque">
+  <xacro:macro name="wojtek_sim_joint" params="name kp kd max_torque tau_ff:=false tau_ff_scale:=0.0">
     <joint name="${name}">
       <command_interface name="position" />
+      <xacro:if value="${tau_ff}">
+        <command_interface name="effort" />
+      </xacro:if>
       <state_interface name="position">
         <param name="initial_value">0.0</param>
       </state_interface>
@@ -82,7 +98,11 @@
       </state_interface>
       <param name="ddq_kp">${kp}</param>
       <param name="ddq_kd">${kd}</param>
-      <param name="max_torque">${max_torque}</param>
+      <!-- The servo's own cap: max_torque arrives as the drive cap (servo
+           plus head). The head's share comes off only with the head on,
+           so a stray tau_ff_scale cannot shrink a plain servo's cap. -->
+      <param name="max_torque">${max_torque - (tau_ff_scale if tau_ff else 0.0)}</param>
+      <param name="tau_ff_scale">${tau_ff_scale if tau_ff else 0.0}</param>
     </joint>
   </xacro:macro>
 
@@ -91,8 +111,14 @@
       <xacro:if value="${'$(arg hw)' == 'mock'}">
         <plugin>mock_components/GenericSystem</plugin>
         <!-- Integrate velocity from the position commands instead of
-             reporting zero, so /joint_states is not obviously fake. -->
-        <param name="calculate_dynamics">true</param>
+             reporting zero, so /joint_states is not obviously fake. Not
+             with the torque head: calculate_dynamics refuses the effort
+             command interface forward_effort_controller claims, and the
+             spawner takes every controller after it down (the robot's
+             mock, wojtek_mock_ros2_control.urdf.xacro, never sets it). -->
+        <xacro:unless value="$(arg tau_ff)">
+          <param name="calculate_dynamics">true</param>
+        </xacro:unless>
       </xacro:if>
       <xacro:unless value="${'$(arg hw)' == 'mock'}">
         <plugin>wojtek_mujoco_hardware_interface/MujocoHardwareInterface</plugin>
@@ -112,24 +138,25 @@
              said 0, the simulation exercised a compensation the robot did
              not need, and walked while the robot shook. -->
         <param name="imu_mount_rpy">0 0 0</param>
+        <param name="ground_truth_child_frame">$(arg ground_truth_frame)</param>
       </xacro:unless>
     </hardware>
 
-    <xacro:wojtek_sim_joint name="front_left_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
-    <xacro:wojtek_sim_joint name="front_left_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
-    <xacro:wojtek_sim_joint name="front_left_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
+    <xacro:wojtek_sim_joint name="front_left_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" tau_ff_scale="$(arg tau_ff_scale)" />
+    <xacro:wojtek_sim_joint name="front_left_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" tau_ff_scale="$(arg tau_ff_scale)" />
+    <xacro:wojtek_sim_joint name="front_left_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" tau_ff_scale="$(arg tau_ff_scale)" />
 
-    <xacro:wojtek_sim_joint name="front_right_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
-    <xacro:wojtek_sim_joint name="front_right_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
-    <xacro:wojtek_sim_joint name="front_right_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
+    <xacro:wojtek_sim_joint name="front_right_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" tau_ff_scale="$(arg tau_ff_scale)" />
+    <xacro:wojtek_sim_joint name="front_right_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" tau_ff_scale="$(arg tau_ff_scale)" />
+    <xacro:wojtek_sim_joint name="front_right_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" tau_ff_scale="$(arg tau_ff_scale)" />
 
-    <xacro:wojtek_sim_joint name="rear_right_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
-    <xacro:wojtek_sim_joint name="rear_right_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
-    <xacro:wojtek_sim_joint name="rear_right_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
+    <xacro:wojtek_sim_joint name="rear_right_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" tau_ff_scale="$(arg tau_ff_scale)" />
+    <xacro:wojtek_sim_joint name="rear_right_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" tau_ff_scale="$(arg tau_ff_scale)" />
+    <xacro:wojtek_sim_joint name="rear_right_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" tau_ff_scale="$(arg tau_ff_scale)" />
 
-    <xacro:wojtek_sim_joint name="rear_left_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
-    <xacro:wojtek_sim_joint name="rear_left_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
-    <xacro:wojtek_sim_joint name="rear_left_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" />
+    <xacro:wojtek_sim_joint name="rear_left_first_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" tau_ff_scale="$(arg tau_ff_scale)" />
+    <xacro:wojtek_sim_joint name="rear_left_second_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" tau_ff_scale="$(arg tau_ff_scale)" />
+    <xacro:wojtek_sim_joint name="rear_left_third_joint" kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)" tau_ff="$(arg tau_ff)" tau_ff_scale="$(arg tau_ff_scale)" />
 
     <!-- One component carries both the joints and the IMU, unlike the real
          robot where they are separate drivers on separate buses: the plugin
@@ -139,12 +166,13 @@
          real xacro exactly.
 
          The initial values matter for the mock, which has no physics to
-         produce them: they describe a level robot with the IMU in its real
-         mounting (rotated pi about y). orientation (w0 x0 y1 z0) is that
-         rotation, and the accelerometer reads -9.81 on its own z; either
-         path through policy_node (the quaternion, or the complementary
-         filter over the accelerometer) then resolves gravity to [0,0,-1] in
-         base_link. The magnetometer values are a plausible mid-latitude
+         produce them: they describe a level, motionless robot with the
+         sensor upright (URDF imu_joint rpy 0 0 0, the same mount the
+         mujoco branch and the robot's mock declare): identity orientation
+         and +g on the accelerometer's z; either path through policy_node
+         (the quaternion, or the complementary filter over the
+         accelerometer) then resolves gravity to [0,0,-1] in base_link.
+         The magnetometer values are a plausible mid-latitude
          field in microtesla (the broadcaster converts to tesla); nothing in
          the control path reads them yet. -->
     <xacro:if value="$(arg use_imu)">
@@ -153,13 +181,13 @@
           <param name="initial_value">0.0</param>
         </state_interface>
         <state_interface name="orientation.y">
-          <param name="initial_value">1.0</param>
+          <param name="initial_value">0.0</param>
         </state_interface>
         <state_interface name="orientation.z">
           <param name="initial_value">0.0</param>
         </state_interface>
         <state_interface name="orientation.w">
-          <param name="initial_value">0.0</param>
+          <param name="initial_value">1.0</param>
         </state_interface>
         <state_interface name="magnetometer.x">
           <param name="initial_value">20.0</param>
@@ -186,7 +214,7 @@
           <param name="initial_value">0.0</param>
         </state_interface>
         <state_interface name="linear_acceleration.z">
-          <param name="initial_value">-9.81</param>
+          <param name="initial_value">9.81</param>
         </state_interface>
       </sensor>
     </xacro:if>

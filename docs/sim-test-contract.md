@@ -38,7 +38,7 @@ potrzebny jest `hw:=mujoco`.
 | 16 | `text_commander` | `/wojtek/nav_command` → `/cmd_vel`, dead-man po 2 s | mock |
 | 17 | Chód | robot stoi po `stand_up` i idzie na komendę bez upadku | mujoco |
 | 18 | `boot_pose:=folded` | pełna sekwencja folded → zero → stand_up → arm | mujoco |
-| 19 | Kamera | `/camera/camera/depth/*` i `/color/*` publikują (`sim_camera_node`), `cloud_reduce` zwraca siatkę 8x8 | mujoco |
+| 19 | Kamera | `/camera/camera/depth/*` i `/color/*` publikują (`sim_camera_node`) | mujoco |
 | 20 | Ground truth | `TF odom→base_link`, `/odom_vel`, `/sim/rtf` (≈1,0 gdy fizyka nadąża) | mujoco |
 | 21 | Drzewo TF | **każda** ramka odpytywalna z `odom` (36/36), nie tylko obecna w buforze — patrz uwaga o stemplach niżej | mujoco |
 

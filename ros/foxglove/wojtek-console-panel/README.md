@@ -18,7 +18,9 @@ npm run local-install   # builds + installs into ~/.foxglove-studio/extensions
 ```
 
 Restart the Foxglove desktop app, then add the **Wojtek console** panel to
-your layout. `npm run package` produces a shareable
+your layout. Foxglove 2.x only: 3.x desktop serves pages under a
+Content-Security-Policy without `frame-src`, so this iframe panel stays
+empty there (see `../layouts/README.md`). `npm run package` produces a shareable
 `machinekind.wojtek-console-panel-<version>.foxe` instead (install via
 Extensions → drag the file in).
 

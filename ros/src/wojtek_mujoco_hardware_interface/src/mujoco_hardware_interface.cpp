@@ -141,13 +141,42 @@ hardware_interface::CallbackReturn MujocoHardwareInterface::on_init(
   const double gt_hz = std::stod(
     param(info_.hardware_parameters, "ground_truth_rate_hz", "100"));
   ground_truth_period_ = gt_hz > 0.0 ? 1.0 / gt_hz : 0.0;
+  // Which frame the true base pose is broadcast as. "base_link" makes the
+  // ground truth the robot's odometry (the default: nothing else in the sim
+  // claims odom->base_link). A run that lets leg_odometry own that edge --
+  // so a map built on it inherits the odometry's real drift -- moves the
+  // truth aside to e.g. "base_link_gt", where it stays visible in RViz and
+  // available to the drift meters.
+  ground_truth_child_frame_ = param(
+    info_.hardware_parameters, "ground_truth_child_frame", "base_link");
 
+  // Every joint takes a position command. With the feed-forward torque head
+  // (tau_ff in the URDF) it takes an effort command as well, and then every
+  // joint does: the controller that drives them is one for all twelve.
   for (const auto & joint : info_.joints) {
-    if (joint.command_interfaces.size() != 1 ||
-      joint.command_interfaces[0].name != hardware_interface::HW_IF_POSITION)
-    {
+    bool has_position = false, has_effort = false;
+    for (const auto & cmd : joint.command_interfaces) {
+      if (cmd.name == hardware_interface::HW_IF_POSITION) {
+        has_position = true;
+      } else if (cmd.name == hardware_interface::HW_IF_EFFORT) {
+        has_effort = true;
+      } else {
+        RCLCPP_FATAL(
+          logger_, "joint '%s' asks for a '%s' command; only position and effort exist",
+          joint.name.c_str(), cmd.name.c_str());
+        return hardware_interface::CallbackReturn::ERROR;
+      }
+    }
+    if (!has_position) {
       RCLCPP_FATAL(
-        logger_, "joint '%s' needs exactly one position command interface",
+        logger_, "joint '%s' needs a position command interface", joint.name.c_str());
+      return hardware_interface::CallbackReturn::ERROR;
+    }
+    if (joint_names_.empty()) {
+      tau_ff_ = has_effort;
+    } else if (tau_ff_ != has_effort) {
+      RCLCPP_FATAL(
+        logger_, "joint '%s': the effort command is on every joint or on none",
         joint.name.c_str());
       return hardware_interface::CallbackReturn::ERROR;
     }
@@ -157,6 +186,8 @@ hardware_interface::CallbackReturn MujocoHardwareInterface::on_init(
   velocity_.assign(joint_names_.size(), 0.0);
   effort_.assign(joint_names_.size(), 0.0);
   command_.assign(joint_names_.size(), 0.0);
+  tau_ff_command_.assign(joint_names_.size(), 0.0);
+  tau_ff_scale_.assign(joint_names_.size(), 0.0);
 
   if (info_.sensors.size() > 1) {
     RCLCPP_FATAL(logger_, "at most one sensor (the IMU) is supported");
@@ -213,6 +244,18 @@ hardware_interface::CallbackReturn MujocoHardwareInterface::on_configure(
       plant_.applyServoSettings(
         joint_names_[i],
         {std::stod(kp->second), std::stod(kd->second), std::stod(max_torque->second)});
+      if (tau_ff_) {
+        // The head's authority, clamped separately from the servo's cap.
+        const auto scale = params.find("tau_ff_scale");
+        const double bound = scale == params.end() ? 0.0 : std::stod(scale->second);
+        if (!(bound > 0.0)) {
+          RCLCPP_FATAL(
+            logger_, "joint '%s' has an effort command but no positive tau_ff_scale",
+            joint_names_[i].c_str());
+          return hardware_interface::CallbackReturn::ERROR;
+        }
+        tau_ff_scale_[i] = bound;
+      }
     }
     plant_.reset(initial_pose_, folded_ctrl_);
     {
@@ -292,6 +335,10 @@ MujocoHardwareInterface::export_command_interfaces()
   for (std::size_t i = 0; i < joint_names_.size(); ++i) {
     interfaces.emplace_back(
       joint_names_[i], hardware_interface::HW_IF_POSITION, &command_[i]);
+    if (tau_ff_) {
+      interfaces.emplace_back(
+        joint_names_[i], hardware_interface::HW_IF_EFFORT, &tau_ff_command_[i]);
+    }
   }
   return interfaces;
 }
@@ -307,6 +354,10 @@ hardware_interface::CallbackReturn MujocoHardwareInterface::on_activate(
   std::fill(velocity_.begin(), velocity_.end(), 0.0);
   std::fill(effort_.begin(), effort_.end(), 0.0);
   std::fill(command_.begin(), command_.end(), 0.0);
+  std::fill(tau_ff_command_.begin(), tau_ff_command_.end(), 0.0);
+  for (std::size_t i = 0; i < joint_names_.size(); ++i) {
+    plant_.setFeedForward(actuator_of_joint_[i], 0.0);
+  }
   RCLCPP_INFO(logger_, "activated: current pose is the zero for joint states");
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -354,14 +405,24 @@ hardware_interface::return_type MujocoHardwareInterface::write(
   const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
 {
   for (std::size_t i = 0; i < joint_names_.size(); ++i) {
+    const double sign = joint_map_->sign(joint_names_[i]);
     const double command = command_[i];
-    if (!std::isfinite(command)) {
-      continue;  // NaN placeholders right after activation: hold position.
-    }
     // Commands arrive boot-relative in URDF convention; undo the sign to get
-    // back to the model's, where the activation pose is added.
-    plant_.setCommand(
-      actuator_of_joint_[i], command / joint_map_->sign(joint_names_[i]));
+    // back to the model's, where the activation pose is added. NaN
+    // placeholders right after activation hold what is there.
+    if (std::isfinite(command)) {
+      plant_.setCommand(actuator_of_joint_[i], command / sign);
+    }
+    if (tau_ff_) {
+      // The torque follows the joint's sign like a rate does, and the
+      // head's authority is +-scale, the clamp the training sim applied.
+      const double tau = tau_ff_command_[i];
+      if (std::isfinite(tau)) {
+        const double bound = tau_ff_scale_[i];
+        plant_.setFeedForward(
+          actuator_of_joint_[i], std::clamp(tau / sign, -bound, bound));
+      }
+    }
   }
   return hardware_interface::return_type::OK;
 }
@@ -390,7 +451,7 @@ void MujocoHardwareInterface::publishGroundTruth(const rclcpp::Duration & period
   geometry_msgs::msg::TransformStamped tf;
   tf.header.stamp = stamp;
   tf.header.frame_id = "odom";
-  tf.child_frame_id = "base_link";
+  tf.child_frame_id = ground_truth_child_frame_;
   tf.transform.translation.x = pose[0];
   tf.transform.translation.y = pose[1];
   tf.transform.translation.z = pose[2];

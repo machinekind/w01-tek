@@ -1,0 +1,95 @@
+<?xml version="1.0"?>
+<!--
+  Mock hardware for the ROBOT launch: the MD80 drives and the I2C IMU
+  replaced by ros2_control's own GenericSystem, on the robot computer
+  itself. Selected with mock_hw:=true on robot.launch.py.
+
+  What it is for: loading the RPi with the real node graph (the same
+  controller_manager rate, broadcasters, real_io_node, policy_node, pad
+  teleop and core pinning as the service) while the motors are unpowered,
+  so the computer's side of the stack can be profiled and stress-tested
+  (ros/hw_tests/perf). It is not a simulation of the robot: commands are
+  echoed back as states and the IMU reads a level, motionless robot.
+
+  What it leaves out: the CANdle's SPI traffic (its library threads on the
+  control core) and the blocking I2C IMU read in the control loop. A load
+  figure measured with this is the floor of the real one.
+
+  The interface names, the sensor name and the joint set MUST match
+  wojtek_ros2_control.urdf.xacro: real_controllers.yaml binds the
+  broadcasters by sensor name ("imu") and the policy binds joints by name.
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:macro name="wojtek_mock_joint" params="name tau_ff">
+    <joint name="${name}">
+      <command_interface name="position" />
+      <xacro:if value="${tau_ff}">
+        <command_interface name="effort" />
+      </xacro:if>
+      <state_interface name="position">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="velocity">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="effort">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+    </joint>
+  </xacro:macro>
+
+  <xacro:macro name="wojtek_mock_imu_value" params="name value">
+    <state_interface name="${name}">
+      <param name="initial_value">${value}</param>
+    </state_interface>
+  </xacro:macro>
+
+  <xacro:macro name="wojtek_mock_ros2_control" params="use_imu tau_ff:=false">
+    <ros2_control name="WojtekMock" type="system">
+      <hardware>
+        <!-- Commands are mirrored into the same-named states. No
+             calculate_dynamics: it refuses the effort command interface
+             that forward_effort_controller claims on a tau_ff policy. -->
+        <plugin>mock_components/GenericSystem</plugin>
+      </hardware>
+
+      <xacro:wojtek_mock_joint name="front_left_first_joint" tau_ff="${tau_ff}" />
+      <xacro:wojtek_mock_joint name="front_left_second_joint" tau_ff="${tau_ff}" />
+      <xacro:wojtek_mock_joint name="front_left_third_joint" tau_ff="${tau_ff}" />
+
+      <xacro:wojtek_mock_joint name="front_right_first_joint" tau_ff="${tau_ff}" />
+      <xacro:wojtek_mock_joint name="front_right_second_joint" tau_ff="${tau_ff}" />
+      <xacro:wojtek_mock_joint name="front_right_third_joint" tau_ff="${tau_ff}" />
+
+      <xacro:wojtek_mock_joint name="rear_right_first_joint" tau_ff="${tau_ff}" />
+      <xacro:wojtek_mock_joint name="rear_right_second_joint" tau_ff="${tau_ff}" />
+      <xacro:wojtek_mock_joint name="rear_right_third_joint" tau_ff="${tau_ff}" />
+
+      <xacro:wojtek_mock_joint name="rear_left_first_joint" tau_ff="${tau_ff}" />
+      <xacro:wojtek_mock_joint name="rear_left_second_joint" tau_ff="${tau_ff}" />
+      <xacro:wojtek_mock_joint name="rear_left_third_joint" tau_ff="${tau_ff}" />
+
+      <!-- A level, motionless robot with the sensor upright (URDF imu_joint
+           rpy 0 0 0): identity orientation, +g on the accelerometer's z. The
+           policy only needs finite, fresh values to run its full tick. -->
+      <xacro:if value="${use_imu}">
+        <sensor name="imu">
+          <xacro:wojtek_mock_imu_value name="orientation.x" value="0.0" />
+          <xacro:wojtek_mock_imu_value name="orientation.y" value="0.0" />
+          <xacro:wojtek_mock_imu_value name="orientation.z" value="0.0" />
+          <xacro:wojtek_mock_imu_value name="orientation.w" value="1.0" />
+          <xacro:wojtek_mock_imu_value name="magnetometer.x" value="20.0" />
+          <xacro:wojtek_mock_imu_value name="magnetometer.y" value="0.0" />
+          <xacro:wojtek_mock_imu_value name="magnetometer.z" value="-44.0" />
+          <xacro:wojtek_mock_imu_value name="angular_velocity.x" value="0.0" />
+          <xacro:wojtek_mock_imu_value name="angular_velocity.y" value="0.0" />
+          <xacro:wojtek_mock_imu_value name="angular_velocity.z" value="0.0" />
+          <xacro:wojtek_mock_imu_value name="linear_acceleration.x" value="0.0" />
+          <xacro:wojtek_mock_imu_value name="linear_acceleration.y" value="0.0" />
+          <xacro:wojtek_mock_imu_value name="linear_acceleration.z" value="9.81" />
+        </sensor>
+      </xacro:if>
+    </ros2_control>
+  </xacro:macro>
+</robot>

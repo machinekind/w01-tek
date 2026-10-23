@@ -1,0 +1,25 @@
+# @package _global_
+# Course preset (learning/wojtek_rl_guide.ipynb): the unified `locomotion`
+# recipe with the gait clock removed from the actor, so the checkpoint exports
+# to the deployment contract (export refuses a phase-observing actor) and a
+# bounded Colab run walks on command: measured on a T4, 52M steps at 4096 envs
+# (15 min) gave 1.84 m in 4 s at vx=0.5 and spins both ways, no falls, while
+# `locomotion_stiff_v1` from scratch still stood at 100M. Servo stays at the
+# XML defaults (kp20/kd1/9 Nm); the critic keeps the clock.
+# Usage: ./training/run.sh train +experiment=course_locomotion run_name=<name>
+defaults:
+  - locomotion
+
+task:
+  env:
+    obs:
+      include:
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+
+ppo:
+  num_timesteps: 50000000
+
+run_name: wojtek_course

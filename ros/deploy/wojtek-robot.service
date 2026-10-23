@@ -62,7 +62,14 @@ Environment=CYCLONEDDS_URI=file:///etc/cyclonedds-rpi.xml
 # tick next to the control data. foxglove:=true opens the bridge on port 8765,
 # which is how the same run is watched live from a PC. Both stay on the
 # non-isolated cores (sysinfo_cpus and foxglove_cpus default to 0,1).
-ExecStart=/usr/bin/taskset -c 2,3 /bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/rpi/wojtek_ws/install/setup.bash && exec ros2 launch wojtek_bringup robot.launch.py gamepad:=true bag:=true bag_cpus:=0,1 telemetry:=true foxglove:=true'
+# The deck panel's gateway needs aiohttp, which the RPi gets from wheels in
+# ~/py_deps (no pypi route from the robot; see ros/deploy/deck/README.md).
+# setup.bash prepends ROS's own path to this, so the order stays right.
+Environment=PYTHONPATH=/home/rpi/py_deps
+# deck:=true deck_camera:=true: the panel's gateway and its colour camera,
+# on cores 0,1 next to the other helpers, so the panel is up whenever the
+# robot is and comes back with it after a restart.
+ExecStart=/usr/bin/taskset -c 2,3 /bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/rpi/wojtek_ws/install/setup.bash && exec ros2 launch wojtek_bringup robot.launch.py control_cpus:=3 policy_cpus:=2 gamepad:=true gamepad_cpus:=0,1 bag:=true bag_cpus:=0,1 telemetry:=true foxglove:=true deck:=true deck_cpus:=0,1 deck_camera:=true'
 Restart=on-failure
 RestartSec=2
 

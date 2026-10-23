@@ -26,7 +26,15 @@
   <depend>python3-aiohttp</depend>
   <!-- JPEG encoding of the camera frames. Soft dependency in code: without
        it the stream is empty and everything else works. -->
+  <!-- OpenCV encodes through libjpeg-turbo and releases the GIL, so the
+       drive tick keeps running while a frame is encoded. Pillow is the
+       fallback when OpenCV is missing. -->
+  <depend>python3-opencv</depend>
   <depend>python3-pil</depend>
+  <!-- The camera node's JPEG plugin: with it the gateway streams the
+       camera's own compressed frames (compressed:=true, the default) and
+       encodes nothing itself. Without it, set compressed:=false. -->
+  <exec_depend>compressed_image_transport</exec_depend>
 
   <test_depend>python3-pytest</test_depend>
 

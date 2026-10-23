@@ -48,6 +48,23 @@ from wojtek_policy import poses, robots
 from wojtek_policy.policy_source import active_policy, load_policy
 
 
+def resolve_scene(model_xml):
+    """The MuJoCo scene file a simulation loads, from the model_xml argument.
+
+    Empty picks wojtek_pc's furnished scene_sim.xml; a bare file name
+    (`model_xml:=scene_nav.xml`) is one of wojtek_pc's config/ scenes; a
+    path is taken as given. One function for the two loaders of the scene
+    (the plant inside ros2_control and the camera renderer), so they cannot
+    resolve the same argument two ways and simulate different worlds.
+    """
+    config = os.path.join(get_package_share_directory("wojtek_pc"), "config")
+    if not model_xml:
+        return os.path.join(config, "scene_sim.xml")
+    if os.sep not in model_xml:
+        return os.path.join(config, model_xml)
+    return model_xml
+
+
 def _cpu_prefix(context, arg):
     """A taskset prefix from a comma list of cores, or nothing when empty.
 
@@ -68,12 +85,15 @@ def robot_profile(context):
 def sim_model_xml(context):
     """The scene a simulated plant loads: model_xml:=, or the robot's own.
 
+    An explicit model_xml goes through resolve_scene (a bare file name is
+    one of wojtek_pc's config/ scenes, a path is taken as given); without
+    it the robot profile's scene loads (robot:=, wojtek_policy/robots.py).
     The plant and the simulated camera both call this, so they always load
     the same scene and share one physics state.
     """
     explicit = LaunchConfiguration("model_xml").perform(context)
     if explicit:
-        return explicit
+        return resolve_scene(explicit)
     package, path = robot_profile(context).sim_scene
     return os.path.join(get_package_share_directory(package), path)
 
@@ -118,6 +138,13 @@ def _launch_setup(context, with_rviz, hardware):
              f"{drive_torque:g}" if tau_ff_on else ""))
 
     use_imu = LaunchConfiguration("use_imu")
+    mock_hw = hardware == "real" and (
+        LaunchConfiguration("mock_hw").perform(context).lower() in ("true", "1")
+    )
+    # Who owns odom->base_link: the leg-kinematics + IMU odometry (the robot,
+    # and the sim when a map is to inherit the odometry's honest drift) or
+    # the platform's placeholder (static identity / the sim's ground truth).
+    leg_odom = LaunchConfiguration("leg_odom").perform(context).lower() in ("true", "1")
     # The servo contract (gains, torque cap), the IMU switch and the bench flag
     # are the same question on both sides, so they go to both xacros. What
     # differs is what the plugin needs to reach its hardware: a CAN link and an
@@ -125,6 +152,10 @@ def _launch_setup(context, with_rviz, hardware):
     xacro_args = [
         f" kp:={pd['kp']} kd:={pd['kd']} max_torque:={drive_torque}",
         f" tau_ff:={'true' if tau_ff_on else 'false'}",
+        # The head's own clamp. The real drives take the summed cap above;
+        # the simulated plant clamps servo and head separately, like the
+        # training sim, and needs the head's share to do it.
+        f" tau_ff_scale:={tau_ff_scale if tau_ff_on else 0.0}",
         " use_imu:=", use_imu,
         " dry_run:=", LaunchConfiguration("dry_run"),
         f" legs:={profile.legs}",
@@ -137,6 +168,7 @@ def _launch_setup(context, with_rviz, hardware):
             " imu_addr_mag:=", LaunchConfiguration("imu_addr_mag"),
             " bus:=", LaunchConfiguration("bus"),
             " can_baud:=", LaunchConfiguration("can_baud"),
+            " mock_hw:=", LaunchConfiguration("mock_hw"),
         ]
     else:
         # wojtek_pc is PC-side and never deployed, so this import-by-name is
@@ -157,6 +189,10 @@ def _launch_setup(context, with_rviz, hardware):
             f" folded_ctrl:='{folded}'",
             " model_xml:=" + sim_model_xml(context),
             " joint_map_yaml:=" + joint_map_yaml,
+            # Where the plant broadcasts the TRUE base pose. With the leg
+            # odometry owning odom->base_link the truth steps aside to
+            # base_link_gt, still in TF for RViz and the drift meters.
+            " ground_truth_frame:=" + ("base_link_gt" if leg_odom else "base_link"),
         ]
     robot_description = ParameterValue(
         Command(["xacro ", xacro_file] + xacro_args), value_type=str,
@@ -171,10 +207,28 @@ def _launch_setup(context, with_rviz, hardware):
         [LaunchConfiguration("bag_dir"), TextSubstitution(text=f"run_{bag_stamp}")]
     )
 
+    # Deterministic placement on the robot. isolcpus turns OFF load
+    # balancing between the isolated cores, so under the service's plain
+    # {2,3} mask every child stays wherever fork put it -- observed on the
+    # Pi 4 as the whole Python stack piling onto CPU2 (99% busy, policy
+    # down to ~44 Hz) while the RT loop's CPU3 idled. The cores come in as
+    # launch arguments (control_cpus, policy_cpus, ui_cpus; empty = no
+    # taskset, which is what the sim runs with), the service names them.
+    # Measured budget that fits (2026-08-24, with perception + odometry +
+    # the on-robot map):
+    #   control_cpus (3): ros2_control (RT loop) + real_io      ~65%
+    #   policy_cpus  (2): policy + leg_odometry                 ~65%
+    #   ui_cpus    (0,1): robot_state_publisher, pad/joy, camera driver,
+    #     nav -- UI-rate, none of it control-critical, sharing with the OS.
+    # SCHED_FIFO keeps the control loop preemptive over its core-mate
+    # either way.
+
     nodes = [
+        # The control loop; the service says control_cpus:=3.
         Node(
             package="controller_manager",
             executable="ros2_control_node",
+            prefix=_cpu_prefix(context, "control_cpus"),
             parameters=[
                 {"robot_description": robot_description},
                 os.path.join(share, "config", "real_controllers.yaml"),
@@ -207,22 +261,50 @@ def _launch_setup(context, with_rviz, hardware):
             executable="robot_state_publisher",
             parameters=[{"robot_description": robot_description}],
             remappings=[("joint_states", "wojtek/joint_states_abs")],
+            prefix=_cpu_prefix(context, "ui_cpus"),
         ),
-        # The RViz views use odom as the fixed frame; there is no odometry on
-        # the real robot yet, so pin base_link at the origin for visualization.
-        # A physics-backed simulation knows the true base pose and publishes
-        # that transform itself, so there the static one would fight it.
+        # The odom->base_link edge has exactly one owner per run:
+        #   leg_odom:=true   leg_odometry (the robot's default; needs the IMU)
+        #   otherwise        the sim's physics ground truth (hw:=mujoco), or
+        #                    a static identity so a bench / mock run still
+        #                    renders in RViz.
         Node(
             package="tf2_ros",
             executable="static_transform_publisher",
             arguments=["--frame-id", "odom", "--child-frame-id", "base_link"],
-            condition=IfCondition(
-                PythonExpression(["'", LaunchConfiguration("hw"), "' != 'mujoco'"])
-            ) if hardware == "sim" else None,
+            condition=IfCondition(PythonExpression([
+                "'", LaunchConfiguration("hw"), "' != 'mujoco' and not ", str(leg_odom),
+            ])) if hardware == "sim" else UnlessCondition(PythonExpression([
+                "'", use_imu, "' == 'true' and ", str(leg_odom),
+            ])),
         ),
+        # Leg-kinematics + IMU odometry. On the robot itself: autonomy keeps
+        # no PC in the loop, and the SLAM/nav consume wojtek/odom locally.
+        # In the sim on request (leg_odom:=true), so a map built on top of
+        # it inherits the odometry's real drift instead of the ground truth
+        # -- the same node, the same parameters, the same TF edge.
+        Node(
+            package="wojtek_odometry",
+            executable="leg_odometry_node",
+            output="screen",
+            # Shares the policy's core: the budget above was measured with
+            # the two together there.
+            prefix=_cpu_prefix(context, "policy_cpus"),
+            # input_stride 2: the abs joint stream arrives at ~50 Hz
+            # (joint_state_broadcaster's rate), and the per-message
+            # kinematics costs ~6 ms on the robot's A72 -- 25 Hz processing
+            # fits the core budget; full rate does not (see the node).
+            parameters=[{"publish_tf": True, "input_stride": 2}],
+            condition=IfCondition(use_imu),
+        ) if leg_odom else None,
         Node(
             package="wojtek_bringup",
             executable="real_io_node",
+            # With the control loop, not the policy: the policy's core also
+            # carries the leg odometry now (see the budget above). Before
+            # the odometry landed this sat on policy_cpus; re-measure if the
+            # loop's core shows overruns.
+            prefix=_cpu_prefix(context, "control_cpus"),
             output="screen",
             parameters=[
                 {
@@ -238,6 +320,7 @@ def _launch_setup(context, with_rviz, hardware):
         Node(
             package="wojtek_policy",
             executable="policy_node",
+            prefix=_cpu_prefix(context, "policy_cpus"),
             output="screen",
             parameters=[
                 {
@@ -286,6 +369,9 @@ def _launch_setup(context, with_rviz, hardware):
             condition=IfCondition(LaunchConfiguration("telemetry")),
         ),
     ]
+    # Sim-only entries resolve to None on the other hardware (and vice
+    # versa); drop them instead of handing launch a None action.
+    nodes = [n for n in nodes if n is not None]
 
     # A websocket bridge on the robot itself, so watching a run in Foxglove
     # needs nothing running on the PC. The bridge is a separate apt package.
@@ -301,7 +387,21 @@ def _launch_setup(context, with_rviz, hardware):
                 Node(
                     package="foxglove_bridge",
                     executable="foxglove_bridge",
-                    parameters=[{"port": 8765}],
+                    parameters=[{
+                        "port": 8765,
+                        # Never the raw colour image: one viewer panel on it
+                        # pulled ~19 MB/s through DDS and eth0, saturated
+                        # cores 0,1 and stretched the policy's output gaps
+                        # from 23 to 111 ms (ros/hw_tests/perf). The JPEG
+                        # (<topic>/compressed) and depth stay available;
+                        # the depth's own /compressed (a lossy 8-bit JPEG of
+                        # 16-bit millimetres) is useless and costs the Pi an
+                        # encode per frame, so it goes too.
+                        "topic_whitelist": [
+                            r"^(?!/camera/camera/(color/image_raw"
+                            r"|depth/image_rect_raw/compressed)$).*$"
+                        ],
+                    }],
                     prefix=_cpu_prefix(context, "foxglove_cpus"),
                     output="screen",
                 )
@@ -322,6 +422,23 @@ def _launch_setup(context, with_rviz, hardware):
     # the resolved policy directory so its command box matches policy_node.
     # deck_cpus keeps the JPEG encoder off the isolated RT cores on the RPi.
     deck_cpus = LaunchConfiguration("deck_cpus").perform(context)
+    # The gateway receives the raw camera image. At 640x480 a frame is
+    # 0.9 MB, hundreds of UDP fragments through the loopback, and with
+    # Cyclone's default socket buffer one lost fragment discards the whole
+    # frame: under load the gateway then sees no frames at all. So it gets
+    # its own, bigger receive buffer, appended to whatever Cyclone config
+    # the process already has (the robot's pins its interfaces there).
+    # `max` asks for 8 MB and keeps what the kernel grants; `min` would
+    # make it a requirement, and Cyclone refuses to start when the kernel
+    # cannot meet one. The robot's install.sh raises rmem_max so it gets
+    # the full 8 MB; the sim and an unprovisioned box get the kernel's cap
+    # and a log line instead of a gateway that never comes up.
+    cyclone_base = os.environ.get("CYCLONEDDS_URI", "")
+    cyclone_uri = (cyclone_base + "," if cyclone_base else "") + (
+        "<CycloneDDS><Domain><Internal>"
+        '<SocketReceiveBufferSize max="8MB"/>'
+        "</Internal></Domain></CycloneDDS>"
+    )
     nodes.append(
         Node(
             package="wojtek_deck",
@@ -329,16 +446,92 @@ def _launch_setup(context, with_rviz, hardware):
             output="screen",
             condition=IfCondition(LaunchConfiguration("deck")),
             prefix=f"taskset -c {deck_cpus}" if deck_cpus else None,
+            additional_env={"CYCLONEDDS_URI": cyclone_uri},
             parameters=[
                 {
                     "policy": str(loaded.directory),
                     "port": ParameterValue(
                         LaunchConfiguration("deck_port"), value_type=int
                     ),
+                    # The panel's restart button restarts this unit; the
+                    # simulation has none, so there the button stays off.
+                    # So does a mock_hw stack (ros/hw_tests/perf): it does
+                    # not run in the boot service, and restarting that one
+                    # from here would start the real drivers next to it.
+                    "stack_unit": (
+                        "wojtek-robot.service"
+                        if hardware == "real" and not mock_hw else ""
+                    ),
+                    # Frames a second the gateway passes on to the panel.
+                    "stream_hz": ParameterValue(
+                        LaunchConfiguration("deck_stream_hz"), value_type=float
+                    ),
                 }
             ],
         )
     )
+
+    # The colour camera for the panel, on the robot only (the simulation
+    # renders its own). Colour plus depth at the sensor's own 424x240 is
+    # the set measured safe on the Pi; no point cloud, no sync, no align:
+    # the perception stack's d435.yaml turns those on together and the
+    # RealSense node dies with SIGSEGV the moment the RGB sensor starts
+    # (see ros/deploy/deck/README.md). The depth is the raw stream, without
+    # d435.yaml's preset and temporal filter. 640x480 rather than the sensor's
+    # 1280x720 is the Pi's budget: at full size the camera node and the
+    # gateway starved the control loop until the drives dropped to idle.
+    # initial_reset: a D435 that comes up publishing nothing (seen after a
+    # power cycle) is cured by resetting it before the streams start.
+    if hardware == "real":
+        nodes.append(
+            Node(
+                package="realsense2_camera",
+                executable="realsense2_camera_node",
+                namespace="camera",
+                name="camera",
+                output="screen",
+                condition=IfCondition(LaunchConfiguration("deck_camera")),
+                prefix=f"taskset -c {deck_cpus}" if deck_cpus else None,
+                parameters=[
+                    {
+                        "initial_reset": True,
+                        # Depth rides in the same node when asked for (the
+                        # off-board VLM's map): the sensor's own low
+                        # resolution, so the Pi does no decimation, and
+                        # no sync/align/cloud -- those stay off-board.
+                        "enable_depth": ParameterValue(
+                            LaunchConfiguration("deck_camera_depth"), value_type=bool
+                        ),
+                        "depth_module.depth_profile": LaunchConfiguration(
+                            "deck_camera_depth_profile"
+                        ),
+                        # Beyond 3 m the D435's depth is noise for the map
+                        # (docs/perception/d435-noise.md) and a far or
+                        # invalid return can come out as 65535: zero it in
+                        # the driver, which also keeps a viewer's depth scale
+                        # sane.
+                        "clip_distance": 3.0,
+                        "enable_infra1": False,
+                        "enable_infra2": False,
+                        "enable_color": True,
+                        "rgb_camera.color_profile": LaunchConfiguration(
+                            "deck_camera_profile"
+                        ),
+                        "pointcloud.enable": False,
+                        "align_depth.enable": False,
+                        "enable_rgbd": False,
+                        "enable_sync": False,
+                        # The compressed transport plugin encodes the JPEG
+                        # the gateway streams, in C++ and only while the
+                        # gateway subscribes. This is the plugin's quality
+                        # parameter as the node declares it (the leading
+                        # dot is image_transport's naming); 95, its
+                        # default, made 120 KB frames, 80 makes 40 KB.
+                        ".camera.color.image_raw.compressed.jpeg_quality": 80,
+                    }
+                ],
+            )
+        )
 
     nodes.append(
         # bash -c: mkdir the parent (rosbag2 creates the bag dir itself but
@@ -462,6 +655,11 @@ def common_launch_description(
             # 0x6B/0x1E if the board's SDO pins are pulled high.
             DeclareLaunchArgument("imu_addr_ag", default_value="0x6A"),
             DeclareLaunchArgument("imu_addr_mag", default_value="0x1C"),
+            # Motors unpowered, computer under test: the drives and the IMU
+            # become ros2_control's GenericSystem while every node, rate and
+            # core pin stays as it is on the robot. For profiling the RPi
+            # (ros/hw_tests/perf), not for driving.
+            DeclareLaunchArgument("mock_hw", default_value="false"),
         ]
     else:
         args += [
@@ -509,6 +707,12 @@ def common_launch_description(
             # one drive source at a time: with the pad on, leave the web
             # console's pad/drive alone, both publish the same /cmd_vel.
             DeclareLaunchArgument("gamepad", default_value="false"),
+            # Cores for the joy driver and the teleop node (the include takes
+            # them as `cpus`, the same contract as perception and nav).
+            # Empty = wherever the tree runs; the service says 0,1, because
+            # on the isolated RT cores with no load balancing they shared
+            # one core with policy_node and real_io and took a fifth of it.
+            DeclareLaunchArgument("gamepad_cpus", default_value=""),
             IncludeLaunchDescription(
                 PathJoinSubstitution(
                     [
@@ -517,6 +721,9 @@ def common_launch_description(
                         "gamepad.launch.py",
                     ]
                 ),
+                launch_arguments={
+                    "cpus": LaunchConfiguration("gamepad_cpus"),
+                }.items(),
                 condition=IfCondition(LaunchConfiguration("gamepad")),
             ),
         ]
@@ -529,9 +736,12 @@ def common_launch_description(
         DeclareLaunchArgument("perception", default_value="false"),
         # The camera pipeline must not run on the isolated RT cores: the
         # service starts this whole tree under `taskset -c 2,3`, and children
-        # inherit that mask, so without re-affinitizing them the driver and
-        # the reduction (~26% of a core together, measured) compete with the
-        # 400 Hz control loop. Same treatment the bag recorder gets.
+        # inherit that mask, so without re-affinitizing it the driver
+        # (~0.7 of a Pi 4 core measured with colour+RGBD on) competes with
+        # the 400 Hz control loop. Same treatment the bag recorder gets.
+        # Even off the RT cores the camera is not free for the loop: its USB
+        # traffic and the IMU's i2c completion share CPU0's interrupt path
+        # (see the I2C_TIMEOUT note in imu_i2c.cpp).
         DeclareLaunchArgument("perception_cpus", default_value="0,1"),
         IncludeLaunchDescription(
             PathJoinSubstitution(
@@ -543,8 +753,37 @@ def common_launch_description(
             ),
             launch_arguments={
                 "cpus": LaunchConfiguration("perception_cpus"),
+                # 6 fps on both streams: the depth consumer is the SLAM,
+                # which keys at ~2 Hz, and the driver's post-processing at
+                # 15 fps alone saturated a Pi 4 core. Colour rides along:
+                # the RGBD product pairs depth with colour, so their rates
+                # must match, and the VLM decides at ~0.3-0.5 Hz anyway.
+                "depth_profile": "848x480x6",
+                "color_profile": "1280x720x6",
             }.items(),
             condition=IfCondition(LaunchConfiguration("perception")),
+        ),
+        # Owner of odom->base_link, see _launch_setup. The robot's default is
+        # its own odometry; the sim's is the ground truth, until a run wants
+        # the odometry's drift in the picture (the SLAM sessions do).
+        DeclareLaunchArgument(
+            "leg_odom", default_value="true" if hardware == "real" else "false",
+        ),
+        # Local perception for navigation (wojtek_nav): the rolling costmap
+        # around the robot in odom, from the depth camera. Off by default,
+        # like the camera it needs (perception:=true on the robot, the
+        # virtual camera in the sim) and the odometry under it
+        # (leg_odom:=true in the sim).
+        DeclareLaunchArgument("nav", default_value="false"),
+        DeclareLaunchArgument(
+            "nav_cpus", default_value="0,1" if hardware == "real" else "",
+        ),
+        IncludeLaunchDescription(
+            PathJoinSubstitution(
+                [FindPackageShare("wojtek_nav"), "launch", "costmap.launch.py"]
+            ),
+            launch_arguments={"cpus": LaunchConfiguration("nav_cpus")}.items(),
+            condition=IfCondition(LaunchConfiguration("nav")),
         ),
         # The deck panel (wojtek_deck): a browser cockpit for a handheld on
         # the robot's wifi. On in the simulation (open http://localhost:8090),
@@ -554,6 +793,31 @@ def common_launch_description(
         ),
         DeclareLaunchArgument("deck_port", default_value="8090"),
         DeclareLaunchArgument("deck_cpus", default_value=""),
+        # The panel's colour camera, robot only (deck_camera:=true in the
+        # service). Profile WxHxFPS. 640x480 is what the Pi affords next to
+        # the control loop; with the camera node doing the JPEG itself
+        # (compressed transport) 30 fps fits, and deck_stream_hz is how
+        # many of those the gateway passes on to the panel.
+        # Where the control loop and the policy side run, as taskset
+        # lists; empty = wherever the tree runs. The RPi service pins the
+        # controller to 3 and policy_node + real_io to 2 (see the nodes).
+        DeclareLaunchArgument("control_cpus", default_value=""),
+        DeclareLaunchArgument("policy_cpus", default_value=""),
+        # UI-rate nodes of the tree itself (robot_state_publisher). The
+        # robot sends them to the system cores; the sim inherits.
+        DeclareLaunchArgument(
+            "ui_cpus", default_value="0,1" if hardware == "real" else "",
+        ),
+        DeclareLaunchArgument("deck_camera", default_value="false"),
+        DeclareLaunchArgument("deck_camera_profile", default_value="640x480x30"),
+        # Depth from the same camera node, for an off-board consumer (the
+        # VLM's map). On with the camera; profile WxHxFPS at the sensor.
+        # 424x240 is the camera contract the simulation renders to
+        # (wojtek_pc.camera_spec), native on the D435 so the Pi does no
+        # decimation.
+        DeclareLaunchArgument("deck_camera_depth", default_value="true"),
+        DeclareLaunchArgument("deck_camera_depth_profile", default_value="424x240x15"),
+        DeclareLaunchArgument("deck_stream_hz", default_value="30.0"),
         OpaqueFunction(
             function=_launch_setup,
             kwargs={"with_rviz": with_rviz, "hardware": hardware},

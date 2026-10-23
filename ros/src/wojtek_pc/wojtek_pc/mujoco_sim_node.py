@@ -115,7 +115,7 @@ class MujocoSimNode(Node):
         # policy).
         self.declare_parameter("policy", "")
         # D435-compatible virtual camera (issue #91): topics, encodings and
-        # rates mirror the real perception stack so cloud_reduce/planner/VLM
+        # rates mirror the real perception stack so depth consumers/VLM
         # run unchanged. `camera:=false` on the launch is the off-switch for
         # weak machines; rendering runs on its own thread, never in _tick.
         self.declare_parameter("camera", True)

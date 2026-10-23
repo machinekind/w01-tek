@@ -7,7 +7,9 @@ parameters differ:
               /imu_sensor_broadcaster/imu (sensor_msgs/Imu)
               /cmd_vel       (geometry_msgs/Twist; linear.x/y + angular.z are
                               vx/vy/wz, linear.z > 0 commands the standing
-                              height for 4-D-command policies)
+                              height for 4-D-command policies. Dead-man:
+                              cmd_timeout_s of silence reads as zero
+                              velocity, see command_gate.py)
   publishes   /wojtek/joint_targets (sensor_msgs/JointState, URDF convention,
                                   absolute; 12 actuated joints. For a policy
                                   whose contract enables the tau_ff head the
@@ -37,6 +39,7 @@ from std_srvs.srv import SetBool, Trigger
 from wojtek_telemetry.msg import PolicyTiming
 
 from wojtek_policy import poses
+from wojtek_policy.command_gate import CommandGate
 from wojtek_policy.joint_map import JointMap
 from wojtek_policy.policy import WojtekPolicy, gravity_from_quat
 from wojtek_policy.policy_source import resolve_policy
@@ -76,6 +79,11 @@ class PolicyNode(Node):
         self.declare_parameter("auto_enable", True)
         self.declare_parameter("soft_start_s", 1.0)
         self.declare_parameter("watchdog_timeout_s", 0.2)
+        # Dead-man on /cmd_vel: with no command for this long the velocities
+        # read zero (a commanded height is kept). Every drive source talks at
+        # 20 Hz or more, so only a source that died mid-walk trips it. 0
+        # disables the gate (the pre-2026-09 behaviour: hold forever).
+        self.declare_parameter("cmd_timeout_s", 0.5)
         # Report the cost of each tick on /wojtek/policy_timing. Off unless a
         # run asks for it, so a plain run publishes nothing extra.
         self.declare_parameter("publish_timing", False)
@@ -111,9 +119,11 @@ class PolicyNode(Node):
         self._gyro_base = None
         self._gravity_base = None
         self._grav_filt = np.array([0.0, 0.0, -1.0])
-        self._cmd = np.zeros(3)
-        if self.policy.command_fill.size:
-            self._cmd = np.append(self._cmd, self.policy.command_fill)
+        self._gate = CommandGate(
+            self.get_parameter("cmd_timeout_s").value,
+            fill=self.policy.command_fill,
+        )
+        self._cmd_expired = False
         self._joints_stamp = None
         self._imu_stamp = None
         self._enabled = self.get_parameter("auto_enable").value
@@ -218,7 +228,10 @@ class PolicyNode(Node):
                 height, self.policy.command_low[3], self.policy.command_high[3]
             )
             cmd = np.append(cmd, height)
-        self._cmd = cmd
+        self._gate.update(cmd, self._now_s())
+
+    def _now_s(self):
+        return self.get_clock().now().nanoseconds * 1e-9
 
     # -- services ------------------------------------------------------------
     def _srv_enable(self, req, res):
@@ -272,12 +285,24 @@ class PolicyNode(Node):
                 )
             self._was_running = False
             return
+        cmd, expired = self._gate.current(self._now_s())
+        if expired != self._cmd_expired:
+            # Edge-logged: once when the source falls silent, once when it
+            # is back. A holding robot must be explainable from the log.
+            self._cmd_expired = expired
+            if expired:
+                self.get_logger().warning(
+                    f"no /cmd_vel for {self._gate.timeout_s:g} s -- "
+                    "commanding zero velocity until the source talks again"
+                )
+            else:
+                self.get_logger().info("/cmd_vel is back")
         # A single NaN in the inputs would poison the policy permanently
         # (last_action feeds back into the observation), so treat non-finite
         # input like stale data: hold, and reset the policy state on
         # recovery via the _was_running edge. Seen in practice from the IMU
         # broadcaster's NaN placeholders right after activation.
-        inputs = [self._q_urdf, self._dq_urdf, self._cmd]
+        inputs = [self._q_urdf, self._dq_urdf, cmd]
         if self.policy.uses_imu:
             inputs += [self._gyro_base, self._gravity_base]
         if not np.all(np.isfinite(np.concatenate(inputs))):
@@ -301,7 +326,7 @@ class PolicyNode(Node):
             else np.array([0.0, 0.0, -1.0])
         )
         step_t = time.perf_counter()
-        targets_mjc = self.policy.step(gyro, gravity, q_mjc, dq_mjc, self._cmd)
+        targets_mjc = self.policy.step(gyro, gravity, q_mjc, dq_mjc, cmd)
         inference_ms = (time.perf_counter() - step_t) * 1e3
 
         # Soft start: blend from the measured pose to the policy output.

@@ -1,0 +1,168 @@
+{
+  "configById": {
+    "3D!nav": {
+      "followTf": "base_link",
+      "layers": {
+        "grid": {
+          "layerId": "foxglove.Grid",
+          "visible": true,
+          "frameId": "odom",
+          "size": 10,
+          "divisions": 20,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "order": 1
+        }
+      },
+      "topics": {
+        "/robot_description": {
+          "visible": true
+        },
+        "/wojtek/nav/points": {
+          "visible": true,
+          "colorField": "z",
+          "colorMode": "colormap",
+          "colorMap": "turbo",
+          "pointSize": 4,
+          "decayTime": 0
+        },
+        "/wojtek/nav/costmap": {
+          "visible": true,
+          "colorMode": "costmap",
+          "alpha": 0.6
+        },
+        "/wojtek/nav/goal": {
+          "visible": true,
+          "type": "arrow",
+          "color": "#ff4400"
+        },
+        "/wojtek/nav/pixel_target": {
+          "visible": true
+        },
+        "/wojtek/nav/published_footprint": {
+          "visible": true
+        }
+      },
+      "cameraState": {
+        "distance": 6,
+        "perspective": true,
+        "phi": 50,
+        "thetaOffset": 30,
+        "targetOffset": [
+          0,
+          0,
+          0
+        ],
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "fovy": 45,
+        "near": 0.01,
+        "far": 5000
+      },
+      "scene": {
+        "transforms": {
+          "showLabel": false,
+          "axisScale": 0.15,
+          "lineWidth": 0.5
+        }
+      }
+    },
+    "Image!color": {
+      "imageMode": {
+        "imageTopic": "/camera/camera/color/image_raw"
+      }
+    },
+    "Image!vlm": {
+      "imageMode": {
+        "imageTopic": "/wojtek/vlm/annotated"
+      }
+    },
+    "Image!depth": {
+      "imageMode": {
+        "imageTopic": "/camera/camera/depth/image_rect_raw",
+        "colorMode": "colormap",
+        "colorMap": "turbo",
+        "minValue": 0,
+        "maxValue": 3000
+      }
+    },
+    "RawMessages!nav": {
+      "topicPath": "/wojtek/nav/status"
+    },
+    "RawMessages!vlm": {
+      "topicPath": "/wojtek/vlm/status"
+    },
+    "Plot!cmdvel": {
+      "title": "Velocity command",
+      "xAxisVal": "timestamp",
+      "isSynced": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "paths": [
+        {
+          "value": "/cmd_vel.linear.x",
+          "enabled": true,
+          "timestampMethod": "receiveTime"
+        },
+        {
+          "value": "/cmd_vel.angular.z",
+          "enabled": true,
+          "timestampMethod": "receiveTime"
+        }
+      ]
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": {
+    "speed": 1
+  },
+  "layout": {
+    "direction": "row",
+    "splitPercentage": 60,
+    "first": "3D!nav",
+    "second": {
+      "direction": "column",
+      "splitPercentage": 40,
+      "first": {
+        "direction": "row",
+        "splitPercentage": 50,
+        "first": "Image!color",
+        "second": "Image!vlm"
+      },
+      "second": {
+        "direction": "column",
+        "splitPercentage": 50,
+        "first": {
+          "direction": "row",
+          "splitPercentage": 50,
+          "first": "Image!depth",
+          "second": "Plot!cmdvel"
+        },
+        "second": {
+          "direction": "row",
+          "splitPercentage": 50,
+          "first": "RawMessages!nav",
+          "second": "RawMessages!vlm"
+        }
+      }
+    }
+  }
+}

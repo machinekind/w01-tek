@@ -40,6 +40,7 @@
     <span class="policy" id="policy"></span>
     <div class="readouts">
       <span>H <b id="height">—</b> m</span>
+      <span title="stick range, right trigger adds the rest">SPD <b id="scale">50</b> %</span>
       <span id="hud-clock"></span>
       <!-- The panel runs on a handheld with no keyboard, so the two things
            F11 and F5 would do have to be on the page itself. Full puts the
@@ -108,6 +109,11 @@
     <button data-call="lie_down">lie</button>
     <button data-call="enable" id="btn-enable">policy</button>
     <button data-call="reset">reset</button>
+    <!-- Hold, not tap: restarts the robot's control stack. The gateway
+         refuses unless the robot is lying, because the stack assumes the
+         folded pose when it starts. Needed after a motor power cycle, when
+         the drives come back idle and nothing else re-enables them. -->
+    <button data-hold="restart_stack" class="hold" title="hold to restart the control stack">restart</button>
     <span class="sep"></span>
     <button class="trick" data-call="trick_paw_wave">paw</button>
     <button class="trick" data-call="trick_bow">bow</button>

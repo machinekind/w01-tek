@@ -15,6 +15,7 @@
 <robot name="quadruped" xmlns:xacro="http://www.ros.org/wiki/xacro">
   <xacro:include filename="$(find wojtek_description)/urdf/body.urdf.xacro" />
   <xacro:include filename="$(find wojtek_bringup)/urdf/wojtek_ros2_control.urdf.xacro" />
+  <xacro:include filename="$(find wojtek_bringup)/urdf/wojtek_mock_ros2_control.urdf.xacro" />
 
   <xacro:arg name="kp" default="40.0" />
   <xacro:arg name="kd" default="1.6" />
@@ -24,6 +25,10 @@
        from the loaded policy's contract and widens max_torque to
        pd.max_torque + tau_ff.scale (the sim clamps the two separately). -->
   <xacro:arg name="tau_ff" default="false" />
+  <!-- The head's clamp, passed by the launch for the simulated plant. The
+       drives clamp the sum, so it is declared here only so the launch can
+       hand both xacros the same arguments. -->
+  <xacro:arg name="tau_ff_scale" default="0.0" />
   <!-- CAN link to the MD80s: CANdle HAT over SPI by default (drives flashed
        to 8M). bus:=usb can_baud:=1 falls back to the old USB dongle; only
        works if the drives are flashed back to 1M. -->
@@ -45,14 +50,23 @@
        wojtek_description's body.urdf.xacro). The launches set it from the
        robot profile (robot:=, wojtek_policy/robots.py). -->
   <xacro:arg name="legs" default="stock" />
+  <!-- Profiling on the robot computer with the motors unpowered: the drives
+       and the IMU become one GenericSystem, everything else is unchanged.
+       See wojtek_mock_ros2_control.urdf.xacro. -->
+  <xacro:arg name="mock_hw" default="false" />
 
   <xacro:wojtek_body legs="$(arg legs)" />
 
-  <xacro:wojtek_ros2_control kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)"
-    usb_port="$(arg usb_port)" bus="$(arg bus)" can_baud="$(arg can_baud)"
-    dry_run="$(arg dry_run)" tau_ff="$(arg tau_ff)" />
-  <xacro:if value="$(arg use_imu)">
-    <xacro:wojtek_imu_i2c_ros2_control bus="$(arg imu_bus)" addr_ag="$(arg imu_addr_ag)"
-      addr_mag="$(arg imu_addr_mag)" />
+  <xacro:if value="$(arg mock_hw)">
+    <xacro:wojtek_mock_ros2_control use_imu="$(arg use_imu)" tau_ff="$(arg tau_ff)" />
   </xacro:if>
+  <xacro:unless value="$(arg mock_hw)">
+    <xacro:wojtek_ros2_control kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)"
+      usb_port="$(arg usb_port)" bus="$(arg bus)" can_baud="$(arg can_baud)"
+      dry_run="$(arg dry_run)" tau_ff="$(arg tau_ff)" />
+    <xacro:if value="$(arg use_imu)">
+      <xacro:wojtek_imu_i2c_ros2_control bus="$(arg imu_bus)" addr_ag="$(arg imu_addr_ag)"
+        addr_mag="$(arg imu_addr_mag)" />
+    </xacro:if>
+  </xacro:unless>
 </robot>

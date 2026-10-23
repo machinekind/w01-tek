@@ -81,6 +81,84 @@ def test_use_imu_false_drops_the_sensor_on_both_sides():
     assert _joints(sim) == _joints(real)
 
 
+def test_tau_ff_adds_the_effort_command_on_both_sides():
+    """A policy with the torque head gets an effort command per joint from
+    the launch's tau_ff switch, and the simulated plant must take it: a
+    controller spawned for an interface the plant does not export fails
+    to activate, and the spawner takes every controller after it down."""
+    sim = _ros2_control(
+        "wojtek_pc", "urdf/wojtek_sim.urdf.xacro", hw="mock",
+        tau_ff="true", tau_ff_scale="3.0",
+    )
+    real = _ros2_control(
+        "wojtek_bringup", "urdf/wojtek_real.urdf.xacro", tau_ff="true",
+    )
+    assert _joints(sim) == _joints(real)
+    assert all(("command", "effort") in ifs for ifs in _joints(sim).values())
+
+
+def test_sim_servo_cap_leaves_the_torque_head_out():
+    """The launch hands both xacros the drive cap, servo plus head. The
+    plant clamps the two separately like the training sim, so the servo's
+    param is the cap with the head removed and the head's scale rides next
+    to it."""
+    mujoco = _ros2_control(
+        "wojtek_pc", "urdf/wojtek_sim.urdf.xacro", hw="mujoco",
+        tau_ff="true", tau_ff_scale="3.0", max_torque="9.0",
+    )
+    for joint in mujoco[0].findall("joint"):
+        params = {p.get("name"): p.text for p in joint.findall("param")}
+        assert float(params["max_torque"]) == 6.0
+        assert float(params["tau_ff_scale"]) == 3.0
+    plain = _ros2_control(
+        "wojtek_pc", "urdf/wojtek_sim.urdf.xacro", hw="mujoco", max_torque="9.0",
+    )
+    params = {p.get("name"): p.text for p in plain[0].find("joint").findall("param")}
+    assert float(params["max_torque"]) == 9.0
+    assert float(params["tau_ff_scale"]) == 0.0
+    # A scale without the switch is a stray value, not a head: the servo
+    # keeps its whole cap and the plugin sees no scale to clamp against.
+    stray = _ros2_control(
+        "wojtek_pc", "urdf/wojtek_sim.urdf.xacro", hw="mujoco",
+        tau_ff="false", tau_ff_scale="3.0", max_torque="9.0",
+    )
+    params = {p.get("name"): p.text for p in stray[0].find("joint").findall("param")}
+    assert float(params["max_torque"]) == 9.0
+    assert float(params["tau_ff_scale"]) == 0.0
+
+
+def test_mock_drops_calculate_dynamics_with_the_torque_head():
+    """GenericSystem with calculate_dynamics refuses a joint whose command
+    set is not position/velocity/acceleration, so with the effort command
+    the spawner cannot activate forward_effort_controller. Without the head
+    the mock keeps integrating velocities from the position commands."""
+    def dynamics(**args):
+        block = _ros2_control("wojtek_pc", "urdf/wojtek_sim.urdf.xacro", hw="mock", **args)[0]
+        return {p.get("name"): p.text for p in block.find("hardware").findall("param")}
+    assert dynamics().get("calculate_dynamics") == "true"
+    assert "calculate_dynamics" not in dynamics(tau_ff="true", tau_ff_scale="3.0")
+
+
+def test_mock_imu_reads_an_upright_level_robot():
+    """The mock IMU's initial values must agree with the mount the mujoco
+    branch declares (imu_mount_rpy 0 0 0) and the robot's own mock: identity
+    orientation and +g on z, or the policy sees an upside-down robot."""
+    sim = _ros2_control("wojtek_pc", "urdf/wojtek_sim.urdf.xacro", hw="mock")
+    real = _ros2_control(
+        "wojtek_bringup", "urdf/wojtek_real.urdf.xacro", mock_hw="true",
+    )
+
+    def initial(blocks):
+        return {
+            i.get("name"): float(i.find("param[@name='initial_value']").text)
+            for block in blocks for s in block.findall("sensor")
+            for i in s.findall("state_interface")
+        }
+    assert initial(sim) == initial(real)
+    assert initial(sim)["orientation.w"] == 1.0
+    assert initial(sim)["linear_acceleration.z"] > 0.0
+
+
 def test_sim_plant_is_selected_by_hw(sim):
     plugin = sim[0].find("hardware/plugin").text
     assert plugin == "mock_components/GenericSystem"

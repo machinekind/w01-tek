@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+# Per-run agent transcripts and screenshots that are not curated into docs/runs/.
+runs/
+# RAI writes its artifact database (tool images) into the cwd at run time.
+artifact_database.pkl

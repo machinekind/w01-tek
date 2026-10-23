@@ -36,6 +36,13 @@ Websocket protocol (text frames, JSON):
     {"t":"height", "delta": +-0.005}           step the held stance height
     {"t":"call", key, [value]}                 arm/enable (bool) and the
                                                Trigger services below
+    {"t":"call", "key":"restart_stack"}        restart the robot's control
+                                               stack (the systemd unit in
+                                               the stack_unit parameter);
+                                               refused unless the robot is
+                                               lying, because the stack
+                                               assumes the folded pose when
+                                               it starts
 
 Threading is the web_console pattern: rclpy spins in a background thread;
 the ROS side hands data to the asyncio side with call_soon_threadsafe and
@@ -45,6 +52,7 @@ which rclpy allows from any thread.
 import asyncio
 import io
 import os
+import shutil
 import signal
 import threading
 import time
@@ -58,15 +66,25 @@ from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.signals import SignalHandlerOptions
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import CompressedImage, Image, JointState
 from std_srvs.srv import SetBool, Trigger
 
 from wojtek_policy.policy_source import load_meta
 from wojtek_deck.drive import DriveGate
 
+# JPEG encoder, cheapest first. OpenCV encodes through libjpeg-turbo and
+# releases the GIL while it works, so the asyncio side (the drive tick that
+# publishes /cmd_vel) keeps running underneath. Pillow holds the GIL for
+# most of the encode: on the RPi that stalled the tick to 6 Hz and, with
+# the camera node next to it, starved the control stack until the MD80
+# drives dropped to idle (2026-09-12). Pillow stays as the fallback.
+try:
+    import cv2
+except ImportError:
+    cv2 = None
 try:
     from PIL import Image as PILImage
-except ImportError:  # soft dep: no Pillow = empty camera stream
+except ImportError:  # soft dep: no encoder at all = empty camera stream
     PILImage = None
 
 # Fallbacks when no policy reference is set (or it fails to load) -- same
@@ -86,6 +104,10 @@ DRIVE_TICK_HZ = 20.0     # /cmd_vel publish rate (same as the other teleops)
 STATUS_HZ = 2.0          # status frames to the page
 CMD_TIMEOUT_S = 0.5      # dead-man: sticks older than this = link gone
 SILENCE_AFTER_S = 2.0    # zeroing burst length before going silent
+
+# "Lying" for the stack restart: every joint within this of the folded pose,
+# which is where the encoders read zero after a boot in that pose.
+LYING_MAX_RAD = 0.35
 
 SETBOOL_SERVICES = ("arm", "enable")
 TRIGGER_SERVICES = ("zero", "stand_up", "lie_down", "reset",
@@ -108,8 +130,10 @@ def assets_store():
     env = os.environ.get("WOJTEK_DECK_ASSETS", "").strip()
     if env:
         return Path(env).expanduser()
+    # A symlink install resolves this file into src/; a copying install
+    # (the robot's) into install/. Either way the store sits next to them.
     for parent in Path(__file__).resolve().parents:
-        if parent.name == "src":
+        if parent.name in ("src", "install"):
             return parent.parent / "deck_assets"
     return None
 
@@ -129,6 +153,18 @@ class GatewayNode(Node):
         self.declare_parameter("bridge_port", 8765)
         self.declare_parameter("color_topic", DEFAULT_COLOR_TOPIC)
         self.declare_parameter("jpeg_quality", 80)
+        # Most frames a second that get encoded for the stream. The camera
+        # may run faster; the rest are dropped before they cost anything.
+        # Encoding is the gateway's whole CPU bill, and on the RPi that
+        # bill is paid by the same four cores as the control loop.
+        self.declare_parameter("stream_hz", 10.0)
+        # Take the camera node's own JPEG (image_transport's compressed
+        # plugin, <color_topic>/compressed) instead of the raw image. The
+        # camera node encodes in C++ and only while somebody subscribes;
+        # the gateway then receives ~40 KB a frame instead of 0.9 MB and
+        # encodes nothing. false = the raw image and the encoder below,
+        # for a robot without the plugin.
+        self.declare_parameter("compressed", True)
         # Where the detector's files are. Empty means "work it out", which
         # is right everywhere except a container that named it differently.
         self.declare_parameter("assets_dir", "")
@@ -139,6 +175,15 @@ class GatewayNode(Node):
                           for k in TRIGGER_SERVICES})
         self._pub_cmd = self.create_publisher(Twist, "cmd_vel", 10)
 
+        # The control stack's systemd unit, for the panel's restart button.
+        # Empty disables the button (the simulation has no such unit).
+        self.declare_parameter("stack_unit", "wojtek-robot.service")
+        # Where the joints are, for the "is it lying" check before a
+        # restart: the largest distance from zero, and when it was seen.
+        self.joint_max_rad = None
+        self._joint_stamp = 0.0
+        self.create_subscription(JointState, "joint_states", self._on_joints, 10)
+
         self.cmd_low = list(DEFAULT_CMD_LOW)
         self.cmd_high = list(DEFAULT_CMD_HIGH)
         self.height_range = list(DEFAULT_HEIGHT_RANGE)
@@ -147,20 +192,27 @@ class GatewayNode(Node):
         self._load_meta()
 
         self._jpeg_quality = int(self.get_parameter("jpeg_quality").value)
+        self._stream_period = 1.0 / max(
+            0.1, float(self.get_parameter("stream_hz").value))
+        self._last_encode = 0.0   # monotonic time of the last encoded frame
         self._frame_stamps = []   # wall times of the last encoded frames
         self.frames_seen = 0      # camera messages received (status field)
         self.frames_encoded = 0   # ... of which reached a viewer
         self._last_cb = None
-        if PILImage is not None:
-            # The camera publishes best-effort; a default-QoS subscription
-            # would match nothing, so mirror the sensor-data profile.
-            self.create_subscription(
-                Image, self.get_parameter("color_topic").value,
-                self._on_color, qos_profile_sensor_data)
+        # The camera subscription exists only while somebody watches the
+        # stream (set_camera_wanted). Receiving the raw image costs a third
+        # of a core on the RPi whether or not a frame gets encoded, and the
+        # gateway is resident in the robot service now, so an unwatched
+        # panel must cost nothing.
+        self._color_sub = None
+        self._encoder = None
+        if cv2 is not None or PILImage is not None:
+            self._encoder = "OpenCV" if cv2 is not None else "Pillow"
+            self.get_logger().info(f"camera JPEG encoder: {self._encoder}")
         else:
             self.get_logger().warning(
-                "Pillow not installed -- camera stream will stay empty "
-                "(apt install python3-pil)")
+                "no JPEG encoder (neither OpenCV nor Pillow) -- camera "
+                "stream will stay empty (apt install python3-opencv)")
 
     def _load_meta(self):
         ref = self.get_parameter("policy").value
@@ -188,6 +240,53 @@ class GatewayNode(Node):
             f"command box from {meta['run_name']} ({source})")
 
     # -- camera (ROS thread) -------------------------------------------------
+    def set_camera_wanted(self, wanted):
+        """Subscribe to the camera while a viewer is on the stream."""
+        if self._encoder is None:
+            return
+        if wanted and self._color_sub is None:
+            # The camera publishes best-effort; a default-QoS subscription
+            # would match nothing, so mirror the sensor-data profile.
+            topic = self.get_parameter("color_topic").value
+            if self.get_parameter("compressed").value:
+                self._color_sub = self.create_subscription(
+                    CompressedImage, topic + "/compressed",
+                    self._on_compressed, qos_profile_sensor_data)
+                self.get_logger().info(
+                    "camera: viewer arrived, subscribing (compressed)")
+            else:
+                self._color_sub = self.create_subscription(
+                    Image, topic, self._on_color, qos_profile_sensor_data)
+                self.get_logger().info("camera: viewer arrived, subscribing")
+        elif not wanted and self._color_sub is not None:
+            self.destroy_subscription(self._color_sub)
+            self._color_sub = None
+            self._frame_stamps = []
+            self.get_logger().info("camera: last viewer gone, unsubscribed")
+
+    def _on_compressed(self, msg):
+        """A JPEG from the camera node: pass it through, nothing to encode."""
+        self.frames_seen += 1
+        if self.on_frame is None or not self.want_frames():
+            return
+        if "jpeg" not in msg.format.lower():
+            self.get_logger().warning(
+                f"compressed camera format {msg.format!r} is not JPEG; set "
+                "the camera's compressed format to jpeg", once=True)
+            return
+        now = time.monotonic()
+        if now - self._last_encode < self._stream_period:
+            return
+        self._last_encode = now
+        self._frame_stamps = [t for t in self._frame_stamps if now - t < 2.0]
+        self._frame_stamps.append(now)
+        self.frames_encoded += 1
+        if self.frames_encoded == 1:
+            self.get_logger().info(
+                f"camera: first frame passed through ({len(msg.data) // 1024} "
+                f"KB JPEG from the camera node)")
+        self.on_frame(bytes(msg.data))
+
     def _on_color(self, msg):
         self.frames_seen += 1
         if self.on_frame is None or not self.want_frames():
@@ -197,16 +296,16 @@ class GatewayNode(Node):
                 f"unsupported camera encoding {msg.encoding!r} "
                 f"(want {COLOR_ENCODING})", once=True)
             return
+        now = time.monotonic()
+        if now - self._last_encode < self._stream_period:
+            return  # over the stream rate: dropped before it costs anything
         try:
-            img = PILImage.frombuffer(
-                "RGB", (msg.width, msg.height), msg.data, "raw", "RGB", 0, 1)
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=self._jpeg_quality)
+            jpeg = self._encode(msg)
         except Exception as e:  # noqa: BLE001 -- a bad frame must not kill
             # the spin thread (see web_console for the same rule)
             self.get_logger().warning(f"dropping camera frame: {e}", once=True)
             return
-        now = time.monotonic()
+        self._last_encode = now
         if self._last_cb is not None and now - self._last_cb > 1.0:
             self.get_logger().warning(
                 f"camera callback starved: {now - self._last_cb:.1f} s since "
@@ -218,21 +317,59 @@ class GatewayNode(Node):
         if self.frames_encoded == 1:
             self.get_logger().info(
                 f"camera: first frame encoded ({msg.width}x{msg.height}, "
-                f"{len(buf.getvalue()) // 1024} KB JPEG)")
+                f"{len(jpeg) // 1024} KB JPEG)")
         t0 = time.monotonic()
-        self.on_frame(buf.getvalue())
+        self.on_frame(jpeg)
         dt = time.monotonic() - t0
         if dt > 0.05:
             self.get_logger().warning(f"handing a frame to the server took {dt*1000:.0f} ms")
+
+    def _encode(self, msg):
+        """One rgb8 Image message -> JPEG bytes."""
+        if cv2 is not None:
+            import numpy as np
+            rgb = np.frombuffer(msg.data, dtype=np.uint8).reshape(
+                msg.height, msg.width, 3)
+            ok, out = cv2.imencode(
+                ".jpg", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR),
+                [int(cv2.IMWRITE_JPEG_QUALITY), self._jpeg_quality])
+            if not ok:
+                raise RuntimeError("cv2.imencode failed")
+            return out.tobytes()
+        img = PILImage.frombuffer(
+            "RGB", (msg.width, msg.height), msg.data, "raw", "RGB", 0, 1)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=self._jpeg_quality)
+        return buf.getvalue()
 
     def cam_hz(self):
         now = time.monotonic()
         recent = [t for t in self._frame_stamps if now - t < 2.0]
         return len(recent) / 2.0
 
+    def _on_joints(self, msg):
+        if msg.position:
+            self.joint_max_rad = max(abs(p) for p in msg.position)
+            self._joint_stamp = time.monotonic()
+
+    def lying(self):
+        """(ok, reason): may the control stack be restarted right now?"""
+        if self.joint_max_rad is None or time.monotonic() - self._joint_stamp > 1.0:
+            return False, "no fresh joint states"
+        if self.joint_max_rad > LYING_MAX_RAD:
+            return False, (f"robot is not lying: a joint is "
+                           f"{self.joint_max_rad:.2f} rad from folded")
+        return True, ""
+
+    def stack_unit(self):
+        unit = str(self.get_parameter("stack_unit").value).strip()
+        return unit if unit and shutil.which("systemctl") else ""
+
     # -- commands (asyncio thread) ---------------------------------------------
     def availability(self):
-        return {k: c.service_is_ready() for k, c in self._cli.items()}
+        avail = {k: c.service_is_ready() for k, c in self._cli.items()}
+        avail["restart_stack"] = bool(self.stack_unit())
+        return avail
 
     def call(self, key, value=None):
         cli = self._cli[key]
@@ -351,6 +488,7 @@ class Server:
         await resp.prepare(request)
         q = asyncio.Queue(maxsize=1)
         self.streams.add(q)
+        self.node.set_camera_wanted(True)
         try:
             while True:
                 jpeg = await q.get()
@@ -363,6 +501,8 @@ class Server:
             pass
         finally:
             self.streams.discard(q)
+            if not self.streams:
+                self.node.set_camera_wanted(False)
         return resp
 
     async def websocket(self, request):
@@ -428,6 +568,58 @@ class Server:
             key = msg.get("key")
             if key in SETBOOL_SERVICES or key in TRIGGER_SERVICES:
                 self.node.call(key, msg.get("value"))
+            elif key == "restart_stack":
+                asyncio.ensure_future(self.restart_stack())
+
+    async def restart_stack(self):
+        """Restart the control stack's systemd unit, if the robot is lying.
+
+        The stack assumes the folded pose when it starts (real_io zeroes
+        there), so a restart mid-stand would leave every joint offset
+        wrong. What makes this necessary at all: after a motor power cycle
+        under a running controller the drives come back idle, keep
+        answering on CAN, and nothing re-enables them. On the robot the
+        gateway is a node of the same launch, so the restart takes this
+        process down with the stack: the page sees the socket close and
+        reconnects by itself once the service is back. A success verdict
+        could therefore never reach the panel; what it gets instead is a
+        message sent, and flushed, before systemctl is spawned. A refusal
+        (sudo, a bad unit name) exits before anything stops, so that
+        verdict does arrive.
+        """
+        async def verdict(success, message):
+            msg = json.dumps({"t": "svc", "key": "restart_stack",
+                              "value": None, "success": success,
+                              "message": message})
+            # Awaited rather than through _broadcast: that only schedules
+            # the sends, and a SIGTERM may come before they run.
+            await asyncio.gather(*(ws.send_str(msg) for ws in list(self.clients)
+                                   if not ws.closed), return_exceptions=True)
+
+        unit = self.node.stack_unit()
+        if not unit:
+            await verdict(False, "no control stack unit configured")
+            return
+        ok, why = self.node.lying()
+        if not ok:
+            await verdict(False, why)
+            return
+        self.gate.stop(self.loop.time())
+        self.node.get_logger().warning(f"restarting {unit} on the panel's request")
+        await verdict(True, f"restart requested; LINK drops and the panel "
+                            f"reconnects when {unit} is back, ~30 s")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "sudo", "-n", "systemctl", "restart", unit,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE)
+            _, err = await asyncio.wait_for(proc.communicate(), timeout=90)
+        except Exception as e:  # noqa: BLE001 -- report, never crash the loop
+            await verdict(False, f"restart failed: {e}")
+            return
+        if proc.returncode != 0:
+            await verdict(False, f"systemctl exited {proc.returncode}: "
+                                 f"{err.decode(errors='replace').strip()[:120]}")
 
     # -- periodic tasks ----------------------------------------------------
     async def drive_tick(self):
@@ -463,11 +655,21 @@ class Server:
         app.router.add_get("/stream.mjpg", self.stream)
         # The detector's assets, before the catch-all below: aiohttp tries
         # routes in the order they were added, and "/" matches everything.
+        #
+        # follow_symlinks: deploy.sh builds the workspace with
+        # `colcon --symlink-install`, so every file under the installed web/
+        # is a symlink into src/, and the asset store on the robot is itself
+        # a symlink. aiohttp's default refuses a file whose real path lies
+        # outside the static root, which turned the whole page into 404s
+        # (only index.html survived, served by FileResponse above). Both
+        # directories hold only what this package and fetch_assets.sh put
+        # there, so following links out of them is the intended layout.
         if self.assets_dir is not None:
             app.router.add_static("/det/", str(self.assets_dir),
-                                  show_index=False)
+                                  show_index=False, follow_symlinks=True)
         # css/js next to the page; no directory listing
-        app.router.add_static("/", self.web_dir, show_index=False)
+        app.router.add_static("/", self.web_dir, show_index=False,
+                              follow_symlinks=True)
         return app
 
 

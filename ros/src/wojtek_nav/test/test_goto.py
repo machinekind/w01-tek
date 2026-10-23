@@ -124,6 +124,20 @@ def test_a_setpoint_expires_the_dead_man_stops_the_robot():
     assert ctrl.goal is None
 
 
+def test_cancel_drops_the_setpoint_before_the_dead_man():
+    """A stop from the brain or the console must not wait 3 s."""
+    ctrl = GotoController(goal_timeout=3.0)
+    ctrl.set_goal(5.0, 0.0, 0.0)
+    assert ctrl.step((0, 0, 0), 0.5, FREE).status == "driving"
+    ctrl.cancel()
+    cmd = ctrl.step((0, 0, 0), 0.6, FREE)
+    assert (cmd.vx, cmd.wz, cmd.status) == (0.0, 0.0, "idle")
+    assert ctrl.goal is None
+    # And a cancelled controller takes the next goal like a fresh one.
+    ctrl.set_goal(1.0, 0.0, 1.0)
+    assert ctrl.step((0, 0, 0), 1.0, FREE).status == "driving"
+
+
 def test_a_new_goal_replaces_the_old_one_and_restarts_the_clock():
     ctrl = GotoController(goal_timeout=3.0)
     ctrl.set_goal(5.0, 0.0, 0.0)

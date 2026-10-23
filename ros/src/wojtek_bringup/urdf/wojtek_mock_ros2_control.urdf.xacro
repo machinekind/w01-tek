@@ -70,9 +70,11 @@
       <xacro:wojtek_mock_joint name="rear_left_second_joint" tau_ff="${tau_ff}" />
       <xacro:wojtek_mock_joint name="rear_left_third_joint" tau_ff="${tau_ff}" />
 
-      <!-- A level, motionless robot with the sensor upright (URDF imu_joint
-           rpy 0 0 0): identity orientation, +g on the accelerometer's z. The
-           policy only needs finite, fresh values to run its full tick. -->
+      <!-- A level, motionless robot with the sensor upright: identity
+           orientation, +g on the accelerometer's z. URDF imu_joint only
+           yaws the sensor, which changes neither, so identity is a valid
+           level reading. The policy only needs finite, fresh values to run
+           its full tick. -->
       <xacro:if value="${use_imu}">
         <sensor name="imu">
           <xacro:wojtek_mock_imu_value name="orientation.x" value="0.0" />

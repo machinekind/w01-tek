@@ -48,7 +48,12 @@ def _setup(context, *args, **kwargs):
             executable="gamepad_teleop",
             output="screen",
             prefix=prefix,
-            parameters=[{"policy": LaunchConfiguration("policy")}],
+            parameters=[{
+                "policy": LaunchConfiguration("policy"),
+                "speed_scale": ParameterValue(
+                    LaunchConfiguration("speed_scale"), value_type=float
+                ),
+            }],
         ),
     ]
 
@@ -63,6 +68,10 @@ def generate_launch_description():
             # conservative default limits.
             DeclareLaunchArgument("policy", default_value=""),
             DeclareLaunchArgument("cpus", default_value=""),
+            # Fraction of the command box the sticks reach at full throw
+            # with slow mode off (see gamepad_teleop's speed_scale; RB
+            # toggles slow mode, 0.4 of the box).
+            DeclareLaunchArgument("speed_scale", default_value="0.6"),
             OpaqueFunction(function=_setup),
         ]
     )

@@ -25,7 +25,7 @@ from wojtek_teleop.gamepad_teleop import GamepadTeleop  # noqa: E402
 TEST_DOMAIN = 88
 TICK = 0.05
 AX_VX, AX_YAW, AX_VY = 1, 0, 3
-BTN_LB, BTN_RB = 4, 5
+BTN_RB, BTN_BACK, BTN_START = 5, 6, 7
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -52,12 +52,12 @@ def node():
     n.destroy_node()
 
 
-def joy(vx=0.0, vy=0.0, yaw=0.0, lb=0, rb=0):
+def joy(vx=0.0, vy=0.0, yaw=0.0, rb=0, back=0, start=0):
     msg = Joy()
     msg.axes = [0.0] * 8
     msg.axes[AX_VX], msg.axes[AX_VY], msg.axes[AX_YAW] = vx, vy, yaw
     msg.buttons = [0] * 11
-    msg.buttons[BTN_LB], msg.buttons[BTN_RB] = lb, rb
+    msg.buttons[BTN_RB], msg.buttons[BTN_BACK], msg.buttons[BTN_START] = rb, back, start
     return msg
 
 
@@ -82,10 +82,43 @@ def test_a_slightly_off_centre_idle_pad_is_still_idle(node):
     assert node.published == []
 
 
+def test_full_stick_reaches_the_scaled_box_not_the_trained_edge(node):
+    """speed_scale (default 0.6) shrinks every axis of the command box: the
+    trained edge is more than this hardware copes with."""
+    assert node.drive_high == pytest.approx([0.6 * v for v in node.cmd_high])
+    assert node.drive_low == pytest.approx([0.6 * v for v in node.cmd_low])
+
+
+def test_rb_toggles_slow_mode(node):
+    """RB is a toggle on the press edge: 0.4 of the box (not 0.4 of
+    speed_scale) until pressed again; holding it does not flip it back."""
+    run(node, 1.0, lambda: joy(vx=1.0))
+    assert all(m.linear.x == pytest.approx(node.drive_high[0])
+               for m in node.published)
+    n0 = len(node.published)
+    run(node, 1.0, lambda: joy(vx=1.0, rb=1))     # press and hold RB
+    assert all(m.linear.x == pytest.approx(0.4 * node.cmd_high[0])
+               for m in node.published[n0:])
+    n1 = len(node.published)
+    run(node, 1.0, lambda: joy(vx=1.0))           # release: still slow
+    assert all(m.linear.x == pytest.approx(0.4 * node.cmd_high[0])
+               for m in node.published[n1:])
+    n2 = len(node.published)
+    node._on_joy(joy(vx=1.0, rb=1))               # second press: back to 0.6
+    run(node, 1.0, lambda: joy(vx=1.0))
+    assert all(m.linear.x == pytest.approx(node.drive_high[0])
+               for m in node.published[n2:])
+
+
+def test_rb_alone_is_not_input(node):
+    run(node, 3.0, lambda: joy(rb=1))
+    assert node.published == []
+
+
 def test_deflected_stick_drives_and_release_zeros_then_stops(node):
     run(node, 1.0, lambda: joy(vx=1.0))
     assert node.published, "a deflected stick must publish"
-    assert all(m.linear.x == pytest.approx(node.cmd_high[0])
+    assert all(m.linear.x == pytest.approx(node.drive_high[0])
                for m in node.published)
     n_live = len(node.published)
     # Release: the driver keeps repeating the centred state.
@@ -101,8 +134,8 @@ def test_deflected_stick_drives_and_release_zeros_then_stops(node):
 def test_height_step_reaches_the_policy_with_sticks_at_rest(node):
     run(node, 1.0, lambda: joy())
     assert node.published == []
-    node._on_joy(joy(rb=1))       # press RB
-    node._on_joy(joy())           # release RB
+    node._on_joy(joy(start=1))    # press Start
+    node._on_joy(joy())           # release Start
     run(node, 5.0, lambda: joy())
     assert node.published, "a height step must publish"
     assert all(m.linear.x == 0.0 for m in node.published)

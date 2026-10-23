@@ -1,7 +1,17 @@
 # Camera -> body extrinsics, published as a static transform.
 #
-# THESE ARE PLACEHOLDERS. Measure or calibrate them before trusting anything
-# downstream of the depth stream.
+# The numbers are the DESIGN mount of the D435 in the head bracket, the same
+# ones the sim renders with (wojtek_pc/camera_spec.py MOUNT_XYZ /
+# MOUNT_PITCH_RAD) and the URDF carries (body.urdf.xacro camera_mount);
+# tests cross-check all three. Entered 2026-09-26; they still have to be
+# confirmed with a tape measure and a floor check (the depth cloud lying on
+# the floor in Foxglove) on the robot, and corrected in all three places
+# if the head differs from the drawing.
+#
+# On the robot the bringup owns this TF edge (the real URDF has the mount,
+# robot_state_publisher publishes it in every mode with a camera, and
+# robot.launch.py passes extrinsics:=false here). This file serves a
+# standalone perception launch.
 #
 # Why this is a file and not a calibration node: calibration is a one-shot
 # procedure that produces numbers. Running it at every boot would either
@@ -22,13 +32,15 @@ static_transform:
   parent_frame: base_link
   child_frame: camera_link
 
-  # Translation [m], camera origin in the body frame.
-  x: 0.0
+  # Translation [m], camera origin in the body frame: the centre of the
+  # head bracket, 0.32 m ahead of base_link and 0.07 m above it.
+  x: 0.32
   y: 0.0
-  z: 0.0
+  z: 0.07
 
   # Rotation [rad]. `pitch` is the one to get right: positive tilts the
   # camera down, trading far range for near-field ground resolution.
+  # 15 deg down, as drawn.
   roll: 0.0
-  pitch: 0.0
+  pitch: 0.2617994
   yaw: 0.0

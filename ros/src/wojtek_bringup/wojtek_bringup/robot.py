@@ -73,7 +73,44 @@ def sim_session_args(args):
         out.append("console:=web")
     if args.gamepad:
         out.append("gamepad:=true")
+    if getattr(args, "vlm", False):
+        # The brain needs goto and the pixel resolver underneath, and those
+        # need the legs' odometry and the corridor scene is where it has
+        # been tried; the last two stay the caller's choice (passthrough).
+        out.append("vlm:=true")
     return out
+
+
+def brain_launch_cmd(args):
+    """The VLM brain against the robot: the same launch the sim includes,
+    run here on the PC, where the model server is reachable and the
+    camera's JPEG arrives over the robot's wifi. Its url comes from
+    VLM_URL in the environment unless --vlm-url says otherwise."""
+    cmd = ["ros2", "launch", "wojtek_nav", "brain.launch.py"]
+    if args.vlm_url:
+        cmd.append(f"url:={args.vlm_url}")
+    if args.vlm_model:
+        cmd.append(f"model:={args.vlm_model}")
+    if getattr(args, "raw_camera", False):
+        cmd.append("compressed:=false")
+    return cmd
+
+
+def web_console_cmd(args):
+    """The PC's web console against the robot: the policy's command box
+    (--policy) and, with --raw-camera, the raw colour image where the
+    robot publishes no JPEG."""
+    params = []
+    if getattr(args, "policy", None):
+        params.append(f"policy:={args.policy}")
+    if getattr(args, "raw_camera", False):
+        params.append("camera_compressed:=false")
+    cmd = ["ros2", "run", "wojtek_pc", "web_console"]
+    if params:
+        cmd.append("--ros-args")
+        for p in params:
+            cmd += ["-p", p]
+    return cmd
 
 
 ARMING_HINT = """
@@ -110,6 +147,27 @@ def main():
                          "(pair the pad with the robot); with --sim it runs "
                          "here (pair with this machine). Combine with "
                          "--no-console to replace the console entirely")
+    ap.add_argument("--vlm", action="store_true",
+                    help="run the VLM brain (wojtek_nav brain.launch.py) for "
+                         "this session: instructions from the web console's "
+                         "brain panel become pixel goals for the robot. "
+                         "Needs nav:=true (and on the robot perception:=true) "
+                         "in the stack underneath, and a model server at "
+                         "VLM_URL / --vlm-url")
+    ap.add_argument("--vlm-url", default=None,
+                    help="base URL of the Ollama server for --vlm "
+                         "(default: VLM_URL from the environment, else "
+                         "localhost:11434)")
+    ap.add_argument("--vlm-model", default=None,
+                    help="Ollama model tag for --vlm (default: the brain's, "
+                         "qwen3-vl:30b-a3b-instruct)")
+    ap.add_argument("--raw-camera", action="store_true",
+                    help="the robot publishes no camera JPEG "
+                         "(compressed_image_transport not installed, see "
+                         "deploy/deck/README.md): the VLM brain and the web "
+                         "console read the raw colour image instead, at the "
+                         "cost of wifi bandwidth. Robot sessions only; the "
+                         "sim camera publishes its own JPEG")
     ap.add_argument("--plotjuggler", action="store_true", help="also open PlotJuggler")
     ap.add_argument("--benchmark", action="store_true",
                     help="with --sim: also start the AprilTag benchmark rig "
@@ -159,8 +217,15 @@ def main():
         # and can be passed through: hw:=mujoco for physics.
         print(">> [sim] local simulation in the container: the robot's node "
               "graph over a simulated plant (hw:=mujoco for physics)")
+        sim_args = sim_session_args(args)
+        if args.vlm_url:
+            sim_args.append(f"vlm_url:={args.vlm_url}")
+        if args.vlm_model:
+            sim_args.append(f"vlm_model:={args.vlm_model}")
+        if args.raw_camera:
+            print(">> --raw-camera has no effect in sim: the sim camera publishes its own JPEG")
         spawn(["ros2", "launch", "wojtek_pc", "sim.launch.py", "rviz:=false"]
-              + sim_session_args(args) + policy_arg + launch_args)
+              + sim_args + policy_arg + launch_args)
         if args.benchmark:
             # External instrumentation, so a sibling launch rather than a
             # sim.launch.py argument -- also keeps wojtek_pc free of a
@@ -223,16 +288,25 @@ def main():
     # contract; without --policy they fall back to conservative defaults.
     # In sim mode the console is sim.launch.py's (console:=, web by default;
     # sim_session_args carried the flags there) -- nothing to start here.
-    console_policy = (
-        ["--ros-args", "-p", f"policy:={args.policy}"] if args.policy else []
-    )
     if not args.sim and not args.no_console:
         if args.web_console:
             print(">> launching web operator console -- open http://localhost:8080")
-            spawn(["ros2", "run", "wojtek_pc", "web_console"] + console_policy)
+            spawn(web_console_cmd(args))
         else:
             print(">> launching operator console (ros2 run wojtek_pc console)")
             spawn(["ros2", "run", "wojtek_pc", "console"])
+
+    # ---- VLM brain (PC side, against the robot) -----------------------------
+    # In sim it is the launch's (vlm:=true via sim_session_args). Against the
+    # robot it runs here: the model server is on the PC's network, not the
+    # robot's, and the brain only ever publishes pixel goals, setpoints and
+    # a turn -- the robot's own goto keeps the costmap veto. It moves nothing
+    # until an instruction is typed, and the stack still has to be armed.
+    if args.vlm and not args.sim:
+        print(">> launching the VLM brain (wojtek_nav brain.launch.py); type an "
+              "instruction in the web console's brain panel. The robot stack "
+              "must run with perception:=true nav:=true.")
+        spawn(brain_launch_cmd(args))
 
     # ---- gamepad teleop (bluetooth Xbox pad -> /cmd_vel) --------------------
     # Independent of the console choice: the pad drives, the console (if any)

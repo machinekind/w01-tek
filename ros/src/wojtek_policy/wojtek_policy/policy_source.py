@@ -126,11 +126,15 @@ def policy_override_file() -> Path:
 def active_policy() -> str:
     """The reference a bringup comes up with when no policy:= is given.
 
-    The override file wins when it exists and is non-empty. Otherwise the
-    pin answers. The file is deployment state on the robot, written by
-    `./deploy.sh --policy <ref>` and removed by a plain `./deploy.sh`. The
-    PC never has one, so PC launches run the pin.
+    WOJTEK_POLICY in the environment wins: the PC's way (repo-root .env,
+    carried into the dev container by sim.sh / dev.sh; the training tools
+    read the same name). Then the override file, when it exists and is
+    non-empty: deployment state on the robot, written by `./deploy.sh
+    --policy <ref>` and removed by a plain `./deploy.sh`. Otherwise the pin.
     """
+    env = os.environ.get("WOJTEK_POLICY", "").strip()
+    if env:
+        return env
     path = policy_override_file()
     if path.is_file():
         ref = path.read_text().strip()
@@ -147,6 +151,10 @@ def resolve_policy(ref: str) -> ResolvedPolicy:
             "directory or a Hugging Face repo id (org/name[@revision])"
         )
     as_path = Path(ref).expanduser()
+    if as_path.is_file() and as_path.name == FILES[0]:
+        # The training tools name the policy by its npz (WOJTEK_POLICY);
+        # here that means the directory the pair sits in.
+        as_path = as_path.parent
     if as_path.is_dir():
         missing = [f for f in FILES if not (as_path / f).is_file()]
         if missing:

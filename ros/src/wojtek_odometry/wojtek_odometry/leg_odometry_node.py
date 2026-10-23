@@ -19,8 +19,9 @@ Inputs
                              knee torque gates unloaded legs out of the
                              stance set
   /imu_sensor_broadcaster/imu  orientation (ESKF / sim ground truth) and
-                             gyro; the mount is upright (rpy 0 0 0), so
-                             sensor axes == base axes
+                             gyro, in the SENSOR frame; imu_mount_rpy
+                             (URDF imu_joint, passed by launch_common)
+                             rotates both into base_link
 
 Outputs
   /wojtek/odom               nav_msgs/Odometry (twist in base frame)
@@ -85,6 +86,14 @@ def _rot_z(angle):
     return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
 
 
+def _rot_rpy(r, p, y):
+    """URDF fixed-axis roll-pitch-yaw: Rz(y) @ Ry(p) @ Rx(r)."""
+    cr, sr, cp, sp = np.cos(r), np.sin(r), np.cos(p), np.sin(p)
+    rot_y = np.array([[cp, 0.0, sp], [0.0, 1.0, 0.0], [-sp, 0.0, cp]])
+    rot_x = np.array([[1.0, 0.0, 0.0], [0.0, cr, -sr], [0.0, sr, cr]])
+    return _rot_z(y) @ rot_y @ rot_x
+
+
 class LegOdometryNode(Node):
     def __init__(self):
         super().__init__("wojtek_leg_odometry")
@@ -121,6 +130,10 @@ class LegOdometryNode(Node):
         # stamp dt), so 50 Hz processing (stride 4) loses nothing at gait
         # timescales. 1 = every message (PC-class hosts).
         self.declare_parameter("input_stride", 1)
+        # Rotation of the IMU frame in base_link (URDF imu_joint rpy). The
+        # sensor's orientation and gyro arrive in its own axes; this is what
+        # turns them into the base's. Zeros = sensor axes are base axes.
+        self.declare_parameter("imu_mount_rpy", [0.0, 0.0, 0.0])
 
         self._odom_frame = self.get_parameter("odom_frame").value
         self._base_frame = self.get_parameter("base_frame").value
@@ -130,12 +143,13 @@ class LegOdometryNode(Node):
         self._roll_r = self.get_parameter("rolling_radius").value
         self._input_stride = max(1, int(self.get_parameter("input_stride").value))
         self._input_count = 0
+        self._mount = _rot_rpy(*self.get_parameter("imu_mount_rpy").value)
 
         self._legs = None  # built when robot_description arrives
         self._actuated = None  # flat joint-name list, LEGS order
         self._stance = np.zeros(4, dtype=bool)
         self._tau_knee = np.zeros(4)
-        self._rot_imu = None  # base -> world, straight from the IMU
+        self._rot_imu = None  # base -> world, from the IMU through its mount
         self._rot_yaw0 = None  # world -> odom (yaw zero at first IMU sample)
         self._gyro = np.zeros(3)
         self._pos = np.zeros(2)
@@ -189,7 +203,8 @@ class LegOdometryNode(Node):
 
     def _on_imu(self, msg):
         o = msg.orientation
-        rot = _quat_to_matrix(o.x, o.y, o.z, o.w)
+        # sensor -> world, then base -> sensor (the mount, transposed).
+        rot = _quat_to_matrix(o.x, o.y, o.z, o.w) @ self._mount.T
         if self._rot_yaw0 is None:
             if abs(o.x) + abs(o.y) + abs(o.z) + abs(o.w) < 1e-9:
                 return  # "no fusion yet" all-zero marker from the ESKF
@@ -197,7 +212,7 @@ class LegOdometryNode(Node):
             self.get_logger().info("IMU alive, odom yaw zeroed")
         self._rot_imu = rot
         g = msg.angular_velocity
-        self._gyro = np.array([g.x, g.y, g.z])
+        self._gyro = self._mount @ np.array([g.x, g.y, g.z])
 
     # ------------------------------------------------------- integration
     def _on_joints_abs(self, msg):

@@ -117,6 +117,12 @@ private:
 
   std::vector<MD80Info> md80_info_;
   std::vector<double> initial_positions_;
+  // Silent-bus detector (see read()): the last raw drive state and how many
+  // consecutive cycles it has been bit-identical across all drives.
+  std::vector<double> last_raw_;
+  unsigned int stall_cycles_ = 0;
+  unsigned int link_stall_cycles_ = 200;
+  bool update_loop_running_ = false;
   // Bench mode (URDF <hardware> param "dry_run"): keep the CANdle update loop
   // running so encoder states stream, but never enable the drives -- no
   // torque can reach the motors regardless of what is commanded.

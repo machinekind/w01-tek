@@ -10,12 +10,16 @@ between such a model and the drives belongs in the variant's joint map
 (wojtek_policy/config, tested in wojtek_policy's test_robots.py).
 
 Checked here: the axis of each actuated joint, expressed in base_link at
-the zero configuration. The abduction and hip drives are the body's, so
-every variant turns them like the stock URDF (the mounts are the same, so
-the frames are comparable). The knee drives sit on the legs themselves, so
-their sense is the variant's own, measured on the robot and pinned here:
-the v6.37a knees all turn about +y of the body (the stock ones are mirrored
-left/right; with that mirroring the right levers ran backwards, 2026-10-23).
+the zero configuration, is the same in the stock and in every other legs'
+URDF (the mounts are the same, so the frames are comparable).
+
+Measured by hand on the robot on 2026-10-23 (drives disabled, encoders
+streaming, each leg straightened as if standing): hips rear_left -0.23,
+rear_right +0.53, front_right +0.58, front_left -0.34 rad; levers
+rear_left -1.67, rear_right +2.11, front_right +1.37, front_left -2.09 rad.
+Left legs negative, right legs positive on both joints, as this test
+expects. A second stand-up had looked like the right levers ran backwards;
+that was a zero taken with one lever off its folding stop, not a sign.
 """
 
 import math
@@ -75,28 +79,14 @@ def stock():
 
 
 @pytest.mark.parametrize("legs", ["legs_v627"])
-def test_body_drives_turn_like_the_stock_urdf(stock, legs):
+def test_actuated_axes_match_the_stock_urdf(stock, legs):
     other = _axes_in_base(legs)
     for leg in LEGS:
-        for joint in ("first", "second"):
+        for joint in ACTUATED:
             name = f"{leg}_{joint}_joint"
             assert np.allclose(other[name], stock[name]), (
                 f"{name}: {legs} turns about {other[name]}, the drives about {stock[name]}"
             )
-
-
-# Measured on the robot: the sense of each variant's knee drives in base_link.
-KNEE_AXIS = {"legs_v627": [0, 1, 0]}
-
-
-@pytest.mark.parametrize("legs", list(KNEE_AXIS))
-def test_knee_drives_turn_as_measured_on_the_robot(legs):
-    other = _axes_in_base(legs)
-    for leg in LEGS:
-        name = f"{leg}_third_joint"
-        assert np.allclose(other[name], KNEE_AXIS[legs]), (
-            f"{name}: {legs} turns about {other[name]}, the drive about {KNEE_AXIS[legs]}"
-        )
 
 
 def test_stock_axes_are_what_the_map_was_fitted_against(stock):

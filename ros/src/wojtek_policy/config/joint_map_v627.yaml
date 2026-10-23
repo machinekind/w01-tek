@@ -2,20 +2,16 @@
 # + offset (radians), same format as joint_map.yaml. MuJoCo == policy
 # convention (the training model, wojtek_description/mujoco/legs_v627).
 #
-# The URDF keeps the drives' sense of rotation, the training model has the
-# mechanism's own: hips about `dir` and knees about `-dir` of the mount
-# (dir = -1 for rear_left and front_right, +1 for rear_right and front_left;
-# see body.urdf.xacro). The hip drives are the body's, unchanged from the
-# stock legs (+z of the joint frame: left legs about +y of the body, right
-# legs about -y), so the hip's sign is dir. The knee drives sit on the new
-# thighs, the same way on every leg, all four turning about +y of the body
-# (measured on the robot 2026-10-23), so the knee's sign is -lim: +1 on the
-# rear legs, -1 on the front ones. Offsets 0: both models share the zero
-# pose. Verified by wojtek_bringup/test/test_leg_axes_follow_the_drives.py
-# (URDF axes) and wojtek_policy/test/test_robots.py (signs).
-# History: the identity map turned four drives the wrong way at the first
-# stand-up (hips RL/FR, knees RR/FL); the stock knee mirroring (sign -dir)
-# then turned the right levers backwards at the second.
+# The URDF keeps the drives' sense of rotation (the drives did not change
+# with the legs; every hip and knee axis is +z of its joint frame, as on the
+# stock legs), while the training model has the mechanism's own: hips about
+# `dir` and knees about `-dir` of the mount (dir = -1 for rear_left and
+# front_right, +1 for rear_right and front_left; see body.urdf.xacro). So the
+# hip's sign is dir and the knee's is -dir, offsets 0: both models share the
+# zero pose. Verified by wojtek_bringup/test/test_leg_axes_follow_the_drives.py
+# (URDF axes against the stock URDF) and wojtek_policy/test/test_robots.py
+# (signs against the training model's axes). Before 2026-10-23 this was the
+# identity map, and on the robot four drives turned the wrong way at stand-up.
 joint_map:
   rear_left_first_joint: {sign: 1, offset: 0.0}
   rear_left_second_joint: {sign: -1, offset: 0.0}
@@ -24,12 +20,12 @@ joint_map:
   rear_left_fifth_joint: {sign: 1, offset: 0.0}
   rear_right_first_joint: {sign: 1, offset: 0.0}
   rear_right_second_joint: {sign: 1, offset: 0.0}
-  rear_right_third_joint: {sign: 1, offset: 0.0}
+  rear_right_third_joint: {sign: -1, offset: 0.0}
   rear_right_fourth_joint: {sign: 1, offset: 0.0}
   rear_right_fifth_joint: {sign: 1, offset: 0.0}
   front_right_first_joint: {sign: 1, offset: 0.0}
   front_right_second_joint: {sign: -1, offset: 0.0}
-  front_right_third_joint: {sign: -1, offset: 0.0}
+  front_right_third_joint: {sign: 1, offset: 0.0}
   front_right_fourth_joint: {sign: 1, offset: 0.0}
   front_right_fifth_joint: {sign: 1, offset: 0.0}
   front_left_first_joint: {sign: 1, offset: 0.0}

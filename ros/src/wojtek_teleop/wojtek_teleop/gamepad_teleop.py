@@ -20,7 +20,9 @@ another driver enumerates differently):
   A                        toggle /wojtek/arm
   Y                        /wojtek/stand_up (ramp to standing pose)
   B                        /wojtek/lie_down (ramp down to folded)
-  LB / RB                  standing height -/+ height_step (held set-point)
+  RB                       toggle slow mode: sticks x slow_scale (0.4 of
+                           the box) instead of x speed_scale (0.6)
+  Back / Start             standing height -/+ height_step (held set-point)
   D-pad up                 /wojtek/trick_paw_wave (offer + shake a paw)
   D-pad left               /wojtek/trick_bow
   D-pad right              /wojtek/trick_sit
@@ -39,7 +41,10 @@ have; the sticks command velocity whenever the stack accepts it. Two rails
 stay in place anyway:
   * sticks scale into the policy's trained command box, read from the
     contract of the `policy` parameter's reference (the same reference
-    policy_node gets; empty = conservative defaults), and
+    policy_node gets; empty = conservative defaults), times speed_scale
+    (default 0.6; the launches' gamepad_speed) -- or times slow_scale
+    (0.4) while slow mode is on, toggled with RB; both are fractions of
+    the box, not of each other -- and
   * a dead-man zeroes the motion if Joy messages stop (pad powered off / out
     of bluetooth range / joy driver gone) for more than cmd_timeout_s. The
     height set-point is held through stops, same rule as the consoles.
@@ -87,23 +92,41 @@ class GamepadTeleop(Node):
         self._btn_arm = self.declare_parameter("arm_button", 0).value
         self._btn_stand = self.declare_parameter("stand_button", 3).value  # Y
         self._btn_lie = self.declare_parameter("lie_button", 1).value      # B
-        self._btn_height_dn = self.declare_parameter("height_down_button", 4).value  # LB
-        self._btn_height_up = self.declare_parameter("height_up_button", 5).value    # RB
+        self._btn_height_dn = self.declare_parameter("height_down_button", 6).value  # Back
+        self._btn_height_up = self.declare_parameter("height_up_button", 7).value    # Start
+        # RB toggles slow mode: sticks reach slow_scale of the box instead
+        # of speed_scale (both fractions of the box). Starts off.
+        self._btn_slow = self.declare_parameter("slow_button", 5).value              # RB
+        self._slow_scale = min(1.0, max(
+            0.0, float(self.declare_parameter("slow_scale", 0.4).value)))
         # Extra deadzone on top of the joy driver's own, rescaled so full
         # deflection still reaches the box edge (bluetooth pads idle off-center).
         self._deadzone = self.declare_parameter("deadzone", 0.1).value
         self._height_step = self.declare_parameter("height_step", 0.005).value
         self._cmd_timeout = self.declare_parameter("cmd_timeout_s", 0.5).value
+        # Fraction of the command box full stick deflection reaches (vx, vy
+        # and yaw alike) with slow mode off. 1.0 = the trained box edge,
+        # tested too much for this hardware (2026-10-07); 0.6 is the
+        # ceiling it copes with. RB drops to slow_scale indoors.
+        self._speed_scale = min(1.0, max(
+            0.0, float(self.declare_parameter("speed_scale", 0.6).value)))
         # Same reference policy_node gets (HF repo id or local directory);
         # empty = drive with the conservative default limits below.
         self.declare_parameter("policy", "")
 
         self._load_meta()
+        # What full stick reaches with slow mode off: the command box shrunk
+        # by speed_scale (for the log and the tests; the gate holds the full
+        # box and gets the active fraction every tick).
+        self.drive_low = [v * self._speed_scale for v in self.cmd_low]
+        self.drive_high = [v * self._speed_scale for v in self.cmd_high]
 
         self._gate = PadDrive(self.cmd_low, self.cmd_high, self.height_range,
                               self.height_default, timeout_s=self._cmd_timeout,
                               silence_after_s=SILENCE_AFTER_S)
         self._last_state = IDLE
+        self._slow = False
+        self._slow_btn_prev = 0
         self._arm_btn_prev = 0
         self._stand_btn_prev = 0
         self._lie_btn_prev = 0
@@ -131,9 +154,13 @@ class GamepadTeleop(Node):
         self.get_logger().info(
             "gamepad teleop up -- left stick vx/yaw, right stick strafe, "
             "A toggles arm, Y stand up, B lie down, "
-            f"LB/RB height +-{self._height_step * 1000:.0f} mm "
+            f"Back/Start height +-{self._height_step * 1000:.0f} mm "
             f"({self.height_range[0]:.3f}..{self.height_range[1]:.3f} m), "
-            "D-pad tricks: up=paw_wave left=bow right=sit down=shake"
+            "D-pad tricks: up=paw_wave left=bow right=sit down=shake; "
+            f"speed_scale {self._speed_scale:g} -> full stick "
+            f"vx {self.drive_high[0]:.2f} m/s, vy {self.drive_high[1]:.2f} m/s, "
+            f"yaw {self.drive_high[2]:.2f} rad/s; RB toggles slow mode "
+            f"x{self._slow_scale:g}"
         )
 
     def _load_meta(self):
@@ -204,7 +231,16 @@ class GamepadTeleop(Node):
             self._call_trigger(self._lie_cli, "lie_down")
         self._lie_btn_prev = btn
 
-        # LB/RB: step the held height set-point on the press edge.
+        # RB: toggle slow mode on the press edge.
+        btn = msg.buttons[self._btn_slow] if self._btn_slow < len(msg.buttons) else 0
+        if btn and not self._slow_btn_prev:
+            self._slow = not self._slow
+            self.get_logger().info(
+                f"slow mode {'ON' if self._slow else 'off'} "
+                f"(sticks x{self._slow_scale if self._slow else 1.0:g})")
+        self._slow_btn_prev = btn
+
+        # Back/Start: step the held height set-point on the press edge.
         h_dn = msg.buttons[self._btn_height_dn] if self._btn_height_dn < len(msg.buttons) else 0
         h_up = msg.buttons[self._btn_height_up] if self._btn_height_up < len(msg.buttons) else 0
         if (h_dn and not self._height_btn_prev[0]) or (
@@ -285,7 +321,7 @@ class GamepadTeleop(Node):
         # nobody holds it, and an idle pad must not overwrite whatever else
         # (deck, console) drives /cmd_vel.
         now = self._now()
-        out = self._gate.tick(now)
+        out = self._gate.tick(now, self._slow_scale if self._slow else self._speed_scale)
         state = self._gate.state
         if state != self._last_state:
             if state == ZEROING and self._gate.pad_lost(now):

@@ -47,6 +47,13 @@ from launch_ros.substitutions import FindPackageShare
 from wojtek_policy import poses, robots
 from wojtek_policy.policy_source import active_policy, load_policy
 
+# The IMU's rotation in base_link, a copy of body.urdf.xacro's imu_joint rpy:
+# upright, yawed -90 deg (chip +y forward, +x right). Every node that reads
+# the sensor's axes gets it from here, and the simulator emulates the same
+# mount (wojtek_sim.urdf.xacro), so the value is exercised in the sim too.
+# The copy drifting from the URDF is what fed v41 an upside-down gravity.
+IMU_MOUNT_RPY = [0.0, 0.0, -1.5707963]
+
 
 def resolve_scene(model_xml):
     """The MuJoCo scene file a simulation loads, from the model_xml argument.
@@ -294,7 +301,11 @@ def _launch_setup(context, with_rviz, hardware):
             # (joint_state_broadcaster's rate), and the per-message
             # kinematics costs ~6 ms on the robot's A72 -- 25 Hz processing
             # fits the core budget; full rate does not (see the node).
-            parameters=[{"publish_tf": True, "input_stride": 2}],
+            parameters=[{
+                "publish_tf": True,
+                "input_stride": 2,
+                "imu_mount_rpy": IMU_MOUNT_RPY,
+            }],
             condition=IfCondition(use_imu),
         ) if leg_odom else None,
         Node(
@@ -314,6 +325,14 @@ def _launch_setup(context, with_rviz, hardware):
                     # follow the profile, like the joint map.
                     "robot": profile.name,
                     "joint_map_yaml": joint_map_yaml,
+                    # The arm check compares the pose against the policy's
+                    # home. On the robot 0.15 rad (the node's default) is
+                    # the safety margin. The simulated plant holds nothing
+                    # while disarmed and sags 0.22-0.28 rad from stand_up,
+                    # so with the robot's limit `zero -> stand_up -> arm`
+                    # never arms in the sim (seen by every E2E harness so
+                    # far, each raising it at runtime). Sim only.
+                    **({"max_arm_jump_rad": 0.35} if hardware == "sim" else {}),
                 }
             ],
         ),
@@ -332,13 +351,9 @@ def _launch_setup(context, with_rviz, hardware):
                     # so a policy for other legs cannot slip in by any path.
                     "robot": profile.name,
                     "joint_map_yaml": joint_map_yaml,
-                    # URDF imu_joint: rpy 0 0 0 relative to base_link -- the
-                    # sensor sits upright and its driver publishes the chip
-                    # axes unmodified, so nothing needs rotating here. Keep
-                    # this equal to body.urdf.xacro's imu_joint: the value is
-                    # a copy, not derived, and the two drifting apart is what
-                    # fed v41 an upside-down gravity vector.
-                    "imu_mount_rpy": [0.0, 0.0, 0.0],
+                    # The driver publishes the chip axes unmodified; this
+                    # rotates them into base_link (see IMU_MOUNT_RPY).
+                    "imu_mount_rpy": IMU_MOUNT_RPY,
                     "auto_enable": True,  # real_io arming is the gate
                     "soft_start_s": 2.0,
                     "clamp_knee": profile.clamp_knee,
@@ -718,6 +733,11 @@ def common_launch_description(
             # on the isolated RT cores with no load balancing they shared
             # one core with policy_node and real_io and took a fifth of it.
             DeclareLaunchArgument("gamepad_cpus", default_value=""),
+            # Fraction of the command box full stick reaches with slow
+            # mode off; 1.0 = the policy's trained top speed, too much for
+            # this hardware (tested 2026-10-07), 0.6 is what it copes with.
+            # RB on the pad toggles slow mode (0.4 of the box) for indoors.
+            DeclareLaunchArgument("gamepad_speed", default_value="0.6"),
             IncludeLaunchDescription(
                 PathJoinSubstitution(
                     [
@@ -728,6 +748,7 @@ def common_launch_description(
                 ),
                 launch_arguments={
                     "cpus": LaunchConfiguration("gamepad_cpus"),
+                    "speed_scale": LaunchConfiguration("gamepad_speed"),
                 }.items(),
                 condition=IfCondition(LaunchConfiguration("gamepad")),
             ),
@@ -765,6 +786,11 @@ def common_launch_description(
                 # must match, and the VLM decides at ~0.3-0.5 Hz anyway.
                 "depth_profile": "848x480x6",
                 "color_profile": "1280x720x6",
+                # base_link -> camera_link is the URDF's here (the real
+                # xacro's with_camera_mount, published by the
+                # robot_state_publisher in every camera mode); a second
+                # publisher of the same edge would fight it.
+                "extrinsics": "false",
             }.items(),
             condition=IfCondition(LaunchConfiguration("perception")),
         ),
@@ -783,11 +809,18 @@ def common_launch_description(
         DeclareLaunchArgument(
             "nav_cpus", default_value="0,1" if hardware == "real" else "",
         ),
+        # nav_costmap:=false starts goto alone: no camera chain, no costmap.
+        # For the split where a second computer owns perception and the
+        # brain and hands this one setpoints in odom (wojtek/nav/goal).
+        DeclareLaunchArgument("nav_costmap", default_value="true"),
         IncludeLaunchDescription(
             PathJoinSubstitution(
                 [FindPackageShare("wojtek_nav"), "launch", "costmap.launch.py"]
             ),
-            launch_arguments={"cpus": LaunchConfiguration("nav_cpus")}.items(),
+            launch_arguments={
+                "cpus": LaunchConfiguration("nav_cpus"),
+                "costmap": LaunchConfiguration("nav_costmap"),
+            }.items(),
             condition=IfCondition(LaunchConfiguration("nav")),
         ),
         # The deck panel (wojtek_deck): a browser cockpit for a handheld on

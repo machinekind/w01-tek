@@ -49,6 +49,17 @@ def test_sticks_scale_into_the_asymmetric_box():
     assert h == pytest.approx(0.125)     # default stance until stepped
 
 
+def test_scale_shrinks_the_live_command_and_never_widens_it():
+    g = make()
+    g.joy(1.0, vx=1.0, vy=-1.0, yaw=0.5)
+    vx, vy, yaw, _ = g.tick(1.1, scale=0.4)
+    assert (vx, vy, yaw) == pytest.approx((0.48, -0.16, 0.14))
+    vx, _, _, _ = g.tick(1.2, scale=1.5)       # never past the box
+    assert vx == pytest.approx(1.2)
+    vx, _, _, _ = g.tick(1.3)                  # default: the full box
+    assert vx == pytest.approx(1.2)
+
+
 def test_release_zeros_for_a_while_then_goes_quiet():
     g = make()
     g.joy(0.0, 1.0, 0.0, 0.0)

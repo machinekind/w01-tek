@@ -55,8 +55,13 @@ def _setup(context, *args, **kwargs):
 
     depth_topic, info_topic = arg("depth_topic"), arg("depth_info_topic")
     actions = []
+    # costmap:=false runs goto alone: no depth chain, no costmap, no pixel
+    # resolver (it needs the depth image). goto treats a missing grid as
+    # free, so a setpoint from elsewhere -- a brain on another machine that
+    # owns the perception -- still drives the robot, without the veto.
+    with_costmap = arg("costmap").lower() in ("true", "1")
 
-    if decimation > 1:
+    if with_costmap and decimation > 1:
         # Every Nth pixel in both axes, no interpolation: a depth image is
         # not a picture, averaging two depths across an edge invents a
         # point in mid-air.
@@ -88,7 +93,7 @@ def _setup(context, *args, **kwargs):
         )
         depth_topic, info_topic = f"/{NAMESPACE}/depth/image", f"/{NAMESPACE}/depth/camera_info"
 
-    actions += [
+    actions += [] if not with_costmap else [
         Node(
             package="depth_image_proc",
             executable="point_cloud_xyz_node",
@@ -126,6 +131,7 @@ def _setup(context, *args, **kwargs):
         # The VLM's pixel -> goto's setpoint (wojtek_nav/pixel_goal.py). It
         # reads the same raw depth stream the costmap does and hands goto a
         # setpoint in odom, so it belongs to goto's session, not the map's.
+    if arg("goto").lower() in ("true", "1") and with_costmap:
         actions.append(
             Node(
                 package=PKG,
@@ -169,6 +175,13 @@ def generate_launch_description():
                             "deprojection; 1 = none. 4 turns 424x240 into "
                             "106x60, ~6k points -- the costmap ray-traces "
                             "each one.",
+            ),
+            DeclareLaunchArgument(
+                "costmap", default_value="true",
+                description="Run the depth chain and the costmap (and the "
+                "pixel resolver, which needs the depth). false = goto "
+                "alone, for a robot whose perception and brain live on "
+                "another machine and hand over setpoints in odom.",
             ),
             DeclareLaunchArgument(
                 "goto", default_value="true",

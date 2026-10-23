@@ -109,7 +109,13 @@ def test_robots_cli_prints_the_pin(capsys):
     assert robots.main(["no_such_robot"]) == 2
 
 
-def test_identity_map_maps_every_joint_to_itself():
+def test_v627_map_flips_the_joints_the_mount_mirrors_and_nothing_else():
+    """The v6.27 URDF keeps the drives' sense of rotation (+z of every hip
+    and knee joint frame, like the stock URDF), the training model has the
+    mechanism's: hips about `dir`, knees about `-dir` of the leg's mount
+    (body.urdf.xacro: dir = -1 for rear_left and front_right). No offsets:
+    both share the zero pose. The identity map that stood here turned four
+    drives the wrong way on the robot (2026-10-23)."""
     yaml = pytest.importorskip("yaml")
     from wojtek_policy.joint_map import JointMap
 
@@ -119,10 +125,18 @@ def test_identity_map_maps_every_joint_to_itself():
     # the MuJoCo plant converts every joint it publishes.
     assert jm.names() == list(stock)
     names = jm.names()
-    q = np.random.default_rng(0).uniform(-3, 3, len(names))
-    assert np.array_equal(jm.to_urdf(names, q), q)
-    assert np.array_equal(jm.to_mjc(names, q), q)
-    assert np.array_equal(jm.vel_to_urdf(names, q), q)
+    direction = {"rear_left": -1, "rear_right": 1, "front_right": -1, "front_left": 1}
+    expected = {}
+    for name in names:
+        leg = "_".join(name.split("_")[:2])
+        expected[name] = (direction[leg] if name.endswith("_second_joint")
+                          else -direction[leg] if name.endswith("_third_joint")
+                          else 1)
+    assert dict(zip(names, jm.sign(names))) == expected
+    assert np.array_equal(jm.offset(names), np.zeros(len(names)))
+    flipped = sorted(n for n, s in expected.items() if s == -1)
+    assert flipped == ["front_left_third_joint", "front_right_second_joint",
+                       "rear_left_second_joint", "rear_right_third_joint"]
 
 
 # -- a policy for the wrong legs is refused ------------------------------------

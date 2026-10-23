@@ -34,6 +34,7 @@ def test_stock_poses_are_what_the_stack_had_before():
     assert p.passive_from_driver == poses.PASSIVE_FROM_KNEE
     assert p.passive_driver == "third_joint"
     assert p.passive_constant == {}
+    assert p.passive_convention == "urdf"
     # The knob real_io_node exposes still reaches the folded pose.
     assert poses.for_robot("wojtek", folded_knee_rad=0.5).folded_ctrl[2] == 0.5
 
@@ -57,6 +58,7 @@ def test_v627_poses_follow_the_mirrored_mounting():
     assert np.all(f[0::3] == 0.0)
     # The free foot joints are published at zero.
     assert set(p.passive_constant) == {f"{leg}_foot_joint" for leg in LEGS}
+    assert p.passive_convention == "mjc"
 
 
 def test_v627_passive_table_matches_the_models_home_keyframe():

@@ -138,8 +138,10 @@ V627_CTRL_HIGH = np.array([
 ])
 
 # Passive four-bar joints of the v6.27 legs as a function of the lever
-# (third) joint of the same leg, URDF convention (which is the MuJoCo one
-# for these legs: identity joint map). The four-bar hangs on the thigh, so
+# (third) joint of the same leg, MuJoCo (policy) convention on both sides:
+# real_io converts through the robot's joint map (joint_map_v627.yaml flips
+# the lever of two legs, the URDF keeping the drives' sense of rotation).
+# The four-bar hangs on the thigh, so
 # the hip (second) joint does not enter. Fitted on 2026-10-22 by solving
 # the loop closure of the built training model over the full lever range
 # (240 points, Newton on the closure sites, degree 8); max fit error
@@ -169,8 +171,11 @@ class RobotPoses:
     """The named poses and the passive-joint table of one set of legs.
 
     All ctrl vectors are 12-wide in ACTUATOR_NAMES order, policy/MuJoCo
-    convention. The passive tables are in URDF convention, as functions of
-    the URDF angle of the actuated joint named by `passive_driver`.
+    convention. The passive tables are functions of the angle of the
+    actuated joint named by `passive_driver`, in `passive_convention`:
+    "urdf" (the stock table, fitted URDF-to-URDF) or "mjc" (the v6.27 table,
+    fitted on the training model; the publisher converts both ends through
+    the robot's joint map).
     """
     training_robot: str
     home_ctrl: np.ndarray
@@ -185,6 +190,8 @@ class RobotPoses:
     passive_driver: str
     # Passive joints published at a fixed angle.
     passive_constant: dict = field(default_factory=dict)
+    # Convention of passive_from_driver's input and output: "urdf" or "mjc".
+    passive_convention: str = "urdf"
 
 
 # The stock legs' ctrlrange (wojtek_description/mujoco/wojtek_mjx.xml).
@@ -220,6 +227,7 @@ def for_robot(training_robot: str, folded_knee_rad: float = None) -> RobotPoses:
             passive_from_driver=dict(V627_PASSIVE_FROM_LEVER),
             passive_driver="third_joint",
             passive_constant=dict(V627_PASSIVE_CONSTANT),
+            passive_convention="mjc",
         )
     raise ValueError(
         f"no poses for training robot {training_robot!r} "

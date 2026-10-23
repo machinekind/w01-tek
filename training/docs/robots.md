@@ -284,9 +284,14 @@ then `legs_v627_quiet` (1B steps) on top; its battery against the plain
 through. Both leg macros use the same link and joint names, so the
 `ros2_control` joint list and TF frame names do not change.
 
-The `legs_v627` URDF uses the MuJoCo model's joint angles. The stock URDF has
-gear-correction offsets, which `joint_map.yaml` removes. The v6.27 legs use
-`joint_map_identity.yaml`, which maps every joint to itself.
+The `legs_v627` URDF shares the MuJoCo model's zero pose (no gear-correction
+offsets, which `joint_map.yaml` removes for the stock legs), but keeps the
+drives' sense of rotation on every hip and knee, as the stock URDF does: the
+drives did not change with the legs. The model's axes follow the mechanism,
+mirrored between front and rear, so `joint_map_v627.yaml` flips the hip of
+`rear_left`/`front_right` and the knee of `rear_right`/`front_left` (offsets
+zero). The identity map used before 2026-10-23 turned those four drives the
+wrong way at the first stand-up on the robot.
 
 `real.launch.py`, `robot.launch.py` and `sim.launch.py` take `robot:=wojtek`,
 the default, or `robot:=wojtek_v2`. The profile sets the xacro `legs`, the joint

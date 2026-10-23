@@ -11,9 +11,11 @@
        the first joint, so TF consumers and the ros2_control joint list do
        not change. From the second joint on it differs from the stock leg in
        three ways that matter to whoever drives it:
-         - Joint angles are the MuJoCo model's angles. The stock leg has
-           gear-correction offsets in its URDF and joint_map.yaml to undo
-           them; this leg needs the identity map.
+         - No gear-correction offsets: the zero pose is the training
+           model's. The sense of rotation of the hip and knee joints is the
+           drives' (+z of the joint frame, like the stock leg), which on two
+           joints per leg is the opposite of the model's; joint_map_v627.yaml
+           carries those signs.
          - Front and rear legs are mounted mirrored (knees point at each
            other), so the rear legs' second and third joints run negative.
          - The loop closes 42 mm below the knee, at foot_link, not at the
@@ -65,10 +67,19 @@
       <parent link="${prefix}_second_link" />
       <child link="${prefix}_third_link" />
       <origin xyz="0.064 0 0.0668000048" rpy="0 0 ${pi if rear else 0.0}" />
-      <axis xyz="0 0 ${dir}" />
+      <!-- Axis +z of the joint frame on every leg, like the stock legs: the
+           drives did not change with the legs, and the MD80 interface writes
+           URDF joint angles to them, so the URDF keeps the drives' sense of
+           rotation. The mechanism's own convention (the training model,
+           wojtek.xml: hips about +-y by the dir of the mount) differs on
+           this joint by `dir`; joint_map_v627.yaml carries that sign, with
+           the limits below written in the URDF's (the drives') sense.
+           Seen on the robot 2026-10-23: with the model's axes here and the
+           identity map, four drives turned the wrong way at stand-up. -->
+      <axis xyz="0 0 1" />
       <limit effort="22" velocity="20"
-        lower="${min(lim*1.53588974, lim*2.69478837)}"
-        upper="${max(lim*1.53588974, lim*2.69478837)}" />
+        lower="${min(dir*lim*1.53588974, dir*lim*2.69478837)}"
+        upper="${max(dir*lim*1.53588974, dir*lim*2.69478837)}" />
     </joint>
 
     <!-- Crank (dzwignia), L2 = 33.0 mm, on the hip axis. -->
@@ -80,10 +91,12 @@
       <parent link="${prefix}_third_link" />
       <child link="${prefix}_fourth_link" />
       <origin xyz="0 0 0" rpy="0 0 0" />
-      <axis xyz="0 0 ${-dir}" />
+      <!-- Drives' sense again (see the second joint); the model's axis is
+           -dir here, so the map's sign for this joint is -dir. -->
+      <axis xyz="0 0 1" />
       <limit effort="22" velocity="20"
-        lower="${min(lim*0.244346095, lim*2.83266938)}"
-        upper="${max(lim*0.244346095, lim*2.83266938)}" />
+        lower="${min(-dir*lim*0.244346095, -dir*lim*2.83266938)}"
+        upper="${max(-dir*lim*0.244346095, -dir*lim*2.83266938)}" />
     </joint>
 
     <!-- Rod (wodzik), L4 = 291.0 mm, passive. -->

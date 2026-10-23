@@ -129,6 +129,14 @@ class RealIoNode(Node):
             for name, coeffs in self.poses.passive_from_driver.items()
         ]
         self._passive_constant = list(self.poses.passive_constant.items())
+        # A table fitted in the policy convention (the v6.27 legs) takes the
+        # driver through the joint map and gives its result back through it;
+        # the stock table is URDF-to-URDF and goes straight through.
+        self._passive_via_map = self.poses.passive_convention == "mjc"
+        self._passive_names = [name for name, _, _ in self._passive]
+        self._passive_driver_names = [
+            self.joint_names[idx] for _, _, idx in self._passive
+        ]
 
         self._armed = False
         self._q_rel = None
@@ -197,10 +205,17 @@ class RealIoNode(Node):
         passive.name = [name for name, _, _ in self._passive] + [
             name for name, _ in self._passive_constant
         ]
-        passive.position = [
-            float(np.polyval(coeffs, q_abs[driver_idx]))
-            for _, coeffs, driver_idx in self._passive
-        ] + [value for _, value in self._passive_constant]
+        drivers = np.array([q_abs[idx] for _, _, idx in self._passive])
+        if self._passive_via_map:
+            drivers = self.jmap.to_mjc(self._passive_driver_names, drivers)
+        values = np.array([
+            np.polyval(coeffs, q) for (_, coeffs, _), q in zip(self._passive, drivers)
+        ])
+        if self._passive_via_map:
+            values = self.jmap.to_urdf(self._passive_names, values)
+        passive.position = [float(v) for v in values] + [
+            value for _, value in self._passive_constant
+        ]
         self._pub_abs.publish(passive)
 
     def _on_targets(self, msg):

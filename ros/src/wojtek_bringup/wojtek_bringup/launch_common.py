@@ -571,6 +571,37 @@ def _launch_setup(context, with_rviz, hardware):
             output="screen",
         )
     )
+    # The pad's command box and height envelope come from the policy
+    # contract, so the pad is launched here, with the resolved reference, and
+    # not from the static list above: an include there runs before the
+    # SetLaunchConfiguration below and sees the argument's default. With the
+    # pin (no policy:= on the command line) that default is empty, and the
+    # pad drove with its built-in stock box and height (seen 2026-10-23 on
+    # the wojtek_v2 profile: height 0.090..0.170 m against a 0.28..0.37 m
+    # policy). The gamepad argument exists only in the launches built with
+    # with_gamepad, hence the default here.
+    gamepad_on = LaunchConfiguration("gamepad", default="false").perform(
+        context
+    ).lower() in ("true", "1")
+    if gamepad_on:
+        nodes.append(
+            IncludeLaunchDescription(
+                PathJoinSubstitution(
+                    [
+                        FindPackageShare("wojtek_teleop"),
+                        "launch",
+                        "gamepad.launch.py",
+                    ]
+                ),
+                launch_arguments={
+                    "cpus": LaunchConfiguration("gamepad_cpus"),
+                    "speed_scale": LaunchConfiguration("gamepad_speed"),
+                    # The loaded directory, like policy_node and the deck:
+                    # the same files, no second resolution.
+                    "policy": str(loaded.directory),
+                }.items(),
+            )
+        )
     return [SetLaunchConfiguration("policy", policy_ref)] + nodes
 
 
@@ -738,20 +769,8 @@ def common_launch_description(
             # this hardware (tested 2026-10-07), 0.6 is what it copes with.
             # RB on the pad toggles slow mode (0.4 of the box) for indoors.
             DeclareLaunchArgument("gamepad_speed", default_value="0.6"),
-            IncludeLaunchDescription(
-                PathJoinSubstitution(
-                    [
-                        FindPackageShare("wojtek_teleop"),
-                        "launch",
-                        "gamepad.launch.py",
-                    ]
-                ),
-                launch_arguments={
-                    "cpus": LaunchConfiguration("gamepad_cpus"),
-                    "speed_scale": LaunchConfiguration("gamepad_speed"),
-                }.items(),
-                condition=IfCondition(LaunchConfiguration("gamepad")),
-            ),
+            # The include itself is added by _launch_setup, after the policy
+            # reference is resolved: the pad reads the command box from it.
         ]
     args += [
         # RealSense D435 depth (+ colour for the VLM) and the grid reduction.

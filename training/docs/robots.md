@@ -269,11 +269,13 @@ variant. A policy exported before the field existed counts as `wojtek`.
 | Profile | Variant | Knee clamp | Pinned policy |
 |---|---|---|---|
 | `wojtek` | `wojtek` | on | yes |
-| `wojtek_v2` | `legs_v627` | off | none yet |
+| `wojtek_v2` | `legs_v627` | off | yes: `wojtek_v2-quiet-locomotion` |
 
-A `legs_v627` policy still cannot run on the real robot, because none is
-exportable yet. The preset observes the gait clock, which the ROS runtime does
-not implement, so `export` refuses it. The same holds in a ROS simulation.
+The pinned `legs_v627` policy is `wojtek_legs_v627_quiet_v1` (2026-10-23):
+preset `legs_v627_locomotion` (encoder-only observations, 300M steps) and
+then `legs_v627_quiet` (1B steps) on top; its battery against the plain
+`loco_v3` is in the model card. The earlier keeper `wojtek_v2-locomotion`
+(v2b) observes the gait clock and cannot be exported.
 
 ## ROS description
 

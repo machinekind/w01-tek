@@ -70,11 +70,15 @@ WOJTEK = RobotProfile(
     sim_scene=("wojtek_pc", "config/scene_sim.xml"),
 )
 
-# The v6.27 four-bar legs on the same body. Training calls them legs_v627.
+# The v6.27 four-bar legs on the same body (the v6.37a legs on the robot
+# have the same kinematics). Training calls them legs_v627.
 #   joint_map: the v6.27 URDF uses MuJoCo's joint angles directly. It has no
 #     gear-correction offsets, so the map is the identity.
-#   default_policy: none. No exportable policy exists yet. The trained ones
-#     observe the gait clock, which this runtime does not implement.
+#   default_policy: wojtek_legs_v627_quiet_v1 (2026-10-23), encoder-only
+#     observations like the stock pin, trained for a low body oscillation,
+#     low mechanical work and soft touchdowns (training/docs/robots.md and
+#     the model card). Chosen by the owner over the harder-stepping
+#     loco_v3 and the slip-priced quiet_v2.
 #   clamp_knee: off. These legs have no knee singularity angle. The export's
 #     joint ranges stop the linkage short of its dead points on both sides,
 #     so their policies carry knee_singularity null and the runtime refuses
@@ -85,7 +89,8 @@ WOJTEK_V2 = RobotProfile(
     legs="legs_v627",
     training_robot="legs_v627",
     joint_map="joint_map_identity.yaml",
-    default_policy=None,
+    default_policy=("wojtek_v2-quiet-locomotion"
+                    "@a04c9511ec9ac2750790835a2b185ca368b5a953"),
     clamp_knee=False,
     sim_scene=("wojtek_description", "mujoco/legs_v627/scene_mjx.xml"),
 )

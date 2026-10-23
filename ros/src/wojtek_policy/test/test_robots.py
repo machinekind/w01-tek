@@ -59,11 +59,14 @@ def test_stock_profile_is_what_the_stack_did_before():
     assert wojtek.sim_scene == ("wojtek_pc", "config/scene_sim.xml")
 
 
-def test_v2_profile_has_no_pin_and_no_knee_clamp():
+V2_PIN = "wojtek_v2-quiet-locomotion@a04c9511ec9ac2750790835a2b185ca368b5a953"
+
+
+def test_v2_profile_pins_the_quiet_policy_and_has_no_knee_clamp():
     v2 = robots.get("wojtek_v2")
     assert v2.legs == "legs_v627"
     assert v2.training_robot == "legs_v627"
-    assert v2.default_policy is None
+    assert v2.default_policy == V2_PIN
     assert v2.clamp_knee is False
 
 
@@ -76,26 +79,25 @@ def test_default_policy_follows_the_profile(monkeypatch):
     monkeypatch.setenv("HF_ORGANIZATION", "org")
     assert default_policy("wojtek") == f"org/{STOCK_PIN}"
     assert default_policy() == f"org/{STOCK_PIN}"
-    assert default_policy("wojtek_v2") == ""
+    assert default_policy("wojtek_v2") == f"org/{V2_PIN}"
     monkeypatch.delenv("HF_ORGANIZATION")
     assert default_policy("wojtek") == ""
 
 
-def test_active_policy_for_a_robot_without_a_pin(tmp_path, monkeypatch):
+def test_active_policy_of_the_v2_robot_is_its_pin(tmp_path, monkeypatch):
     monkeypatch.setenv("HF_ORGANIZATION", "org")
     monkeypatch.setenv("WOJTEK_POLICY_STORE", str(tmp_path / "policies"))
-    assert policy_source.active_policy("wojtek_v2") == ""
+    assert policy_source.active_policy("wojtek_v2") == f"org/{V2_PIN}"
     # The override file still wins. The launch then checks it against the
     # profile when it loads the meta.
     (tmp_path / "policy_override").write_text("org/other@main\n")
     assert policy_source.active_policy("wojtek_v2") == "org/other@main"
 
 
-def test_default_cli_for_a_robot_without_a_pin(monkeypatch, capsys):
+def test_default_cli_refuses_an_unknown_robot(monkeypatch, capsys):
     monkeypatch.setenv("HF_ORGANIZATION", "org")
-    assert policy_source.main(["--default", "--robot", "wojtek_v2"]) == 2
-    assert "wojtek_v2" in capsys.readouterr().out
     assert policy_source.main(["--default", "--robot", "no_such_robot"]) == 2
+    assert "no_such_robot" in capsys.readouterr().out
 
 
 def test_robots_cli_prints_the_pin(capsys):
@@ -103,7 +105,7 @@ def test_robots_cli_prints_the_pin(capsys):
     assert robots.main(["wojtek"]) == 0
     assert capsys.readouterr().out.strip() == STOCK_PIN
     assert robots.main(["wojtek_v2"]) == 0
-    assert capsys.readouterr().out.strip() == ""
+    assert capsys.readouterr().out.strip() == V2_PIN
     assert robots.main(["no_such_robot"]) == 2
 
 

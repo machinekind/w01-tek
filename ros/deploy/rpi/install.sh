@@ -316,11 +316,16 @@ provision_network() {
 provision_service() {
     say "Phase 5: robot control service"
     run "sudo install -m644 '${HERE}/../wojtek-robot.service' /etc/systemd/system/wojtek-robot.service"
-    # Robot-local overrides (folded boot pose, bag off, /home/rpi/policy
-    # symlink as the policy reference) -- see wojtek-robot-local.conf.
+    # Robot-local overrides (robot profile, keeper org, folded boot pose,
+    # bag off) -- see wojtek-robot-local.conf. The profile and the org come
+    # from the PC's .env through deploy.sh, like the AP passphrase.
     # The hand-written 10-policy.conf from the pre-repo era is retired.
+    if [ -z "${HF_ORGANIZATION:-}" ]; then
+        echo "!! HF_ORGANIZATION not set -- the service will have no default policy" >&2
+        echo "   (set it in the PC's .env; until then every launch needs policy:=)" >&2
+    fi
     run "sudo mkdir -p /etc/systemd/system/wojtek-robot.service.d"
-    run "sudo install -m644 '${HERE}/wojtek-robot-local.conf' /etc/systemd/system/wojtek-robot.service.d/10-local.conf"
+    run "sed -e 's|__WOJTEK_ROBOT__|${WOJTEK_ROBOT:-wojtek}|g' -e 's|__HF_ORGANIZATION__|${HF_ORGANIZATION:-}|g' '${HERE}/wojtek-robot-local.conf' | sudo install -m644 /dev/stdin /etc/systemd/system/wojtek-robot.service.d/10-local.conf"
     run "sudo rm -f /etc/systemd/system/wojtek-robot.service.d/10-policy.conf"
     run "sudo systemctl daemon-reload"
     # The unit is always installed/refreshed; --enable-robot decides whether it

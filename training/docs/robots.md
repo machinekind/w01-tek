@@ -291,7 +291,9 @@ drives did not change with the legs. The model's axes follow the mechanism,
 mirrored between front and rear, so `joint_map_v627.yaml` flips the hip of
 `rear_left`/`front_right` and the knee of `rear_right`/`front_left` (offsets
 zero). The identity map used before 2026-10-23 turned those four drives the
-wrong way at the first stand-up on the robot.
+wrong way at the first stand-up on the robot; the signs were then measured
+by hand (`ros/hw_tests/signcheck/README.md`). Do that before the first
+torque on any new legs: no simulation can tell which way a drive turns.
 
 `real.launch.py`, `robot.launch.py` and `sim.launch.py` take `robot:=wojtek`,
 the default, or `robot:=wojtek_v2`. The profile sets the xacro `legs`, the joint

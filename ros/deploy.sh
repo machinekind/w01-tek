@@ -42,9 +42,10 @@ fi
 RPI_HOST="${RPI_HOST:-rpi@10.42.0.2}"      # static anchor; same over eth or the RPi's AP
 REMOTE_WS="${REMOTE_WS:-wojtek_ws}"        # relative to the RPi user's home
 ROS_DISTRO="${ROS_DISTRO:-jazzy}"
-# Which robot profile's pinned policy to resolve (wojtek_policy/robots.py).
-# It only picks the pin resolved below. The robot's service launches with
-# no robot:= and so runs the stock profile.
+# Which robot profile the robot runs (wojtek_policy/robots.py): its pinned
+# policy is resolved below, and --provision writes it into the service's
+# drop-in (deploy/rpi/wojtek-robot-local.conf) together with
+# HF_ORGANIZATION. A plain ./deploy.sh does not touch the drop-in.
 WOJTEK_ROBOT="${WOJTEK_ROBOT:-wojtek}"
 # Keep in sync with docker/Dockerfile's CANDLE_COMMIT.
 CANDLE_COMMIT="7c201d744baa107ee408e3e01694efd1a764a174"
@@ -94,6 +95,7 @@ if [ "${PROVISION}" = 1 ]; then
     [ "${ENABLE_ROBOT}" = 1 ] && install_args="--enable-robot"
     ssh "${RPI_HOST}" \
         "UBUNTU_PRO_TOKEN='${UBUNTU_PRO_TOKEN:-}' WOJTEK_AP_PSK='${WOJTEK_AP_PSK:-}' ROS_DISTRO='${ROS_DISTRO}' \
+         WOJTEK_ROBOT='${WOJTEK_ROBOT}' HF_ORGANIZATION='${HF_ORGANIZATION:-}' \
          bash '${REMOTE_WS}/deploy/rpi/install.sh' ${install_args}"
 
     # Kernel/cmdline changes leave /var/run/reboot-required -- reboot + wait so

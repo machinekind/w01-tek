@@ -1,0 +1,19 @@
+# @package _global_
+# Iteration 2 over fbb_loco_v1 (battery-driven):
+#  * duty-aware gait schedule + contact_match reward (v1's "walk" was a
+#    soft trot: diag-corr 0.82 in the walk band; real walk = 70% stance)
+#  * quieter, truer standing (v1: 14 mm height bias, vibration 0.25 at
+#    stand): stronger stand_still + height terms, tighter height sigma.
+# Usage: ./run.sh train +experiment=locomotion_v2
+defaults:
+  - locomotion
+
+task:
+  env:
+    reward:
+      height_sigma: 5e-4
+      scales:
+        height_tracking: 2.0
+        stand_still: -1.0
+
+run_name: fbb_loco_v2

@@ -1,0 +1,66 @@
+# @package _global_
+# Generation H7: H6's full stack + LIVE height command (owner request
+# 2026-07-27). The stiff line rode height frozen at 0.125 since the
+# 2026-07-12 redesign; phase_c re-enabled it on the keeper via fine-tune.
+# What makes it clean now is real_pose_ref: the env measures the
+# kinematic height<->pose family at construction, so the height mapping,
+# pose/stand references and reset poses are honest across the WHOLE
+# range at any gains.
+# Range [0.11, 0.18]: the measured kinematic envelope is 0.105-0.210
+# (higher than the legacy sagged table's 0.084-0.182 — same set-pose
+# artifact real_pose_ref fixes); 0.11 clears the interpolation floor and
+# keeps gait bounce away from fall.min_height=0.06, 0.18 leaves ~3 cm of
+# leg-extension margin for apex swings at the top. height_tracking 1.0
+# (the redesign's springiness warning noted; battery vibration gates it).
+# Heights resample with every command draw (5 s), zeroing keeps height
+# live, so stand-at-height is trained too.
+# Stack carried from H6: symmetry, tracking_product, tracking_relative,
+# feet_landing, feet_apex (target 0.05), real_pose_ref, rotation defense,
+# slow+fast clean coverage.
+# NOTE apex-vs-height interplay: a 5 cm apex from an 11 cm crouch is
+# demanding; watch low-height scenarios in eval before retuning.
+# Gate (courses battery, run at 0.125 as always): everything >= H6's
+# completions; plus held-height probes at 0.11/0.15/0.18 tracking within
+# ~1 cm and no falls.
+# DEPLOYMENT: kp=40 / kd=1.6 / +-9 Nm unchanged, but runtime height
+# control needs the ROS policy node to recompute the height anchor per
+# command (phase_c's note stands; wojtek_policy height_anchor).
+# Usage: ./training/run.sh train +experiment=stiff_h7_height \
+#   ++ppo.num_evals=40 seed=1
+defaults:
+  - locomotion_stiff_v1
+
+task:
+  env:
+    real_pose_ref: true
+    symmetry:
+      enable: true
+      mirror_prob: 0.5
+    command:
+      wz: [-1.5, 1.5]
+      height: [0.11, 0.18]
+      arc_prob: 0.2
+      arc_vx: [0.3, 1.2]
+      pure_slow_prob: 0.15
+      slow_vx: [0.1, 0.35]
+      pure_fast_prob: 0.2
+      fast_vx: [0.8, 1.2]
+    reward:
+      tracking_product: true
+      tracking_relative: true
+      apex_target: 0.05
+      scales:
+        feet_landing: -0.5
+        feet_apex: 5.0
+        height_tracking: 1.0
+
+early_stop:
+  enable: true
+  min_evals: 10
+  patience: 8
+  min_delta: 1.0
+
+ppo:
+  num_timesteps: 2000000000
+
+run_name: wojtek_stiff_h7_height

@@ -1,0 +1,15 @@
+# @package _global_
+# BIPEDAL STAND, iteration 1 (2026-08-19): rear up onto the hind legs
+# and hold for the rest of a 10 s episode. Getup-derived recipe with the
+# attitude target rotated to nose-up (gravity_body -> [-1,0,0], verified
+# against the model) plus hind-contact / front-clearance shaping gated by
+# attitude progress. The actor observes the IMU — see conf/task/biped.yaml
+# for why this family breaks the encoders-only contract on purpose.
+# Judge: fraction of the episode spent reared (ori_err < 0.05 at height)
+# on the eval battery, and a rendered rollout.
+# Usage: ./training/run.sh train +experiment=biped_v1 seed=0
+defaults:
+  - override /task: biped
+
+
+run_name: wojtek_biped_v1

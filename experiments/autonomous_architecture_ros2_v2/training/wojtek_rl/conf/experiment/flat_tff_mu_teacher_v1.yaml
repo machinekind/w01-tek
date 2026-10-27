@@ -1,0 +1,50 @@
+# @package _global_
+# mu-TEACHER (2026-08-11): flat_tff_sag_v3 with the per-env foot friction
+# exposed to BOTH heads — the actor knows the true mu it stands on. First
+# step of the teacher-student plan for slippery-floor performance: v3
+# proved friction DR buys robustness (0 falls on the slippery courses)
+# but not performance (0.69/0.41, ~= the no-DR baseline), matching the
+# recorded lesson that an unobservable mu cannot be adapted to. This
+# policy is the upper bound: what the same recipe achieves when mu IS
+# observable. A later student distills it into deployable observations
+# (history / slip residual).
+#
+# NOT DEPLOYABLE by construction — no physical sensor measures mu; the
+# ROS runtime refuses the foot_friction component at load. Judge on the
+# courses slippery rows vs wojtek_flat_tff_sag_v3_s1b (0.69 / 0.41): the
+# gap this opens is exactly the value a student can chase.
+# Usage: ./training/run.sh train +experiment=flat_tff_mu_teacher_v1
+defaults:
+  - flat_tff_sag_v3
+
+task:
+  env:
+    obs:
+      # sag_v3's lists + foot_friction appended (order defines the layout).
+      state:
+        - gyro
+        - gravity
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+        - phase
+        - foot_friction
+      include:
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+        - foot_friction
+      privileged:
+        - gyro
+        - gravity
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+        - linvel
+        - foot_contact
+        - foot_friction
+
+run_name: wojtek_flat_tff_mu_teacher_v1

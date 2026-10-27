@@ -1,0 +1,54 @@
+# @package _global_
+# Generation H5: fast-walk coverage polish of the H4 policy. H4's battery
+# (2026-07-27) completes everything except the 1.0 m/s scenarios, which
+# deadlock: the speed probe shows a cliff exactly at arc_vx's 0.8 upper
+# bound (0.70 m/s achieved at cmd 0.8, 0.00 at cmd 1.0) — clean fast
+# commands were never in the training distribution (the uniform box only
+# serves vx > 0.8 contaminated with vy/wz, which product-gated tracking
+# prices at ~0), so the fast corner was learned as unsatisfiable.
+# H5 restores H4's final checkpoint and fixes COVERAGE only: arc_vx
+# widened to 1.2 and pure_fast_prob 0.1 (clean straight fast walks,
+# mirroring pure_slow). This is gait refinement — the legitimate use of a
+# restore fine-tune; the spins it must NOT lose stay defended by
+# pure_wz_prob 0.25 + tracking_ang_vel 2.4 (gate checks them).
+# Gate: straight_fast / circle_r2_fast / straight_push_fast complete with
+# score > 0; all four spins still complete; no other course loses vs H4.
+# DEPLOYMENT: kp=40 / kd=1.6 / +-9 Nm, keeper contract.
+# Launched with restore=<H4 final checkpoint>; this preset does not set
+# restore.
+# Usage: ./training/run.sh train +experiment=stiff_h5_fast \
+#   restore=runs/wojtek_stiff_h4_realpose_20260726_seed1/checkpoints/001939865600 \
+#   ++ppo.num_evals=20 seed=1
+defaults:
+  - locomotion_stiff_v1
+
+task:
+  env:
+    real_pose_ref: true
+    symmetry:
+      enable: true
+      mirror_prob: 0.5
+    command:
+      wz: [-1.5, 1.5]
+      arc_prob: 0.2
+      arc_vx: [0.3, 1.2]
+      pure_slow_prob: 0.15
+      slow_vx: [0.1, 0.35]
+      pure_fast_prob: 0.1
+      fast_vx: [0.8, 1.2]
+    reward:
+      tracking_product: true
+      tracking_relative: true
+      scales:
+        feet_landing: -0.5
+
+early_stop:
+  enable: true
+  min_evals: 6
+  patience: 4
+  min_delta: 1.0
+
+ppo:
+  num_timesteps: 400000000
+
+run_name: wojtek_stiff_h5_fast

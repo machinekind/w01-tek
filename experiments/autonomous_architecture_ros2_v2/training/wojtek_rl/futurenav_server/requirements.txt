@@ -1,0 +1,16 @@
+# FutureNav-4B action server — GPU host dependencies.
+# transformers MUST stay on 4.57.x: 5.x changes the tied-weights API and the
+# FutureNav custom model class no longer loads.
+# torch + torchvision are installed by deploy.sh from the cu124 index
+# BEFORE this file -- an unpinned 'torch' here pulls a cu130+ wheel that
+# needs driver >= 580 and silently falls back to CPU on typical vast hosts.
+transformers==4.57.1
+accelerate
+qwen-vl-utils
+einops
+bitsandbytes
+pillow
+numpy
+huggingface_hub
+fastapi
+uvicorn[standard]

@@ -1,0 +1,26 @@
+# @package _global_
+# QUIET WALKING, iteration 6 (2026-08-12): the full quiet recipe FROM
+# SCRATCH — feet_landing -15 + spin fade (v4) + energy_cmd 1.0 (v5) with
+# no restore. Motivation: a converged jump-turn is a local optimum a 1B
+# fine-tune does not leave (v5 alpha=1.0 polished the jump: taps/s 17.7
+# -> 17.2, flight unchanged, while walking improved 16 -> 10 W). The
+# energy literature (arXiv 2403.20001) trains with the energy term from
+# the start precisely so bouncing never forms. From-scratch budget: 2B
+# (the flat family's convergence scale).
+# Usage: ./training/run.sh train +experiment=flat_quiet_v6 seed=0
+defaults:
+  - flat_quiet_v4
+
+task:
+  env:
+    reward:
+      # Spins pay 35% of the landing charge (0 = v4's full exemption
+      # left spin td_p90 at 0.87 m/s; 100% erased spins twice).
+      feet_landing_wz_floor: 0.35
+      scales:
+        energy_cmd: 1.0
+
+ppo:
+  num_timesteps: 2000000000
+
+run_name: wojtek_flat_quiet_v6

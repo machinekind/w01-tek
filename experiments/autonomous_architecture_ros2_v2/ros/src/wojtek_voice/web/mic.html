@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<!-- Standalone client for the wojtek_voice audio bridge: streaming mic in,
+     streamed speech out, transcript/reply mirror.  Mic/playback code ported
+     from the #131 room.html voice path (same wire protocol).  Open as a
+     local file or serve statically; set the ws address to the bridge:
+
+       python3 -m http.server 8000        # then http://localhost:8000/mic.html
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Wojtek voice bridge</title>
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 640px; margin: 3rem auto; padding: 0 1rem; }
+  #mic { font-size: 1.6rem; padding: .5rem 1rem; border-radius: .6rem; border: 2px solid #999; cursor: pointer; background: #f5f5f5; }
+  #mic.live { background: #d9f2d9; border-color: #4a4; animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: .6; } }
+  #level { height: 6px; background: #4a4; width: 0; border-radius: 3px; margin: .6rem 0; transition: width .1s; }
+  #log { margin-top: 1rem; }
+  #log div { margin: .25rem 0; }
+  .q::before { content: "🧍 "; }
+  .a::before { content: "🐕 "; }
+  .sys { color: #888; font-size: .85em; }
+  input { width: 20rem; }
+</style>
+</head>
+<body>
+<h2>Wojtek voice bridge</h2>
+<p>
+  <input id="addr" value="ws://localhost:8765" spellcheck="false">
+  <button id="connect">connect</button>
+  <span id="status" class="sys">disconnected</span>
+</p>
+<p><button id="mic" disabled>🎙️</button> <span id="speaking"></span></p>
+<div id="level"></div>
+<div id="log"></div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const RATE = 24000;
+let ws = null, voiceOn = false;
+
+function log(cls, text) {
+  const d = document.createElement("div");
+  d.className = cls;
+  d.textContent = text;
+  $("log").prepend(d);
+}
+
+$("connect").onclick = () => {
+  if (ws) { ws.close(); ws = null; }
+  ws = new WebSocket($("addr").value);
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => { $("status").textContent = "connected"; $("mic").disabled = false; };
+  ws.onclose = () => { $("status").textContent = "disconnected"; $("mic").disabled = true; };
+  ws.onerror = () => { $("status").textContent = "error"; };
+  ws.onmessage = e => {
+    if (e.data instanceof ArrayBuffer) { playPcm(e.data); return; }
+    const m = JSON.parse(e.data);
+    if (m.type === "flush") stopPlayback();
+    if (m.type === "transcript") log("q", m.text);
+    if (m.type === "say") log("a", m.text);
+  };
+};
+
+// ---- mic capture: AudioWorklet -> 100 ms PCM16 frames -----------------------
+const WORKLET_SRC = `
+class PCMTap extends AudioWorkletProcessor {
+  process(inputs) {
+    const ch = inputs[0][0];
+    if (ch) this.port.postMessage(ch.slice(0));
+    return true;
+  }
+}
+registerProcessor("pcm-tap", PCMTap);`;
+
+let micStream = null, micCtx = null, micNode = null;
+
+async function startVoice() {
+  micStream = await navigator.mediaDevices.getUserMedia({
+    // echoCancellation matters: the dog's voice comes out of the same
+    // laptop speakers the mic is listening to.
+    audio: {channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true},
+  });
+  micCtx = new AudioContext({sampleRate: RATE});
+  await micCtx.audioWorklet.addModule(
+    URL.createObjectURL(new Blob([WORKLET_SRC], {type: "application/javascript"})));
+  const src = micCtx.createMediaStreamSource(micStream);
+  micNode = new AudioWorkletNode(micCtx, "pcm-tap");
+  let buf = [], len = 0;
+  const target = Math.round(micCtx.sampleRate / 10);   // 100 ms frames
+  micNode.port.onmessage = ev => {
+    buf.push(ev.data); len += ev.data.length;
+    if (len < target) return;
+    const all = new Float32Array(len); let o = 0;
+    buf.forEach(a => { all.set(a, o); o += a.length; });
+    buf = []; len = 0;
+    let peak = 0;
+    const pcm = new Int16Array(all.length);
+    for (let i = 0; i < all.length; i++) {
+      const v = all[i];
+      if (Math.abs(v) > peak) peak = Math.abs(v);
+      pcm[i] = Math.max(-32768, Math.min(32767, Math.round(v * 32767)));
+    }
+    $("level").style.width = Math.min(100, peak * 180).toFixed(0) + "%";
+    if (ws && ws.readyState === 1 && voiceOn) ws.send(pcm.buffer);
+  };
+  src.connect(micNode);
+}
+
+function stopVoice() {
+  if (micNode) { micNode.disconnect(); micNode = null; }
+  if (micCtx) { micCtx.close(); micCtx = null; }
+  if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+  $("level").style.width = "0";
+}
+
+$("mic").onclick = async () => {
+  if (voiceOn) {
+    voiceOn = false;
+    stopVoice();
+    ws.send(JSON.stringify({type: "mic", on: false}));
+    $("mic").classList.remove("live");
+    return;
+  }
+  try {
+    await startVoice();
+    voiceOn = true;
+    ws.send(JSON.stringify({type: "mic", on: true}));
+    $("mic").classList.add("live");
+  } catch (err) { log("sys", "mic: " + err.message); }
+};
+
+// ---- playback: schedule frames back-to-back on the audio clock --------------
+let outCtx = null, playHead = 0;
+function playPcm(buffer) {
+  if (!outCtx) outCtx = new AudioContext({sampleRate: RATE});
+  const pcm = new Int16Array(buffer);
+  if (!pcm.length) return;
+  const audio = outCtx.createBuffer(1, pcm.length, RATE);
+  const ch = audio.getChannelData(0);
+  for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
+  const node = outCtx.createBufferSource();
+  node.buffer = audio;
+  node.connect(outCtx.destination);
+  const now = outCtx.currentTime;
+  if (playHead < now) playHead = now + 0.02;   // small cushion after a gap
+  node.start(playHead);
+  playHead += audio.duration;
+  $("speaking").textContent = "· speaking";
+  clearTimeout(playPcm._idle);
+  playPcm._idle = setTimeout(() => { $("speaking").textContent = ""; },
+                             (playHead - now) * 1000 + 250);
+}
+function stopPlayback() {
+  // Dropping the context is the reliable way to kill everything scheduled.
+  if (outCtx) { outCtx.close(); outCtx = null; }
+  playHead = 0;
+  $("speaking").textContent = "";
+}
+</script>
+</body>
+</html>

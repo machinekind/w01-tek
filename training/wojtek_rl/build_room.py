@@ -45,6 +45,64 @@ def _rel(target: Path, base: Path) -> str:
     return os.path.relpath(target, base).replace(os.sep, "/")
 
 
+def _obj_zbounds(path: Path) -> tuple[float, float] | None:
+    """(zmin, zmax) of an OBJ's vertices; None when unreadable."""
+    zmin, zmax = float("inf"), float("-inf")
+    try:
+        with open(path) as f:
+            for line in f:
+                if line.startswith("v "):
+                    z = float(line.split()[3])
+                    zmin, zmax = min(zmin, z), max(zmax, z)
+    except (OSError, ValueError, IndexError):
+        return None
+    return (zmin, zmax) if zmin <= zmax else None
+
+
+def _decal_lifts(manifest: dict, visual_dir: Path) -> dict[str, float]:
+    """Per-mesh z-lift for rugs/decals coplanar with the floor slab.
+
+    ReplicaCAD ships rugs as separate flat meshes whose top face is EXACTLY
+    coplanar with the floor's -- the renderer then z-fights per pixel and the
+    floor flickers black/wood on camera (user report, 2026-08-27). The mesh
+    with the largest footprint is the floor; every thin mesh whose bottom
+    sits within 3 mm of the floor's top gets lifted 3 mm.
+    """
+    bounds, foot = {}, {}
+    for entry in manifest["visual"]:
+        name = Path(entry["mesh"]).stem
+        zb = _obj_zbounds(visual_dir / entry["mesh"])
+        if zb is None:
+            continue
+        bounds[name] = zb
+        xs, ys = [], []
+        # footprint from the same pass would need x/y too; reread cheaply
+        with open(visual_dir / entry["mesh"]) as f:
+            for line in f:
+                if line.startswith("v "):
+                    parts = line.split()
+                    xs.append(float(parts[1])); ys.append(float(parts[2]))
+        foot[name] = (max(xs) - min(xs)) * (max(ys) - min(ys)) if xs else 0.0
+    if not bounds:
+        return {}
+    # The floor is the largest-FOOTPRINT flat mesh that actually lies at
+    # ground height -- without the flatness guard the wall shell wins, and
+    # without the height guard the CEILING does (same footprint, z=3 m).
+    flat_meshes = {n: a for n, a in foot.items()
+                   if bounds[n][1] - bounds[n][0] < 0.3 and bounds[n][1] < 0.5}
+    if not flat_meshes:
+        return {}
+    floor = max(flat_meshes, key=flat_meshes.get)
+    floor_top = bounds[floor][1]
+    lifts = {}
+    for name, (zmin, zmax) in bounds.items():
+        if name == floor:
+            continue
+        if abs(zmin - floor_top) < 0.003 and (zmax - zmin) < 0.05:
+            lifts[name] = 0.003
+    return lifts
+
+
 def build_scene_xml(
     manifest: dict, offset: tuple[float, float, float], scene_name: str = "room"
 ) -> str:
@@ -53,6 +111,7 @@ def build_scene_xml(
     visual_dir = scene_dir / manifest["visual_dir"]
     collision_dir = scene_dir / manifest["collision_dir"]
     meshdir = _robot_meshdir()
+    lifts = _decal_lifts(manifest, visual_dir)
 
     assets, geoms = [], []
     for entry in manifest["visual"]:
@@ -75,9 +134,10 @@ def build_scene_xml(
             assets.append(
                 f'    <material name="{name}_mat" rgba="0.6 0.6 0.6 1"/>'
             )
+        lift = f'pos="0 0 {lifts[name]:.3f}" ' if name in lifts else ""
         geoms.append(
             f'      <geom name="{name}_visual" type="mesh" mesh="{name}" '
-            f'material="{name}_mat" {VISUAL_GEOM}/>'
+            f'{lift}material="{name}_mat" {VISUAL_GEOM}/>'
         )
 
     for hull in manifest["collision_meshes"]:

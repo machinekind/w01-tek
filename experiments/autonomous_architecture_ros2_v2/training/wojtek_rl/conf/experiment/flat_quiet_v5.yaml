@@ -1,0 +1,27 @@
+# @package _global_
+# QUIET WALKING, iteration 5 (2026-08-12): the anti-jump-turn arm. v4's
+# spins are jump-turns (measured: 17.7 taps/s, 14% airborne, 40% of steps
+# on all fours, 64 W vs 16 W walking) because nothing prices energy — the
+# flat family zeroed the energy term and arXiv 2403.20001 reports exactly
+# this failure ("bouncing gait across all command velocities" without
+# energy regularization). energy_cmd is that paper's distance-normalized
+# form: motor power per unit of COMMANDED motion, so spins pay for waste,
+# not for existing — no gait choreography imposed (the clock terms stay
+# off).
+# Meant to be launched with restore= from a converged quiet_v4 checkpoint;
+# dose-bracket the scale with ++task.env.reward.scales.energy_cmd=2.5 on
+# the second card. Judge on spin_fluidity (taps/s, flight, quad, yaw
+# jitter, P) + quiet_eval (linear quieting must survive, spins >= 0.8).
+# Usage:
+#   ./training/run.sh train +experiment=flat_quiet_v5 \
+#     restore=runs/wojtek_flat_quiet_v4_s0/checkpoints/<final>
+defaults:
+  - flat_quiet_v4
+
+task:
+  env:
+    reward:
+      scales:
+        energy_cmd: 1.0
+
+run_name: wojtek_flat_quiet_v5

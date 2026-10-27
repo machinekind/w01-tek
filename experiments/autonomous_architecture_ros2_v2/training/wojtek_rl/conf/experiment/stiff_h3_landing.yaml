@@ -1,0 +1,60 @@
+# @package _global_
+# Generation H3: stiff_h2_scratch + two owner-requested changes
+# (2026-07-26). NOTE: two intents in one run — owner's explicit call;
+# they gate on disjoint metrics (touchdown KPI vs fast-spin completion).
+# 1. Soft-landing shaping: reward.scales.feet_landing penalizes downward
+#    foot speed^2 within reward.glide_height (0.03 m) of the floor,
+#    measured PRE-contact, so the gait glides feet into stance instead of
+#    striking at swing free-fall speed (sqrt(2g*0.03) ~ 0.77 m/s — the
+#    physical reference for judging touchdown softness). Scale -0.5
+#    starts small: the term taxes the end of swing while feet_air_time/
+#    high_step (4.0) pay for the swing itself; watch straight_fast for
+#    stride shortening.
+# 2. Relative tracking error (tracking_relative): H2 completes wz 0.8
+#    pivots but deadlocks at wz 1.2 — the absolute kernel's reward cliff
+#    sits ~0.3 rad/s from the target regardless of target size, out of
+#    exploration's reach at fast commands. Relative error (normalized by
+#    commanded magnitude, floored at 0.3 m/s / 0.4 rad/s) pays 80%-of-
+#    target equally at every speed. tracking_sigma is replaced by the
+#    dimensionless tracking_rel_sigma 0.25, calibrated to the keeper's
+#    measured operating points.
+# Otherwise identical to H2 (from scratch, symmetry, product-gated
+# tracking, rotation defended, slow coverage, no foot-friction DR,
+# plateau stop min_delta 1.0). H2 is the baseline arm: first policy ever
+# to complete pivots in BOTH directions (spin_left/right/slow 3/3 at the
+# 262M interim probe; early-stopped at 996M, best reward 51.05).
+# Gate: courses >= H2 everywhere; touchdown speed down vs H2; no
+# tracking/grip/duration regression.
+# DEPLOYMENT: kp=40 / kd=1.6 / +-9 Nm, keeper contract.
+# Usage: ./training/run.sh train +experiment=stiff_h3_landing \
+#   ++ppo.num_evals=40 seed=1
+defaults:
+  - locomotion_stiff_v1
+
+task:
+  env:
+    symmetry:
+      enable: true
+      mirror_prob: 0.5
+    command:
+      wz: [-1.5, 1.5]
+      arc_prob: 0.2
+      arc_vx: [0.3, 0.8]
+      pure_slow_prob: 0.15
+      slow_vx: [0.1, 0.35]
+    reward:
+      tracking_product: true
+      tracking_relative: true
+      scales:
+        feet_landing: -0.5
+
+early_stop:
+  enable: true
+  min_evals: 10
+  patience: 6
+  min_delta: 1.0
+
+ppo:
+  num_timesteps: 2000000000
+
+run_name: wojtek_stiff_h3_landing

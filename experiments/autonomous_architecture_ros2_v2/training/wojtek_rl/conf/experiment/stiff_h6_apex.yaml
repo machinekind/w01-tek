@@ -1,0 +1,57 @@
+# @package _global_
+# Generation H6: H5b's full stack + per-swing apex shaping, from scratch
+# (owner request 2026-07-27: much higher legs, grip is critical).
+# Why: H5b skims at 1.5-2 cm median apex — a rational optimum, because
+# high_step pays duration-averaged clearance (a long skim earns like a
+# crisp arc) while tracking_product taxes the base wobble of vigorous
+# lifts. reward.feet_apex pays once per swing, at touchdown, for how
+# close the swing's PEAK came to reward.apex_target (0.05 m) — pricing
+# lift height itself. Expected grip side-effect: higher, deliberate steps
+# place feet instead of grazing (the keeper's higher steps track with its
+# grip edge); measured via the new battery gait KPIs
+# (swing_apex_med_m / touchdown_softness_med in courses raw metrics).
+# Stack carried from H5b: symmetry, tracking_product, tracking_relative,
+# feet_landing, real_pose_ref, rotation defense, slow+fast clean command
+# coverage (pure_fast baked at 0.2; H5b proved the fast corner needs it).
+# Gate (courses battery): swing_apex_med >= 0.035 m on walk scenarios;
+# grip sub-scores >= H5b everywhere; all H5b completions retained (both
+# 0.8 spins, spin_fast, slalom, straight_fast); touchdown_softness <=
+# H5b's (the glide must survive the height).
+# DEPLOYMENT: kp=40 / kd=1.6 / +-9 Nm, keeper contract.
+# Usage: ./training/run.sh train +experiment=stiff_h6_apex \
+#   ++ppo.num_evals=40 seed=1
+defaults:
+  - locomotion_stiff_v1
+
+task:
+  env:
+    real_pose_ref: true
+    symmetry:
+      enable: true
+      mirror_prob: 0.5
+    command:
+      wz: [-1.5, 1.5]
+      arc_prob: 0.2
+      arc_vx: [0.3, 1.2]
+      pure_slow_prob: 0.15
+      slow_vx: [0.1, 0.35]
+      pure_fast_prob: 0.2
+      fast_vx: [0.8, 1.2]
+    reward:
+      tracking_product: true
+      tracking_relative: true
+      apex_target: 0.05
+      scales:
+        feet_landing: -0.5
+        feet_apex: 5.0
+
+early_stop:
+  enable: true
+  min_evals: 10
+  patience: 8
+  min_delta: 1.0
+
+ppo:
+  num_timesteps: 2000000000
+
+run_name: wojtek_stiff_h6_apex

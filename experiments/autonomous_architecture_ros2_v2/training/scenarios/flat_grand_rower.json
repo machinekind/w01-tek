@@ -1,0 +1,54 @@
+[
+  {
+    "wav": "scenarios/wavs/q_przedstaw.wav",
+    "quiet": 2.5,
+    "wait": 25
+  },
+  {
+    "pause": 2
+  },
+  {
+    "wav": "scenarios/wavs/q_siad.wav",
+    "quiet": 2.0,
+    "wait": 15
+  },
+  {
+    "pause": 6
+  },
+  {
+    "wav": "scenarios/wavs/q_lapa.wav",
+    "quiet": 2.0,
+    "wait": 15
+  },
+  {
+    "pause": 11
+  },
+  {
+    "cmd": "turn_left 150",
+    "wait": 8
+  },
+  {
+    "wav": "scenarios/wavs/q_rower.wav",
+    "quiet": 2.5,
+    "wait": 30
+  },
+  {
+    "pause": 90
+  },
+  {
+    "wav": "scenarios/wavs/q_blizej.wav",
+    "quiet": 2.5,
+    "wait": 25
+  },
+  {
+    "pause": 20
+  },
+  {
+    "wav": "scenarios/wavs/q_nasik.wav",
+    "quiet": 2.5,
+    "wait": 25
+  },
+  {
+    "pause": 18
+  }
+]

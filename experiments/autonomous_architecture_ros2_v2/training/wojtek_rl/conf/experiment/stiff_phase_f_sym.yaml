@@ -1,0 +1,51 @@
+# @package _global_
+# Phase F: the courses-report fix stack on the kp40 stiff keeper. Four
+# changes, each aimed at a measured defect of wojtek_stiff_b (courses
+# benchmark v1, 2026-07-26):
+# - symmetry.enable: left/right mirror augmentation (env-level mirrored
+#   worlds, wojtek_rl/symmetry.py). Directly targets the dead right
+#   pure-spin (emergent one-sided collapse: reward and command sampling
+#   are symmetric, so only exploration asymmetry can explain it) and the
+#   slalom hard 0 it causes. Obs layout unchanged -> keeper restore and
+#   the deployment contract stay valid.
+# - reward.tracking_far_weight 0.25 / tracking_far_sigma 2.5: keeps a
+#   tracking gradient far from the command (exp(-e/0.1) is flat-zero
+#   there — the mechanism that let the right-spin deadlock persist).
+#   Bounded [0,1], optimum unchanged.
+# - dr.foot_friction [0.45, 1.4] (same knob as stiff_phase_e_friction):
+#   effective contact mu ~0.4-1.26; the keeper never trained below 0.9.
+#   feet_slip stays at the keeper's -0.35 — wojtek_stiff_d_grip showed a
+#   flat -1.0 kills rotation and slow walking.
+# - command.pure_slow_prob 0.15: clean slow straight walks (vx 0.1-0.35)
+#   for the gait-does-not-scale-down defect (straight_slow 0.69).
+# Gate against the keeper (courses battery): slalom and both pure spins
+# complete; circle/u_turn scores not below keeper; straight_slow and the
+# two slippery scenarios up; grip sub-score up overall; no falls.
+# DEPLOYMENT unchanged from the keeper: kp=40 / kd=1.6 / +-9 Nm; mirror
+# augmentation is training-only (the deployed policy sees real obs).
+# Launched with restore=<keeper checkpoint>; this preset does not set
+# restore.
+# Usage: ./training/run.sh train +experiment=stiff_phase_f_sym \
+#   restore=runs/wojtek_stiff_b_keeper/checkpoints/000825753600
+defaults:
+  - locomotion_stiff_v1
+
+task:
+  env:
+    symmetry:
+      enable: true
+      mirror_prob: 0.5
+    command:
+      pure_slow_prob: 0.15
+      slow_vx: [0.1, 0.35]
+    reward:
+      tracking_far_weight: 0.25
+      tracking_far_sigma: 2.5
+
+dr:
+  foot_friction: { enable: true, range: [0.45, 1.4] }
+
+ppo:
+  num_timesteps: 400000000
+
+run_name: wojtek_stiff_f_sym

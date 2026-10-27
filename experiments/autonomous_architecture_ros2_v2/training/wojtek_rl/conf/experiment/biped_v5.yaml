@@ -1,0 +1,20 @@
+# @package _global_
+# BIPEDAL STAND, iteration 5 (2026-08-20): v4 diagnosis showed the
+# policy DOES balance (2.5x the zero-action baseline from the reared
+# init) but loses backward falls by railing the knee target ceiling
+# (3.15 singularity clip) with both feet planted — the one recovery
+# channel the reward allowed.  Point-feet bipeds catch falls by
+# stepping; v5 stops taxing it: hind_contact pays for >=1 planted hind
+# foot (max, not mean), lateral_vel softened -0.5 -> -0.1.  Budget 1B
+# (reward had not plateaued at 500M).
+# Judge: clean-reared fraction (feet-only support) per init branch.
+# Usage: ./training/run.sh train +experiment=biped_v5 seed=0
+defaults:
+  - override /task: biped
+
+
+run_name: wojtek_biped_v5
+
+task:
+  ppo:
+    num_timesteps: 1000000000

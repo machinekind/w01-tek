@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>wojtek_agent_perf</name>
+  <version>0.1.0</version>
+  <description>
+    Latency probe for Wojtek's agentic stack: a passive subscriber that
+    turns the pipeline's message stamps into per-stage timings (ASR, router,
+    brain, TTS, and the whole mic-to-sound wait) and writes them as the same
+    perf.span JSONL the training-side profiler emits, so one report ranks
+    both stacks.  Adds no work to any node's callback.
+  </description>
+  <maintainer email="maciejgruszczynski@surferseo.com">Maciej Gruszczynski</maintainer>
+  <license>Apache License 2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>wojtek_agent_msgs</depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

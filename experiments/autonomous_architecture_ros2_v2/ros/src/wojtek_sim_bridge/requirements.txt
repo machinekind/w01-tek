@@ -1,0 +1,6 @@
+# Not rosdep-resolvable; installed into the world box's venv by the
+# deployment payload. The sim itself comes from the repo's training/ dir
+# (wojtek_rl on PYTHONPATH) with mujoco + the policy runtime.
+websockets
+numpy
+pillow

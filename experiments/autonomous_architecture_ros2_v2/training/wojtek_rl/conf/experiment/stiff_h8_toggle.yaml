@@ -1,0 +1,82 @@
+# @package _global_
+# Generation H8: state-based four-bar guard + full-envelope height
+# (owner design, 2026-07-27). Replaces the knee_target_max COMMAND clamp
+# with a toggle-angle TERMINATION (fall.max_toggle_deg 150): the measured
+# truth is that the same knee target can sit at toggle 14 deg
+# (coordinated extension — safe to the full 0.212 m stance) or 177 deg
+# (uncoordinated, hip left behind), so the command never was the danger
+# variable. Every healthy behavior measures <= ~14 deg; the branch
+# crossing is at 180. Termination teaches avoidance like fall avoidance.
+# Consequences:
+# - knee_target_max: 0 (no command clamp). The calibrated kinematic
+#   envelope opens to its physical top (~0.105-0.21 m).
+# - command.height widened to [0.11, 0.20]: the full usable stance range,
+#   68% taller at the top than the nominal 0.125.
+# - DEPLOYMENT: no clamp parity needed (termination is training-only);
+#   the motor driver SHOULD keep an independent last-resort knee limit as
+#   hardware protection, but the policy no longer relies on any clamp.
+#   Sim caveat: MuJoCo soft constraints understate near-toggle internal
+#   forces; validate tall stances gently on hardware.
+# Stack otherwise = H7 (symmetry, product+relative tracking, feet_landing,
+# feet_apex 0.05, real_pose_ref, height_tracking, rotation defense,
+# slow+fast coverage).
+# Gate (courses battery at 0.125 + held-height probes): >= H7 everywhere;
+# height tracked over [0.11, 0.19] within ~1 cm; toggle terminations only
+# during early training (monitor ep_len recovery); spins/fast retained.
+# Usage: ./training/run.sh train +experiment=stiff_h8_toggle \
+#   ++ppo.num_evals=40 seed=1
+defaults:
+  - locomotion_stiff_v1
+
+task:
+  env:
+    real_pose_ref: true
+    # 4.2 is an EXPLORATION FENCE, not the guard (the toggle termination
+    # is): H8 with no bound at all died in a termination storm (ep_len
+    # ~180, reward 10 at 681M) — knee targets to 5.8 made most of
+    # exploration lethal. 4.2 sits past every useful pose (0.21 m needs
+    # 4.0) and well past the old 3.15 command guard.
+    knee_target_max: 4.2
+    fall:
+      # 0: NO termination cliff. H8c post-mortem: swing-phase transients
+      # (unloaded leg + knee targets near the 4.2 fence, ~zero sag) trip
+      # any toggle threshold at EVERY commanded height (12/12 deaths incl.
+      # h=0.118), so a cliff anywhere makes exploration groundhog-day.
+      # The toggle_flat shaping is the guard; sim flips self-penalize
+      # (broken pose -> falls/reward); hardware keeps its own driver limit.
+      max_toggle_deg: 0.0
+    symmetry:
+      enable: true
+      mirror_prob: 0.5
+    command:
+      wz: [-1.5, 1.5]
+      # 0.18 cap: above ~0.19 the height anchor parks SWING knees at
+      # 3.9-4.0 and the +-0.5 action range cannot reach safely-bent swing
+      # angles — an action-authority wall, not a learning problem.
+      height: [0.11, 0.18]
+      arc_prob: 0.2
+      arc_vx: [0.3, 1.2]
+      pure_slow_prob: 0.15
+      slow_vx: [0.1, 0.35]
+      pure_fast_prob: 0.2
+      fast_vx: [0.8, 1.2]
+    reward:
+      tracking_product: true
+      tracking_relative: true
+      apex_target: 0.05
+      scales:
+        feet_landing: -0.5
+        toggle_flat: -1.5
+        feet_apex: 5.0
+        height_tracking: 1.0
+
+early_stop:
+  enable: true
+  min_evals: 10
+  patience: 8
+  min_delta: 1.0
+
+ppo:
+  num_timesteps: 2000000000
+
+run_name: wojtek_stiff_h8_toggle

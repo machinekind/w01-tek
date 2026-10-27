@@ -1,0 +1,64 @@
+# @package _global_
+# RMA stage A (2026-08-12): the adaptive base for the RMA campaign
+# (arXiv 2107.04034 / DreamWaQ-style asymmetric variant). Three changes
+# vs flat_tff_sag_v3, motivated by the recorded mu-teacher lesson
+# (privileged input without a priced cost goes unused — RMA's own reward
+# prices foot slip):
+# - ACTOR gets proprio_history (25 x 36 = 900 dims of joint_pos/
+#   joint_vel/last_act, robot-available by construction) — the signal an
+#   adaptation context can be inferred from, learned implicitly.
+# - CRITIC gets env_factors (44-dim normalized privileged vector: per-
+#   foot mu, kp/kd scales, motor strength, base mass, CoM offset — every
+#   quantity the DR wrapper rebinds per env).
+# - slip_cmd reward (energy_cmd construction on contact-foot slip,
+#   speed-scaled + tracking-gated) makes friction matter; foot_friction
+#   DR widened down to 0.25 (effective mu floor ~0.23) so the adaptation
+#   range covers genuinely slippery floors.
+# From scratch (obs layout change invalidates checkpoints); LOUD on
+# purpose — the proven quiet chain (feet_landing floor + energy_cmd +
+# ang 2.4) is stage B, restored from this run's checkpoint.
+# Judge stage A on the slippery courses rows vs the blind family
+# (sag_v3_s1b 0.69/0.41, quiet v10 0.47/0.34) and falls under low mu.
+# NOTE: symmetry mirroring has no perm entries for proprio_history —
+# keep symmetry.enable false (family default).
+# Usage: ./training/run.sh train +experiment=flat_rma_v1 seed=0
+defaults:
+  - flat_tff_sag_v3
+
+task:
+  env:
+    obs:
+      history_len: 25
+      state:
+        - gyro
+        - gravity
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+        - phase
+        - proprio_history
+      include:
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+        - proprio_history
+      privileged:
+        - gyro
+        - gravity
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+        - linvel
+        - foot_contact
+        - env_factors
+    reward:
+      scales:
+        slip_cmd: 1.0
+
+dr:
+  foot_friction: { enable: true, range: [0.25, 1.35] }
+
+run_name: wojtek_flat_rma_v1

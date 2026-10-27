@@ -1,0 +1,23 @@
+# @package _global_
+# Iteration 3 (battery-driven). v2 fixed the walk (diag-corr 0.82 -> -0.06)
+# and height tracking (14 -> 7 mm standing, ~3 mm moving) but regressed
+# velocity tracking (0.08 -> 0.10 overall; worst at top speed) and stand
+# vibration. v3: faster clock cap + stronger velocity tracking (stride is
+# length-limited at mid stance; tall stance tracked best), stand_still now
+# includes velocity damping (env change).
+# Usage: ./run.sh train +experiment=locomotion_v3
+defaults:
+  - locomotion
+
+task:
+  env:
+    gait:
+      freq: [1.4, 3.6]
+    reward:
+      height_sigma: 5e-4
+      scales:
+        height_tracking: 2.0
+        stand_still: -1.0
+        tracking_lin_vel: 2.0
+
+run_name: fbb_loco_v3

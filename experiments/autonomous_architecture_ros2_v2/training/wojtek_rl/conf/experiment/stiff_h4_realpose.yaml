@@ -1,0 +1,54 @@
+# @package _global_
+# Generation H4: the full 2026-07-26 fix stack, from scratch — H3 plus
+# real_pose_ref (owner-driven design: rewards judge the REAL pose, never
+# the set one). Stack:
+# - symmetry mirror augmentation (bilateral skills by construction)
+# - tracking_product (deadlock under any command earns ~0 tracking)
+# - tracking_relative (80%-of-target pays equally at every speed; fixes
+#   the fast-command reward cliff)
+# - feet_landing -0.5 (pre-contact glide shaping; measured harmless to
+#   pivoting: pivot tax 0.053 vs walk 0.091 on H2)
+# - real_pose_ref (kinematic, gain-invariant pose/height reference:
+#   removes the 0.343 rad set-pose sag floor from pose/stand_still and
+#   makes height mapping honest on the kp40 plant)
+# - rotation defended (tracking_ang_vel 2.4, wz +-1.5, arcs), slow-walk
+#   coverage, no foot-friction DR (adaptation-capable iteration later)
+# early_stop patience 8 (was 6): overnight run, premature stop costs more
+# than 100M extra steps; capability probes run checkpoint-wise alongside.
+# Gate (courses battery): >= keeper on every keeper-passing course;
+# slalom + both 0.8 pure spins complete; straight_slow >= 1.0; slippery
+# at keeper level acceptable; touchdown softness <= H2's.
+# DEPLOYMENT: kp=40 / kd=1.6 / +-9 Nm, keeper contract.
+# Usage: ./training/run.sh train +experiment=stiff_h4_realpose \
+#   ++ppo.num_evals=40 seed=1
+defaults:
+  - locomotion_stiff_v1
+
+task:
+  env:
+    real_pose_ref: true
+    symmetry:
+      enable: true
+      mirror_prob: 0.5
+    command:
+      wz: [-1.5, 1.5]
+      arc_prob: 0.2
+      arc_vx: [0.3, 0.8]
+      pure_slow_prob: 0.15
+      slow_vx: [0.1, 0.35]
+    reward:
+      tracking_product: true
+      tracking_relative: true
+      scales:
+        feet_landing: -0.5
+
+early_stop:
+  enable: true
+  min_evals: 10
+  patience: 8
+  min_delta: 1.0
+
+ppo:
+  num_timesteps: 2000000000
+
+run_name: wojtek_stiff_h4_realpose

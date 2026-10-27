@@ -1,0 +1,47 @@
+# @package _global_
+# Phase C: capability fine-tune of the kp40 stiff keeper. Inherits
+# locomotion_stiff_v1 verbatim (gains, DR, penalty stack) and adds two
+# capabilities on top (owner request, 2026-07-23):
+# - The height command goes live again: sampled 0.10-0.16 m (measured
+#   stable envelope 0.084-0.182 m, kept inside with gait margin; 0.10 min
+#   also keeps bounce clear of fall.min_height=0.06) and rewarded via
+#   height_tracking. The 2026-07-12 redesign dropped the height command so
+#   the legs could work as springs; at the stiff kp40 operating point the
+#   owner now wants commandable height back. The command obs is already
+#   4-D (height rode along frozen at 0.125), so restoring from the keeper
+#   checkpoint is layout-compatible; mechanically the action anchor
+#   already follows _height_ctrl(cmd[3]), so the policy mainly learns to
+#   stabilize height transitions, not to produce the height itself.
+#   Watch the battery's springiness metrics: height_tracking is the term
+#   the redesign warned suppresses vertical bounce.
+# - Rotation/arc emphasis: wz widened +-1.0 -> +-1.5, tracking_ang_vel
+#   1.6 -> 2.4 (turning was the keeper's weakest battery axis: vel_err
+#   0.13 on turn vs 0.071 on the ramp), and the new command.arc_prob mode
+#   holds forward vx with live wz so sustained curved paths are trained
+#   deliberately instead of relying on rare uniform-box draws.
+# DEPLOYMENT: kp=40 / kd=1.6 / +-9 Nm unchanged from the keeper, but
+# runtime height control additionally needs the ROS policy node to
+# recompute the height anchor per command instead of the fixed
+# command_height it uses today (wojtek_policy/policy.py height_anchor).
+# Launched with restore=<stiff_v1 keeper checkpoint>; this preset does
+# not set restore.
+# Usage: ./training/run.sh train +experiment=stiff_phase_c restore=runs/<keeper>/checkpoints/<step>
+defaults:
+  - locomotion_stiff_v1
+
+task:
+  env:
+    command:
+      wz: [-1.5, 1.5]
+      height: [0.10, 0.16]
+      arc_prob: 0.2
+      arc_vx: [0.3, 0.8]
+    reward:
+      scales:
+        tracking_ang_vel: 2.4
+        height_tracking: 1.0
+
+ppo:
+  num_timesteps: 400000000
+
+run_name: wojtek_stiff_c

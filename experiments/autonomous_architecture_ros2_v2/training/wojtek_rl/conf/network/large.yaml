@@ -1,0 +1,2 @@
+policy_hidden_layer_sizes: [512, 256, 128]
+value_hidden_layer_sizes: [512, 256, 128]

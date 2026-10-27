@@ -124,8 +124,12 @@ public:
   /// It rides qfrc_applied, so it stays on until written again; the caller
   /// clamps it, the plant does not. Withheld in dry run like the servo.
   void setFeedForward(int actuator, double tau);
-  /// Bench mode: physics runs, no actuator force is applied.
-  void setDryRun(bool dry_run) {dry_run_ = dry_run;}
+  /// Bench mode, the disabled drives of a real dry run: physics runs, no
+  /// actuator force is applied. MuJoCo's actuation stage is switched off
+  /// for the model (a zeroed ctrl is not enough: for a position servo it
+  /// is a target of 0 rad, and the servo pulls towards it). reset() still
+  /// builds its poses with the servos, as the powered robot is posed.
+  void setDryRun(bool dry_run);
 
   /// IMU as the physical sensor would report it: `mount_quat` is the sensor
   /// frame's orientation in base_link (the real unit is bolted on rotated),
@@ -143,6 +147,8 @@ public:
   std::vector<double> qpos() const;
 
 private:
+  /// Writes dry_run_ into the model's disable flags (no-op before load()).
+  void applyDryRun();
   int actuatorId(const std::string & name) const;
 
   mjModel * model_ = nullptr;

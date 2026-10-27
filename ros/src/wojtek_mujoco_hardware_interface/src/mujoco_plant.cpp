@@ -140,6 +140,7 @@ void MujocoPlant::load(const std::string & scene_xml, const std::string & mesh_d
     }
     sensor_adr_.push_back(model_->sensor_adr[id]);
   }
+  applyDryRun();
   reset("home");
 }
 
@@ -194,6 +195,10 @@ void MujocoPlant::reset(const std::string & pose, const std::vector<double> & fo
   }
   mj_resetDataKeyframe(model_, data_, home);
   leftover_ = 0.0;
+  // The poses are built with the servos on, as the powered robot is held
+  // or laid down, even when the session then runs dry.
+  const int disableflags = model_->opt.disableflags;
+  model_->opt.disableflags &= ~mjDSBL_ACTUATION;
 
   // The pose's actuator targets: the keyframe's for home; for folded the
   // legs' own vector, or the stock rule (hips straight, knees on the stop).
@@ -286,6 +291,7 @@ void MujocoPlant::reset(const std::string & pose, const std::vector<double> & fo
   }
   std::fill(data_->qvel, data_->qvel + model_->nv, 0.0);
   data_->time = 0.0;
+  model_->opt.disableflags = disableflags;
   mj_forward(model_, data_);
 }
 
@@ -324,7 +330,8 @@ int MujocoPlant::advance(double seconds)
     leftover_ = 0.0;
   }
   if (dry_run_) {
-    std::fill(data_->ctrl, data_->ctrl + model_->nu, 0.0);
+    // Actuation is disabled on the model (applyDryRun); this keeps the
+    // feed-forward slot clean so nothing stale is released later.
     std::fill(data_->qfrc_applied, data_->qfrc_applied + model_->nv, 0.0);
   }
   return steps;
@@ -344,8 +351,8 @@ double MujocoPlant::jointEffort(int actuator) const
 {
   // The joint's whole torque, servo plus feed-forward head, as the drive
   // measures it (md.getTorque()) and as the training env accounts it
-  // (actuator_force + tau_ff). Both are zero in dry run: advance() clears
-  // them, and setFeedForward() withholds the head.
+  // (actuator_force + tau_ff). Both are zero in dry run: the model's
+  // actuation is disabled, and setFeedForward() withholds the head.
   return data_->actuator_force[actuator] + data_->qfrc_applied[dof_adr_[actuator]];
 }
 
@@ -353,6 +360,24 @@ void MujocoPlant::setCommand(int actuator, double q_relative)
 {
   data_->ctrl[actuator] = dry_run_ ? activation_qpos_[actuator]
     : activation_qpos_[actuator] + q_relative;
+}
+
+void MujocoPlant::setDryRun(bool dry_run)
+{
+  dry_run_ = dry_run;
+  applyDryRun();
+}
+
+void MujocoPlant::applyDryRun()
+{
+  if (!model_) {
+    return;
+  }
+  if (dry_run_) {
+    model_->opt.disableflags |= mjDSBL_ACTUATION;
+  } else {
+    model_->opt.disableflags &= ~mjDSBL_ACTUATION;
+  }
 }
 
 void MujocoPlant::setFeedForward(int actuator, double tau)

@@ -1,6 +1,6 @@
 #!/bin/bash
-# wojtek-cm-watchdog: stop wojtek-robot when the drive link dies, and say
-# when the drives are back so a human can start it again.
+# wojtek-cm-watchdog: stop wojtek-robot when the drive link dies, and start
+# it again when the motor power switch is cycled.
 #
 # Three ways the control stack loses the drives, and what this loop sees:
 #
@@ -18,16 +18,17 @@
 # works once the drives answer. So: on a dead CM or a non-active hardware
 # component, stop the service (frees the SPI bus and leaves the drives
 # disabled), then probe the drives with mdtool (as the robot user: its ini
-# pins bus=SPI) and log once when they answer. The start is left to a
-# human, on purpose: the service boots with boot_pose:=folded and zeroes
-# the encoders assuming that pose, and a robot that lost its drives under
-# load is lying wherever it fell, possibly with someone already handling
-# it. Lay it down folded, then start the service: over ssh
-# (`sudo systemctl start wojtek-robot.service`) or from the PC with
-# `ros2 run wojtek_bringup robot`, which does that ssh for you. The pad
-# and the deck panel cannot: both live inside the stack that was just
-# stopped. Until this version the loop started the service by itself as
-# soon as the drives answered.
+# pins bus=SPI). The service is started again on one signal only: the
+# drives were SILENT (motor power off) and answer again, i.e. someone
+# cycled the motor power switch on the robot. That switch is the operator's
+# step: the service boots with boot_pose:=folded and zeroes the encoders
+# assuming that pose, and a robot that lost its drives under load is lying
+# wherever it fell, possibly in someone's hands -- so the protocol is lay
+# the robot down folded, motor power off, motor power on, and the stack
+# comes up by itself. If the drives never went silent (the CM died on its
+# own, or the HAT reset and recovered before this loop looked), nothing
+# starts: the log says to cycle the motor power. Until 2026-10-27 the loop
+# started the service whenever the drives answered, with no pose step.
 #
 # Two signals for "component not active", cheapest first:
 #   * the CM's own journal: the driver logs "Drive link lost" and the CM
@@ -147,22 +148,27 @@ while true; do
         continue
     fi
 
-    # Service down (we stopped it, or it never came up): watch the drives
-    # and say when they are back. mdtool needs the SPI bus, which is free
-    # now. No start from here (see the header); the one line per change of
-    # state is what the operator reads in the journal.
+    # Service down (we stopped it, or it never came up). mdtool needs the
+    # SPI bus, which is free now. Start only on the off->on edge of the
+    # motor power (see the header); otherwise say once what to do.
     if drives_answer; then
-        if [ "${drives_back_logged}" = 0 ]; then
-            if [ "${power_off}" = 1 ]; then
-                log "motor power BACK; ${SERVICE} stays stopped -- lay the robot down folded, then start it by hand"
-            else
-                log "drives answer; ${SERVICE} stays stopped -- lay the robot down folded, then start it by hand"
-            fi
+        if [ "${power_off}" = 1 ] && ! systemctl is-enabled --quiet "${SERVICE}"; then
+            # A bench robot (provisioned without --enable-robot) does not
+            # start its stack on the power switch either.
+            log "motor power BACK, but ${SERVICE} is disabled (no boot autostart) -- not starting it"
+            power_off=0
+        elif [ "${power_off}" = 1 ]; then
+            log "motor power BACK -- starting ${SERVICE} (zeroing assumes the robot was laid down folded)"
+            power_off=0
+            drives_back_logged=0
+            systemctl start "${SERVICE}"
+            sleep "${GRACE_S}"
+        elif [ "${drives_back_logged}" = 0 ]; then
+            log "drives answer but motor power was not seen off; ${SERVICE} stays stopped -- lay the robot down folded, then cycle the motor power to restart"
             drives_back_logged=1
         fi
-        power_off=0
     elif [ "${power_off}" = 0 ]; then
-        log "drives SILENT -- motor power off or bus open; waiting"
+        log "drives SILENT -- motor power off or bus open; the stack starts when they answer again"
         power_off=1
         drives_back_logged=0
     fi

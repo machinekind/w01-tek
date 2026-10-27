@@ -345,9 +345,9 @@ provision_service() {
     run "sed -e 's|__WOJTEK_ROBOT__|${WOJTEK_ROBOT:-wojtek}|g' -e 's|__HF_ORGANIZATION__|${HF_ORGANIZATION:-}|g' '${HERE}/wojtek-robot-local.conf' | sudo install -m644 /dev/stdin /etc/systemd/system/wojtek-robot.service.d/10-local.conf"
     run "sudo rm -f /etc/systemd/system/wojtek-robot.service.d/10-policy.conf"
     # The CM watchdog stops the stack when the drives stop answering (motor
-    # power lost, CANdle reset) and logs when they are back; it never
-    # starts the stack itself -- see wojtek-cm-watchdog.sh.
-    info "installing wojtek-cm-watchdog.service (stop the stack on a lost drive link)"
+    # power lost, CANdle reset) and starts it again when the motor power
+    # switch is cycled -- see wojtek-cm-watchdog.sh.
+    info "installing wojtek-cm-watchdog.service (restart the stack with the motor power)"
     run "sudo install -m755 '${HERE}/wojtek-cm-watchdog.sh' /usr/local/sbin/wojtek-cm-watchdog.sh"
     run "sudo install -m644 '${HERE}/wojtek-cm-watchdog.service' /etc/systemd/system/wojtek-cm-watchdog.service"
     run "sudo systemctl daemon-reload"

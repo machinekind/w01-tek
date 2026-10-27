@@ -140,9 +140,10 @@ def test_mock_drops_calculate_dynamics_with_the_torque_head():
 
 
 def test_mock_imu_reads_an_upright_level_robot():
-    """The mock IMU's initial values must agree with the mount the mujoco
-    branch declares (imu_mount_rpy 0 0 0) and the robot's own mock: identity
-    orientation and +g on z, or the policy sees an upside-down robot."""
+    """The mock IMU's initial values must describe an upright, level sensor
+    and agree with the robot's own mock: identity orientation and +g on z,
+    or the policy sees an upside-down robot. The mount (imu_joint) is a pure
+    yaw, which moves neither, so identity stays a level reading."""
     sim = _ros2_control("wojtek_pc", "urdf/wojtek_sim.urdf.xacro", hw="mock")
     real = _ros2_control(
         "wojtek_bringup", "urdf/wojtek_real.urdf.xacro", mock_hw="true",
@@ -214,9 +215,9 @@ def test_joint_map_reaches_the_mujoco_plant():
     assert stock["joint_map_yaml"].endswith("/config/joint_map.yaml")
     v2 = _plugin_params(_ros2_control(
         "wojtek_pc", "urdf/wojtek_sim.urdf.xacro", hw="mujoco",
-        legs="legs_v627", joint_map_yaml="/tmp/joint_map_identity.yaml",
+        legs="legs_v627", joint_map_yaml="/tmp/joint_map_v627.yaml",
     ))
-    assert v2["joint_map_yaml"] == "/tmp/joint_map_identity.yaml"
+    assert v2["joint_map_yaml"] == "/tmp/joint_map_v627.yaml"
 
 
 def test_real_xacro_wears_either_legs_under_the_same_names(real):

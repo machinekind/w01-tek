@@ -8,7 +8,10 @@
 #   * feet_landing -15: downward foot speed^2 before contact (Sony
 #     2502.10983, QuietPaw 2503.05035); from scratch it collapses into
 #     skating, so this is a PHASE-B preset: restore from a converged
-#     walking checkpoint (wojtek_legs_v627_loco_v3 or _v4_imu).
+#     walking checkpoint (wojtek_legs_v627_loco_v3). The actor keeps the
+#     encoder-only observation list it inherits; restoring an IMU run
+#     (_v4_imu) needs the same `task.env.obs.include` with gyro and gravity
+#     on the command line, or the restored params do not fit the network.
 #   * the spin exemption that kept pivots alive: fade 0.1, spins pay 35%.
 #   * base_accel -0.02 with the same fade: squared vertical and angular
 #     acceleration of the body, the instrument behind az_p99/vibration.

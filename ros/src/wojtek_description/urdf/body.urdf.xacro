@@ -25,8 +25,8 @@
        tests cross-check all three.
 
        legs picks the set of legs bolted to this body: "stock" (the robot as
-       built, leg.urdf.xacro) or "legs_v627" (leg_v627.urdf.xacro, simulation
-       only so far). Both use the same link and joint names. The names match
+       built, leg.urdf.xacro) or "legs_v627" (leg_v627.urdf.xacro, the robot
+       profile wojtek_v2). Both use the same link and joint names. The names match
        training's robot variants (training/wojtek_rl/robots.py), where the
        stock legs are called "wojtek". -->
   <xacro:macro name="camera_mount">

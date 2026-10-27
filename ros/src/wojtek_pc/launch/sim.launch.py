@@ -81,9 +81,9 @@ navigation room (model_xml:=scene_nav.xml), or anywhere else by path.
 
 robot:=wojtek_v2 simulates the v6.27 legs (wojtek_policy/robots.py). The
 profile swaps the URDF legs, the joint map and the knee clamp, and the plant
-loads the legs' own training scene, which has no props. That profile has no
-pinned policy yet, so it needs policy:= naming a policy trained on those
-legs. A policy for the other legs is refused at launch.
+loads the legs' own training scene, which has no props. Without policy:= it
+runs the profile's pinned policy (wojtek_v2-quiet-locomotion), like the
+robot. A policy for the other legs is refused at launch.
 
 telemetry:=true adds /wojtek/sysinfo and /wojtek/policy_timing, the same
 opt-in the robot service uses. It is off by default here too. The Foxglove bridge

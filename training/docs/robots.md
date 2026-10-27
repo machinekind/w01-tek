@@ -11,7 +11,7 @@ command) can be exported for the robot.
 | Variant | Legs | Standing height | Status |
 |---|---|---|---|
 | `wojtek` | The robot as built. | 0.12 m | Default. Every task and every existing preset. |
-| `legs_v627` | The v6.27 four-bar legs, about 2.3 times longer. | 0.345 m | Simulation only. Joystick task on flat ground. One policy trained, see "First trained policy". |
+| `legs_v627` | The v6.27 four-bar legs, about 2.3 times longer. | 0.345 m | Joystick task on flat ground. On the robot as the `wojtek_v2` profile with the pinned `wojtek_v2-quiet-locomotion`; see "Deployment contract". |
 
 ## Selecting a variant
 

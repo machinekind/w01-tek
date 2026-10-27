@@ -814,7 +814,10 @@ so command-line values can still override it.
 | `jump` | jump | Commanded jump baseline. |
 | `jump_v3` | jump | Higher torque and deliberate wind-up jump recipe. |
 | `locomotion` | joystick | Deployable no-IMU locomotion, stand/walk/trot schedule. |
-| `legs_v627_locomotion` | joystick | The `locomotion` schedule on the `legs_v627` robot variant, with lengths scaled to the longer legs. Untrained starting point. |
+| `legs_v627_locomotion` | joystick | The `locomotion` schedule on the `legs_v627` robot variant, with lengths scaled to the longer legs; encoder-only observations, so the result exports for the robot. |
+| `legs_v627_long_stride` | legs_v627_locomotion | Slower clock (0.5-1.3 Hz), walk-like duty, swing time paid for, work priced harder: a longer stride on the v6.27 legs. |
+| `legs_v627_quiet` | legs_v627_locomotion | Phase B from a converged v6.27 walk: touchdown-speed and base-acceleration penalties with a spin fade, command-normalised power, clock and trot band from biomechanics. The pinned `wojtek_v2` policy. |
+| `legs_v627_quiet_v2` | legs_v627_quiet | Phase C from quiet: the slip price tripled. |
 | `locomotion_3090` | locomotion | Single-GPU locomotion variant. |
 | `locomotion_v2` … `locomotion_v8` | locomotion | Recorded locomotion iteration recipes. |
 | `run` | joystick | Extended command range / faster gait for running. |
@@ -860,7 +863,10 @@ than infer them from a historical run name:
 | `jump` | `fbb_jump_v1` | Selects `task=jump`. |
 | `jump_v3` | `fbb_jump_v3` | `task.env.forcerange=12`, `task.env.action_scale=0.8`, `task.env.countdown_steps=40`, `task.env.reward.scales.{flight,launch_vel,action_rate,action_accel}={15,5,-0.4,-0.2}`. |
 | `locomotion` | `fbb_loco_v1` | Joystick + `obs=no_imu`; `task.env.command.{vx,vy,wz,height}={[-0.8,1.2],[-0.5,0.5],[-1,1],[0.09,0.17]}`, `task.env.gait.{freq,swing_height,trot_band}={[1.4,3.2],0.035,[0.35,0.55]}`, `task.env.push.vel=0.5`, `task.ppo.num_timesteps=300000000`. |
-| `legs_v627_locomotion` | `wojtek_legs_v627_loco_v1` | Joystick + `robot=legs_v627` (so `task.env.sim_dt=0.002`, `task.env.fall.min_height=0.15`) with the full sensor suite; `task.env.real_pose_ref=true`; `task.env.command.{vx,vy,wz,height}={[-0.8,1.2],[-0.5,0.5],[-1,1],[0.28,0.37]}`, `task.env.gait.{freq,swing_height,trot_band}={[0.9,2.0],0.07,[0.5,0.8]}`, `task.env.push.vel=0.5`, `ppo.num_timesteps=300000000`. Build the model first with `./training/run.sh build --robot legs_v627`. See [Robot variants](robots.md). |
+| `legs_v627_locomotion` | `wojtek_legs_v627_loco` | Joystick + `robot=legs_v627` (so `task.env.sim_dt=0.002`, `task.env.fall.min_height=0.15`); `task.env.obs.include=[joint_pos, joint_vel, last_act, command]` (what the robot measures; the env default adds the gait clock, which the deploy runtime has no source for); `task.env.real_pose_ref=true`; `task.env.command.{vx,vy,wz,height,zero_prob,arc_prob,pure_wz_prob}={[-0.8,1.2],[-0.5,0.5],[-1,1],[0.28,0.37],0.15,0.2,0.1}`, `task.env.reward.tracking_sigma=0.15`, `task.env.reward.scales.{ang_vel_xy,orientation}={-0.15,-10}`, `task.env.gait.{freq,swing_height,trot_band}={[0.9,2.0],0.07,[0.5,0.8]}`, `task.env.push.vel=0.5`, `ppo.num_timesteps=300000000`. Build the model first with `./training/run.sh build --robot legs_v627`. See [Robot variants](robots.md). |
+| `legs_v627_long_stride` | `wojtek_legs_v627_long_stride` | `legs_v627_locomotion` + `task.env.gait.{freq,duty,swing_height,air_time_cap}={[0.5,1.3],[0.65,0.5],0.09,0.7}`, `task.env.reward.apex_target=0.07`, `task.env.reward.scales.{feet_air_time,feet_apex,pose,energy,feet_slip}={6,0.5,-0.25,-6e-3,-0.5}`. |
+| `legs_v627_quiet` | `wojtek_legs_v627_quiet` | `legs_v627_locomotion` + `task.env.gait.{freq,trot_band}={[0.5,1.9],[1.0,1.3]}`, `task.env.reward.{feet_landing_wz_fade,feet_landing_wz_floor,base_accel_wz_fade,base_accel_wz_floor}={0.1,0.35,0.1,0.35}`, `task.env.reward.scales.{feet_landing,base_accel,energy_cmd}={-15,-0.02,1}`, `ppo.num_timesteps=1000000000`. Phase B: `restore=` a converged `legs_v627_locomotion` checkpoint. |
+| `legs_v627_quiet_v2` | `wojtek_legs_v627_quiet_v2` | `legs_v627_quiet` + `task.env.reward.scales.feet_slip=-0.75`, `ppo.num_timesteps=500000000`. Phase C: `restore=` the converged `legs_v627_quiet` checkpoint. |
 | `locomotion_3090` | `fbb_loco_3090_v1` | Inherits `locomotion`, changes only the run name. |
 | `locomotion_v2` | `fbb_loco_v2` | `locomotion` + `task.env.reward.height_sigma=5e-4`, `task.env.reward.scales.height_tracking=2`, `task.env.reward.scales.stand_still=-1`. |
 | `locomotion_v3` | `fbb_loco_v3` | v2 fields + `task.env.gait.freq=[1.4,3.6]`, `task.env.reward.scales.tracking_lin_vel=2`. |

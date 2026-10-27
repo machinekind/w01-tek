@@ -34,7 +34,8 @@ low max_torque for cautious first tests.
 robot:= names the robot profile (wojtek_policy/robots.py), "wojtek" by
 default. It picks the URDF legs, the joint map, the knee clamp and the
 default policy, and a policy trained for other legs is refused. The systemd
-service passes no robot:=, so it runs the stock profile.
+service passes the robot:= that `deploy.sh --provision` wrote into its
+drop-in from WOJTEK_ROBOT (deploy/rpi/wojtek-robot-local.conf).
 
 Recording note: manual runs of this file do not record by default (record
 on demand: bag:=true bag_cpus:=0,1). The systemd service

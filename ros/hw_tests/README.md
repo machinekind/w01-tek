@@ -98,9 +98,9 @@ PASS/FAIL per criterion.
 
 * ~~`md80_hardware_interface` hardcodes `BusType_E::USB`~~ DONE 2026-07-17:
   the driver honors the `bus` (`usb`/`spi`) and `can_baud` (1|2|5|8) URDF
-  params; robot/real launches default to `bus:=spi can_baud:=8` and expose
-  both as launch args. Verified on hardware (dry_run bring-up: 12/12 drives
-  at 400 Hz over SPI). Candle-side knobs still belong to the planned candle
+  params; robot/real launches default to `bus:=spi` and, since 2026-10-05,
+  `can_baud:=1` (see section 2), and expose both as launch args. Verified on
+  hardware at 8M (dry_run bring-up: 12/12 drives at 400 Hz over SPI). Candle-side knobs still belong to the planned candle
   rewrite (backlog #9).
 * New I2C IMU hardware interface (or an I2C mode in the existing pkg):
   read the LSM6DS3TR-C + LIS3MDL over `/dev/i2c-1` directly; orientation

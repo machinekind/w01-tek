@@ -13,9 +13,10 @@
        three ways that matter to whoever drives it:
          - No gear-correction offsets: the zero pose is the training
            model's. The sense of rotation of the hip and knee joints is the
-           drives' (+z of the joint frame, like the stock leg), which on two
-           joints per leg is the opposite of the model's; joint_map_v627.yaml
-           carries those signs.
+           drives' (+z of the joint frame, like the stock leg), which on one
+           joint per leg (the hip where the model's dir is -1, the knee
+           where it is +1; four joints in all) is the opposite of the
+           model's; joint_map_v627.yaml carries those signs.
          - Front and rear legs are mounted mirrored (knees point at each
            other), so the rear legs' second and third joints run negative.
          - The loop closes 42 mm below the knee, at foot_link, not at the

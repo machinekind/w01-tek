@@ -16,6 +16,7 @@ from ml_collections import config_dict
 from mujoco import mjx
 from mujoco_playground._src import mjx_env
 
+from wojtek_rl import paths
 from wojtek_rl.base import KNEE_ACTUATORS, KNEE_SINGULARITY, WojtekEnv
 
 # 3 gyro + 3 gravity + 12 qpos + 12 qvel + 12 last_act + 2 jump signal
@@ -24,6 +25,8 @@ OBS_SIZE = 44
 
 def default_config() -> config_dict.ConfigDict:
     return config_dict.create(
+        # Stock legs only; base.WojtekEnv refuses another robot here.
+        robot=paths.DEFAULT_ROBOT,
         ctrl_dt=0.02,
         sim_dt=0.004,
         # Physics backend. auto picks warp on a CUDA host and jax elsewhere.

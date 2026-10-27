@@ -27,15 +27,21 @@ can ship.
 
 import numpy as np
 
+from wojtek_rl import robots
+
 SCHEMA_VERSION = 2
 
 # Past the knee (third-joint) singularity the four-bar can snap through and
 # break the linkage; the runtime's clamp_knee safety option clips there.
-KNEE_SINGULARITY = 3.2
+# The stock robot's value; the contract carries the env's own robot's.
+KNEE_SINGULARITY = robots.WOJTEK.knee_singularity
 
 # Keys whose values become contract fields (directly or via the env's
 # resolved state: model customization, target bounds, anchor).
 CONSUMED_KEYS = {
+    # Which legs the policy drives: exported as "robot", and it decides the
+    # model every other resolved field below is read from.
+    "robot",
     "ctrl_dt",
     "action_scale",
     "action_filter",
@@ -213,13 +219,19 @@ def build_contract(env, run: dict, checkpoint: str = "") -> dict:
             "heights": np.asarray(env._anchor_heights, np.float32).tolist(),
             "dsecond": np.asarray(env._anchor_dsecond, np.float32).tolist(),
         }
+        dthird = np.asarray(env._anchor_dthird, np.float32).tolist()
     else:
-        from wojtek_rl.env import DSECOND_TABLE, HEIGHT_TABLE
-
         height_table = {
-            "heights": list(HEIGHT_TABLE),
-            "dsecond": list(DSECOND_TABLE),
+            "heights": list(env._robot.height_table),
+            "dsecond": list(env._robot.dsecond_table),
         }
+        dthird = list(env._robot.dthird_table)
+    # The stock legs move the third joint twice as far as the second, which
+    # is what a runtime assumes when the table says nothing else, so the
+    # stock contract stays as it always was. Other legs spell it out.
+    if env._robot.name != robots.WOJTEK.name:
+        height_table["dthird"] = dthird
+        height_table["leg_sign"] = list(env._robot.leg_sign)
 
     scale = np.asarray(env._config.action_scale, np.float32)
     if scale.ndim == 0:
@@ -236,6 +248,7 @@ def build_contract(env, run: dict, checkpoint: str = "") -> dict:
         "run_name": run["run_name"],
         "checkpoint": str(checkpoint),
         "task": task,
+        "robot": env._robot.name,
         "obs_size": int(sum(w for _, w in layout)),
         "action_size": int(env.action_size),
         "obs_layout": [f"{n}:{w}" for n, w in layout],
@@ -257,7 +270,9 @@ def build_contract(env, run: dict, checkpoint: str = "") -> dict:
         "height_table": height_table,
         "action_filter": float(env._config.action_filter),
         "ctrl_dt": float(env._config.ctrl_dt),
-        "knee_singularity": KNEE_SINGULARITY,
+        # null on legs that have no such angle; the runtime then refuses
+        # its clamp_knee option instead of clipping at a made-up number.
+        "knee_singularity": env._robot.knee_singularity,
         # Informational: the PD servo config the policy trained against.
         # The real driver (wojtek_real.urdf.xacro kp/kd, launch max_torque)
         # must match; the policy node logs these at load.

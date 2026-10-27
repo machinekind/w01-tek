@@ -1,0 +1,6 @@
+# @package _global_
+# The robot as built: the stock legs. Everything else in the configuration
+# is tuned to them, so this file only names the robot.
+task:
+  env:
+    robot: wojtek

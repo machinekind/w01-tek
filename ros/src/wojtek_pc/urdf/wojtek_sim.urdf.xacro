@@ -44,6 +44,11 @@
        in. Wired from the launch's boot_pose, the same argument real_io_node
        takes: the two must agree or zeroing starts from a lie. -->
   <xacro:arg name="boot_pose" default="home" />
+  <!-- The folded pose as the 12 actuator targets (MuJoCo convention, actuator
+       order) the plant settles under when boot_pose is "folded". The launch
+       fills it from wojtek_policy.poses for the robot's legs. Empty = the
+       stock rule (hips straight, knees at the model's ctrlrange stop). -->
+  <xacro:arg name="folded_ctrl" default="" />
   <!-- Bench mode, the simulated analogue of the real one: physics runs but
        commands are not applied, so the robot goes limp. Ignored by the mock,
        which has no torque to withhold. -->
@@ -52,6 +57,15 @@
        with it, both sensor broadcasters). The policy then has no gravity or
        gyro, so this is a plumbing switch, not a way to walk. -->
   <xacro:arg name="use_imu" default="true" />
+  <!-- Which legs the description shows: "stock" or "legs_v627" (see
+       wojtek_description's body.urdf.xacro). This swaps the URDF only. A
+       mujoco plant on the other legs also needs their scene as model_xml
+       and their joint map as joint_map_yaml. The launches set all three
+       from the robot profile (robot:=, wojtek_policy/robots.py). -->
+  <xacro:arg name="legs" default="stock" />
+  <!-- The URDF/MuJoCo sign and offset table for these legs, from
+       wojtek_policy's config. The default is the stock legs' map. -->
+  <xacro:arg name="joint_map_yaml" default="$(find wojtek_policy)/config/joint_map.yaml" />
   <!-- Frame the plant broadcasts the TRUE base pose as (odom->this). The
        default makes the ground truth the odometry; leg_odom:=true in the
        launch moves it to base_link_gt so leg_odometry can own
@@ -61,7 +75,7 @@
   <!-- In sim the robot model owns the camera extrinsics (ground truth) -
        robot_state_publisher latches base_link->camera_link->optical frames
        matching the MJCF render camera; see wojtek_pc/camera_spec.py. -->
-  <xacro:wojtek_body with_camera="true" />
+  <xacro:wojtek_body with_camera="true" legs="$(arg legs)" />
 
   <!-- Same interface set as wojtek_bringup's wojtek_joint macro: a position
        command (impedance target) and position/velocity/effort states. The
@@ -114,8 +128,9 @@
         <param name="mesh_dir">$(find wojtek_description)/meshes</param>
         <!-- The URDF/MuJoCo sign and offset table, read from the same file
              wojtek_policy reads. No second copy of the fitted values. -->
-        <param name="joint_map_yaml">$(find wojtek_policy)/config/joint_map.yaml</param>
+        <param name="joint_map_yaml">$(arg joint_map_yaml)</param>
         <param name="initial_pose">$(arg boot_pose)</param>
+        <param name="folded_ctrl">$(arg folded_ctrl)</param>
         <param name="dry_run">$(arg dry_run)</param>
         <!-- Emulate the physical mount (URDF imu_joint: upright, yawed
              -90 deg, see body.urdf.xacro and launch_common.IMU_MOUNT_RPY).

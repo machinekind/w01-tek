@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -101,6 +102,10 @@ hardware_interface::CallbackReturn MujocoHardwareInterface::on_init(
     return hardware_interface::CallbackReturn::ERROR;
   }
   initial_pose_ = param(info_.hardware_parameters, "initial_pose", "home");
+  // The folded pose as actuator targets (wojtek_policy.poses, via the
+  // launch), so the plant lies down the way real_io_node's lie_down does
+  // for these legs. Empty keeps the plant's stock rule.
+  folded_ctrl_ = parseDoubles(param(info_.hardware_parameters, "folded_ctrl", ""));
   dry_run_ = isTrue(param(info_.hardware_parameters, "dry_run", "false"));
 
   const auto joint_map_yaml = param(info_.hardware_parameters, "joint_map_yaml");
@@ -252,7 +257,32 @@ hardware_interface::CallbackReturn MujocoHardwareInterface::on_configure(
         tau_ff_scale_[i] = bound;
       }
     }
-    plant_.reset(initial_pose_);
+    plant_.reset(initial_pose_, folded_ctrl_);
+    {
+      // Where the plant actually starts, against the pose the stack assumes
+      // (real_io_node's boot_pose): the zeroing error of this run.
+      const auto & names = plant_.actuatorNames();
+      std::ostringstream worst;
+      double worst_err = 0.0;
+      for (std::size_t i = 0; i < names.size(); ++i) {
+        const double target = folded_ctrl_.empty() || initial_pose_ != "folded"
+          ? std::numeric_limits<double>::quiet_NaN() : folded_ctrl_[i];
+        if (std::isfinite(target)) {
+          const double err = plant_.jointPositionAbsolute(static_cast<int>(i)) - target;
+          if (std::abs(err) > std::abs(worst_err)) {
+            worst_err = err;
+            worst.str("");
+            worst << names[i];
+          }
+        }
+      }
+      const auto pose = plant_.basePose();
+      RCLCPP_INFO(
+        logger_, "plant starts %s: base z %.3f m%s", initial_pose_.c_str(), pose[2],
+        std::isfinite(worst_err) && !worst.str().empty()
+        ? (", largest offset from the folded pose " + std::to_string(worst_err) + " rad at " + worst.str()).c_str()
+        : "");
+    }
   } catch (const std::exception & e) {
     RCLCPP_FATAL(logger_, "%s", e.what());
     return hardware_interface::CallbackReturn::ERROR;

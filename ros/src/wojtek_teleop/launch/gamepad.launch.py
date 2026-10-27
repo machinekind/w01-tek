@@ -69,8 +69,9 @@ def generate_launch_description():
             DeclareLaunchArgument("policy", default_value=""),
             DeclareLaunchArgument("cpus", default_value=""),
             # Fraction of the command box the sticks reach at full throw
-            # (see gamepad_teleop's speed_scale).
-            DeclareLaunchArgument("speed_scale", default_value="0.4"),
+            # with slow mode off (see gamepad_teleop's speed_scale; RB
+            # toggles slow mode, 0.4 of the box).
+            DeclareLaunchArgument("speed_scale", default_value="0.6"),
             OpaqueFunction(function=_setup),
         ]
     )

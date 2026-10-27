@@ -189,16 +189,21 @@ bool ImuI2C::initialize()
     write_reg(addr_ag_, LSM6_CTRL3_C, LSM6_BDU_IFINC) &&
     write_reg(addr_ag_, LSM6_CTRL1_XL, LSM6_XL_104HZ_4G) &&
     write_reg(addr_ag_, LSM6_CTRL2_G, LSM6_G_104HZ_500DPS) &&
-    write_reg(addr_mag_, LIS3_CTRL_REG1, LIS3_UHP_80HZ) &&
-    write_reg(addr_mag_, LIS3_CTRL_REG2, LIS3_FS_4GAUSS) &&
-    write_reg(addr_mag_, LIS3_CTRL_REG4, LIS3_UHP_Z) &&
-    write_reg(addr_mag_, LIS3_CTRL_REG3, LIS3_CONTINUOUS);
+    init_mag();
   if (!ok) {
     return false;
   }
   std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
   return true;
+}
+
+bool ImuI2C::init_mag()
+{
+  return write_reg(addr_mag_, LIS3_CTRL_REG1, LIS3_UHP_80HZ) &&
+         write_reg(addr_mag_, LIS3_CTRL_REG2, LIS3_FS_4GAUSS) &&
+         write_reg(addr_mag_, LIS3_CTRL_REG4, LIS3_UHP_Z) &&
+         write_reg(addr_mag_, LIS3_CTRL_REG3, LIS3_CONTINUOUS);
 }
 
 bool ImuI2C::read_sample(SensorData & data)
@@ -238,6 +243,15 @@ bool ImuI2C::read_sample(SensorData & data)
     data.mag_y = s16(mag[3], mag[4]) * MAG_UT_PER_LSB;
     data.mag_z = s16(mag[5], mag[6]) * MAG_UT_PER_LSB;
     data.mag_fresh = true;
+    mag_stale_cycles_ = 0;
+  } else if (++mag_stale_cycles_ >= kMagStaleReinit) {
+    // No data-ready for ~1 s at 80 Hz ODR: the chip has dropped its
+    // configuration (seen as power-down on the robot). Re-arm it; the
+    // caller reads mag_reinits() to log it.
+    mag_stale_cycles_ = 0;
+    if (init_mag()) {
+      ++mag_reinits_;
+    }
   }
 
   return true;

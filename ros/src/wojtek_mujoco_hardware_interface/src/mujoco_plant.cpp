@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <cstdio>
 #include <filesystem>
@@ -139,6 +140,7 @@ void MujocoPlant::load(const std::string & scene_xml, const std::string & mesh_d
     }
     sensor_adr_.push_back(model_->sensor_adr[id]);
   }
+  applyDryRun();
   reset("home");
 }
 
@@ -177,38 +179,128 @@ double MujocoPlant::foldedKneeRad() const
   throw std::runtime_error("model has no knee (third) actuator");
 }
 
-void MujocoPlant::reset(const std::string & pose)
+void MujocoPlant::reset(const std::string & pose, const std::vector<double> & folded_ctrl)
 {
+  if (!folded_ctrl.empty() && static_cast<int>(folded_ctrl.size()) != model_->nu) {
+    throw std::runtime_error(
+      "folded_ctrl has " + std::to_string(folded_ctrl.size()) + " values, the model has " +
+      std::to_string(model_->nu) + " actuators");
+  }
+  if (pose != "home" && pose != "folded") {
+    throw std::runtime_error("initial_pose must be 'home' or 'folded', got " + pose);
+  }
   const int home = mj_name2id(model_, mjOBJ_KEY, "home");
   if (home < 0) {
     throw std::runtime_error("model has no 'home' keyframe");
   }
   mj_resetDataKeyframe(model_, data_, home);
-  mj_forward(model_, data_);
   leftover_ = 0.0;
-  if (pose == "home") {
-    return;
-  }
-  if (pose != "folded") {
-    throw std::runtime_error("initial_pose must be 'home' or 'folded', got " + pose);
-  }
-  // Settle into the boot pose instead of hand-writing a qpos: the four-bar
-  // closure has to stay consistent, and gravity plus the folded targets get
-  // there the same way the real robot does.
-  const double knee = foldedKneeRad();
+  // The poses are built with the servos on, as the powered robot is held
+  // or laid down, even when the session then runs dry.
+  const int disableflags = model_->opt.disableflags;
+  model_->opt.disableflags &= ~mjDSBL_ACTUATION;
+
+  // The pose's actuator targets: the keyframe's for home; for folded the
+  // legs' own vector, or the stock rule (hips straight, knees on the stop).
+  std::vector<double> targets(model_->nu);
   for (int i = 0; i < model_->nu; ++i) {
-    const auto & name = actuator_names_[i];
-    const bool is_knee = name.size() > 12 &&
-      name.compare(name.size() - 12, 12, "_third_joint") == 0;
-    data_->ctrl[i] = is_knee ? knee : 0.0;
+    targets[i] = model_->key_ctrl[home * model_->nu + i];
   }
-  const int steps = static_cast<int>(2.0 / model_->opt.timestep);
-  for (int i = 0; i < steps; ++i) {
-    mj_step(model_, data_);
+  if (pose == "folded") {
+    if (!folded_ctrl.empty()) {
+      targets = folded_ctrl;
+    } else {
+      const double knee = foldedKneeRad();
+      for (int i = 0; i < model_->nu; ++i) {
+        const auto & name = actuator_names_[i];
+        const bool is_knee = name.size() > 12 &&
+          name.compare(name.size() - 12, 12, "_third_joint") == 0;
+        targets[i] = is_knee ? knee : 0.0;
+      }
+    }
+  }
+
+  // Both poses are built in free space with gravity off, then lowered onto
+  // the floor: the pose the real robot is held in (home) or lies in
+  // (folded) when its drives are powered, with the four-bar closure
+  // consistent. The keyframe's own qpos is the settled stance, which
+  // already sags under the servo; latching that as "home" would count the
+  // sag twice, once in the offset and once more under gravity.
+  const bool free_base = model_->njnt > 0 && model_->jnt_type[0] == mjJNT_FREE;
+  const int base = free_base ? model_->jnt_qposadr[0] : -1;
+  auto level_base = [&](double lift) {
+      if (!free_base) {return;}
+      data_->qpos[base + 2] += lift;
+      data_->qpos[base + 3] = 1.0;
+      data_->qpos[base + 4] = data_->qpos[base + 5] = data_->qpos[base + 6] = 0.0;
+    };
+  const mjtNum gravity[3] = {model_->opt.gravity[0], model_->opt.gravity[1], model_->opt.gravity[2]};
+  std::fill(model_->opt.gravity, model_->opt.gravity + 3, 0.0);
+  std::vector<double> home_ctrl(model_->nu);
+  for (int i = 0; i < model_->nu; ++i) {
+    home_ctrl[i] = model_->key_ctrl[home * model_->nu + i];
+    data_->qpos[qpos_adr_[i]] = home_ctrl[i];
+    data_->ctrl[i] = home_ctrl[i];
+  }
+  level_base(1.0);
+  std::fill(data_->qvel, data_->qvel + model_->nv, 0.0);
+  stepFor(1.0);
+  if (pose == "folded") {
+    // Reach the lying pose from the stand with a servo ramp (a jump of the
+    // actuated joints would let the loop closure re-close on the wrong
+    // branch).
+    const double ramp = 1.0;
+    const int steps = static_cast<int>(ramp / model_->opt.timestep);
+    for (int k = 0; k <= steps; ++k) {
+      const double s = 0.5 - 0.5 * std::cos(M_PI * std::min(1.0, k * model_->opt.timestep / ramp));
+      for (int i = 0; i < model_->nu; ++i) {
+        data_->ctrl[i] = (1.0 - s) * home_ctrl[i] + s * targets[i];
+      }
+      mj_step(model_, data_);
+    }
+    stepFor(0.5);
+  }
+  std::fill(data_->qvel, data_->qvel + model_->nv, 0.0);
+  level_base(0.0);
+  mj_forward(model_, data_);
+  // Lower the robot until its lowest collision shape is 2 mm above the floor.
+  int plane = -1;
+  for (int g = 0; g < model_->ngeom && plane < 0; ++g) {
+    if (model_->geom_type[g] == mjGEOM_PLANE) {
+      plane = g;
+    }
+  }
+  if (plane >= 0 && free_base) {
+    double lowest = 2.0;
+    for (int g = 0; g < model_->ngeom; ++g) {
+      if (g == plane || !(model_->geom_contype[g] || model_->geom_conaffinity[g])) {
+        continue;
+      }
+      lowest = std::min(lowest, mj_geomDistance(model_, data_, g, plane, 2.0, nullptr));
+    }
+    data_->qpos[base + 2] -= lowest - 0.002;
+    mj_forward(model_, data_);
+  }
+  std::copy(gravity, gravity + 3, model_->opt.gravity);
+  if (pose == "folded") {
+    // Lying, the servos hold the pose under gravity. They stay on: with the
+    // primitive collision shapes the motorless model folds its rear thighs
+    // under the body instead of lying flat like the robot, so letting it
+    // fall would start the simulation from a pose the robot is not in.
+    stepFor(1.0);
   }
   std::fill(data_->qvel, data_->qvel + model_->nv, 0.0);
   data_->time = 0.0;
+  model_->opt.disableflags = disableflags;
   mj_forward(model_, data_);
+}
+
+void MujocoPlant::stepFor(double seconds)
+{
+  const int steps = static_cast<int>(seconds / model_->opt.timestep);
+  for (int i = 0; i < steps; ++i) {
+    mj_step(model_, data_);
+  }
 }
 
 void MujocoPlant::latchActivationPose()
@@ -238,7 +330,8 @@ int MujocoPlant::advance(double seconds)
     leftover_ = 0.0;
   }
   if (dry_run_) {
-    std::fill(data_->ctrl, data_->ctrl + model_->nu, 0.0);
+    // Actuation is disabled on the model (applyDryRun); this keeps the
+    // feed-forward slot clean so nothing stale is released later.
     std::fill(data_->qfrc_applied, data_->qfrc_applied + model_->nv, 0.0);
   }
   return steps;
@@ -258,8 +351,8 @@ double MujocoPlant::jointEffort(int actuator) const
 {
   // The joint's whole torque, servo plus feed-forward head, as the drive
   // measures it (md.getTorque()) and as the training env accounts it
-  // (actuator_force + tau_ff). Both are zero in dry run: advance() clears
-  // them, and setFeedForward() withholds the head.
+  // (actuator_force + tau_ff). Both are zero in dry run: the model's
+  // actuation is disabled, and setFeedForward() withholds the head.
   return data_->actuator_force[actuator] + data_->qfrc_applied[dof_adr_[actuator]];
 }
 
@@ -267,6 +360,24 @@ void MujocoPlant::setCommand(int actuator, double q_relative)
 {
   data_->ctrl[actuator] = dry_run_ ? activation_qpos_[actuator]
     : activation_qpos_[actuator] + q_relative;
+}
+
+void MujocoPlant::setDryRun(bool dry_run)
+{
+  dry_run_ = dry_run;
+  applyDryRun();
+}
+
+void MujocoPlant::applyDryRun()
+{
+  if (!model_) {
+    return;
+  }
+  if (dry_run_) {
+    model_->opt.disableflags |= mjDSBL_ACTUATION;
+  } else {
+    model_->opt.disableflags &= ~mjDSBL_ACTUATION;
+  }
 }
 
 void MujocoPlant::setFeedForward(int actuator, double tau)

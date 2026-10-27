@@ -7,15 +7,19 @@ policy works in absolute URDF angles, so this node shifts by an offset in
 both directions. The offset starts as "the robot was in the boot_pose at
 activation" and can be corrected at runtime with /wojtek/zero.
 
-The boot_pose parameter names the reference pose (the robot's position 0):
+The boot_pose parameter names the reference pose (the robot's position 0).
+Which angles those are depends on the legs: the `robot` parameter names the
+robot profile (wojtek_policy.robots), and wojtek_policy.poses holds the
+poses of its legs.
 
-  boot_pose="home" (default): the home standing pose (wojtek_policy.poses
-    HOME_CTRL, where /wojtek/stand_up ends).
-  boot_pose="folded": robot lying flat on its base, hips straight and knees
-    folded against the mechanical stop (folded_knee_rad, policy convention --
-    see wojtek_policy.poses). Reproducible by hand without holding the
-    robot -- call /wojtek/stand_up afterwards to ramp slowly into the home
-    standing pose, then /wojtek/arm.
+  boot_pose="home" (default): the home standing pose (where
+    /wojtek/stand_up ends).
+  boot_pose="folded": the robot lying flat. Stock legs: hips straight and
+    knees folded against the mechanical stop (folded_knee_rad, policy
+    convention). v6.27 legs: shins flat on the floor, hips against their
+    range stop. Reproducible by hand without holding the robot -- call
+    /wojtek/stand_up afterwards to ramp slowly into the home standing pose,
+    then /wojtek/arm.
 
   subscribes  /joint_states           (boot-relative, from joint_state_broadcaster)
               /wojtek/joint_targets      (absolute URDF, from policy_node)
@@ -36,9 +40,9 @@ The boot_pose parameter names the reference pose (the robot's position 0):
               /wojtek/stand_up (std_srvs/Trigger)  -- slow ramp current -> home
               /wojtek/lie_down (std_srvs/Trigger)  -- slow ramp current -> folded
               /wojtek/trick_{bow,sit,paw_wave,shake} (std_srvs/Trigger) --
-              play a scripted show clip (wojtek_policy.tricks); DISARMED
-              only, and only from (near) the home standing pose, since
-              every clip starts and ends there
+              play a scripted show clip (wojtek_policy.tricks, the set for
+              this robot's legs); DISARMED only, and only from (near) the
+              home standing pose, since every clip starts and ends there
               /wojtek/zero     (std_srvs/Trigger)  -- re-zero: declare that the
               robot is physically in the boot_pose RIGHT NOW and recompute
               the offset from the current measurement. Lets you power and
@@ -71,13 +75,17 @@ from std_srvs.srv import SetBool, Trigger
 
 from wojtek_policy.joint_map import JointMap
 
-from wojtek_policy import poses, tricks
+from wojtek_policy import poses, robots, tricks
 
 
 class RealIoNode(Node):
     def __init__(self):
         super().__init__("wojtek_real_io")
         share = get_package_share_directory("wojtek_policy")
+        # Robot profile name (wojtek_policy/robots.py): which legs, hence
+        # which home/folded poses, passive-joint table and trick clips.
+        # The bringup launches set it together with the joint map.
+        self.declare_parameter("robot", robots.DEFAULT_ROBOT)
         self.declare_parameter("joint_map_yaml", f"{share}/config/joint_map.yaml")
         self.declare_parameter("max_arm_jump_rad", 0.15)
         self.declare_parameter("dry_run", False)
@@ -86,18 +94,23 @@ class RealIoNode(Node):
         self.declare_parameter("ramp_duration_s", 4.0)
         self.declare_parameter("ramp_rate_hz", 50.0)
 
-        # Joint order and the home pose are robot constants (poses.py), not
-        # properties of whichever policy is loaded -- arming must work the
-        # same with no policy at all.
+        # Joint order and the poses are robot constants (poses.py, per set
+        # of legs), not properties of whichever policy is loaded -- arming
+        # must work the same with no policy at all.
         self.jmap = JointMap(self.get_parameter("joint_map_yaml").value)
         self.joint_names = list(poses.ACTUATOR_NAMES)
+        robot = self.get_parameter("robot").value
+        legs = robots.get(robot).training_robot
+        self.poses = poses.for_robot(
+            legs, self.get_parameter("folded_knee_rad").value
+        )
+        self.tricks = tricks.for_robot(legs)
 
         # Named poses in URDF convention.
-        folded = poses.folded_ctrl(
-            self.joint_names, self.get_parameter("folded_knee_rad").value
+        self.home_urdf = self.jmap.to_urdf(self.joint_names, self.poses.home_ctrl)
+        self.folded_urdf = self.jmap.to_urdf(
+            self.joint_names, self.poses.folded_ctrl
         )
-        self.home_urdf = self.jmap.to_urdf(self.joint_names, poses.HOME_CTRL)
-        self.folded_urdf = self.jmap.to_urdf(self.joint_names, folded)
         boot_pose = self.get_parameter("boot_pose").value
         if boot_pose not in ("folded", "home"):
             raise ValueError(f"boot_pose must be 'folded' or 'home', got {boot_pose!r}")
@@ -106,13 +119,23 @@ class RealIoNode(Node):
         # robot was in the boot pose at activation; /wojtek/zero recomputes it.
         self._offset_urdf = self.boot_urdf.copy()
 
-        # Passive four-bar joints for RViz: (name, poly coeffs, index of that
-        # leg's knee in joint_names).
+        # Passive four-bar joints for RViz: (name, poly coeffs, index of the
+        # actuated joint of that leg which drives them), plus the joints
+        # published at a constant angle.
+        driver = self.poses.passive_driver
         self._passive = [
             (name, coeffs, self.joint_names.index(
-                name.replace("fourth_joint", "third_joint").replace(
-                    "fifth_joint", "third_joint")))
-            for name, coeffs in poses.PASSIVE_FROM_KNEE.items()
+                f"{name.rsplit('_', 2)[0]}_{driver}"))
+            for name, coeffs in self.poses.passive_from_driver.items()
+        ]
+        self._passive_constant = list(self.poses.passive_constant.items())
+        # A table fitted in the policy convention (the v6.27 legs) takes the
+        # driver through the joint map and gives its result back through it;
+        # the stock table is URDF-to-URDF and goes straight through.
+        self._passive_via_map = self.poses.passive_convention == "mjc"
+        self._passive_names = [name for name, _, _ in self._passive]
+        self._passive_driver_names = [
+            self.joint_names[idx] for _, _, idx in self._passive
         ]
 
         self._armed = False
@@ -143,13 +166,14 @@ class RealIoNode(Node):
         )
         self.create_service(Trigger, "wojtek/zero", self._srv_zero)
         self.declare_parameter("trick_start_tolerance_rad", 0.3)
-        for trick in tricks.TRICKS:
+        for trick in self.tricks.names:
             self.create_service(
                 Trigger, f"wojtek/trick_{trick}",
                 lambda req, res, t=trick: self._srv_trick(res, t),
             )
         self.get_logger().info(
-            f"real io up, DISARMED, boot_pose={boot_pose}. Assuming the robot "
+            f"real io up, DISARMED, robot={robot} ({legs} legs), "
+            f"boot_pose={boot_pose}. Assuming the robot "
             f"was in the {boot_pose} pose at activation; if not, pose it there "
             "now and call: ros2 service call /wojtek/zero std_srvs/srv/Trigger. "
             "Then /wojtek/stand_up if lying, and arm with: ros2 service call "
@@ -178,10 +202,19 @@ class RealIoNode(Node):
         # draws the legs broken.
         passive = JointState()
         passive.header = msg.header
-        passive.name = [name for name, _, _ in self._passive]
-        passive.position = [
-            float(np.polyval(coeffs, q_abs[knee_idx]))
-            for _, coeffs, knee_idx in self._passive
+        passive.name = [name for name, _, _ in self._passive] + [
+            name for name, _ in self._passive_constant
+        ]
+        drivers = np.array([q_abs[idx] for _, _, idx in self._passive])
+        if self._passive_via_map:
+            drivers = self.jmap.to_mjc(self._passive_driver_names, drivers)
+        values = np.array([
+            np.polyval(coeffs, q) for (_, coeffs, _), q in zip(self._passive, drivers)
+        ])
+        if self._passive_via_map:
+            values = self.jmap.to_urdf(self._passive_names, values)
+        passive.position = [float(v) for v in values] + [
+            value for _, value in self._passive_constant
         ]
         self._pub_abs.publish(passive)
 
@@ -299,17 +332,17 @@ class RealIoNode(Node):
         period = 1.0 / self.get_parameter("ramp_rate_hz").value
         self._ramp_timer = self.create_timer(period, self._trick_tick)
         self.get_logger().info(
-            f"trick {name}: playing ({tricks.duration(name):.1f} s)"
+            f"trick {name}: playing ({self.tricks.duration(name):.1f} s)"
         )
         res.success, res.message = True, f"trick {name} started"
         return res
 
     def _trick_tick(self):
         t = (self.get_clock().now() - self._ramp_t0).nanoseconds * 1e-9
-        ctrl = tricks.sample(self._trick_name, t)
+        ctrl = self.tricks.sample(self._trick_name, t)
         q_urdf = self.jmap.to_urdf(self.joint_names, ctrl)
         self._send_cmd(np.asarray(q_urdf) - self._offset_urdf)
-        if t >= tricks.duration(self._trick_name):
+        if t >= self.tricks.duration(self._trick_name):
             self.destroy_timer(self._ramp_timer)
             self._ramp_timer = None
             self.get_logger().info(f"trick {self._trick_name}: complete")

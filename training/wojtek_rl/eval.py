@@ -33,18 +33,17 @@ import jax.numpy as jp
 import numpy as np
 
 from wojtek_rl import paths
-from wojtek_rl.battery import battery_scenarios
+from wojtek_rl.battery import STOCK_HEIGHTS, battery_scenarios, scenario_heights
 from wojtek_rl.video import SceneView, frame_size, write_video
 
 
-def _demo_sequence(i):
+def _demo_sequence(i, H=0.125):
     """EVAL-ONLY, not part of battery.py's fixed comparison battery: one
     continuous rollout for --scenario demo_sequence -- stand, trot forward,
     turn in place, trot forward, stand -- at ctrl_dt=0.02 (50 steps/s).
     Command transitions are steps, not ramps, matching how the trained
-    policy actually receives commands. Height pinned at 0.125, same anchor
-    value battery_scenarios() uses."""
-    H = 0.125
+    policy actually receives commands. Height pinned at the same anchor
+    value battery_scenarios() uses, 0.125 on the stock robot."""
     if i < 150:  # 0-3s: stand
         vx, wz = 0.0, 0.0
     elif i < 450:  # 3-9s: trot forward
@@ -58,13 +57,14 @@ def _demo_sequence(i):
     return jp.array([vx, 0.0, wz, H])
 
 
-def eval_scenarios():
+def eval_scenarios(heights=STOCK_HEIGHTS):
     """battery_scenarios() plus eval-only scenarios that --scenario accepts
     but battery.py does not run: the battery's scenario set is a fixed
     comparison battery and must not change for a video-only addition like
-    demo_sequence."""
-    scenarios = dict(battery_scenarios())
-    scenarios["demo_sequence"] = (_demo_sequence, 1200)
+    demo_sequence. `heights` is battery.scenario_heights(env)."""
+    scenarios = dict(battery_scenarios(heights))
+    anchor = heights[0]
+    scenarios["demo_sequence"] = (lambda i: _demo_sequence(i, anchor), 1200)
     return scenarios
 
 
@@ -230,7 +230,9 @@ def main() -> None:
     ap.add_argument("--x-vel", type=float, default=0.3)
     ap.add_argument("--y-vel", type=float, default=0.0)
     ap.add_argument("--yaw-vel", type=float, default=0.0)
-    ap.add_argument("--height", type=float, default=0.125)
+    ap.add_argument("--height", type=float, default=None,
+                    help="default: the anchor height of the run's robot, "
+                         "0.125 on the stock one")
     ap.add_argument("--steps", type=int, default=500)
     ap.add_argument(
         "--scenario",
@@ -380,10 +382,12 @@ def main() -> None:
     ckpt = _latest_checkpoint(ckpt_dir)
     policy = load_policy(ckpt, env, ppo_params)
 
+    heights = scenario_heights(env)
     if args.scenario:
-        cmd_at, n_steps = eval_scenarios()[args.scenario]
+        cmd_at, n_steps = eval_scenarios(heights)[args.scenario]
     else:
-        command = jp.array([args.x_vel, args.y_vel, args.yaw_vel, args.height])
+        height = heights[0] if args.height is None else args.height
+        command = jp.array([args.x_vel, args.y_vel, args.yaw_vel, height])
         cmd_at, n_steps = (lambda i: command), args.steps
 
     reset = jax.jit(env.reset)

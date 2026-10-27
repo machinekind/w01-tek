@@ -1,0 +1,16 @@
+# Stop wojtek-robot.service when the controller manager loses the drives,
+# and start it again when the motor power is cycled. Installed and enabled by
+# deploy/rpi/install.sh (robot service phase); the why and the three
+# failure cases it covers are in wojtek-cm-watchdog.sh.
+[Unit]
+Description=Wojtek: restart the control stack with the motor power
+After=wojtek-robot.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/wojtek-cm-watchdog.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

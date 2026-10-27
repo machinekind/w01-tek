@@ -4,6 +4,12 @@
 load `scene.xml` for physically meaningful simulation, or provide your own
 scene/`<option>` wrapper.
 
+Other sets of legs have their own directory here, such as `legs_v627/`, with
+the same three file names: `wojtek.xml` is the source and `wojtek_mjx.xml` and
+`scene_mjx.xml` are generated. To look at one, open its `scene_view.xml`, which
+holds the stand with the controls at zero. `training/docs/robots.md` covers
+them.
+
 ## Setup
 
 From repo root:

@@ -46,6 +46,10 @@
   <xacro:arg name="imu_bus" default="/dev/i2c-1" />
   <xacro:arg name="imu_addr_ag" default="0x6A" />
   <xacro:arg name="imu_addr_mag" default="0x1C" />
+  <!-- Which legs the description shows: "stock" or "legs_v627" (see
+       wojtek_description's body.urdf.xacro). The launches set it from the
+       robot profile (robot:=, wojtek_policy/robots.py). -->
+  <xacro:arg name="legs" default="stock" />
   <!-- Profiling on the robot computer with the motors unpowered: the drives
        and the IMU become one GenericSystem, everything else is unchanged.
        See wojtek_mock_ros2_control.urdf.xacro. -->
@@ -57,7 +61,7 @@
        robot_state_publisher gives it in every mode that runs a camera
        (deck_camera:=true, perception:=true), which the costmap, the pixel
        resolver and the VLM brain's bearing all need. -->
-  <xacro:wojtek_body with_camera_mount="true" />
+  <xacro:wojtek_body legs="$(arg legs)" with_camera_mount="true" />
 
   <xacro:if value="$(arg mock_hw)">
     <xacro:wojtek_mock_ros2_control use_imu="$(arg use_imu)" tau_ff="$(arg tau_ff)" />

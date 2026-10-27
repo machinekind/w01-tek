@@ -147,6 +147,13 @@ hardware_interface::return_type ImuI2CHardwareInterface::read(
     return hardware_interface::return_type::OK;
   }
 
+  if (imu_->mag_reinits() != mag_reinits_seen_) {
+    mag_reinits_seen_ = imu_->mag_reinits();
+    RCLCPP_WARN(
+      logger_, "magnetometer stopped delivering data and was re-initialised (%u so far); "
+      "yaw rode the gyro alone meanwhile", mag_reinits_seen_);
+  }
+
   if (d.mag_fresh) {
     hw_states_[0] = d.mag_x;
     hw_states_[1] = d.mag_y;

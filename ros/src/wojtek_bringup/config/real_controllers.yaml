@@ -1,12 +1,18 @@
 controller_manager:
   ros__parameters:
-    # 200 Hz: the Pi 3 (Cortex-A53, no RT kernel) sustains ~240 Hz of the
-    # former 400 before overrunning, and the irregular skipped cycles came
-    # out as visibly jagged ramps. A rate the board holds evenly beats a
-    # higher one it can't: the PD servo runs on the MD80s themselves and
-    # the policy ticks on its own ctrl_dt, so this only paces target/state
-    # transport. Was 400 on the Pi 5 -- restore if the robot moves back.
-    update_rate: 200
+    # 100 Hz (2026-10-05, was 200): this loop only paces target/state
+    # transport -- the PD servo runs on the MD80s themselves and the policy
+    # ticks on its own ctrl_dt (50 Hz) -- so 100 Hz still delivers every
+    # policy command within 10 ms and reads each CANdle frame about once.
+    # The point is the CAN link: the CANdle update loop over SPI runs
+    # ~400 Hz at 8M but only ~110 Hz at 1M, and the drives' flashed 8M has
+    # been marginal on the unterminated-at-the-drives harness (frames and
+    # flash writes lost). A 100 Hz loop is the rate a 1M bus can feed, so
+    # the stack is ready for the baud to drop without another config
+    # change; it also halves ros2_control_node's load on its core.
+    # History: 400 on the Pi 5; 200 on the Pi 3 (~240 Hz sustainable, and
+    # irregular overruns showed as jagged ramps).
+    update_rate: 100
 
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster

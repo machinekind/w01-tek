@@ -77,6 +77,7 @@ private:
   // A mag sample can land on a cycle without a fresh gyro sample (80 vs
   // 104 Hz); latch it and hand it to the filter on the next gyro step.
   bool mag_pending_ = false;
+  unsigned mag_reinits_seen_ = 0;
 
   // Layout: magnetometer.{x,y,z} (0-2), angular_velocity.{x,y,z} (3-5),
   // linear_acceleration.{x,y,z} (6-8), orientation.{x,y,z,w} (9-12).

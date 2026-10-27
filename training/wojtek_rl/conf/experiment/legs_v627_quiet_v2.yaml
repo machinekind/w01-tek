@@ -1,0 +1,28 @@
+# @package _global_
+# QUIET, iteration 2 (2026-10-23): one lever on top of legs_v627_quiet.
+# quiet_v1 met the objective against loco_v3 -- vibration index 0.35 ->
+# 0.09 on the ramp, tilt rate 10.8 -> 7.0 deg/s, peak base acceleration
+# 35.7 -> 22.9 m/s^2, mean power 23.3 -> 17.1 W, stance fraction 0.67 ->
+# 0.71-0.90 -- and paid with foot slip: 0.07 -> 0.20 m/s on the ramp,
+# 0.17 -> 0.41 on the arc. Soft placement lets the feet slide (QuietPaw
+# and the stock quiet family saw the same trade-off). The one change is
+# the slip price, feet_slip -0.25 -> -0.75; Fu/Kumar/Malik 2021 report
+# that minimizing work also minimizes slip, so the two terms should not
+# fight. Phase C: restore from the converged quiet_v1 checkpoint. Judged
+# on slip_mean against quiet_v1 with the quiet metrics held.
+# Usage:
+#   ./run.sh train +experiment=legs_v627_quiet_v2 run_name=<name> \
+#     restore=runs/wojtek_legs_v627_quiet_v1/checkpoints/001002700800
+defaults:
+  - legs_v627_quiet
+
+task:
+  env:
+    reward:
+      scales:
+        feet_slip: -0.75
+
+ppo:
+  num_timesteps: 500000000
+
+run_name: wojtek_legs_v627_quiet_v2

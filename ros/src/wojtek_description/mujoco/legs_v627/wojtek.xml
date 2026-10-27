@@ -1,0 +1,279 @@
+<mujoco model="wojtek_legs_v627">
+  <compiler angle="radian" autolimits="true" eulerseq="zyx" meshdir="../../meshes" />
+  <default>
+    <joint armature="0.01" damping="0.3" frictionloss="0.3" limited="true" />
+    <geom conaffinity="15" condim="4" contype="1" friction="0.9 0.2 0.2" solref="0.001 2" />
+    <motor ctrllimited="true" />
+    <equality solref="0.001 2" />
+    <default class="visual">
+      <geom type="mesh" contype="0" conaffinity="0" group="2" density="0" material="grey" />
+    </default>
+    <default class="collision">
+      <geom type="mesh" group="3" />
+    </default>
+  </default>
+  <asset>
+    <mesh name="base_link" file="base_link.stl" />
+    <mesh name="first_link" file="first_link.stl" />
+    <mesh name="second_link" file="second_link.stl" />
+    <material name="grey" rgba="0.5 0.5 0.5 1.0" />
+    <mesh name="vis_udo_A" file="legs_v627/vis_udo_A.stl" />
+    <mesh name="vis_udo_B" file="legs_v627/vis_udo_B.stl" />
+    <mesh name="vis_dzwignia_A" file="legs_v627/vis_dzwignia_A.stl" />
+    <mesh name="vis_dzwignia_B" file="legs_v627/vis_dzwignia_B.stl" />
+    <mesh name="vis_wodzik_A" file="legs_v627/vis_wodzik_A.stl" />
+    <mesh name="vis_wodzik_B" file="legs_v627/vis_wodzik_B.stl" />
+    <mesh name="vis_golen_A" file="legs_v627/vis_golen_A.stl" />
+    <mesh name="vis_golen_B" file="legs_v627/vis_golen_B.stl" />
+    <material name="m_udo" rgba="0.85 0.45 0.20 1" />
+    <material name="m_dzwignia" rgba="0.25 0.60 0.85 1" />
+    <material name="m_wodzik" rgba="0.85 0.80 0.25 1" />
+    <material name="m_golen" rgba="0.35 0.75 0.35 1" />
+    <texture name="grid" type="2d" builtin="checker" rgb1=".2 .3 .4" rgb2=".1 .2 .3" width="300" height="300" />
+    <material name="grid" texture="grid" texrepeat="8 8" reflectance="0.1" />
+  </asset>
+  <worldbody>
+    <body name="root" pos="0 0 0.08" quat="1 0 0 0">
+      <freejoint name="root" />
+      <inertial pos="-0.00692690993 7.05821983e-05 0.0601677531" mass="7.54375" diaginertia="0.164006 0.150387 0.0273804" />
+      <!-- v6.27: korpus = M_ROBOT_KG 16.350 - nogi 8.806 kg; tensor Wojtka x0.401 -->
+      <site name="imu" pos="0 0 0" size="0.00000001" />
+      <geom class="visual" name="base_link_visual" mesh="base_link" quat="0 0 0 1" />
+      <geom class="collision" name="base_link_collision" mesh="base_link" quat="0 0 0 1" />
+      <geom class="visual" name="rear_left_first_link_visual" mesh="first_link" pos="-0.131 0.06 0.06" quat="0 0 -0.707107 0.707107" />
+      <geom class="collision" name="rear_left_first_link_collision" mesh="first_link" pos="-0.131 0.06 0.06" quat="0 0 -0.707107 0.707107" />
+      <geom class="visual" name="rear_right_first_link_visual" mesh="first_link" pos="-0.131 -0.06 0.06" quat="0 0 -0.707107 0.707107" />
+      <geom class="collision" name="rear_right_first_link_collision" mesh="first_link" pos="-0.131 -0.06 0.06" quat="0 0 -0.707107 0.707107" />
+      <geom class="visual" name="front_right_first_link_visual" mesh="first_link" pos="0.131 -0.06 0.06" quat="0.707107 -0.707107 0 0" />
+      <geom class="collision" name="front_right_first_link_collision" mesh="first_link" pos="0.131 -0.06 0.06" quat="0.707107 -0.707107 0 0" />
+      <geom class="visual" name="front_left_first_link_visual" mesh="first_link" pos="0.131 0.06 0.06" quat="0.707107 -0.707107 0 0" />
+      <geom class="collision" name="front_left_first_link_collision" mesh="first_link" pos="0.131 0.06 0.06" quat="0.707107 -0.707107 0 0" />
+      <body name="rear_left_second_link" pos="-0.162 0.06 0.06" quat="0 0 0.707107 0.707107">
+        <inertial diaginertia="0.00075 0.000455 0.000455" mass="0.6" pos="0.055 0 0" quat="0.5 0.5 -0.5 0.5" />
+        <joint name="rear_left_first_joint" axis="1 0 0" pos="0 0 0" damping="0.05" frictionloss="0.01" range="-3.1416 3.1416" />
+        <geom class="visual" name="rear_left_second_link_visual" mesh="second_link" />
+        <geom class="collision" name="rear_left_second_link_collision" mesh="second_link" />
+        <body name="rear_left_third_link" pos="0.064 0 0.0668000048" quat="0 0 0 1">
+          <inertial pos="0.0394156322 0.000858147547 0.0250979492" mass="1.0898013" fullinertia="0.00113131174 0.00915077731 0.00961974953 -0.000143718167 -9.20316273e-05 -4.05098865e-08" />
+          <!-- masa silnikow + mocowania: `third_link` Wojtka (0.6 kg) jako DRUGI inertial nie istnieje w MJCF -> jest DOLICZONA w `props` (patrz RAPORT §2) -->
+          <joint name="rear_left_second_joint" axis="0 0 -1" pos="0 0 0" range="-2.69478837 -1.53588974" armature="0.02" damping="0.05" frictionloss="0.2" />
+          <site name="rear_left_P1" pos="0 0 0" size="0.004" group="4" />
+          <geom class="visual" name="rear_left_udo_visual" type="mesh" mesh="vis_udo_B" material="m_udo" />
+          <body name="rear_left_fourth_link" pos="0 0 0">
+            <inertial pos="0.0138922194 4.11188856e-09 0.0149449436" mass="0.102018" fullinertia="2.0275739e-05 4.6477108e-05 4.996135e-05 5.59160128e-12 -7.4602413e-06 -1.49546912e-13" />
+            <joint name="rear_left_third_joint" axis="0 0 1" pos="0 0 0" range="-2.83266938 -0.244346095" armature="0.02" damping="0.05" frictionloss="0.2" />
+            <geom class="visual" name="rear_left_dzwignia_visual" type="mesh" mesh="vis_dzwignia_B" material="m_dzwignia" />
+            <body name="rear_left_fifth_link" pos="0.0329880602 0 0">
+              <inertial pos="0.200477529 4.01515853e-13 0.0255000221" mass="0.07891" fullinertia="7.59801241e-06 0.00114915708 0.00115302161 -7.61011458e-18 2.99430464e-10 -5.3572425e-18" />
+              <joint name="rear_left_fourth_joint" axis="0 0 -1" pos="0 0 0" limited="false" damping="0.01" frictionloss="1.2586" />
+              <geom class="visual" name="rear_left_wodzik_visual" type="mesh" mesh="vis_wodzik_B" material="m_wodzik" />
+              <site name="rear_left_chain_close_a" pos="0.290952718 0 0" size="0.005" group="4" />
+              <body name="rear_left_chain_close_a_link" pos="0.290952718 0 0" />
+            </body>
+          </body>
+          <body name="rear_left_sixth_link" pos="0.288242496 0 0">
+            <inertial pos="-0.0695813154 0.0314282279 0.0253786195" mass="0.33082967" fullinertia="0.000484073385 0.00284756885 0.00324257878 0.00105991563 -1.89937798e-05 6.52345872e-06" />
+            <joint name="rear_left_fifth_joint" axis="0 0 -1" pos="0 0 0" limited="false" damping="0.01" frictionloss="1.4784" />
+            <geom class="visual" name="rear_left_golen_visual" type="mesh" mesh="vis_golen_B" material="m_golen" />
+            <site name="rear_left_foot" pos="-0.2377128 0.1022437 0" size="0.005" group="4" />
+            <body name="rear_left_foot_link" pos="0.0418229679 0 0">
+              <inertial pos="0 0 0" mass="4e-06" diaginertia="1.3225e-08 1.3225e-08 2.2e-09" />
+              <joint name="rear_left_foot_joint" axis="0 0 1" pos="0 0 0" limited="false" armature="1e-4" damping="0.01" frictionloss="0" />
+              <site name="rear_left_chain_close_b" pos="0 0 0" size="0.005" group="4" />
+            </body>
+          </body>
+        </body>
+      </body>
+      <body name="rear_right_second_link" pos="-0.162 -0.06 0.06" quat="0 0 -0.707107 0.707107">
+        <inertial diaginertia="0.00075 0.000455 0.000455" mass="0.6" pos="0.055 0 0" quat="0.5 0.5 -0.5 0.5" />
+        <joint name="rear_right_first_joint" axis="1 0 0" pos="0 0 0" damping="0.05" frictionloss="0.01" range="-3.1416 3.1416" />
+        <geom class="visual" name="rear_right_second_link_visual" mesh="second_link" />
+        <geom class="collision" name="rear_right_second_link_collision" mesh="second_link" />
+        <body name="rear_right_third_link" pos="0.064 0 0.0668000048" quat="0 0 0 1">
+          <inertial pos="0.0394156322 -0.000858147547 0.0250979492" mass="1.0898013" fullinertia="0.00113131174 0.00915077731 0.00961974953 0.000143718167 -9.20316273e-05 4.05098865e-08" />
+          <!-- masa silnikow + mocowania: `third_link` Wojtka (0.6 kg) jako DRUGI inertial nie istnieje w MJCF -> jest DOLICZONA w `props` (patrz RAPORT §2) -->
+          <joint name="rear_right_second_joint" axis="0 0 1" pos="0 0 0" range="-2.69478837 -1.53588974" armature="0.02" damping="0.05" frictionloss="0.2" />
+          <site name="rear_right_P1" pos="0 0 0" size="0.004" group="4" />
+          <geom class="visual" name="rear_right_udo_visual" type="mesh" mesh="vis_udo_A" material="m_udo" />
+          <body name="rear_right_fourth_link" pos="0 0 0">
+            <inertial pos="0.0138922194 -4.11188856e-09 0.0149449436" mass="0.102018" fullinertia="2.0275739e-05 4.6477108e-05 4.996135e-05 -5.59160128e-12 -7.4602413e-06 1.49546912e-13" />
+            <joint name="rear_right_third_joint" axis="0 0 -1" pos="0 0 0" range="-2.83266938 -0.244346095" armature="0.02" damping="0.05" frictionloss="0.2" />
+            <geom class="visual" name="rear_right_dzwignia_visual" type="mesh" mesh="vis_dzwignia_A" material="m_dzwignia" />
+            <body name="rear_right_fifth_link" pos="0.0329880602 0 0">
+              <inertial pos="0.200477529 -4.01515853e-13 0.0255000221" mass="0.07891" fullinertia="7.59801241e-06 0.00114915708 0.00115302161 7.61011458e-18 2.99430464e-10 5.3572425e-18" />
+              <joint name="rear_right_fourth_joint" axis="0 0 -1" pos="0 0 0" limited="false" damping="0.01" frictionloss="1.2586" />
+              <geom class="visual" name="rear_right_wodzik_visual" type="mesh" mesh="vis_wodzik_A" material="m_wodzik" />
+              <site name="rear_right_chain_close_a" pos="0.290952718 0 0" size="0.005" group="4" />
+              <body name="rear_right_chain_close_a_link" pos="0.290952718 0 0" />
+            </body>
+          </body>
+          <body name="rear_right_sixth_link" pos="0.288242496 0 0">
+            <inertial pos="-0.0695813154 -0.0314282279 0.0253786195" mass="0.33082967" fullinertia="0.000484073385 0.00284756885 0.00324257878 -0.00105991563 -1.89937798e-05 -6.52345872e-06" />
+            <joint name="rear_right_fifth_joint" axis="0 0 -1" pos="0 0 0" limited="false" damping="0.01" frictionloss="1.4784" />
+            <geom class="visual" name="rear_right_golen_visual" type="mesh" mesh="vis_golen_A" material="m_golen" />
+            <site name="rear_right_foot" pos="-0.2377128 -0.1022437 0" size="0.005" group="4" />
+            <body name="rear_right_foot_link" pos="0.0418229679 0 0">
+              <inertial pos="0 0 0" mass="4e-06" diaginertia="1.3225e-08 1.3225e-08 2.2e-09" />
+              <joint name="rear_right_foot_joint" axis="0 0 1" pos="0 0 0" limited="false" armature="1e-4" damping="0.01" frictionloss="0" />
+              <site name="rear_right_chain_close_b" pos="0 0 0" size="0.005" group="4" />
+            </body>
+          </body>
+        </body>
+      </body>
+      <body name="front_right_second_link" pos="0.162 -0.06 0.06" quat="0.707107 0.707107 0 0">
+        <inertial diaginertia="0.00075 0.000455 0.000455" mass="0.6" pos="0.055 0 0" quat="0.5 0.5 -0.5 0.5" />
+        <joint name="front_right_first_joint" axis="1 0 0" pos="0 0 0" damping="0.05" frictionloss="0.01" range="-3.1416 3.1416" />
+        <geom class="visual" name="front_right_second_link_visual" mesh="second_link" />
+        <geom class="collision" name="front_right_second_link_collision" mesh="second_link" />
+        <body name="front_right_third_link" pos="0.064 0 0.0668000048" quat="1 0 0 0">
+          <inertial pos="0.0394156322 -0.000858147547 0.0250979492" mass="1.0898013" fullinertia="0.00113131174 0.00915077731 0.00961974953 0.000143718167 -9.20316273e-05 4.05098865e-08" />
+          <!-- masa silnikow + mocowania: `third_link` Wojtka (0.6 kg) jako DRUGI inertial nie istnieje w MJCF -> jest DOLICZONA w `props` (patrz RAPORT §2) -->
+          <joint name="front_right_second_joint" axis="0 0 -1" pos="0 0 0" range="1.53588974 2.69478837" armature="0.02" damping="0.05" frictionloss="0.2" />
+          <site name="front_right_P1" pos="0 0 0" size="0.004" group="4" />
+          <geom class="visual" name="front_right_udo_visual" type="mesh" mesh="vis_udo_A" material="m_udo" />
+          <body name="front_right_fourth_link" pos="0 0 0">
+            <inertial pos="0.0138922194 -4.11188856e-09 0.0149449436" mass="0.102018" fullinertia="2.0275739e-05 4.6477108e-05 4.996135e-05 -5.59160128e-12 -7.4602413e-06 1.49546912e-13" />
+            <joint name="front_right_third_joint" axis="0 0 1" pos="0 0 0" range="0.244346095 2.83266938" armature="0.02" damping="0.05" frictionloss="0.2" />
+            <geom class="visual" name="front_right_dzwignia_visual" type="mesh" mesh="vis_dzwignia_A" material="m_dzwignia" />
+            <body name="front_right_fifth_link" pos="0.0329880602 0 0">
+              <inertial pos="0.200477529 -4.01515853e-13 0.0255000221" mass="0.07891" fullinertia="7.59801241e-06 0.00114915708 0.00115302161 7.61011458e-18 2.99430464e-10 5.3572425e-18" />
+              <joint name="front_right_fourth_joint" axis="0 0 -1" pos="0 0 0" limited="false" damping="0.01" frictionloss="1.2586" />
+              <geom class="visual" name="front_right_wodzik_visual" type="mesh" mesh="vis_wodzik_A" material="m_wodzik" />
+              <site name="front_right_chain_close_a" pos="0.290952718 0 0" size="0.005" group="4" />
+              <body name="front_right_chain_close_a_link" pos="0.290952718 0 0" />
+            </body>
+          </body>
+          <body name="front_right_sixth_link" pos="0.288242496 0 0">
+            <inertial pos="-0.0695813154 -0.0314282279 0.0253786195" mass="0.33082967" fullinertia="0.000484073385 0.00284756885 0.00324257878 -0.00105991563 -1.89937798e-05 -6.52345872e-06" />
+            <joint name="front_right_fifth_joint" axis="0 0 -1" pos="0 0 0" limited="false" damping="0.01" frictionloss="1.4784" />
+            <geom class="visual" name="front_right_golen_visual" type="mesh" mesh="vis_golen_A" material="m_golen" />
+            <site name="front_right_foot" pos="-0.2377128 -0.1022437 0" size="0.005" group="4" />
+            <body name="front_right_foot_link" pos="0.0418229679 0 0">
+              <inertial pos="0 0 0" mass="4e-06" diaginertia="1.3225e-08 1.3225e-08 2.2e-09" />
+              <joint name="front_right_foot_joint" axis="0 0 1" pos="0 0 0" limited="false" armature="1e-4" damping="0.01" frictionloss="0" />
+              <site name="front_right_chain_close_b" pos="0 0 0" size="0.005" group="4" />
+            </body>
+          </body>
+        </body>
+      </body>
+      <body name="front_left_second_link" pos="0.162 0.06 0.06" quat="0.707107 -0.707107 0 0">
+        <inertial diaginertia="0.00075 0.000455 0.000455" mass="0.6" pos="0.055 0 0" quat="0.5 0.5 -0.5 0.5" />
+        <joint name="front_left_first_joint" axis="1 0 0" pos="0 0 0" damping="0.05" frictionloss="0.01" range="-3.1416 3.1416" />
+        <geom class="visual" name="front_left_second_link_visual" mesh="second_link" />
+        <geom class="collision" name="front_left_second_link_collision" mesh="second_link" />
+        <body name="front_left_third_link" pos="0.064 0 0.0668000048" quat="1 0 0 0">
+          <inertial pos="0.0394156322 0.000858147547 0.0250979492" mass="1.0898013" fullinertia="0.00113131174 0.00915077731 0.00961974953 -0.000143718167 -9.20316273e-05 -4.05098865e-08" />
+          <!-- masa silnikow + mocowania: `third_link` Wojtka (0.6 kg) jako DRUGI inertial nie istnieje w MJCF -> jest DOLICZONA w `props` (patrz RAPORT §2) -->
+          <joint name="front_left_second_joint" axis="0 0 1" pos="0 0 0" range="1.53588974 2.69478837" armature="0.02" damping="0.05" frictionloss="0.2" />
+          <site name="front_left_P1" pos="0 0 0" size="0.004" group="4" />
+          <geom class="visual" name="front_left_udo_visual" type="mesh" mesh="vis_udo_B" material="m_udo" />
+          <body name="front_left_fourth_link" pos="0 0 0">
+            <inertial pos="0.0138922194 4.11188856e-09 0.0149449436" mass="0.102018" fullinertia="2.0275739e-05 4.6477108e-05 4.996135e-05 5.59160128e-12 -7.4602413e-06 -1.49546912e-13" />
+            <joint name="front_left_third_joint" axis="0 0 -1" pos="0 0 0" range="0.244346095 2.83266938" armature="0.02" damping="0.05" frictionloss="0.2" />
+            <geom class="visual" name="front_left_dzwignia_visual" type="mesh" mesh="vis_dzwignia_B" material="m_dzwignia" />
+            <body name="front_left_fifth_link" pos="0.0329880602 0 0">
+              <inertial pos="0.200477529 4.01515853e-13 0.0255000221" mass="0.07891" fullinertia="7.59801241e-06 0.00114915708 0.00115302161 -7.61011458e-18 2.99430464e-10 -5.3572425e-18" />
+              <joint name="front_left_fourth_joint" axis="0 0 -1" pos="0 0 0" limited="false" damping="0.01" frictionloss="1.2586" />
+              <geom class="visual" name="front_left_wodzik_visual" type="mesh" mesh="vis_wodzik_B" material="m_wodzik" />
+              <site name="front_left_chain_close_a" pos="0.290952718 0 0" size="0.005" group="4" />
+              <body name="front_left_chain_close_a_link" pos="0.290952718 0 0" />
+            </body>
+          </body>
+          <body name="front_left_sixth_link" pos="0.288242496 0 0">
+            <inertial pos="-0.0695813154 0.0314282279 0.0253786195" mass="0.33082967" fullinertia="0.000484073385 0.00284756885 0.00324257878 0.00105991563 -1.89937798e-05 6.52345872e-06" />
+            <joint name="front_left_fifth_joint" axis="0 0 -1" pos="0 0 0" limited="false" damping="0.01" frictionloss="1.4784" />
+            <geom class="visual" name="front_left_golen_visual" type="mesh" mesh="vis_golen_B" material="m_golen" />
+            <site name="front_left_foot" pos="-0.2377128 0.1022437 0" size="0.005" group="4" />
+            <body name="front_left_foot_link" pos="0.0418229679 0 0">
+              <inertial pos="0 0 0" mass="4e-06" diaginertia="1.3225e-08 1.3225e-08 2.2e-09" />
+              <joint name="front_left_foot_joint" axis="0 0 1" pos="0 0 0" limited="false" armature="1e-4" damping="0.01" frictionloss="0" />
+              <site name="front_left_chain_close_b" pos="0 0 0" size="0.005" group="4" />
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <motor name="rear_left_first_joint" joint="rear_left_first_joint" gear="1" ctrllimited="true" ctrlrange="-2.0 2.0" />
+    <motor name="rear_left_second_joint" joint="rear_left_second_joint" gear="1" ctrllimited="true" ctrlrange="-22 22" />
+    <motor name="rear_left_third_joint" joint="rear_left_third_joint" gear="1" ctrllimited="true" ctrlrange="-22 22" />
+    <motor name="rear_right_first_joint" joint="rear_right_first_joint" gear="1" ctrllimited="true" ctrlrange="-2.0 2.0" />
+    <motor name="rear_right_second_joint" joint="rear_right_second_joint" gear="1" ctrllimited="true" ctrlrange="-22 22" />
+    <motor name="rear_right_third_joint" joint="rear_right_third_joint" gear="1" ctrllimited="true" ctrlrange="-22 22" />
+    <motor name="front_right_first_joint" joint="front_right_first_joint" gear="1" ctrllimited="true" ctrlrange="-2.0 2.0" />
+    <motor name="front_right_second_joint" joint="front_right_second_joint" gear="1" ctrllimited="true" ctrlrange="-22 22" />
+    <motor name="front_right_third_joint" joint="front_right_third_joint" gear="1" ctrllimited="true" ctrlrange="-22 22" />
+    <motor name="front_left_first_joint" joint="front_left_first_joint" gear="1" ctrllimited="true" ctrlrange="-2.0 2.0" />
+    <motor name="front_left_second_joint" joint="front_left_second_joint" gear="1" ctrllimited="true" ctrlrange="-22 22" />
+    <motor name="front_left_third_joint" joint="front_left_third_joint" gear="1" ctrllimited="true" ctrlrange="-22 22" />
+  </actuator>
+  <sensor>
+    <actuatorpos name="rear_left_first_joint_p" actuator="rear_left_first_joint" />
+    <actuatorvel name="rear_left_first_joint_v" actuator="rear_left_first_joint" />
+    <actuatorfrc name="rear_left_first_joint_f" actuator="rear_left_first_joint" noise="0.001" />
+    <actuatorpos name="rear_left_second_joint_p" actuator="rear_left_second_joint" />
+    <actuatorvel name="rear_left_second_joint_v" actuator="rear_left_second_joint" />
+    <actuatorfrc name="rear_left_second_joint_f" actuator="rear_left_second_joint" noise="0.001" />
+    <actuatorpos name="rear_left_third_joint_p" actuator="rear_left_third_joint" />
+    <actuatorvel name="rear_left_third_joint_v" actuator="rear_left_third_joint" />
+    <actuatorfrc name="rear_left_third_joint_f" actuator="rear_left_third_joint" noise="0.001" />
+    <actuatorpos name="rear_right_first_joint_p" actuator="rear_right_first_joint" />
+    <actuatorvel name="rear_right_first_joint_v" actuator="rear_right_first_joint" />
+    <actuatorfrc name="rear_right_first_joint_f" actuator="rear_right_first_joint" noise="0.001" />
+    <actuatorpos name="rear_right_second_joint_p" actuator="rear_right_second_joint" />
+    <actuatorvel name="rear_right_second_joint_v" actuator="rear_right_second_joint" />
+    <actuatorfrc name="rear_right_second_joint_f" actuator="rear_right_second_joint" noise="0.001" />
+    <actuatorpos name="rear_right_third_joint_p" actuator="rear_right_third_joint" />
+    <actuatorvel name="rear_right_third_joint_v" actuator="rear_right_third_joint" />
+    <actuatorfrc name="rear_right_third_joint_f" actuator="rear_right_third_joint" noise="0.001" />
+    <actuatorpos name="front_right_first_joint_p" actuator="front_right_first_joint" />
+    <actuatorvel name="front_right_first_joint_v" actuator="front_right_first_joint" />
+    <actuatorfrc name="front_right_first_joint_f" actuator="front_right_first_joint" noise="0.001" />
+    <actuatorpos name="front_right_second_joint_p" actuator="front_right_second_joint" />
+    <actuatorvel name="front_right_second_joint_v" actuator="front_right_second_joint" />
+    <actuatorfrc name="front_right_second_joint_f" actuator="front_right_second_joint" noise="0.001" />
+    <actuatorpos name="front_right_third_joint_p" actuator="front_right_third_joint" />
+    <actuatorvel name="front_right_third_joint_v" actuator="front_right_third_joint" />
+    <actuatorfrc name="front_right_third_joint_f" actuator="front_right_third_joint" noise="0.001" />
+    <actuatorpos name="front_left_first_joint_p" actuator="front_left_first_joint" />
+    <actuatorvel name="front_left_first_joint_v" actuator="front_left_first_joint" />
+    <actuatorfrc name="front_left_first_joint_f" actuator="front_left_first_joint" noise="0.001" />
+    <actuatorpos name="front_left_second_joint_p" actuator="front_left_second_joint" />
+    <actuatorvel name="front_left_second_joint_v" actuator="front_left_second_joint" />
+    <actuatorfrc name="front_left_second_joint_f" actuator="front_left_second_joint" noise="0.001" />
+    <actuatorpos name="front_left_third_joint_p" actuator="front_left_third_joint" />
+    <actuatorvel name="front_left_third_joint_v" actuator="front_left_third_joint" />
+    <actuatorfrc name="front_left_third_joint_f" actuator="front_left_third_joint" noise="0.001" />
+    <framequat name="orientation" objtype="site" objname="imu" noise="0.001" />
+    <gyro name="angular-velocity" site="imu" noise="0.005" cutoff="34.9" />
+    <accelerometer name="linear-acceleration" site="imu" />
+  </sensor>
+  <contact>
+    <!-- para WOJTKA (jego abad w obrysie jego korpusu, przenikanie 63.7..80.5 mm POMIAR) — wyklucza ja rowniez ORYGINALNY wojtek.xml; nie dotyka naszego czworoboku -->
+    <exclude name="ex_front_left_second_link_root" body1="front_left_second_link" body2="root" />
+    <!-- przegub D: wodzik i golen sa polaczone PETLA (nie sa para rodzic-dziecko, wiec MuJoCo ich nie filtruje) — luz ruchowy z bramki 1 jest MNIEJSZY od bledu otoczek coacd -->
+    <exclude name="ex_front_left_fifth_link_sixth_link" body1="front_left_fifth_link" body2="front_left_sixth_link" />
+    <!-- para WOJTKA (jego abad w obrysie jego korpusu, przenikanie 63.7..80.5 mm POMIAR) — wyklucza ja rowniez ORYGINALNY wojtek.xml; nie dotyka naszego czworoboku -->
+    <exclude name="ex_front_right_second_link_root" body1="front_right_second_link" body2="root" />
+    <!-- przegub D: wodzik i golen sa polaczone PETLA (nie sa para rodzic-dziecko, wiec MuJoCo ich nie filtruje) — luz ruchowy z bramki 1 jest MNIEJSZY od bledu otoczek coacd -->
+    <exclude name="ex_front_right_fifth_link_sixth_link" body1="front_right_fifth_link" body2="front_right_sixth_link" />
+    <!-- para WOJTKA (jego abad w obrysie jego korpusu, przenikanie 63.7..80.5 mm POMIAR) — wyklucza ja rowniez ORYGINALNY wojtek.xml; nie dotyka naszego czworoboku -->
+    <exclude name="ex_rear_left_second_link_root" body1="rear_left_second_link" body2="root" />
+    <!-- przegub D: wodzik i golen sa polaczone PETLA (nie sa para rodzic-dziecko, wiec MuJoCo ich nie filtruje) — luz ruchowy z bramki 1 jest MNIEJSZY od bledu otoczek coacd -->
+    <exclude name="ex_rear_left_fifth_link_sixth_link" body1="rear_left_fifth_link" body2="rear_left_sixth_link" />
+    <!-- para WOJTKA (jego abad w obrysie jego korpusu, przenikanie 63.7..80.5 mm POMIAR) — wyklucza ja rowniez ORYGINALNY wojtek.xml; nie dotyka naszego czworoboku -->
+    <exclude name="ex_rear_right_second_link_root" body1="rear_right_second_link" body2="root" />
+    <!-- przegub D: wodzik i golen sa polaczone PETLA (nie sa para rodzic-dziecko, wiec MuJoCo ich nie filtruje) — luz ruchowy z bramki 1 jest MNIEJSZY od bledu otoczek coacd -->
+    <exclude name="ex_rear_right_fifth_link_sixth_link" body1="rear_right_fifth_link" body2="rear_right_sixth_link" />
+  </contact>
+  <equality>
+    <connect name="equality_sconstraint_front_left" site1="front_left_chain_close_b" site2="front_left_chain_close_a" active="true" />
+    <connect name="equality_sconstraint_front_right" site1="front_right_chain_close_b" site2="front_right_chain_close_a" active="true" />
+    <connect name="equality_sconstraint_rear_left" site1="rear_left_chain_close_b" site2="rear_left_chain_close_a" active="true" />
+    <connect name="equality_sconstraint_rear_right" site1="rear_right_chain_close_b" site2="rear_right_chain_close_a" active="true" />
+  </equality>
+  <keyframe>
+    <key name="stanie" qpos="0 0 0.359994599 1 0 0 0 0 -2.25954745 -2.00631532 -2.23915174 -2.04393848 0 0 -2.25954745 -2.00631532 2.23915174 2.04393848 0 0 2.25954745 2.00631532 2.23915174 2.04393848 0 0 2.25954745 2.00631532 -2.23915174 -2.04393848 0" />
+  </keyframe>
+</mujoco>

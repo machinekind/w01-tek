@@ -22,9 +22,12 @@
 # human, on purpose: the service boots with boot_pose:=folded and zeroes
 # the encoders assuming that pose, and a robot that lost its drives under
 # load is lying wherever it fell, possibly with someone already handling
-# it. Lay it down folded, then `systemctl start wojtek-robot.service` (or
-# the pad / the deck). Until this version the loop started the service by
-# itself as soon as the drives answered.
+# it. Lay it down folded, then start the service: over ssh
+# (`sudo systemctl start wojtek-robot.service`) or from the PC with
+# `ros2 run wojtek_bringup robot`, which does that ssh for you. The pad
+# and the deck panel cannot: both live inside the stack that was just
+# stopped. Until this version the loop started the service by itself as
+# soon as the drives answered.
 #
 # Two signals for "component not active", cheapest first:
 #   * the CM's own journal: the driver logs "Drive link lost" and the CM

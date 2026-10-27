@@ -99,7 +99,7 @@ def policy_store() -> Path:
 # to resolve it too, and this module imports nothing beyond the standard
 # library.
 _DEFAULT_REPO = ("wojtek-quiet-locomotion"
-                 "@553795b13001cc1f519a4abc0235f275095129f8")
+                 "@46b5f299a1e249c5c4c4e3fd521aa82884ddb186")
 
 
 def default_policy() -> str:

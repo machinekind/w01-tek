@@ -219,8 +219,9 @@ that policy, syncs it, and leaves the robot running it. A plain `./deploy.sh`
 puts the pinned default back.
 
 The pin belongs to a robot profile in `wojtek_policy/robots.py`. `WOJTEK_ROBOT`
-in `.env` names the profile whose pin `deploy.sh` resolves, and it defaults to
-`wojtek`, the stock legs. The launch files take the same name as `robot:=`
+in the repo-root `.env` (next to `HF_ORGANIZATION`; `deploy.sh` reads that file
+as well as `ros/.env`) names the profile whose pin `deploy.sh` resolves, and it
+defaults to `wojtek`, the stock legs. The launch files take the same name as `robot:=`
 next to `policy:=`. It sets the URDF legs, the joint map, the knee clamp and
 the default policy, and a policy trained for other legs is refused.
 

@@ -34,10 +34,17 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
-# Secrets + local overrides (UBUNTU_PRO_TOKEN, optional RPI_HOST, ...).
-if [ -f "${HERE}/.env" ]; then
-    set -a; . "${HERE}/.env"; set +a
-fi
+# Two .env files, both gitignored, both optional. The repo-root one holds
+# what the whole repository shares and this script needs for the policy
+# pin: HF_ORGANIZATION, WOJTEK_ROBOT, HF_TOKEN (see ../.env.example). The
+# one next to this script holds the robot's own secrets and overrides:
+# UBUNTU_PRO_TOKEN, WOJTEK_AP_PSK, optional RPI_HOST (see .env.example).
+# The robot's file is read second, so it wins on a name set in both.
+for env_file in "${HERE}/../.env" "${HERE}/.env"; do
+    if [ -f "${env_file}" ]; then
+        set -a; . "${env_file}"; set +a
+    fi
+done
 
 RPI_HOST="${RPI_HOST:-rpi@10.42.0.2}"      # static anchor; same over eth or the RPi's AP
 REMOTE_WS="${REMOTE_WS:-wojtek_ws}"        # relative to the RPi user's home

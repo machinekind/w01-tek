@@ -31,7 +31,9 @@
 # a wrong zero on every joint. Such a dip never shows SILENT_MIN_S of
 # silence here; a hand on the switch does. The operator's procedure after
 # any lost link: lay the robot down folded, motor power off, count to
-# five, motor power on. The stack comes up by itself, no ssh.
+# ten, motor power on. The stack comes up by itself, no ssh. Ten seconds
+# rather than three so that a supply brownout of a few seconds, which
+# comes back on its own, does not pass for a hand on the switch.
 #
 # Two signals for "component not active", cheapest first:
 #   * the CM's own journal: the driver logs "Drive link lost" and the CM
@@ -63,7 +65,7 @@ GRACE_S=60
 # free, mdtool is cheap), and the motor power must have been off for at
 # least this long before answering drives count as a switch cycle.
 DOWN_POLL_S=1
-SILENT_MIN_S=3
+SILENT_MIN_S=10
 
 log() { echo "$*" | systemd-cat -t wojtek-cm-watchdog; }
 

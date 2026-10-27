@@ -1,5 +1,6 @@
 #!/bin/bash
-# wojtek-cm-watchdog: bring wojtek-robot back when the drive link dies.
+# wojtek-cm-watchdog: stop wojtek-robot when the drive link dies, and say
+# when the drives are back so a human can start it again.
 #
 # Three ways the control stack loses the drives, and what this loop sees:
 #
@@ -15,10 +16,15 @@
 #
 # In every case the fix is a fresh bring-up, and a fresh bring-up only
 # works once the drives answer. So: on a dead CM or a non-active hardware
-# component, stop the service (frees the SPI bus), probe the drives with
-# mdtool (as the robot user: its ini pins bus=SPI), and start the service
-# again when they answer. While they are silent -- motor power off -- hold,
-# instead of restart-looping a stack that cannot come up.
+# component, stop the service (frees the SPI bus and leaves the drives
+# disabled), then probe the drives with mdtool (as the robot user: its ini
+# pins bus=SPI) and log once when they answer. The start is left to a
+# human, on purpose: the service boots with boot_pose:=folded and zeroes
+# the encoders assuming that pose, and a robot that lost its drives under
+# load is lying wherever it fell, possibly with someone already handling
+# it. Lay it down folded, then `systemctl start wojtek-robot.service` (or
+# the pad / the deck). Until this version the loop started the service by
+# itself as soon as the drives answered.
 #
 # Two signals for "component not active", cheapest first:
 #   * the CM's own journal: the driver logs "Drive link lost" and the CM
@@ -97,6 +103,7 @@ drives_answer() {
 
 sleep 30
 power_off=0
+drives_back_logged=0
 misses=0
 last_probe=0
 while true; do
@@ -132,23 +139,28 @@ while true; do
         fi
         systemctl stop "${SERVICE}"
         power_off=0
+        drives_back_logged=0
         misses=0
         continue
     fi
 
-    # Service down (we stopped it, or it never came up): bring it back only
-    # once the drives answer. mdtool needs the SPI bus, which is free now.
+    # Service down (we stopped it, or it never came up): watch the drives
+    # and say when they are back. mdtool needs the SPI bus, which is free
+    # now. No start from here (see the header); the one line per change of
+    # state is what the operator reads in the journal.
     if drives_answer; then
-        if [ "${power_off}" = 1 ]; then
-            log "motor power BACK -- starting ${SERVICE}"
-        else
-            log "drives answer -- starting ${SERVICE}"
+        if [ "${drives_back_logged}" = 0 ]; then
+            if [ "${power_off}" = 1 ]; then
+                log "motor power BACK; ${SERVICE} stays stopped -- lay the robot down folded, then start it by hand"
+            else
+                log "drives answer; ${SERVICE} stays stopped -- lay the robot down folded, then start it by hand"
+            fi
+            drives_back_logged=1
         fi
         power_off=0
-        systemctl start "${SERVICE}"
-        sleep "${GRACE_S}"
     elif [ "${power_off}" = 0 ]; then
         log "drives SILENT -- motor power off or bus open; waiting"
         power_off=1
+        drives_back_logged=0
     fi
 done

@@ -1,0 +1,16 @@
+# Stop wojtek-robot.service when the controller manager loses the drives,
+# and log when they answer again. Installed and enabled by
+# deploy/rpi/install.sh (robot service phase); the why and the three
+# failure cases it covers are in wojtek-cm-watchdog.sh.
+[Unit]
+Description=Wojtek: stop the control stack when the drive link dies
+After=wojtek-robot.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/wojtek-cm-watchdog.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

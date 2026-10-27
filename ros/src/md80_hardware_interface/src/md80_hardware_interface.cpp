@@ -224,9 +224,10 @@ hardware_interface::return_type MD80HardwareInterface::read(
   // identical across ALL drives for link_stall_cycles consecutive cycles
   // (URDF <hardware> param, default 200 = 1 s at 200 Hz; 0 disables) is a
   // lost link. Returning ERROR makes the controller manager log "read cycle
-  // resulted in an error" and drop this component, which is exactly what
-  // the on-robot CM watchdog waits for before it restarts the stack once
-  // the drives answer again. Skipped in dry_run (disabled drives can sit
+  // resulted in an error" and drop this component, which is what the
+  // on-robot CM watchdog (deploy/rpi/wojtek-cm-watchdog.sh) waits for: it
+  // stops the service and logs when the drives answer again; a human
+  // starts the stack. Skipped in dry_run (disabled drives can sit
   // at exact zeros) and until the update loop has been started.
   if (update_loop_running_ && !dry_run_ && link_stall_cycles_ > 0) {
     if (raw == last_raw_) {

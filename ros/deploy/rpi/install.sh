@@ -11,8 +11,9 @@
 #                     unattended upgrades off (apt-daily timers masked)
 #   4 network       : hostapd/dnsmasq/netplan + failover switch      (--skip-network)
 #   5 robot service : install wojtek-robot.service + the local       (--skip-service)
-#                     drop-in (folded boot, bag off, /home/rpi/policy
-#                     symlink); boot autostart only with --enable-robot
+#                     drop-in (robot:= profile, keeper org, folded boot,
+#                     bag off) and wojtek-cm-watchdog.service; boot
+#                     autostart only with --enable-robot
 #   6 shell env     : ROS env in ~/.bashrc (domain 42 + CycloneDDS)  (--skip-shell-env)
 #
 # Needs the token for phase 2 (RT kernel), passed by deploy.sh from .env:
@@ -343,6 +344,15 @@ provision_service() {
     run "sudo mkdir -p /etc/systemd/system/wojtek-robot.service.d"
     run "sed -e 's|__WOJTEK_ROBOT__|${WOJTEK_ROBOT:-wojtek}|g' -e 's|__HF_ORGANIZATION__|${HF_ORGANIZATION:-}|g' '${HERE}/wojtek-robot-local.conf' | sudo install -m644 /dev/stdin /etc/systemd/system/wojtek-robot.service.d/10-local.conf"
     run "sudo rm -f /etc/systemd/system/wojtek-robot.service.d/10-policy.conf"
+    # The CM watchdog stops the stack when the drives stop answering (motor
+    # power lost, CANdle reset) and logs when they are back; it never
+    # starts the stack itself -- see wojtek-cm-watchdog.sh.
+    info "installing wojtek-cm-watchdog.service (stop the stack on a lost drive link)"
+    run "sudo install -m755 '${HERE}/wojtek-cm-watchdog.sh' /usr/local/sbin/wojtek-cm-watchdog.sh"
+    run "sudo install -m644 '${HERE}/wojtek-cm-watchdog.service' /etc/systemd/system/wojtek-cm-watchdog.service"
+    run "sudo systemctl daemon-reload"
+    run "sudo systemctl enable wojtek-cm-watchdog.service"
+    run "sudo systemctl restart wojtek-cm-watchdog.service || true"
     run "sudo systemctl daemon-reload"
     # The unit is always installed/refreshed; --enable-robot decides whether it
     # runs at power-on, and this phase enforces that state either way. Running

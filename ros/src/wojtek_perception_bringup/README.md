@@ -73,7 +73,7 @@ and the last one wins.
 | piece | state |
 |---|---|
 | camera settings | measured on hardware, see `config/d435.yaml` |
-| camera -> body extrinsics | **placeholder numbers**, must be measured |
+| camera -> body extrinsics | the design mount (0.32 m ahead, 0.07 m up, 15 deg down; `config/extrinsics.yaml`, the same numbers as the URDF and `camera_spec.py`, cross-checked by tests). On the robot the URDF publishes the edge (`with_camera_mount`); this file is for a standalone launch. **Not yet confirmed by measurement on the head** |
 | odom-frame accumulated cloud | REMOVED 2026-09 (superseded by the SLAM's map) |
 | depth -> 8x8 grid reduction | REMOVED 2026-08 (fed only the dropped SCAN-planner path) |
 

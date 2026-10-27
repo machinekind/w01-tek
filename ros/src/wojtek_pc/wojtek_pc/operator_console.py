@@ -10,7 +10,8 @@ the nodes already expose -- nothing in wojtek_bringup / wojtek_policy changes:
   * Services (M1): /wojtek/arm (SetBool), /wojtek/zero, /wojtek/stand_up,
     /wojtek/lie_down (Trigger), /wojtek/enable (SetBool), /wojtek/reset (Trigger).
   * Telemetry (M2): measured joint angles from /wojtek/joint_states_abs and
-    orientation/angular-rate from /imu_sensor_broadcaster/imu, shown live.
+    orientation/angular-rate from /imu_sensor_broadcaster/imu, shown live,
+    turned from the IMU's own axes into the robot's (base_link).
   * Joint jog (M3): per-joint sliders publish /wojtek/joint_targets (absolute
     URDF JointState). real_io_node applies them ONLY when armed, and does NOT
     ramp -- so we ramp here, nudging the published target toward the slider set-
@@ -57,6 +58,8 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from wojtek_policy.imu_mount import IMU_MOUNT_RPY, into_base
 
 # Console-side cap on the XY-pad drive commands [vx, vy, yaw]. Deliberately
 # conservative; policy_node additionally clips /cmd_vel to the loaded
@@ -124,6 +127,12 @@ class RosNode(Node):
             JointState, "wojtek/joint_states_abs", self._on_joints_abs, 10)
         self.create_subscription(
             JointState, "joint_states", self._on_joints_raw, 10)
+        # The IMU is bolted on turned a quarter turn; this is how, so its
+        # readings can be turned into the robot's roll, pitch and heading.
+        # The default is the robot's own mount, so a console started by
+        # hand, without a launch file, shows the right numbers too.
+        self.declare_parameter("imu_mount_rpy", list(IMU_MOUNT_RPY))
+        self._imu_mount = [float(v) for v in self.get_parameter("imu_mount_rpy").value]
         self.create_subscription(
             Imu, "imu_sensor_broadcaster/imu", self._on_imu, 10)
 
@@ -156,9 +165,12 @@ class RosNode(Node):
         self.sig.joints.emit((list(msg.name), list(msg.position), vel))
 
     def _on_imu(self, msg: Imu):
+        # The topic carries the sensor's own frame; the window shows the
+        # robot's. Same (quat xyzw, gyro xyz) shape as before, in base_link.
         q = msg.orientation
         w = msg.angular_velocity
-        self.sig.imu.emit(((q.x, q.y, q.z, q.w), (w.x, w.y, w.z)))
+        q_b, w_b = into_base((q.x, q.y, q.z, q.w), (w.x, w.y, w.z), self._imu_mount)
+        self.sig.imu.emit((q_b, w_b))
 
     def _on_urdf(self, msg: String):
         limits = {}

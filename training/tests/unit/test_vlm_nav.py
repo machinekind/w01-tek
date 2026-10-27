@@ -1,12 +1,11 @@
 """Unit tests for the VLM navigation bridge.
 
-Pure offline: no anthropic import, no room assets. The navigator loop runs
+Pure offline: no model server, no room assets. The navigator loop runs
 against a FakeSim/FakeClient pair via asyncio.run().
 """
 
 import asyncio
 import math
-from types import SimpleNamespace
 
 import pytest
 
@@ -17,9 +16,7 @@ from wojtek_rl.vlm_nav import (
     MAX_TURN_DEG,
     VlmDecision,
     VlmNavigator,
-    build_messages,
     decision_to_command,
-    parse_response,
     situation_text,
 )
 
@@ -82,53 +79,20 @@ def test_mapped_commands_pass_parse_command(decision):
     parse_command(decision_to_command(decision))
 
 
-# --- build_messages ---------------------------------------------------------
+# --- situation_text ---------------------------------------------------------
 
 
-def test_build_messages_contains_image_and_goal():
-    msgs = build_messages("go to the bed", "abc123", [], 1, 20, POSE)
-    assert len(msgs) == 1
-    content = msgs[0]["content"]
-    assert content[0]["type"] == "image"
-    assert content[0]["source"]["data"] == "abc123"
-    assert "go to the bed" in content[1]["text"]
-    assert "Step 1 of 20" in content[1]["text"]
+def test_situation_text_contains_goal_and_step():
+    text = situation_text("go to the bed", [], 1, 20, POSE)
+    assert "go to the bed" in text
+    assert "Step 1 of 20" in text
 
 
-def test_build_messages_truncates_history():
+def test_situation_text_truncates_history():
     history = [{"cmd": f"forward {i}", "result": "completed"} for i in range(20)]
-    msgs = build_messages("goal", "x", history, 21, 30, POSE)
-    text = msgs[0]["content"][1]["text"]
+    text = situation_text("goal", history, 21, 30, POSE)
     assert "forward 19" in text
     assert "forward 11" not in text  # only last 8 entries
-
-
-# --- parse_response -----------------------------------------------------------
-
-
-def tool_block(**inp):
-    return SimpleNamespace(type="tool_use", name="navigate", input=inp)
-
-
-def text_block(text):
-    return SimpleNamespace(type="text", text=text)
-
-
-def test_parse_response_reads_tool_use():
-    msg = SimpleNamespace(content=[tool_block(action="forward", amount=0.5, reasoning="bed ahead")])
-    assert parse_response(msg) == dec("forward", 0.5, "bed ahead")
-
-
-def test_parse_response_falls_back_to_text():
-    msg = SimpleNamespace(content=[text_block("I will turn_left 30 to scan the room.")])
-    d = parse_response(msg)
-    assert d.action == "turn_left"
-    assert d.amount == 30.0
-
-
-def test_parse_response_raises_on_garbage():
-    with pytest.raises(ValueError):
-        parse_response(SimpleNamespace(content=[text_block("no command here")]))
 
 
 # --- navigator loop -----------------------------------------------------------

@@ -117,12 +117,13 @@
         <param name="joint_map_yaml">$(find wojtek_policy)/config/joint_map.yaml</param>
         <param name="initial_pose">$(arg boot_pose)</param>
         <param name="dry_run">$(arg dry_run)</param>
-        <!-- Emulate the physical mount (URDF imu_joint: rpy 0 0 0, i.e. the
-             sensor is upright, see body.urdf.xacro). The simulated IMU must
-             keep matching the real one: while this said pi and the hardware
-             said 0, the simulation exercised a compensation the robot did
-             not need, and walked while the robot shook. -->
-        <param name="imu_mount_rpy">0 0 0</param>
+        <!-- Emulate the physical mount (URDF imu_joint: upright, yawed
+             -90 deg, see body.urdf.xacro and launch_common.IMU_MOUNT_RPY).
+             The simulated IMU must keep matching the real one: while this
+             said pi and the hardware said 0, the simulation exercised a
+             compensation the robot did not need, and walked while the
+             robot shook. -->
+        <param name="imu_mount_rpy">0 0 -1.5707963</param>
         <param name="ground_truth_child_frame">$(arg ground_truth_frame)</param>
       </xacro:unless>
     </hardware>
@@ -152,8 +153,9 @@
 
          The initial values matter for the mock, which has no physics to
          produce them: they describe a level, motionless robot with the
-         sensor upright (URDF imu_joint rpy 0 0 0, the same mount the
-         mujoco branch and the robot's mock declare): identity orientation
+         sensor upright (URDF imu_joint is a pure yaw, which moves neither
+         gravity nor the accelerometer's z, so identity stands in for the
+         mount's own heading, as in the robot's mock): identity orientation
          and +g on the accelerometer's z; either path through policy_node
          (the quaternion, or the complementary filter over the
          accelerometer) then resolves gravity to [0,0,-1] in base_link.

@@ -27,14 +27,22 @@ keep the command, seed, and resulting run directory together.
   rsyncs `ros/src/` only.  Interfaces there are unstable by definition:
   promote code into `ros/` or `training/` when it stops being an experiment,
   and do not treat an experiment's layout as precedent for the rest of the
-  tree.  See
-  [experiments/autonomous_architecture_ros2_v1/README.md](experiments/autonomous_architecture_ros2_v1/README.md).
+  tree.
+- The VLM brain (`ros/src/wojtek_nav`) has one model server: Ollama serving
+  `qwen3-vl:30b-a3b-instruct` on port 11434 (OpenAI-compatible, `/v1`),
+  reached through `VLM_URL`/`VLM_MODEL` in the gitignored `.env`.  There is
+  no other inference backend in this repository.
 - `learning/` holds self-contained learning guides for tools and hardware
   around Wojtek (the SO-101 arms with LeRobot's web GUI, and the Colab
   notebook on training Wojtek's walking policy).  Nothing in `ros/` or
   `training/` depends on it.
 - `skills/` contains opt-in local guides.  Claude users must explicitly
   symlink a skill or ask to read its `SKILL.md`; see [skills/README.md](skills/README.md).
+  The operator GUI for the VLM brain (a JS web page that sends a task to
+  `wojtek_nav`'s brain and shows its steps, in the sim or, human-authorized,
+  on the robot) is an experiment whose own hygiene test forbids naming it in
+  this file; its operating guide is
+  [skills/wojtek-vlm-gui/SKILL.md](skills/wojtek-vlm-gui/SKILL.md).
 - Use **Wojtek** everywhere: prose, artifact names, run names, and new paths.
   `fbb-*` survives only where it is a literal identifier of an existing
   configuration or published artifact.
@@ -133,8 +141,8 @@ git diff --check
 # Anything touching the env, the model, DR, or the latency path
 ./training/run.sh test-slow   # tests/integration: real MJX, minutes
 
-# Anything under experiments/ (that experiment's own model-free suite)
-./experiments/autonomous_architecture_ros2_v1/run.sh test
+# Anything under experiments/ (that experiment's own model-free suite; its README says where it runs)
+./experiments/<experiment>/run.sh test
 
 # Model-generation change (inspect generated XML before committing it)
 ./training/run.sh build
@@ -172,5 +180,7 @@ gitignored policy store (`ros/policies/`).  `ros/deploy.sh` resolves the
 pinned default (see `wojtek_policy/policy_source.py`) into the store and
 syncs the store to the RPi, which has no internet.  `ros/deploy.sh --policy
 <ref>` fetches a one-off reference, syncs it, and makes the robot run it, and
-a plain `ros/deploy.sh` returns the robot to the pin.
+a plain `ros/deploy.sh` returns the robot to the pin.  On the PC,
+`WOJTEK_POLICY` in the gitignored `.env` makes the simulation run that
+reference instead of the pin; the robot launch never reads it.
 Changing the deployed policy is a config change, not a code change.

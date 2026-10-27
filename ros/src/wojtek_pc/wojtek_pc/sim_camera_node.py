@@ -31,15 +31,22 @@ import shutil
 import tempfile
 from pathlib import Path
 
+import io
+
 import numpy as np
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import CameraInfo, Image
+from sensor_msgs.msg import CameraInfo, CompressedImage, Image
 from std_msgs.msg import Float64MultiArray
 
 from wojtek_pc import camera_spec
+
+try:
+    from PIL import Image as PILImage
+except ImportError:  # soft: no Pillow = no /compressed sibling, raw still flows
+    PILImage = None
 
 
 def _staged_scene(model_xml):
@@ -116,6 +123,17 @@ class SimCameraNode(Node):
         self._pub_color_info = self.create_publisher(
             CameraInfo, camera_spec.COLOR_INFO_TOPIC, qos_profile_sensor_data
         )
+        # The JPEG sibling the robot's camera gets from image_transport's
+        # compressed plugin, published here for the same consumers (the VLM
+        # brain, the web console). Encoded only while someone subscribes,
+        # as the plugin does.
+        self._pub_color_jpeg = self.create_publisher(
+            CompressedImage, camera_spec.COLOR_COMPRESSED_TOPIC, qos_profile_sensor_data
+        )
+        if PILImage is None:
+            self.get_logger().warning(
+                "Pillow not installed -- no JPEG on "
+                f"{camera_spec.COLOR_COMPRESSED_TOPIC} (pip install pillow)")
 
         depth_hz = self.get_parameter("depth_hz").value
         color_hz = self.get_parameter("color_hz").value
@@ -182,6 +200,16 @@ class SimCameraNode(Node):
             rgb, stamp, camera_spec.COLOR_FRAME_ID, camera_spec.COLOR_ENCODING,
             self._pub_color, self._pub_color_info,
         )
+        if PILImage is not None and self._pub_color_jpeg.get_subscription_count() > 0:
+            buf = io.BytesIO()
+            PILImage.fromarray(rgb).save(
+                buf, format="JPEG", quality=camera_spec.COLOR_JPEG_QUALITY)
+            msg = CompressedImage()
+            msg.header.stamp = stamp
+            msg.header.frame_id = camera_spec.COLOR_FRAME_ID
+            msg.format = "jpeg"
+            msg.data = buf.getvalue()
+            self._pub_color_jpeg.publish(msg)
 
 
 def main():

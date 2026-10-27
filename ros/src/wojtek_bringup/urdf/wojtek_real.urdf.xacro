@@ -51,7 +51,13 @@
        See wojtek_mock_ros2_control.urdf.xacro. -->
   <xacro:arg name="mock_hw" default="false" />
 
-  <xacro:wojtek_body />
+  <!-- with_camera_mount: the D435's mount (base_link -> camera_link) and
+       nothing below it. The driver publishes camera_link -> *_optical
+       itself; the mount is the one edge it cannot know, and here the
+       robot_state_publisher gives it in every mode that runs a camera
+       (deck_camera:=true, perception:=true), which the costmap, the pixel
+       resolver and the VLM brain's bearing all need. -->
+  <xacro:wojtek_body with_camera_mount="true" />
 
   <xacro:if value="$(arg mock_hw)">
     <xacro:wojtek_mock_ros2_control use_imu="$(arg use_imu)" tau_ff="$(arg tau_ff)" />

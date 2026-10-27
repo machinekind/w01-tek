@@ -380,6 +380,15 @@ def test_resolve_local_dir(tmp_path):
     )
 
 
+def test_resolve_npz_path_means_its_directory(tmp_path):
+    # The training tools name a policy by its npz in WOJTEK_POLICY; the
+    # ROS resolver takes that form too, as the pair's directory.
+    make_policy(tmp_path)
+    r = resolve_policy(str(tmp_path / "policy.npz"))
+    assert r.npz == tmp_path / "policy.npz"
+    assert r.source == f"local:{tmp_path}"
+
+
 def test_resolve_local_dir_missing_files(tmp_path):
     with pytest.raises(FileNotFoundError, match="policy.npz"):
         resolve_policy(str(tmp_path))
@@ -589,9 +598,34 @@ def test_default_cli_without_an_organization_fails(monkeypatch):
     assert policy_source.main(["--default"]) == 2
 
 
+def test_active_policy_ignores_the_environment(tmp_path, monkeypatch):
+    # The robot's answer: the override file, else the pin. A WOJTEK_POLICY
+    # in the shell changes nothing here, so no stray variable on the robot
+    # can pick which policy walks.
+    monkeypatch.setenv("HF_ORGANIZATION", "org")
+    monkeypatch.setenv("WOJTEK_POLICY_STORE", str(tmp_path / "policies"))
+    monkeypatch.setenv("WOJTEK_POLICY", "org/from-env")
+    assert active_policy() == default_policy()
+    (tmp_path / "policy_override").write_text(f"org/other@{SHA}\n")
+    assert active_policy() == f"org/other@{SHA}"
+
+
+def test_desk_policy_prefers_the_environment(tmp_path, monkeypatch):
+    # The PC's way: WOJTEK_POLICY from the repo-root .env, over the override
+    # file and the pin alike. Only the sim launch asks this.
+    monkeypatch.setenv("HF_ORGANIZATION", "org")
+    monkeypatch.setenv("WOJTEK_POLICY_STORE", str(tmp_path / "policies"))
+    (tmp_path / "policy_override").write_text(f"org/other@{SHA}\n")
+    monkeypatch.setenv("WOJTEK_POLICY", "org/from-env")
+    assert policy_source.desk_policy() == "org/from-env"
+    monkeypatch.setenv("WOJTEK_POLICY", "  ")   # blank is unset
+    assert policy_source.desk_policy() == f"org/other@{SHA}"
+
+
 def test_active_policy_prefers_the_override_file(tmp_path, monkeypatch):
     # This is a robot that deploy.sh --policy has visited. The override file
     # sits beside the store and it wins over the pin.
+    monkeypatch.delenv("WOJTEK_POLICY", raising=False)
     monkeypatch.setenv("HF_ORGANIZATION", "org")
     monkeypatch.setenv("WOJTEK_POLICY_STORE", str(tmp_path / "policies"))
     assert policy_source.policy_override_file() == tmp_path / "policy_override"
@@ -601,6 +635,7 @@ def test_active_policy_prefers_the_override_file(tmp_path, monkeypatch):
 
 def test_active_policy_without_an_override_is_the_pin(tmp_path, monkeypatch):
     # Every machine that never got --policy, the operator PC included.
+    monkeypatch.delenv("WOJTEK_POLICY", raising=False)
     monkeypatch.setenv("HF_ORGANIZATION", "org")
     monkeypatch.setenv("WOJTEK_POLICY_STORE", str(tmp_path / "policies"))
     assert active_policy() == default_policy()
@@ -608,6 +643,7 @@ def test_active_policy_without_an_override_is_the_pin(tmp_path, monkeypatch):
 
 def test_active_policy_ignores_an_empty_override(tmp_path, monkeypatch):
     # A blank file names no policy, so the pin still runs.
+    monkeypatch.delenv("WOJTEK_POLICY", raising=False)
     monkeypatch.setenv("HF_ORGANIZATION", "org")
     monkeypatch.setenv("WOJTEK_POLICY_STORE", str(tmp_path / "policies"))
     for text in ("", "\n", "   \n"):

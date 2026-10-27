@@ -1,15 +1,12 @@
-"""The VLM seam, now closed: Claude drives the robot through the room.
+"""The VLM seam, now closed: a VLM drives the robot through the room.
 
 The browser submits a goal ("go to the bed"). VlmNavigator renders the ego
-camera, sends the JPEG + goal (+ a short textual history) to a Claude model,
-receives ONE mid-level command via forced tool use, feeds it through the same
+camera, sends the JPEG + goal (+ a short textual history) to the model
+(Qwen3-VL 30B-A3B on Ollama, wojtek_rl.vlm_client), receives ONE mid-level
+command as a JSON object, feeds it through the same
 parse_command/MidLevelExecutor path a human uses, waits for the executor to
 finish, and repeats -- NaVILA-style hierarchy: VLM at ~0.3 Hz, RL velocity
 policy at 50 Hz.
-
-The Anthropic SDK is an optional extra (`uv sync --extra vlm`) and is imported
-lazily inside AnthropicVlmClient, so the server and all offline tests run
-without it. ANTHROPIC_API_KEY comes from the environment.
 """
 
 from __future__ import annotations
@@ -22,8 +19,6 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from loguru import logger
-
-DEFAULT_MODEL = "claude-haiku-4-5"  # override: --vlm-model / VLM_MODEL env
 
 MAX_STEPS = 20
 MAX_FORWARD_M = 2.0
@@ -66,33 +61,11 @@ class VlmDecision:
     reasoning: str
 
 
-NAV_TOOL = {
-    "name": "navigate",
-    "description": "Choose the robot's next single mid-level command.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "action": {"type": "string", "enum": list(ACTIONS)},
-            "amount": {
-                "type": "number",
-                "description": (
-                    f"degrees for turns ({MIN_TURN_DEG:g}-{MAX_TURN_DEG:g}), "
-                    f"meters for forward ({MIN_FORWARD_M:g}-{MAX_FORWARD_M:g}) "
-                    f"or backward ({MIN_FORWARD_M:g}-{MAX_BACKWARD_M:g}); "
-                    "omit for stop/done"
-                ),
-            },
-            "reasoning": {"type": "string"},
-        },
-        "required": ["action", "reasoning"],
-    },
-}
-
 SYSTEM_PROMPT = f"""\
 You control a small quadruped robot walking through a real scanned room. Each
 turn you see one photo from the robot's forward-facing onboard camera, mounted
 low (~15 cm above the floor). Reach the user's goal by issuing exactly ONE
-command per turn via the `navigate` tool:
+command per turn:
 
 - `turn_left` / `turn_right` with `amount` in degrees ({MIN_TURN_DEG:g}-{MAX_TURN_DEG:g})
 - `forward` with `amount` in meters ({MIN_FORWARD_M:g}-{MAX_FORWARD_M:g})
@@ -161,63 +134,6 @@ def situation_text(
     return "\n".join(lines)
 
 
-def build_messages(
-    goal: str,
-    ego_b64: str,
-    history: list[dict],
-    step: int,
-    max_steps: int,
-    pose: tuple[float, float, float],
-) -> list[dict]:
-    """One user message: current ego frame (image first), then the situation."""
-    return [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": "image/jpeg",
-                        "data": ego_b64,
-                    },
-                },
-                {"type": "text", "text": situation_text(goal, history, step, max_steps, pose)},
-            ],
-        }
-    ]
-
-
-_TEXT_CMD_RE = re.compile(
-    r"\b(turn_left|turn_right|forward|backward|stop|done)\b\s*([-\d.]+)?", re.IGNORECASE
-)
-
-
-def parse_response(message) -> VlmDecision:
-    """Extract a VlmDecision from an Anthropic message (or a stand-in).
-
-    Prefers the forced `navigate` tool_use block; falls back to scanning
-    text blocks so a model that ignores tool_choice still gets parsed.
-    """
-    text_parts = []
-    for block in getattr(message, "content", []) or []:
-        if getattr(block, "type", None) == "tool_use" and block.name == "navigate":
-            inp = block.input
-            amount = inp.get("amount")
-            return VlmDecision(
-                action=str(inp.get("action", "")),
-                amount=float(amount) if amount is not None else None,
-                reasoning=str(inp.get("reasoning", "")),
-            )
-        if getattr(block, "type", None) == "text":
-            text_parts.append(block.text)
-    m = _TEXT_CMD_RE.search(" ".join(text_parts))
-    if m:
-        amount = float(m.group(2)) if m.group(2) else None
-        return VlmDecision(action=m.group(1).lower(), amount=amount, reasoning=" ".join(text_parts).strip())
-    raise ValueError("no navigate tool_use or command found in model response")
-
-
 class VlmClientProto(Protocol):
     async def decide(
         self,
@@ -230,29 +146,8 @@ class VlmClientProto(Protocol):
     ) -> VlmDecision: ...
 
 
-class AnthropicVlmClient:
-    """Thin Claude wrapper; the only place the anthropic SDK is touched."""
-
-    def __init__(self, model: str = DEFAULT_MODEL):
-        from anthropic import AsyncAnthropic  # lazy: `vlm` extra is optional
-
-        self._client = AsyncAnthropic()  # ANTHROPIC_API_KEY from env
-        self.model = model
-
-    async def decide(self, goal, ego_b64, history, step, max_steps, pose) -> VlmDecision:
-        message = await self._client.messages.create(
-            model=self.model,
-            max_tokens=1024,
-            system=SYSTEM_PROMPT,
-            tools=[NAV_TOOL],
-            tool_choice={"type": "tool", "name": "navigate"},
-            messages=build_messages(goal, ego_b64, history, step, max_steps, pose),
-        )
-        return parse_response(message)
-
-
 class VlmNavigator:
-    """Closed-loop goal runner: think (Claude) -> execute (MidLevelExecutor).
+    """Closed-loop goal runner: think (VLM) -> execute (MidLevelExecutor).
 
     Runs as an asyncio task on the same event loop as the websocket control
     loop; the only synchronous sim calls are ego_jpeg() (~10 ms) and
@@ -271,7 +166,6 @@ class VlmNavigator:
         overlap: bool = False,
         overlap_delay_s: float = 0.0,
         max_rotation: int | None = None,
-        vlnce_frame: bool = False,
     ):
         self.sim = sim
         self.client = client
@@ -284,12 +178,9 @@ class VlmNavigator:
         self.overlap = overlap
         self.overlap_delay_s = overlap_delay_s
         self._pending: asyncio.Task | None = None
-        # Anti-spin: stop after this many consecutive turns in place (upstream
-        # eval/run.py EARLY_STOP_ROTATION). None disables the guard.
+        # Anti-spin: stop after this many consecutive turns in place. None
+        # disables the guard.
         self.max_rotation = max_rotation
-        # vlnce_frame: feed the model the clean square VLN-CE frame (FutureNav)
-        # instead of the HUD-composited ego view the prompt-based backends use.
-        self.vlnce_frame = vlnce_frame
 
         self.rev = 0
         self._task: asyncio.Task | None = None
@@ -372,13 +263,6 @@ class VlmNavigator:
             logger.error(f"vlm navigator crashed: {_safe_err(e)}")
             self._set_state("error", error=_safe_err(e))
 
-    def _grab_frame(self) -> str:
-        """The frame handed to the model: clean square VLN-CE frame for FutureNav,
-        else the HUD-composited ego view the prompt-based backends expect."""
-        if self.vlnce_frame:
-            return self.sim.vlm_frame_jpeg()
-        return self.sim.ego_jpeg()
-
     async def _think_ahead(self, goal: str, history: list[dict], step: int) -> VlmDecision:
         """Overlap mode: grab a frame mid-execution and start the next decision.
 
@@ -387,7 +271,7 @@ class VlmNavigator:
         which for a 0.25 m step is a fair trade to hide the 1-3 s inference."""
         if self.overlap_delay_s:
             await asyncio.sleep(self.overlap_delay_s)
-        ego = self._grab_frame()
+        ego = self.sim.ego_jpeg()
         return await self.client.decide(
             goal, ego, list(history), step, self.max_steps, self.sim.pose()
         )
@@ -420,7 +304,7 @@ class VlmNavigator:
                     pending, self._pending = self._pending, None
                     decision = await asyncio.wait_for(pending, self.vlm_timeout_s)
                 else:
-                    ego = self._grab_frame()
+                    ego = self.sim.ego_jpeg()
                     decision = await asyncio.wait_for(
                         self.client.decide(goal, ego, history, step, self.max_steps, self.sim.pose()),
                         self.vlm_timeout_s,
@@ -428,7 +312,7 @@ class VlmNavigator:
                 cmd = self._decision_to_command(decision)
             except asyncio.CancelledError:
                 raise
-            except Exception as e:  # API error, timeout, unparseable, bad amount
+            except Exception as e:  # server error, timeout, unparseable, bad amount
                 failures += 1
                 err = _safe_err(e)
                 logger.warning(f"vlm step {step} failed: {err}")
@@ -452,7 +336,7 @@ class VlmNavigator:
                 self._set_state("done", reason="vlm_stop")
                 return
 
-            # Anti-spin (upstream EARLY_STOP_ROTATION): a run of turns in place
+            # Anti-spin: a run of turns in place
             # with no forward progress means the agent is stuck -- end the episode.
             rotations = rotations + 1 if decision.action in ("turn_left", "turn_right") else 0
             if self.max_rotation is not None and rotations > self.max_rotation:

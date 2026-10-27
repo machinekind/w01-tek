@@ -49,3 +49,9 @@ deploy/rpi/cache/
 
 .policies/
 
+
+# Core dumps from crashing tests in the container (seen: test_depth_camera,
+# dumped next to the package under test). The file only: a directory named
+# core in a package stays tracked.
+src/*/core
+!src/*/core/

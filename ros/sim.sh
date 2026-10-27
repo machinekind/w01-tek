@@ -42,6 +42,13 @@
 #                               /benchmark/yaw_error_deg). Needs the physics
 #                               plant, so don't combine with hw:=mock.
 #   ./sim.sh --no-build         skip the workspace freshness pass (see below)
+#   ./sim.sh model_xml:=scene_nav.xml leg_odom:=true nav:=true vlm:=true
+#                               the VLM session: corridor scene, leg odometry,
+#                               costmap + goto + pixel resolver, and the brain
+#                               talking to the Ollama server at VLM_URL (from
+#                               the host environment or ../.env; see
+#                               .env.example) -- type instructions into the
+#                               web console's brain panel
 #
 # The source is this repo (bind mount) but the build overlay lives in the
 # container, so after a pull the workspace can be stale -- and after a package
@@ -152,6 +159,30 @@ if $MAC; then
 elif [ -n "${DISPLAY:-}" ]; then
   command -v xhost >/dev/null 2>&1 && xhost +local:docker >/dev/null 2>&1 || true
   HAVE_X=true
+fi
+
+# Personal values the session needs inside the container (HF_ORGANIZATION
+# -- without it the launch dies at once with "empty policy reference" --
+# HF_TOKEN, WOJTEK_POLICY, the VLM brain's VLM_URL / VLM_MODEL,
+# ROS_LOCALHOST_ONLY for a headless box), from the host environment or the
+# gitignored repo-root .env: forward_env.sh appends them to DOCKER_ENV.
+. ./forward_env.sh
+# A launch needs a policy from somewhere: an explicit policy:= (robot.py's
+# --policy becomes one), WOJTEK_POLICY, or the pin, which needs the org.
+# Otherwise it stops at once inside the container with "empty policy
+# reference", so say it here. (ros/policy_override is the robot's file,
+# written there by deploy.sh; the container mounts src, policies and
+# deck_assets only, so a copy on the host would not be seen and does not
+# count.)
+if [ -z "${HF_ORGANIZATION:-}" ] && [ -z "${WOJTEK_POLICY:-}" ] \
+   && ! printf '%s\n' ${EXTRA[@]+"${EXTRA[@]}"} | grep -qE '^(policy:=|--policy(=|$))'; then
+  echo "!! No policy: neither HF_ORGANIZATION nor WOJTEK_POLICY is set (host env or" >&2
+  echo "!! repo-root .env) and no policy:= / --policy was given." >&2
+  echo "!! The launch would stop at once. Set one of them (plus HF_TOKEN for a private repo)." >&2
+  exit 1
+fi
+if [ -n "${WOJTEK_POLICY:-}" ]; then
+  echo ">> policy:   ${WOJTEK_POLICY} (WOJTEK_POLICY)"
 fi
 
 if [ "$VIZ" = auto ]; then

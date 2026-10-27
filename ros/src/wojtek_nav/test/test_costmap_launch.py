@@ -41,6 +41,7 @@ def _context(**overrides):
         "depth_info_topic": "/camera/camera/depth/camera_info",
         "points_topic": "/wojtek/nav/points",
         "decimation": "4",
+        "costmap": "true",
         "goto": "true",
         "goal_timeout": "3.0",
         "cpus": "",
@@ -89,6 +90,15 @@ def test_goto_can_be_left_out(launch_mod):
     assert "goto_node" not in _executables(nodes)
     # The pixel resolver only makes sense with goto to drive its setpoints.
     assert "pixel_goal_node" not in _executables(nodes)
+
+
+def test_costmap_can_be_left_out(launch_mod):
+    # The split where another computer owns perception and the brain and
+    # hands over setpoints in odom: goto alone, nothing that needs a camera.
+    nodes = launch_mod._setup(_context(costmap="false"))
+    assert _executables(nodes) == ["goto_node"]
+    nodes = launch_mod._setup(_context(costmap="false", goto="false"))
+    assert nodes == []
 
 
 def _by_executable(nodes, name):

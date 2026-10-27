@@ -157,6 +157,16 @@ def test_tracker_waits_out_a_transient_block():
     assert t.done
 
 
+def test_tracker_cancel_stops_the_resends():
+    t = GoalTracker(repeat_s=1.0, blocked_hold_s=5.0, max_s=60.0)
+    t.start(now=0.0)
+    assert t.step(status="driving", now=0.0) == "send"
+    t.cancel()
+    assert t.done
+    assert t.step(status="driving", now=1.0) is None
+    assert t.step(status="reached", now=2.0) is None
+
+
 def test_tracker_gives_up_after_max_s():
     t = GoalTracker(repeat_s=1.0, blocked_hold_s=5.0, max_s=10.0)
     t.start(now=100.0)
@@ -176,3 +186,24 @@ def test_tracker_ignores_the_stale_status_before_goto_saw_the_goal():
     assert not t.done
     assert t.step(status="driving", now=0.5) is None
     assert t.step(status="reached", now=0.8) == "reached"
+
+
+def test_tracker_takes_a_reached_heard_after_the_send_without_driving():
+    # The target closer than the standoff: the setpoint is where the robot
+    # stands, goto answers `reached` at once and goes `idle` 50 ms later.
+    # Waiting for a `driving` that never comes timed out after 60 s (#42).
+    t = GoalTracker(repeat_s=1.0, blocked_hold_s=5.0, max_s=60.0)
+    t.start(now=0.0)
+    assert t.step(status="idle", now=0.0) == "send"
+    t.observe("reached")
+    t.observe("idle")
+    assert t.step(status="idle", now=0.1) == "reached"
+    assert t.done
+
+
+def test_tracker_does_not_take_a_reached_heard_before_the_send():
+    t = GoalTracker(repeat_s=1.0, blocked_hold_s=5.0, max_s=60.0)
+    t.start(now=0.0)
+    t.observe("reached")  # the previous goal's word, delivered late
+    assert t.step(status="reached", now=0.0) == "send"
+    assert not t.done

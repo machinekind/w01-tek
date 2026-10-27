@@ -111,7 +111,7 @@ echo ">> rsync src -> ${RPI_HOST}:${REMOTE_WS}/src"
 # itself, exactly like the Docker image, so host submodule state is irrelevant).
 rsync -az --delete \
     --exclude 'build/' --exclude 'install/' --exclude 'log/' \
-    --exclude '__pycache__/' \
+    --exclude '__pycache__/' --exclude '.pytest_cache/' \
     --exclude 'md80_hardware_interface/3rd_party/candle/' \
     --exclude 'wojtek_pc/' \
     "${HERE}/src/" "${RPI_HOST}:${REMOTE_WS}/src/"

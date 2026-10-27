@@ -109,7 +109,11 @@ class GoalTracker:
     and go on), so it is final only after `blocked_hold_s` of it. `reached`
     counts only after goto has visibly worked on THIS goal: its latched
     status may still carry the previous goal's word when the new one goes
-    out. Nothing at all within `max_s` is a timeout.
+    out -- unless goto SAYS `reached` after the setpoint went out
+    (`observe`): a setpoint already within goto's tolerance of the robot
+    (the target closer than the standoff) is reached at once, with no
+    driving first, and goto's next word is `idle`. Nothing at all within
+    `max_s` is a timeout.
     """
 
     ACTIVE = ("driving", "turning", "blocked")
@@ -123,6 +127,7 @@ class GoalTracker:
         self._last_send = None
         self._blocked_since = None
         self._seen_active = False
+        self._heard_reached = False
 
     def start(self, now):
         self.done = False
@@ -130,6 +135,19 @@ class GoalTracker:
         self._last_send = None
         self._blocked_since = None
         self._seen_active = False
+        self._heard_reached = False
+
+    def observe(self, status):
+        """Every status message goto publishes (it publishes on change).
+        One that says `reached` after this goal's first send is goto's
+        answer to it, even if it never drove and the next word, `idle`,
+        comes before the next step."""
+        if status == "reached" and self._last_send is not None and not self.done:
+            self._heard_reached = True
+
+    def cancel(self):
+        """The job is over because someone said so: no more re-sends."""
+        self.done = True
 
     def step(self, status, now):
         """-> "send" (re-publish the setpoint now), "reached", "blocked",
@@ -142,7 +160,7 @@ class GoalTracker:
             return "timeout"
         if status in self.ACTIVE:
             self._seen_active = True
-        if status == "reached" and self._seen_active:
+        if self._heard_reached or (status == "reached" and self._seen_active):
             self.done = True
             return "reached"
         if status == "blocked":

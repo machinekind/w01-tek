@@ -7,7 +7,8 @@
 #   1 base packages : ROS 2 Jazzy + AP tools            (--skip-packages)
 #   2 RT kernel     : Ubuntu Pro realtime-kernel        (--skip-kernel)
 #   3 RT tuning     : cmdline isolcpus, rtprio limits, cpu governor, (--skip-tuning)
-#                     Pi 3: wojtek-affinity core-partition daemon
+#                     Pi 3: wojtek-affinity core-partition daemon;
+#                     unattended upgrades off (apt-daily timers masked)
 #   4 network       : hostapd/dnsmasq/netplan + failover switch      (--skip-network)
 #   5 robot service : install wojtek-robot.service + the local       (--skip-service)
 #                     drop-in (folded boot, bag off, /home/rpi/policy
@@ -258,6 +259,21 @@ provision_tuning() {
             ;;
         *) info "not a Pi 3 -- skipping the core-partition daemon" ;;
     esac
+
+    # Unattended upgrades: off. The image assumed a robot with no route to
+    # the internet; on a LAN that has one (2026-09-26) Ubuntu's apt timers
+    # started an unattended-upgrade that held a third of a general core for
+    # over an hour, ignored SIGTERM, and could have replaced the RT kernel
+    # or ros-jazzy-* under the running service. Updating this machine is a
+    # deliberate act (apt-get by hand, service stopped, then a perf run).
+    if systemctl is-enabled --quiet apt-daily.timer 2>/dev/null \
+       || systemctl is-enabled --quiet apt-daily-upgrade.timer 2>/dev/null; then
+        info "disabling unattended upgrades (apt-daily timers, masked)"
+        run "sudo systemctl disable --now apt-daily.timer apt-daily-upgrade.timer unattended-upgrades 2>/dev/null || true"
+        run "sudo systemctl mask apt-daily.service apt-daily-upgrade.service"
+    else
+        info "unattended upgrades already disabled"
+    fi
 }
 
 # ---------------------------------------------------------------- phase 4

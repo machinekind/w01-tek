@@ -1,5 +1,5 @@
 {
-  "comment": "Hand-annotated from coordinate-grid top-down renders (see docs/vlm-nav-roadmap.md). pos is world XY of the object centroid; radius is the success distance: object footprint + ~0.9 m approach.",
+  "comment": "Hand-annotated from coordinate-grid top-down renders. pos is world XY of the object centroid; radius is the success distance: object footprint + ~0.9 m approach.",
   "objects": [
     {"name": "white sofa", "aliases": ["couch", "sofa", "white couch"], "pos": [0.6, 4.3], "radius": 1.5},
     {"name": "coffee table", "aliases": ["potted plant", "coffee table with the plant"], "pos": [-0.05, 2.75], "radius": 1.2},

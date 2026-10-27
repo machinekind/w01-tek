@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline pointing benchmark against an OpenAI-compatible VLM endpoint.
+"""Offline pointing benchmark against the Ollama VLM endpoint.
 
 For every captured frame (index.json from e2e_nav.py's `capture`) and every
 object visible in it, ask the model to point at the object; score the pixel
@@ -7,8 +7,8 @@ against the projected truth and, through the frame's own depth image, the
 metric error of the resolved point (the same maths pixel_goal_node runs).
 Also asks for an object that is NOT visible, to measure hallucination.
 
-  python3 point_bench.py --frames ~/e2e/frames --url http://127.0.0.1:8000/v1 \
-      --model Qwen/Qwen3-VL-8B-Instruct [--fmt qwen|gemini|absolute] [--json-schema]
+  python3 point_bench.py --frames ~/e2e/frames --url http://127.0.0.1:11434/v1 \
+      --model qwen3-vl:30b-a3b-instruct [--fmt qwen|absolute] [--json-schema]
 
 Output: one line per query + a summary; a JSON report next to the frames.
 """
@@ -61,9 +61,7 @@ def prompt(name, fmt, lang):
         task = f"Task: walk to {obj}."
     else:
         task = f"Zadanie: podejdź do: {obj}."
-    if fmt == "gemini":
-        coords = "point_2d = [y, x], integers 0-1000 normalised to the image height and width."
-    elif fmt == "absolute":
+    if fmt == "absolute":
         coords = "point_2d = [x, y] in pixels of this image (848 wide, 480 high)."
     else:
         coords = "point_2d = [x, y], integers 0-1000 normalised to the image width and height."
@@ -93,7 +91,7 @@ def ask(url, model, jpeg_b64, text, use_schema, max_tokens=60, timeout=120):
         body["response_format"] = {"type": "json_schema",
                                    "json_schema": {"name": "nav", "schema": SCHEMA, "strict": True}}
     req = urllib.request.Request(f"{url}/chat/completions", data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json", "Authorization": "Bearer EMPTY"})
+                                 headers={"Content-Type": "application/json"})
     t0 = time.perf_counter()
     with urllib.request.urlopen(req, timeout=timeout) as r:
         out = json.load(r)
@@ -114,8 +112,6 @@ def parse(msg, fmt):
         return None
     if d.get("type") == "goal" and isinstance(d.get("point_2d"), list) and len(d["point_2d"]) == 2:
         a, b = float(d["point_2d"][0]), float(d["point_2d"][1])
-        if fmt == "gemini":
-            a, b = b, a
         if fmt == "absolute":
             d["u_norm"], d["v_norm"] = a / 848.0, b / 480.0
         else:
@@ -144,9 +140,9 @@ def resolve(depth, u_norm, v_norm, kc, kd, radius=4):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--frames", required=True)
-    ap.add_argument("--url", default="http://127.0.0.1:8000/v1")
-    ap.add_argument("--model", required=True)
-    ap.add_argument("--fmt", default="qwen", choices=["qwen", "gemini", "absolute"])
+    ap.add_argument("--url", default="http://127.0.0.1:11434/v1")
+    ap.add_argument("--model", default="qwen3-vl:30b-a3b-instruct")
+    ap.add_argument("--fmt", default="qwen", choices=["qwen", "absolute"])
     ap.add_argument("--json-schema", action="store_true")
     ap.add_argument("--lang", default="en", choices=["en", "pl"])
     ap.add_argument("--tag", default="")

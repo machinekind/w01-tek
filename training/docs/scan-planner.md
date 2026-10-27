@@ -1,7 +1,7 @@
 # SCAN-Planner: collision-aware local planning under VLM guidance
 
-Wojtek's navigation VLMs — FutureNav, Qwen3-VL, Claude — all fail the same
-way: the robot walks into furniture. The VLM is not the problem. A mid-level
+Wojtek's navigation VLM (Qwen3-VL 30B-A3B on Ollama) fails in one
+characteristic way: the robot walks into furniture. The VLM is not the problem. A mid-level
 `forward 1.5` was executed as a *straight line*, nothing looked at the depth
 channel while the robot was moving, and by the time the next frame reached
 the model the nose was already in a chair leg.
@@ -264,8 +264,7 @@ GPU, and the whole loop is comfortably real-time next to the 50 Hz policy.
   suites pass now, but that is the 8 m window being large relative to these
   scenes, not the problem being solved: a goal several rooms away behind a
   concave dead end will still trap a greedy bearing. Frontier exploration
-  (`wojtek_eval.mapping.FrontierPlanner`, M4 in the
-  [roadmap](../../docs/vlm-nav-roadmap.md)) is the natural route source.
+  (`wojtek_eval.mapping.FrontierPlanner`) is the natural route source.
 - **Residual contact rate with legs.** 2.5 contacts/m in the apartment,
   against 0 in the kinematic tier. Attributed, not guessed: 95 % of them
   happen in cells the map already knows (inside the inflation halo of a known

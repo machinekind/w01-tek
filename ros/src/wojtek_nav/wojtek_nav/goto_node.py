@@ -10,6 +10,11 @@ Inputs
                        VLM meant. An unstamped base_link goal means "now".
   wojtek/nav/costmap   nav_msgs/OccupancyGrid (latched), the rolling window
                        from nav2_costmap_2d; probed at a few points ahead.
+  wojtek/nav/cancel    std_msgs/Empty. Drop the setpoint NOW (one zero
+                       Twist, then idle) instead of at the dead-man: the
+                       brain's stop, the console's stop button. A goal
+                       arriving within half a second after it is the
+                       cancelled one, late, and is ignored.
   TF odom->base_link   the robot's pose (leg_odometry).
 
 Outputs
@@ -36,7 +41,7 @@ from rclpy.qos import (
     QoSProfile,
     ReliabilityPolicy,
 )
-from std_msgs.msg import String
+from std_msgs.msg import Empty, String
 from tf2_ros import Buffer, TransformListener
 import tf2_geometry_msgs  # noqa: F401 -- registers PoseStamped with tf2
 
@@ -74,6 +79,7 @@ class GotoNode(Node):
         )
         self.create_subscription(PoseStamped, "wojtek/nav/goal", self._on_goal, 10)
         self.create_subscription(OccupancyGrid, "wojtek/nav/costmap", self._on_grid, latched)
+        self.create_subscription(Empty, "wojtek/nav/cancel", self._on_cancel, 10)
         self._pub_cmd = self.create_publisher(Twist, "cmd_vel", 10)
         self._pub_status = self.create_publisher(String, "wojtek/nav/status", latched)
         self.create_timer(1.0 / DRIVE_TICK_HZ, self._tick)
@@ -94,10 +100,21 @@ class GotoNode(Node):
         except Exception as e:  # noqa: BLE001 -- TF, not our bug to crash on
             self.get_logger().warning(f"goal in '{msg.header.frame_id}' dropped: {e}")
             return
-        self._ctrl.set_goal(msg.pose.position.x, msg.pose.position.y, self._now())
+        # The cancel and the goals come on two subscriptions with no order
+        # between them, so a re-send published just before a cancel can
+        # land here just after it. That goal is the cancelled one and must
+        # not restart the robot; the controller ignores it (set_goal).
+        if not self._ctrl.set_goal(msg.pose.position.x, msg.pose.position.y, self._now()):
+            self.get_logger().info(
+                "goal within %.1f s of a cancel ignored (the cancelled one, late)" % self._ctrl.cancel_hold_off)
 
     def _on_grid(self, msg):
         self._grid = msg
+
+    def _on_cancel(self, _msg):
+        # The tick sees an idle controller next and, if the robot was
+        # moving, sends the one zero Twist on that edge.
+        self._ctrl.cancel(self._now())
 
     # -- the loop --------------------------------------------------------
 

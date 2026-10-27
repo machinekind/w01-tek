@@ -26,7 +26,9 @@ Three links, three jobs:
   opening a second stream, so detection costs the wifi nothing.
 - **Charts** read `foxglove_bridge` directly (`bridge.js` + `cdr.js`, a small
   ros2msg/CDR decoder, no library). Nothing on the robot changes to add a
-  chart: subscribe to the topic in `deck.js`.
+  chart: subscribe to the topic in `deck.js`. The roll, pitch and heading
+  are the robot's own: the IMU is bolted on a quarter turn round, the
+  gateway tells the page how, and `attitude.js` takes that turn back out.
 
 Everything is served from the robot; the page loads no fonts or scripts
 from the internet, because the robot's access point has none.
@@ -160,8 +162,8 @@ coordinates in pixels of the frame it looked at, and reads those frames from
 ## Tests
 
 ```bash
-pytest ros/src/wojtek_deck/test          # the drive gate (dead-man), no ROS
-node --test ros/src/wojtek_deck/web/test # the CDR decoder and the YOLOX maths
+pytest ros/src/wojtek_deck/test                    # the drive gate (dead-man), no ROS
+node --test ros/src/wojtek_deck/web/test/*.test.js # the CDR decoder, the YOLOX and attitude maths
 ```
 
 ## The look

@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wojtek VLM</title>
+<link rel="stylesheet" href="/web/style.css">
+</head>
+<body>
+<header class="top">
+  <h1>Wojtek VLM</h1>
+  <span id="link" class="pill bad">connecting</span>
+  <span class="spacer"></span>
+  <span id="nav" class="navwords">goto - · pixel -</span>
+  <button id="stop" class="stop" title="Freeze Wojtek where it stands: cancel the brain's task and goto's goal, hold /cmd_vel at zero for 1 s. Key: Esc">STOP (Esc)</button>
+</header>
+
+<div class="layout">
+  <aside class="side">
+    <h2>Robot</h2>
+    <div class="grid2">
+      <button data-svc="stand_up">Stand up</button>
+      <button data-svc="lie_down">Lie down</button>
+      <button data-svc="arm" class="danger">Arm</button>
+      <button data-svc="disarm" class="danger">Disarm</button>
+      <button data-svc="policy_on">Policy on</button>
+      <button data-svc="policy_off">Policy off</button>
+    </div>
+    <p class="hint">Order: Stand up, Arm, then a task. Disarm before Lie down. Disarm and Lie down also stop the brain.</p>
+    <p class="hint">STOP (or Esc, anywhere on the page) freezes Wojtek where it stands: zero velocity, the gait keeps it balanced. Policy off and Disarm are not a freeze: the legs hold their last pose, mid-step that tips it over.</p>
+    <p class="hint">STOP the brain before driving with the pad or the Deck: they share /cmd_vel.</p>
+  </aside>
+
+  <main class="center">
+    <section id="walk" class="walk still">
+      <svg viewBox="-60 -60 120 120" class="arrow" aria-label="which way to move">
+        <circle r="56" class="dial"/>
+        <g id="walk-arrow-g"><path d="M0,-46 L20,-14 L7,-14 L7,40 L-7,40 L-7,-14 L-20,-14 Z" class="shaft"/></g>
+        <rect x="-14" y="-14" width="28" height="28" rx="4" class="dot"/>
+      </svg>
+      <div class="walk-text">
+        <div class="walk-label"><span id="walk-role">Walk</span> <span id="walk-age" class="muted">· no walker</span></div>
+        <div id="walk-text" class="big">STAND STILL</div>
+        <div id="walk-progress" class="progress"></div>
+        <div id="walk-pose" class="muted"></div>
+      </div>
+      <div class="goal">
+        <svg viewBox="-60 -60 120 120" class="compass" aria-label="where the goal is">
+          <circle r="56" class="dial"/>
+          <text y="-43" text-anchor="middle" class="tick">ahead</text>
+          <g id="goal-g" class="none"><line y1="0" y2="-40" class="needle"/><circle cy="-40" r="7" class="goal-dot"/></g>
+          <circle r="4" class="hub"/>
+        </svg>
+        <div id="goal-text" class="muted">no goal</div>
+      </div>
+    </section>
+
+    <section class="chat">
+      <div id="chat" class="messages">
+        <div class="msg system">Type a task below. The brain's steps appear here, newest at the bottom.</div>
+      </div>
+      <button id="jump" class="jump" hidden>new messages ↓</button>
+      <form id="task-form" class="composer">
+        <input id="task-input" autocomplete="off" placeholder="Tell Wojtek where to go, e.g. go to the purple pillar">
+        <button type="submit" class="send">Send</button>
+      </form>
+    </section>
+  </main>
+
+  <aside class="right">
+    <section class="card">
+      <div class="card-head"><h2 id="sys-title">Robot computer</h2><span id="sys-age" class="muted"></span></div>
+      <div id="cores" class="cores"></div>
+      <div class="stats">
+        <div><span class="label">load 1/5 min</span><span id="load" class="val">-</span></div>
+        <div><span class="label">memory</span><span id="mem" class="val">-</span></div>
+        <div><span class="label">SoC</span><span id="temp" class="val">-</span></div>
+      </div>
+    </section>
+    <section class="card">
+      <div class="card-head"><h2>Camera</h2><span id="cam-fps" class="muted">- fps</span></div>
+      <img id="cam" class="view" alt="camera">
+      <div id="cam-info" class="muted">no frame yet</div>
+    </section>
+    <section class="card">
+      <div class="card-head"><h2>Depth</h2><span id="depth-fps" class="muted">- fps</span></div>
+      <canvas id="depth" class="view"></canvas>
+      <div class="legend"><span>0.2 m</span><canvas id="legend" width="256" height="10"></canvas><span>4 m</span></div>
+      <div id="depth-info" class="muted">hover the image for the distance</div>
+    </section>
+  </aside>
+</div>
+<script src="/web/app.js"></script>
+</body>
+</html>

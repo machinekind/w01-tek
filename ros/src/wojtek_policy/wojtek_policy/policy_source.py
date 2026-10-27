@@ -130,6 +130,11 @@ def active_policy() -> str:
     pin answers. The file is deployment state on the robot, written by
     `./deploy.sh --policy <ref>` and removed by a plain `./deploy.sh`. The
     PC never has one, so PC launches run the pin.
+
+    WOJTEK_POLICY in the environment is deliberately not read here. This is
+    what the robot runs, and the robot follows only its override file and
+    the pin, so a stray variable in a shell can never change which policy
+    walks. The desk's shortcut is desk_policy().
     """
     path = policy_override_file()
     if path.is_file():
@@ -137,6 +142,19 @@ def active_policy() -> str:
         if ref:
             return ref
     return default_policy()
+
+
+def desk_policy() -> str:
+    """The reference a PC launch (the simulation) comes up with by default.
+
+    WOJTEK_POLICY in the environment wins: the repo-root .env names a policy
+    once and every sim session runs it (sim.sh / dev.sh carry the variable
+    into the container; the training tools read the same name). Otherwise
+    active_policy(), which on the PC is the pin. Only sim.launch.py asks
+    this; robot.launch.py takes active_policy().
+    """
+    env = os.environ.get("WOJTEK_POLICY", "").strip()
+    return env or active_policy()
 
 
 def resolve_policy(ref: str) -> ResolvedPolicy:
@@ -147,6 +165,10 @@ def resolve_policy(ref: str) -> ResolvedPolicy:
             "directory or a Hugging Face repo id (org/name[@revision])"
         )
     as_path = Path(ref).expanduser()
+    if as_path.is_file() and as_path.name == FILES[0]:
+        # The training tools name the policy by its npz (WOJTEK_POLICY);
+        # here that means the directory the pair sits in.
+        as_path = as_path.parent
     if as_path.is_dir():
         missing = [f for f in FILES if not (as_path / f).is_file()]
         if missing:

@@ -49,4 +49,17 @@ elif docker info 2>/dev/null | grep -q 'Runtimes:.*nvidia'; then
 fi
 
 "${COMPOSE[@]}" up -d
-exec docker exec -it wojtek_robot bash
+
+# Personal values the launches read (the pinned policy's org and token, a
+# policy over the pin, the VLM brain's model server, ROS_LOCALHOST_ONLY for
+# a headless box), from the host environment or the gitignored repo-root
+# .env: the same list and the same rules as sim.sh, in forward_env.sh.
+DOCKER_ENV=()
+. ./forward_env.sh
+# (ros/policy_override is the robot's file and is not mounted into the
+# container, so it does not count here.)
+if [ -z "${HF_ORGANIZATION:-}" ] && [ -z "${WOJTEK_POLICY:-}" ]; then
+  echo "!! neither HF_ORGANIZATION nor WOJTEK_POLICY set (repo-root .env): launches need an explicit policy:=" >&2
+fi
+
+exec docker exec -it ${DOCKER_ENV[@]+"${DOCKER_ENV[@]}"} wojtek_robot bash

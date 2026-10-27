@@ -43,6 +43,8 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
+# How the IMU sits on the body, and why the number matters, is in imu_mount.
+from wojtek_policy.imu_mount import IMU_MOUNT_RPY
 from wojtek_policy.policy_source import active_policy, load_policy
 
 
@@ -75,7 +77,39 @@ def _cpu_prefix(context, arg):
     return [f"taskset -c {cpus}"] if cpus else None
 
 
+def _refuse_two_camera_drivers(context, hardware):
+    """One camera, one driver: refuse perception:=true with deck_camera:=true.
+
+    perception:=true (the full d435.yaml pipeline) and deck_camera:=true (the
+    panel's camera, which also carries the depth and the JPEG the nav stack
+    and the VLM brain read) both start realsense2_camera_node as
+    /camera/camera on the same D435. The second one finds the device taken,
+    or resets it under the first. Refuse the pair instead of coming up with
+    a camera that works by luck. Robot only: the simulation has no deck
+    camera node, so there the pair is no conflict. Both default to off, so a
+    context that never declared one of them still works.
+    """
+    if hardware != "real":
+        return
+
+    def on(name):
+        value = LaunchConfiguration(name, default="false").perform(context)
+        return value.lower() in ("true", "1")
+
+    if on("perception") and on("deck_camera"):
+        raise ValueError(
+            "perception:=true and deck_camera:=true both start a RealSense "
+            "driver on the one camera (/camera/camera). Pick one: "
+            "deck_camera already publishes the depth and the JPEG that "
+            "nav:=true and the VLM brain read; perception is the full "
+            "d435.yaml pipeline."
+        )
+
+
 def _launch_setup(context, with_rviz, hardware):
+    # Before anything else, the policy download included: a refused pair of
+    # arguments should say so at once.
+    _refuse_two_camera_drivers(context, hardware)
     share = get_package_share_directory("wojtek_bringup")
     policy_share = get_package_share_directory("wojtek_policy")
 
@@ -250,7 +284,11 @@ def _launch_setup(context, with_rviz, hardware):
             # (joint_state_broadcaster's rate), and the per-message
             # kinematics costs ~6 ms on the robot's A72 -- 25 Hz processing
             # fits the core budget; full rate does not (see the node).
-            parameters=[{"publish_tf": True, "input_stride": 2}],
+            parameters=[{
+                "publish_tf": True,
+                "input_stride": 2,
+                "imu_mount_rpy": IMU_MOUNT_RPY,
+            }],
             condition=IfCondition(use_imu),
         ) if leg_odom else None,
         Node(
@@ -266,6 +304,14 @@ def _launch_setup(context, with_rviz, hardware):
                 {
                     "dry_run": LaunchConfiguration("dry_run"),
                     "boot_pose": LaunchConfiguration("boot_pose"),
+                    # The arm check compares the pose against the policy's
+                    # home. On the robot 0.15 rad (the node's default) is
+                    # the safety margin. The simulated plant holds nothing
+                    # while disarmed and sags 0.22-0.28 rad from stand_up,
+                    # so with the robot's limit `zero -> stand_up -> arm`
+                    # never arms in the sim (seen by every E2E harness so
+                    # far, each raising it at runtime). Sim only.
+                    **({"max_arm_jump_rad": 0.35} if hardware == "sim" else {}),
                 }
             ],
         ),
@@ -280,13 +326,9 @@ def _launch_setup(context, with_rviz, hardware):
                     # loads the same files without resolving the ref again.
                     "policy": str(loaded.directory),
                     "policy_source": loaded.source,
-                    # URDF imu_joint: rpy 0 0 0 relative to base_link -- the
-                    # sensor sits upright and its driver publishes the chip
-                    # axes unmodified, so nothing needs rotating here. Keep
-                    # this equal to body.urdf.xacro's imu_joint: the value is
-                    # a copy, not derived, and the two drifting apart is what
-                    # fed v41 an upside-down gravity vector.
-                    "imu_mount_rpy": [0.0, 0.0, 0.0],
+                    # The driver publishes the chip axes unmodified; this
+                    # rotates them into base_link (see IMU_MOUNT_RPY).
+                    "imu_mount_rpy": IMU_MOUNT_RPY,
                     "auto_enable": True,  # real_io arming is the gate
                     "soft_start_s": 2.0,
                     "clamp_knee": True,
@@ -653,6 +695,9 @@ def common_launch_description(
             # on the isolated RT cores with no load balancing they shared
             # one core with policy_node and real_io and took a fifth of it.
             DeclareLaunchArgument("gamepad_cpus", default_value=""),
+            # Fraction of the command box full stick reaches; 1.0 = the
+            # policy's trained top speed, far too fast indoors.
+            DeclareLaunchArgument("gamepad_speed", default_value="0.4"),
             IncludeLaunchDescription(
                 PathJoinSubstitution(
                     [
@@ -663,6 +708,7 @@ def common_launch_description(
                 ),
                 launch_arguments={
                     "cpus": LaunchConfiguration("gamepad_cpus"),
+                    "speed_scale": LaunchConfiguration("gamepad_speed"),
                 }.items(),
                 condition=IfCondition(LaunchConfiguration("gamepad")),
             ),
@@ -672,7 +718,9 @@ def common_launch_description(
         # Off by default: the depth path is not on the robot's critical path,
         # and a missing driver package would take the whole launch -- and with
         # it the control stack -- down with it. Flip perception:=true in
-        # wojtek-robot.service once the pipeline is proven on hardware.
+        # wojtek-robot.service once the pipeline is proven on hardware, in
+        # place of deck_camera:=true: one driver per camera (see
+        # _refuse_two_camera_drivers).
         DeclareLaunchArgument("perception", default_value="false"),
         # The camera pipeline must not run on the isolated RT cores: the
         # service starts this whole tree under `taskset -c 2,3`, and children
@@ -700,6 +748,11 @@ def common_launch_description(
                 # must match, and the VLM decides at ~0.3-0.5 Hz anyway.
                 "depth_profile": "848x480x6",
                 "color_profile": "1280x720x6",
+                # base_link -> camera_link is the URDF's here (the real
+                # xacro's with_camera_mount, published by the
+                # robot_state_publisher in every camera mode); a second
+                # publisher of the same edge would fight it.
+                "extrinsics": "false",
             }.items(),
             condition=IfCondition(LaunchConfiguration("perception")),
         ),
@@ -711,18 +764,25 @@ def common_launch_description(
         ),
         # Local perception for navigation (wojtek_nav): the rolling costmap
         # around the robot in odom, from the depth camera. Off by default,
-        # like the camera it needs (perception:=true on the robot, the
+        # like the camera it needs (deck_camera:=true on the robot, the
         # virtual camera in the sim) and the odometry under it
         # (leg_odom:=true in the sim).
         DeclareLaunchArgument("nav", default_value="false"),
         DeclareLaunchArgument(
             "nav_cpus", default_value="0,1" if hardware == "real" else "",
         ),
+        # nav_costmap:=false starts goto alone: no camera chain, no costmap.
+        # For the split where a second computer owns perception and the
+        # brain and hands this one setpoints in odom (wojtek/nav/goal).
+        DeclareLaunchArgument("nav_costmap", default_value="true"),
         IncludeLaunchDescription(
             PathJoinSubstitution(
                 [FindPackageShare("wojtek_nav"), "launch", "costmap.launch.py"]
             ),
-            launch_arguments={"cpus": LaunchConfiguration("nav_cpus")}.items(),
+            launch_arguments={
+                "cpus": LaunchConfiguration("nav_cpus"),
+                "costmap": LaunchConfiguration("nav_costmap"),
+            }.items(),
             condition=IfCondition(LaunchConfiguration("nav")),
         ),
         # The deck panel (wojtek_deck): a browser cockpit for a handheld on

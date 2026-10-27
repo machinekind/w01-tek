@@ -113,7 +113,13 @@ def test_control_parameters_are_identical_in_sim_and_real(executable):
     """The parameters that decide how the robot behaves must not depend on
     which plant is underneath. A deliberate exception belongs in this list,
     with the reason -- an empty list is the goal."""
-    allowed_to_differ = set()
+    allowed_to_differ = {
+        # real_io's arm check: 0.15 rad on the robot (the node's default,
+        # not set by the launch), 0.35 rad in the sim, where the plant holds
+        # nothing while disarmed and sags 0.22-0.28 rad from stand_up, so
+        # the robot's margin never let `zero -> stand_up -> arm` arm there.
+        "max_arm_jump_rad",
+    }
 
     ctx_real, real = _nodes("real")
     ctx_sim, sim = _nodes("sim")
@@ -229,7 +235,28 @@ def test_sim_launch_keeps_the_arguments_its_callers_pass():
     assert {
         "rviz", "policy", "camera", "camera_depth_hz", "camera_color_hz",
         "boot_pose", "hw", "model_xml", "console", "gamepad", "robot",
+        "vlm", "vlm_url", "vlm_model",
     } <= declared
+
+
+def _policy_default(launch_file):
+    spec = importlib.util.spec_from_file_location("a_launch", launch_file)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    ld = module.generate_launch_description()
+    (arg,) = [a for a in ld.entities if getattr(a, "name", None) == "policy"]
+    return "".join(s.text for s in arg.default_value)
+
+
+def test_only_the_sim_takes_its_policy_from_the_environment(monkeypatch):
+    """WOJTEK_POLICY in the repo-root .env picks the desk's policy. The
+    robot's launch ignores it: the robot runs its override file or the pin,
+    and nothing in a shell can change that."""
+    monkeypatch.setenv("WOJTEK_POLICY", "org/from-env")
+    sim_launch = PKG_DIR / "launch" / "sim.launch.py"
+    assert _policy_default(sim_launch) == "org/from-env"
+    robot_launch = PKG_DIR.parent / "wojtek_bringup" / "launch" / "robot.launch.py"
+    assert _policy_default(robot_launch) != "org/from-env"
 
 
 # -- the robot profile (robot:=) -----------------------------------------------

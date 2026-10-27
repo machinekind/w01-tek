@@ -1,0 +1,16 @@
+# macOS overlay, the same choice ros/docker/compose.mac.yaml makes for the
+# sim: Docker runs in a Linux VM there, so `network_mode: host` reaches only
+# the VM, and the sim itself runs on the bridge network. The page joins the
+# same bridge (DDS discovery works between two bridge containers) and
+# publishes its port so the browser on the Mac reaches it. run.sh adds this
+# file on Darwin; Linux keeps host networking next to the sim.
+#
+# The port goes to the Mac's own loopback only, because the page's socket
+# arms the robot. To use the page from a handheld on the same network,
+# change the left part to 0.0.0.0:8501 (or drop it), knowing that anything
+# on that network can then arm the robot.
+services:
+  wojtek_vlm_gui:
+    network_mode: bridge
+    ports:
+      - "127.0.0.1:8501:8501"

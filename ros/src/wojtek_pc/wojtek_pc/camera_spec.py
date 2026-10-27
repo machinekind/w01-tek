@@ -67,6 +67,11 @@ DEPTH_TOPIC = "/camera/camera/depth/image_rect_raw"
 DEPTH_INFO_TOPIC = "/camera/camera/depth/camera_info"
 COLOR_TOPIC = "/camera/camera/color/image_raw"
 COLOR_INFO_TOPIC = "/camera/camera/color/camera_info"
+# The colour image's JPEG sibling, where image_transport's compressed plugin
+# puts it on the robot; the sim camera publishes the same topic itself so
+# the VLM brain and the web console read one input in both worlds.
+COLOR_COMPRESSED_TOPIC = COLOR_TOPIC + "/compressed"
+COLOR_JPEG_QUALITY = 80   # the deck's and the robot's plugin setting
 
 
 def intrinsics(width, height, fovy_deg=FOVY_DEG):

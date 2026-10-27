@@ -122,22 +122,44 @@ def policy_override_file() -> Path:
 def active_policy(robot: str = robots.DEFAULT_ROBOT) -> str:
     """The reference a bringup comes up with when no policy:= is given.
 
-    WOJTEK_POLICY in the environment wins: the PC's way (repo-root .env,
-    carried into the dev container by sim.sh / dev.sh; the training tools
-    read the same name). Then the override file, when it exists and is
-    non-empty: deployment state on the robot, written by `./deploy.sh
-    --policy <ref>` and removed by a plain `./deploy.sh`. Otherwise the robot's pin.
-    The PC never has an override file, so PC launches run the pin.
+    The override file wins when it exists and is non-empty. Otherwise the
+    pin answers. The file is deployment state on the robot, written by
+    `./deploy.sh --policy <ref>` and removed by a plain `./deploy.sh`. The
+    PC never has one, so PC launches run the pin.
+
+    WOJTEK_POLICY in the environment is deliberately not read here. This is
+    what the robot runs, and the robot follows only its override file and
+    the pin, so a stray variable in a shell can never change which policy
+    walks. The desk's shortcut is desk_policy().
     """
-    env = os.environ.get("WOJTEK_POLICY", "").strip()
-    if env:
-        return env
     path = policy_override_file()
     if path.is_file():
         ref = path.read_text().strip()
         if ref:
             return ref
     return default_policy(robot)
+
+
+def env_policy() -> str:
+    """WOJTEK_POLICY from the environment, or "" when it is unset or blank.
+
+    The desk's shortcut: the repo-root .env names a policy once and every
+    sim session runs it (sim.sh / dev.sh carry the variable into the
+    container; the training tools read the same name). sim.launch.py
+    declares it as its policy:= default, so the choice is visible in the
+    launch arguments; the robot's launch never reads it.
+    """
+    return os.environ.get("WOJTEK_POLICY", "").strip()
+
+
+def desk_policy(robot: str = robots.DEFAULT_ROBOT) -> str:
+    """The reference a PC launch (the simulation) comes up with by default.
+
+    env_policy() when WOJTEK_POLICY is set, otherwise active_policy(robot),
+    which on the PC is the robot profile's pin. Only the simulation asks
+    this (launch_common, hardware "sim"); the robot takes active_policy().
+    """
+    return env_policy() or active_policy(robot)
 
 
 def resolve_policy(ref: str) -> ResolvedPolicy:

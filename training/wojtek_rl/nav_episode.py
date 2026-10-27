@@ -5,10 +5,11 @@ uses, but pumps the 50 Hz control loop itself and records everything an
 evaluation needs: per-decision JSONL (action, reasoning, pose), periodic
 ego/chase frames, and a final summary with outcome + path length.
 
-    ./run.sh nav-episode --goal "go to the bed" \
-        --vlm-backend futurenav --vlm-url http://<gpu-host>:8100
+    ./run.sh nav-episode --goal "go to the bed"   # Qwen3-VL 30B on Ollama
 
-Outputs land in runs/nav_episodes/<timestamp>_<backend>/ (gitignored).
+--vlm-url / VLM_URL and --vlm-model / VLM_MODEL point at the Ollama server
+(default http://127.0.0.1:11434/v1, qwen3-vl:30b-a3b-instruct).
+Outputs land in runs/nav_episodes/<timestamp>_<vlm_cam>/ (gitignored).
 """
 
 from __future__ import annotations
@@ -27,7 +28,8 @@ from loguru import logger
 
 from wojtek_rl.room_app import RoomSim  # noqa: F401  (sets MUJOCO_GL before mujoco)
 from wojtek_rl import paths
-from wojtek_rl.vlm_nav import VlmNavigator
+from wojtek_rl.vlm_client import DEFAULT_VLM_MODEL, DEFAULT_VLM_URL, VLM_TIMEOUT_S, OpenAIVlmClient
+from wojtek_rl.vlm_nav import MAX_STEPS, VlmNavigator
 
 PUMP_DT_S = 0.02          # 50 Hz, same cadence as the websocket loop
 FRAME_EVERY_STEPS = 25    # 2 fps of saved frames
@@ -61,25 +63,8 @@ class RecordingClient:
 
 
 def build_client(args, sim, out_dir: Path):
-    if args.vlm_backend == "futurenav":
-        from wojtek_rl.futurenav_nav import (
-            DEFAULT_FUTURENAV_URL,
-            FUTURENAV_MAX_STEPS,
-            FUTURENAV_TIMEOUT_S,
-            FutureNavVlmClient,
-        )
-
-        client = FutureNavVlmClient(args.vlm_url or DEFAULT_FUTURENAV_URL)
-        max_steps = args.max_steps or FUTURENAV_MAX_STEPS
-        timeout_s = FUTURENAV_TIMEOUT_S
-    else:
-        from wojtek_rl.vlm_local import DEFAULT_LOCAL_MODEL, LOCAL_VLM_TIMEOUT_S, LocalVlmClient
-        from wojtek_rl.vlm_nav import MAX_STEPS
-
-        client = LocalVlmClient(args.vlm_model or DEFAULT_LOCAL_MODEL)
-        max_steps = args.max_steps or MAX_STEPS
-        timeout_s = LOCAL_VLM_TIMEOUT_S
-    return RecordingClient(client, sim, out_dir), max_steps, timeout_s
+    client = OpenAIVlmClient(args.vlm_url, args.vlm_model)
+    return RecordingClient(client, sim, out_dir), args.max_steps or MAX_STEPS, VLM_TIMEOUT_S
 
 
 async def run_episode(
@@ -155,7 +140,6 @@ async def run_episode(
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--goal", required=True)
-    p.add_argument("--vlm-backend", choices=("futurenav", "local"), default="futurenav")
     p.add_argument(
         "--vlm-cam",
         choices=("ego", "bench"),
@@ -179,9 +163,11 @@ def main(argv=None):
         default=1.5,
         help="success radius in meters around --goal-xy",
     )
-    p.add_argument("--vlm-url", default=None, help="FutureNav action server URL")
-    p.add_argument("--vlm-model", default=None)
-    p.add_argument("--max-steps", type=int, default=None, help="override backend default")
+    p.add_argument("--vlm-url", default=os.environ.get("VLM_URL") or DEFAULT_VLM_URL,
+                   help="Ollama base URL, with or without /v1 (VLM_URL)")
+    p.add_argument("--vlm-model", default=os.environ.get("VLM_MODEL") or DEFAULT_VLM_MODEL,
+                   help="Ollama model tag (VLM_MODEL)")
+    p.add_argument("--max-steps", type=int, default=None, help=f"step budget (default {MAX_STEPS})")
     p.add_argument("--scene", type=Path, default=paths.ROOM_SCENE_XML)
     p.add_argument("--policy", default=paths.DEFAULT_POLICY)
     p.add_argument("--out", type=Path, default=None, help="output dir (default runs/nav_episodes/<ts>)")
@@ -189,18 +175,14 @@ def main(argv=None):
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = args.out or (
-        paths.PROJECT_DIR / "runs/nav_episodes" / f"{stamp}_{args.vlm_backend}_{args.vlm_cam}"
+        paths.PROJECT_DIR / "runs/nav_episodes" / f"{stamp}_{args.vlm_cam}"
     )
     out_dir.mkdir(parents=True, exist_ok=True)
 
     sim = RoomSim(args.scene, args.policy, vlm_cam=args.vlm_cam)
     client, max_steps, timeout_s = build_client(args, sim, out_dir)
-    is_futurenav = args.vlm_backend == "futurenav"
-    from wojtek_rl.futurenav_nav import FUTURENAV_MAX_ROTATION
     nav = VlmNavigator(
         sim, client, max_steps=max_steps, vlm_timeout_s=timeout_s, overlap=args.vlm_overlap,
-        vlnce_frame=is_futurenav,
-        max_rotation=FUTURENAV_MAX_ROTATION if is_futurenav else None,
     )
 
     goal_xy = None
@@ -212,7 +194,7 @@ def main(argv=None):
         run_episode(sim, nav, args.goal, out_dir, goal_xy=goal_xy,
                     success_radius=args.success_radius)
     )
-    summary["backend"] = args.vlm_backend
+    summary["model"] = args.vlm_model
     summary["vlm_cam"] = args.vlm_cam
     summary["overlap"] = args.vlm_overlap
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")

@@ -26,7 +26,7 @@ the gate zeroes the motion for two seconds, then goes silent.
 Websocket protocol (text frames, JSON):
   server -> page
     {"t":"hello", cmd_low, cmd_high, height_range, height_default,
-                  bridge_port, policy}
+                  bridge_port, policy, imu_mount_rpy}
     {"t":"avail", "svc": {key: bool}}          which services answer
     {"t":"svc", key, value, success, message}  a service call's verdict
     {"t":"status", drive: idle|live|deadman, height, cam_hz, clients}
@@ -69,6 +69,7 @@ from rclpy.signals import SignalHandlerOptions
 from sensor_msgs.msg import CompressedImage, Image, JointState
 from std_srvs.srv import SetBool, Trigger
 
+from wojtek_policy.imu_mount import IMU_MOUNT_RPY
 from wojtek_policy.policy_source import load_meta
 from wojtek_deck.drive import DriveGate
 
@@ -151,6 +152,10 @@ class GatewayNode(Node):
         self.declare_parameter("port", 8090)
         # Told to the page so it knows where foxglove_bridge listens.
         self.declare_parameter("bridge_port", 8765)
+        # Also told to the page: how the IMU sits on the body, so it can
+        # turn the raw IMU topic it reads from the bridge into the robot's
+        # roll, pitch and heading. The default is the robot's own mount.
+        self.declare_parameter("imu_mount_rpy", list(IMU_MOUNT_RPY))
         self.declare_parameter("color_topic", DEFAULT_COLOR_TOPIC)
         self.declare_parameter("jpeg_quality", 80)
         # Most frames a second that get encoded for the stream. The camera
@@ -537,6 +542,8 @@ class Server:
             "height_default": self.node.height_default,
             "bridge_port": int(self.node.get_parameter("bridge_port").value),
             "policy": self.node.policy_name,
+            "imu_mount_rpy": [float(v) for v in
+                              self.node.get_parameter("imu_mount_rpy").value],
         }
 
     def status(self):

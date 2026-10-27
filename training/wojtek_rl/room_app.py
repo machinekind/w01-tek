@@ -8,15 +8,12 @@ view), click-to-walk on a minimap, a mid-level command box ("turn_left 30",
 "forward 1.5", "stop"), and a VLM goal box ("go to the bed") that lets a
 VLM drive that same command interface closed-loop (wojtek_rl.vlm_nav).
 
-Two VLM backends (--vlm-backend / VLM_BACKEND):
-  local (default)  Qwen3-VL via mlx-vlm, fully on-device (Apple Silicon);
-                   needs `uv sync --extra vlm-local`, weights download from
-                   HuggingFace on first use (~18 GB)
-  anthropic        Claude via API; needs `--extra vlm` + ANTHROPIC_API_KEY
+The VLM is Qwen3-VL 30B-A3B on Ollama (wojtek_rl.vlm_client), reached at
+--vlm-url / VLM_URL (default http://127.0.0.1:11434/v1) as --vlm-model /
+VLM_MODEL (default qwen3-vl:30b-a3b-instruct).
 
 Run (after ./run.sh room-assets && ./run.sh build && ./run.sh build-room):
-    ./run.sh room                                  # local Qwen3-VL goal box
-    ANTHROPIC_API_KEY=... ./run.sh room --vlm-backend anthropic
+    ./run.sh room
 """
 
 from __future__ import annotations
@@ -44,7 +41,8 @@ from wojtek_rl import paths
 from wojtek_rl.midlevel import Forward, MidLevelExecutor, Stop, parse_command
 from wojtek_rl.navigation import NavConfig, command_to_target, quat_to_yaw
 from wojtek_rl.np_policy import actuator_addresses, gravity_from_quat, load_policy_runtime
-from wojtek_rl.vlm_nav import DEFAULT_MODEL, AnthropicVlmClient, VlmNavigator
+from wojtek_rl.vlm_client import DEFAULT_VLM_MODEL, DEFAULT_VLM_URL, VLM_TIMEOUT_S, OpenAIVlmClient
+from wojtek_rl.vlm_nav import VlmNavigator
 
 ROBOT_KEY = "wojtek"
 ROBOT_LABEL = "Wojtek (room)"
@@ -63,9 +61,6 @@ SENSE_EVERY = 5            # depth into the SCAN map at 10 Hz while walking
 # panel animates (guidance, spline, the twin cylinders turning with the body),
 # so it is worth 5 Hz -- plan_image costs ~1 ms.
 MAP_EVERY = 10
-# FutureNav's training camera (Habitat R2R RGB sensor): square, HFOV 90.
-VLM_FRAME_PX = 224
-VLNCE_HFOV_DEG = 90.0
 
 
 _scene_name = os.environ.get("SCENE", "room")
@@ -109,12 +104,12 @@ class RoomSim:
         # (the model default is 640x480, which would cap every renderer there).
         self.model.vis.global_.offwidth = 1024
         self.model.vis.global_.offheight = 768
-        # 480x640 (VGA, VLN-CE agent-camera geometry) -- the VLM/bench frame the
-        # FutureNav server sees; higher than the old 360x480 for more detail.
+        # 480x640 (VGA) -- the VLM/bench frame; higher than the old 360x480
+        # for more detail.
         self.renderer = mujoco.Renderer(self.model, height=480, width=640)
         # Separate, higher-res renderer for the browser chase view only: it fills
         # a large panel, so keep it crisp without inflating the VLM frame (and its
-        # FutureNav token cost / inference time).
+        # token cost / inference time).
         self.chase_renderer = mujoco.Renderer(self.model, height=768, width=1024)
         self.cam = mujoco.MjvCamera()
         self.cam.distance = VIEW["distance"]
@@ -155,20 +150,6 @@ class RoomSim:
         self._ego_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, self.vlm_cam)
         self._ego_fovy = float(self.model.cam_fovy[self._ego_id])
 
-        # Model (FutureNav) frame: a clean square, HFOV-90, VLN-CE-height view
-        # matching upstream's Habitat R2R RGB sensor (224x224, HFOV 90). Uses the
-        # mast 'bench' camera; its fovy is forced to 90 so a square render yields
-        # HFOV 90 (the XML's 73.74 assumed a 4:3 render). Left untouched when it
-        # doubles as the browser cam (vlm_cam == "bench"), so the ablation keeps
-        # its geometry; falls back to the browser cam if no bench camera exists.
-        self._vlm_frame_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, "bench")
-        if self._vlm_frame_id >= 0:
-            self._vlm_frame_cam = "bench"
-            if self.vlm_cam != "bench":
-                self.model.cam_fovy[self._vlm_frame_id] = VLNCE_HFOV_DEG
-        else:
-            self._vlm_frame_cam = self.vlm_cam
-        self.vlm_renderer = mujoco.Renderer(self.model, height=VLM_FRAME_PX, width=VLM_FRAME_PX)
         occ = paths.scene_dir(_scene_name) / "occupancy.npz"
         if occ.exists():
             from wojtek_eval.gridmap import GridMap
@@ -355,17 +336,6 @@ class RoomSim:
             )
             scene.ngeom += 1
 
-    def vlm_frame_jpeg(self) -> str:
-        """Clean square VLN-CE-style RGB frame for the FutureNav model: no HUD,
-        no minimap -- exactly what upstream feeds its policy (224x224, HFOV 90)."""
-        from PIL import Image
-
-        self.vlm_renderer.update_scene(self.data, camera=self._vlm_frame_cam)
-        frame = self.vlm_renderer.render()
-        buf = io.BytesIO()
-        Image.fromarray(frame).save(buf, format="JPEG", quality=90)
-        return base64.b64encode(buf.getvalue()).decode("ascii")
-
     def render_pair(self) -> tuple[str, str]:
         """(chase, ego) JPEGs from the one shared renderer.
 
@@ -441,9 +411,8 @@ _scene_xml = paths.scene_xml(_scene_name)
 # it too, but only when the ref is None -- and this module always passes one).
 _policy_npz = os.environ.get("WOJTEK_POLICY") or paths.DEFAULT_POLICY
 _navigator: VlmNavigator | None = None
-_vlm_backend = os.environ.get("VLM_BACKEND", "local")
-_vlm_model = os.environ.get("VLM_MODEL")  # None -> backend default
-_vlm_url = os.environ.get("VLM_URL")  # futurenav backend only
+_vlm_model = os.environ.get("VLM_MODEL") or DEFAULT_VLM_MODEL
+_vlm_url = os.environ.get("VLM_URL") or DEFAULT_VLM_URL
 _local_planner = os.environ.get("LOCAL_PLANNER", "1") != "0"
 
 
@@ -455,60 +424,17 @@ def get_sim() -> RoomSim:
 
 
 def get_navigator() -> VlmNavigator:
-    """Lazy: the VLM stack (mlx-vlm or anthropic SDK) is only imported on
-    first use, so the server runs fine without either extra until someone
-    submits a goal."""
+    """Lazy: nothing talks to the model server until someone submits a goal."""
     global _navigator
     if _navigator is None:
-        if _vlm_backend == "futurenav":
-            from wojtek_rl.futurenav_nav import (
-                DEFAULT_FUTURENAV_URL,
-                FUTURENAV_MAX_ROTATION,
-                FUTURENAV_MAX_STEPS,
-                FUTURENAV_TIMEOUT_S,
-                FutureNavVlmClient,
-            )
-
-            client = FutureNavVlmClient(_vlm_url or DEFAULT_FUTURENAV_URL)
-            # vlnce_frame: feed the clean square HFOV-90 VLN-CE frame upstream
-            # trained on. max_rotation: upstream EARLY_STOP_ROTATION anti-spin.
-            # overlap: pipeline the next decision while the current 0.25 m step
-            # runs, so the robot keeps moving instead of idling during inference.
-            _navigator = VlmNavigator(
-                get_sim(), client, max_steps=FUTURENAV_MAX_STEPS,
-                vlm_timeout_s=FUTURENAV_TIMEOUT_S, overlap=True,
-                vlnce_frame=True, max_rotation=FUTURENAV_MAX_ROTATION,
-            )
-        elif _vlm_backend == "anthropic":
-            client = AnthropicVlmClient(_vlm_model or DEFAULT_MODEL)
-            _navigator = VlmNavigator(get_sim(), client)
-        else:
-            from wojtek_rl.vlm_local import (
-                DEFAULT_LOCAL_MODEL,
-                LOCAL_VLM_TIMEOUT_S,
-                LocalVlmClient,
-            )
-
-            client = LocalVlmClient(_vlm_model or DEFAULT_LOCAL_MODEL)
-            _navigator = VlmNavigator(get_sim(), client, vlm_timeout_s=LOCAL_VLM_TIMEOUT_S)
+        client = OpenAIVlmClient(_vlm_url, _vlm_model)
+        _navigator = VlmNavigator(get_sim(), client, vlm_timeout_s=VLM_TIMEOUT_S)
     return _navigator
-
-
-def _preload_local_vlm():
-    """Warm the local weights so the first goal doesn't wait for the load."""
-    try:
-        get_navigator().client.preload()
-    except Exception as e:
-        # Not fatal: the first goal retries the load and surfaces the real
-        # error (missing extra, no disk space, ...) in the UI.
-        logger.warning(f"local VLM preload failed: {e}")
 
 
 @app.on_event("startup")
 def _warmup():
     get_sim()
-    if _vlm_backend == "local":
-        threading.Thread(target=_preload_local_vlm, daemon=True).start()
 
 
 @app.get("/")
@@ -602,7 +528,7 @@ async def set_scene(request: Request):
         _sim, _scene_name, _scene_xml = old_sim, old_name, old_xml
         return {"ok": False, "error": str(e)}
     if old_sim is not None:  # free the old GL renderers
-        for r in ("renderer", "chase_renderer", "vlm_renderer"):
+        for r in ("renderer", "chase_renderer"):
             try:
                 getattr(old_sim, r).close()
             except Exception:
@@ -699,7 +625,6 @@ def info():
         "world_half": _world_half(),
         "current": ROBOT_KEY,
         "robots": [{"key": ROBOT_KEY, "label": ROBOT_LABEL, "env": "RoomSim"}],
-        "vlm_backend": _vlm_backend,
         "vlm_model": _vlm_model,
         "vlm_url": _vlm_url,
         "local_planner": sim.scan is not None,
@@ -750,7 +675,7 @@ async def ws(sock: WebSocket):
                     elif t == "goal":
                         try:
                             ack = get_navigator().start(str(msg.get("text", "")))
-                        except Exception as e:  # missing anthropic extra / API key
+                        except Exception as e:  # e.g. httpx missing (`--extra demo`)
                             ack = {"ok": False, "error": str(e)}
                         await acks.put({"type": "goal_ack", **ack})
                     elif t == "goal_cancel":
@@ -797,7 +722,7 @@ async def ws(sock: WebSocket):
 
 
 def main(argv=None):
-    global _scene_xml, _policy_npz, _vlm_model, _vlm_backend
+    global _scene_xml, _policy_npz, _vlm_model, _vlm_url
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--host", default=os.environ.get("HOST", "127.0.0.1"))
     p.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8010")))
@@ -817,30 +742,22 @@ def main(argv=None):
         "behaviour); the A/B baseline for obstacle avoidance",
     )
     p.add_argument(
-        "--vlm-backend",
-        choices=("local", "anthropic", "futurenav"),
-        default=os.environ.get("VLM_BACKEND", "local"),
-        help="local = Qwen3-VL via mlx-vlm on-device; anthropic = Claude API; "
-        "futurenav = FutureNav-4B action server (--vlm-url)",
-    )
-    p.add_argument(
         "--vlm-model",
-        default=os.environ.get("VLM_MODEL"),
-        help="HuggingFace repo (local) or Anthropic model id; default per backend",
+        default=_vlm_model,
+        help=f"Ollama model tag (default {DEFAULT_VLM_MODEL}; VLM_MODEL)",
     )
     p.add_argument(
         "--vlm-url",
-        default=os.environ.get("VLM_URL"),
-        help="FutureNav action server base URL (futurenav backend only)",
+        default=_vlm_url,
+        help=f"Ollama base URL, with or without /v1 (default {DEFAULT_VLM_URL}; VLM_URL)",
     )
     args = p.parse_args(argv)
-    global _scene_name, _vlm_url, _local_planner
+    global _scene_name, _local_planner
     _local_planner = not args.no_local_planner
     _scene_name = args.scene_name
     _scene_xml = args.scene or paths.scene_xml(_scene_name)
     _policy_npz = args.policy
-    _vlm_backend, _vlm_model = args.vlm_backend, args.vlm_model
-    _vlm_url = args.vlm_url
+    _vlm_model, _vlm_url = args.vlm_model, args.vlm_url
 
     import uvicorn
 

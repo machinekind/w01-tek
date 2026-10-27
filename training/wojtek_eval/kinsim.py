@@ -18,7 +18,7 @@ march any more: it is handed to the SCAN local planner (wojtek_rl.scan),
 which drives the base along an optimised, collision-checked trajectory built
 from the simulated depth channel while the robot moves. The straight-march
 path stays available (``local_planner=False``) as the A/B baseline -- it is
-the behaviour every VLM backend has been failing against, walking into
+the behaviour the VLM has been failing against, walking into
 furniture the model could not judge the distance of.
 
 Both modes book every stopped step: ``collisions`` when the oracle grid has
@@ -104,8 +104,7 @@ class KinematicSim:
         # onboard ~10 cm cam, "bench" = VLN-CE-style 1.25 m mast cam) and
         # whether the minimap HUD is composited in. Depth for the online map
         # always comes from the ego camera -- that is the robot's actual
-        # depth sensor. VLN-trained backends (futurenav) never saw HUDs:
-        # run them with hud=False.
+        # depth sensor. hud=False gives the clean frame (an ablation).
         self.vlm_cam = vlm_cam
         self.hud = hud
         self.model = mujoco.MjModel.from_xml_path(str(paths.scene_xml(scene_name)))

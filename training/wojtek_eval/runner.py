@@ -1,7 +1,7 @@
 """Async evaluation runner: episodes x (KinematicSim + EvalNavigator + VLM).
 
-Episodes run concurrently (default 4) against one shared OpenAIVlmClient so
-the vLLM server batches decisions across episodes. Spoken episodes go through
+Episodes run concurrently (default 4) against one shared OpenAIVlmClient,
+i.e. one Ollama server serving Qwen3-VL 30B-A3B. Spoken episodes go through
 the hearing chain FIRST (say -> faster-whisper on this machine), then the
 transcript -- not the clean text -- becomes the VLM goal.
 
@@ -11,7 +11,7 @@ killed run keeps its partial results), summary.json, and frames/<episode>/
 composite VLM frames + final agent map for the media pipeline.
 
 Usage:
-    python -m wojtek_eval.runner --base-url http://HOST:PORT --model MODEL \
+    python -m wojtek_eval.runner [--base-url URL] [--model TAG] \
         --scenes room apartment --per-task 6 --spoken-frac 0.5 \
         --out runs/nav_eval/night1 [--sample-frac 0.4] [--dry-run]
 """
@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import time
 from pathlib import Path
 
@@ -30,6 +31,8 @@ from loguru import logger
 from wojtek_rl import paths
 from wojtek_eval.episodes import Episode, generate, score_episode, summarize
 from wojtek_eval.gridmap import GridMap
+from wojtek_eval.navigator import EVAL_ACTIONS, EVAL_SYSTEM_PROMPT
+from wojtek_rl.vlm_client import DEFAULT_VLM_MODEL, DEFAULT_VLM_URL, OpenAIVlmClient
 
 
 async def _run_episode(ep: Episode, client, out_dir: Path, save_frames: bool,
@@ -132,12 +135,10 @@ def prepare_audio(episodes: list[Episode], out_dir: Path, seed: int) -> None:
 
 def main(argv=None) -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--backend", choices=("openai", "futurenav"), default="openai",
-                   help="openai = vLLM-served chat VLM; futurenav = FutureNav-4B "
-                   "action server (wojtek_rl/futurenav_server)")
-    p.add_argument("--base-url", default=None, help="openai backend: vLLM URL")
-    p.add_argument("--model", default=None, help="openai backend: model id")
-    p.add_argument("--vlm-url", default=None, help="futurenav backend: action server URL")
+    p.add_argument("--base-url", default=os.environ.get("VLM_URL") or DEFAULT_VLM_URL,
+                   help="Ollama base URL, with or without /v1 (VLM_URL)")
+    p.add_argument("--model", default=os.environ.get("VLM_MODEL") or DEFAULT_VLM_MODEL,
+                   help="Ollama model tag (VLM_MODEL)")
     p.add_argument("--vlm-cam", choices=("ego", "bench"), default="ego",
                    help="camera the VLM sees (bench = VLN-CE-style 1.25 m mast)")
     p.add_argument(
@@ -147,7 +148,7 @@ def main(argv=None) -> None:
         "them through the SCAN local planner (pre-SCAN baseline)",
     )
     p.add_argument("--no-hud", action="store_true",
-                   help="clean frames without the minimap HUD (futurenav never saw HUDs)")
+                   help="clean frames without the minimap HUD (ablation)")
     p.add_argument(
         "--suite",
         type=Path,
@@ -204,32 +205,18 @@ def main(argv=None) -> None:
         logger.info("dry run: suite + audio written, exiting before VLM")
         return
 
-    import os
-
     sim_kwargs = {
         "vlm_cam": args.vlm_cam,
         "hud": not args.no_hud,
         "local_planner": not args.no_local_planner,
     }
 
-    if args.backend == "futurenav":
-        from wojtek_rl.futurenav_nav import DEFAULT_FUTURENAV_URL, FutureNavVlmClient
-
-        client = FutureNavVlmClient(args.vlm_url or DEFAULT_FUTURENAV_URL)
-        if args.concurrency != 1:
-            # The action server holds one episode's state (frame history +
-            # VGGT cache); interleaved episodes would silently corrupt it.
-            logger.warning("futurenav backend is single-episode; forcing concurrency=1")
-            args.concurrency = 1
-    else:
-        if not (args.base_url and args.model):
-            p.error("--base-url and --model are required for the openai backend")
-        from wojtek_eval.vlm_openai import OpenAIVlmClient
-
-        client = OpenAIVlmClient(
-            args.base_url, args.model, api_key=os.environ.get("VLLM_API_KEY", "EMPTY"),
-            temperature=args.temperature,
-        )
+    client = OpenAIVlmClient(
+        args.base_url, args.model,
+        system_prompt=EVAL_SYSTEM_PROMPT, actions=EVAL_ACTIONS,
+        temperature=args.temperature,
+        retries=3,  # a long unattended run waits out a server restart (12/24/36 s waits)
+    )
 
     async def _main():
         try:

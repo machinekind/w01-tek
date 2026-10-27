@@ -23,10 +23,14 @@ import pytest
 PKG = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PKG))
 
+# Before mujoco loads: depth_camera settles MUJOCO_GL (egl on a headless
+# Linux box), and mujoco reads it once, at import. Imported the other way
+# round, a box without a display dumped core inside the first Renderer.
+from wojtek_pc import camera_spec, depth_camera  # noqa: E402
+
 mujoco = pytest.importorskip("mujoco")
 
-from wojtek_pc import camera_spec  # noqa: E402
-from wojtek_pc.depth_camera import SimDepthCamera, inject_camera  # noqa: E402
+SimDepthCamera, inject_camera = depth_camera.SimDepthCamera, depth_camera.inject_camera
 
 REPO_ROS_SRC = PKG.parent  # .../ros/src
 

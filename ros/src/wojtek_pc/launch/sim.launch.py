@@ -10,6 +10,7 @@ virtual camera, RViz, the operator console and optionally a gamepad.
                                        [telemetry:=true] [deck:=false]
                                        [robot:=wojtek|wojtek_v2]
                                        [leg_odom:=true nav:=true]
+                                       [vlm:=true vlm_url:=http://host:11434 vlm_model:=...]
 
 This is `robot.launch.py` with the hardware plugin swapped -- same
 controller_manager at 200 Hz, same broadcasters, same real_io_node, same
@@ -63,6 +64,14 @@ A navigation session: model_xml:=scene_nav.xml leg_odom:=true nav:=true --
 the corridor scene, the legs' odometry, and wojtek_nav's rolling costmap on
 top (/wojtek/nav/costmap). See wojtek_nav/README.md.
 
+vlm:=true adds the VLM brain (wojtek_nav/brain.launch.py) on top of that:
+instructions typed into the web console's brain panel go to the Ollama
+server at vlm_url (VLM_URL from the environment, else localhost:11434)
+serving qwen3-vl:30b-a3b-instruct, and come back as pixel
+goals for the resolver. The brain reads the camera's JPEG
+(/camera/camera/color/image_raw/compressed), which the sim camera publishes
+too, so the sim and the robot feed the same input.
+
 The world the camera draws is config/scene_sim.xml: the training scene plus
 a ball, a fire hydrant, a traffic light, a stop sign, a clock and a person
 standing around the spawn, so the deck panel's detector has something to
@@ -84,20 +93,29 @@ nothing else holds port 8765.
 
 import os
 
-from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.actions import (
+    DeclareLaunchArgument,
+    IncludeLaunchDescription,
+    OpaqueFunction,
+)
 from launch.conditions import IfCondition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import (
+    EnvironmentVariable,
     EqualsSubstitution,
     LaunchConfiguration,
+    PathJoinSubstitution,
     PythonExpression,
 )
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
+from launch_ros.substitutions import FindPackageShare
 
 from wojtek_bringup.launch_common import (
     common_launch_description,
     sim_model_xml,
 )
+from wojtek_policy.policy_source import env_policy
 
 
 def _camera_node(context):
@@ -140,9 +158,13 @@ def generate_launch_description():
     # everything else -- nodes, parameters, the arming procedure, the robot
     # profile and its default policy (robot:=, wojtek_policy/robots.py) --
     # shared verbatim with the robot bringup, so what you watch here is what
-    # the robot comes up with.
+    # the robot comes up with. The one desk-only default is the policy:
+    # WOJTEK_POLICY from the repo-root .env names it (policy_source.env_policy),
+    # else the profile's default is resolved like on the robot. The robot's
+    # launch never reads that variable.
     ld = common_launch_description(
         with_rviz=True, bag_default="false", hardware="sim", with_gamepad=True,
+        policy_default=env_policy(),
     )
     for action in (
         # D435-compatible virtual camera: a separate node now, because the
@@ -187,6 +209,29 @@ def generate_launch_description():
             condition=IfCondition(
                 EqualsSubstitution(LaunchConfiguration("console"), "qt")
             ),
+        ),
+        # The VLM brain (wojtek_nav), opt-in: it needs nav:=true underneath
+        # (goto + the pixel resolver) and a model server to talk to.
+        DeclareLaunchArgument("vlm", default_value="false"),
+        # VLM_URL / VLM_MODEL from the environment, else empty: the brain's
+        # defaults live with the brain (wojtek_nav.vlm_brain), and its node
+        # takes an empty url or model as "the default", so nothing is
+        # duplicated here.
+        DeclareLaunchArgument(
+            "vlm_url", default_value=EnvironmentVariable("VLM_URL", default_value=""),
+        ),
+        DeclareLaunchArgument(
+            "vlm_model", default_value=EnvironmentVariable("VLM_MODEL", default_value=""),
+        ),
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(PathJoinSubstitution(
+                [FindPackageShare("wojtek_nav"), "launch", "brain.launch.py"]
+            )),
+            launch_arguments={
+                "url": LaunchConfiguration("vlm_url"),
+                "model": LaunchConfiguration("vlm_model"),
+            }.items(),
+            condition=IfCondition(LaunchConfiguration("vlm")),
         ),
     ):
         ld.add_action(action)

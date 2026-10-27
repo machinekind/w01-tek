@@ -74,8 +74,7 @@ class Transcriber:
     """Lazy-loading faster-whisper wrapper; the model stays resident once loaded.
 
     faster-whisper is an optional `eval` extra (see pyproject.toml), so the
-    import lives inside _ensure_loaded() -- same lazy-import pattern as
-    wojtek_rl/vlm_local.py uses for mlx, keeping every other module usable
+    import lives inside _ensure_loaded(), keeping every other module usable
     without it installed.
     """
 

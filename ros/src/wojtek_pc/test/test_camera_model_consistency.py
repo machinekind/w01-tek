@@ -26,6 +26,11 @@ from wojtek_pc import camera_spec  # noqa: E402
 BODY_XACRO = (
     PKG.parent / "wojtek_description" / "urdf" / "body.urdf.xacro"
 )
+# The robot's copy of the same numbers, for a standalone perception launch
+# (on the robot the bringup publishes the edge from the URDF's mount).
+EXTRINSICS_YAML = (
+    PKG.parent / "wojtek_perception_bringup" / "config" / "extrinsics.yaml"
+)
 
 
 def _xacro_float(token):
@@ -96,6 +101,20 @@ class TestMountAgreement:
             cx, cr = _origin(_joint(urdf_root, color))
             assert cx == pytest.approx(dx)
             assert cr == pytest.approx(dr)
+
+    def test_robot_extrinsics_file_matches_spec(self):
+        # The third copy of the mount: what a standalone perception launch
+        # publishes on the robot. A number changed in one place only shows
+        # up as a phantom wall a few metres ahead, so all three must agree.
+        yaml = pytest.importorskip("yaml")
+        with open(EXTRINSICS_YAML) as fh:
+            tf = yaml.safe_load(fh)["static_transform"]
+        assert (tf["parent_frame"], tf["child_frame"]) == ("base_link", "camera_link")
+        assert [tf["x"], tf["y"], tf["z"]] == pytest.approx(
+            list(camera_spec.MOUNT_XYZ), abs=1e-9
+        )
+        assert tf["roll"] == 0.0 and tf["yaw"] == 0.0
+        assert tf["pitch"] == pytest.approx(camera_spec.MOUNT_PITCH_RAD, abs=1e-6)
 
 
 class TestOpticalAxisAgreement:

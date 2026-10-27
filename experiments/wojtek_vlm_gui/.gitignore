@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+# Per-session screenshots and notes that are not curated into the README.
+runs/

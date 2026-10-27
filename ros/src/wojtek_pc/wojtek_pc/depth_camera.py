@@ -17,9 +17,23 @@ mujoco is imported lazily so this module can be imported (e.g. by tests that
 only want depth_to_mm re-exports) before the sim node has settled MUJOCO_GL.
 """
 
+import os
+import sys
+
 import numpy as np
 
 from wojtek_pc import camera_spec
+
+# The renderers need an offscreen GL backend, and MuJoCo picks it from
+# MUJOCO_GL the moment it is first imported: unset, that is GLFW on Linux,
+# which wants a display and on a headless box (a GPU server, the container
+# under ssh) kills the process inside mujoco.Renderer instead of raising.
+# EGL renders without a display. An explicit MUJOCO_GL still wins, and
+# mujoco_sim_node settles it the same way (with a fallback to `disabled`);
+# this covers the other importers of the renderer, sim_camera_node and the
+# renderer tests, so the same default holds wherever the camera is built.
+if sys.platform.startswith("linux") and not os.environ.get("MUJOCO_GL"):
+    os.environ["MUJOCO_GL"] = "egl"
 
 
 def _free_root_body(spec, mujoco):

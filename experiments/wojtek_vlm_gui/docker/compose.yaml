@@ -1,0 +1,36 @@
+# The GUI container, run next to wojtek_robot (ros/docker/compose.yaml).
+# Same host network, same ROS_DOMAIN_ID and CycloneDDS profile, so the two
+# discover each other exactly like two nodes on one host. Relative paths
+# resolve against this file's directory.
+#
+# No credentials and no model endpoint here: the page talks only to the
+# ROS 2 graph. The model server is the brain's business (VLM_URL in the
+# root .env, read by ros/sim.sh for the wojtek_robot container).
+name: wojtek_vlm_gui
+
+services:
+  wojtek_vlm_gui:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: wojtek_vlm_gui:jazzy
+    container_name: wojtek_vlm_gui
+    network_mode: host
+    ipc: host
+    working_dir: /exp
+    volumes:
+      # The experiment itself: code and tests.
+      - ..:/exp
+      # The simulation's own DDS profile, read-only, so it can never drift
+      # from what wojtek_robot runs.
+      - ../../../ros/docker/config/cyclonedds.xml:/config/cyclonedds.xml:ro
+    environment:
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - ROS_DOMAIN_ID=42
+      - CYCLONEDDS_URI=file:///config/cyclonedds.xml
+      # On hosts where CycloneDDS multicast loopback is broken, set
+      # ROS_LOCALHOST_ONLY=1 in the repo-root .env (or export it). run.sh
+      # reads it from the same places ros/sim.sh does, so both containers
+      # get the same value.
+      - ROS_LOCALHOST_ONLY=${ROS_LOCALHOST_ONLY:-0}
+      - PYTHONUNBUFFERED=1

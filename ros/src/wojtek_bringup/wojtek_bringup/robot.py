@@ -151,8 +151,9 @@ def main():
                     help="run the VLM brain (wojtek_nav brain.launch.py) for "
                          "this session: instructions from the web console's "
                          "brain panel become pixel goals for the robot. "
-                         "Needs nav:=true (and on the robot perception:=true) "
-                         "in the stack underneath, and a model server at "
+                         "Needs nav:=true in the stack underneath (and on "
+                         "the robot deck_camera:=true, the camera the "
+                         "service already runs), and a model server at "
                          "VLM_URL / --vlm-url")
     ap.add_argument("--vlm-url", default=None,
                     help="base URL of the Ollama server for --vlm "
@@ -305,7 +306,8 @@ def main():
     if args.vlm and not args.sim:
         print(">> launching the VLM brain (wojtek_nav brain.launch.py); type an "
               "instruction in the web console's brain panel. The robot stack "
-              "must run with perception:=true nav:=true.")
+              "must run with deck_camera:=true nav:=true (the service "
+              "already has deck_camera).")
         spawn(brain_launch_cmd(args))
 
     # ---- gamepad teleop (bluetooth Xbox pad -> /cmd_vel) --------------------

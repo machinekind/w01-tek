@@ -1,7 +1,7 @@
 """A/B the SCAN local planner against the straight-march executor.
 
-The failure this exists to measure: whatever the VLM backend is -- FutureNav,
-Qwen3-VL, Claude -- the robot walks into furniture, because a mid-level
+The failure this exists to measure: however good the VLM is, the robot
+walks into furniture, because a mid-level
 "forward 1.5" was executed as a straight line and nothing in the loop looked
 at the depth channel while the robot was moving.
 

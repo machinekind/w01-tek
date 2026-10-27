@@ -12,7 +12,9 @@ Inputs
                        from nav2_costmap_2d; probed at a few points ahead.
   wojtek/nav/cancel    std_msgs/Empty. Drop the setpoint NOW (one zero
                        Twist, then idle) instead of at the dead-man: the
-                       brain's stop, the console's stop button.
+                       brain's stop, the console's stop button. A goal
+                       arriving within half a second after it is the
+                       cancelled one, late, and is ignored.
   TF odom->base_link   the robot's pose (leg_odometry).
 
 Outputs
@@ -70,7 +72,6 @@ class GotoNode(Node):
         self._grid = None
         self._last_status = None
         self._moving = False
-        self._cancelled_at = None   # node time of the last cancel
 
         latched = QoSProfile(
             depth=1, reliability=ReliabilityPolicy.RELIABLE,
@@ -91,13 +92,6 @@ class GotoNode(Node):
     # -- inputs ----------------------------------------------------------
 
     def _on_goal(self, msg):
-        # The resolver re-sends its setpoint on its own clock; one stamped
-        # before a cancel can land here after it (two subscribers, no
-        # ordering). Such a goal is the cancelled one and must not restart
-        # the robot. An unstamped goal means "now" and is taken.
-        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-        if self._cancelled_at is not None and 0.0 < stamp <= self._cancelled_at:
-            return
         try:
             if msg.header.frame_id and msg.header.frame_id != self._odom_frame:
                 # At the message's stamp (zero stamp = latest), so a goal
@@ -106,7 +100,13 @@ class GotoNode(Node):
         except Exception as e:  # noqa: BLE001 -- TF, not our bug to crash on
             self.get_logger().warning(f"goal in '{msg.header.frame_id}' dropped: {e}")
             return
-        self._ctrl.set_goal(msg.pose.position.x, msg.pose.position.y, self._now())
+        # The cancel and the goals come on two subscriptions with no order
+        # between them, so a re-send published just before a cancel can
+        # land here just after it. That goal is the cancelled one and must
+        # not restart the robot; the controller ignores it (set_goal).
+        if not self._ctrl.set_goal(msg.pose.position.x, msg.pose.position.y, self._now()):
+            self.get_logger().info(
+                "goal within %.1f s of a cancel ignored (the cancelled one, late)" % self._ctrl.cancel_hold_off)
 
     def _on_grid(self, msg):
         self._grid = msg
@@ -114,8 +114,7 @@ class GotoNode(Node):
     def _on_cancel(self, _msg):
         # The tick sees an idle controller next and, if the robot was
         # moving, sends the one zero Twist on that edge.
-        self._cancelled_at = self._now()
-        self._ctrl.cancel()
+        self._ctrl.cancel(self._now())
 
     # -- the loop --------------------------------------------------------
 

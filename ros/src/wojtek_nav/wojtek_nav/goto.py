@@ -51,22 +51,47 @@ class GotoController:
 
     def __init__(self, v_max=0.3, w_max=0.5, k_yaw=1.5, turn_in_place_rad=0.6,
                  reach_tolerance=0.15, goal_timeout=3.0,
-                 lookahead=(0.25, 0.5, 0.75), slow_cost=50, aligned_rad=0.1):
+                 lookahead=(0.25, 0.5, 0.75), slow_cost=50, aligned_rad=0.1,
+                 cancel_hold_off=0.5):
         self.v_max, self.w_max, self.k_yaw = v_max, w_max, k_yaw
         self.turn_in_place_rad = turn_in_place_rad
         self.aligned_rad = aligned_rad
         self.reach_tolerance = reach_tolerance
         self.goal_timeout = goal_timeout
+        self.cancel_hold_off = cancel_hold_off
         self.lookahead = tuple(lookahead)
         self.slow_cost = slow_cost
         self._goal = None       # (x, y) in odom
         self._goal_time = None  # when it arrived (s)
         self._done = False      # reached / expired: sent, waiting for the next
+        self._cancelled_at = None  # when the last cancel came (s)
 
     # -- inputs ----------------------------------------------------------
 
     def set_goal(self, x, y, now):
+        """Take a new setpoint. False when it was ignored as the cancelled
+        one arriving late (see cancel)."""
+        # Why a hold-off on this clock and not the message's stamp: the
+        # stamp is set by the sender, often another computer with its own
+        # clock, and the two clocks can be seconds apart. The resolver and
+        # the brain re-send about once a second, so a re-send already on
+        # its way lands within a tick of the cancel. Nothing real sends a
+        # new goal within half a second of a stop: the brain's halt alone
+        # waits 0.3 s, and then a model call comes before any new goal.
+        # A clock that jumped back (a restarted sim) ends the hold-off
+        # rather than stretching it.
+        if self._cancelled_at is not None and 0.0 <= now - self._cancelled_at < self.cancel_hold_off:
+            return False
         self._goal, self._goal_time, self._done = (float(x), float(y)), now, False
+        return True
+
+    def cancel(self, now):
+        """Drop the setpoint now, not at the dead-man: the next step is
+        idle (the node's moving->stopped edge sends the one zero). For the
+        next cancel_hold_off seconds any goal that arrives is taken for
+        the cancelled one arriving late, and ignored."""
+        self._goal, self._goal_time, self._done = None, None, False
+        self._cancelled_at = float(now)
 
     def cancel(self):
         """Drop the setpoint now, not at the dead-man: the next step is

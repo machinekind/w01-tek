@@ -21,9 +21,20 @@ work in the shell — the workspace is a lab you walk into, not a set of wrapper
 scripts:
 
 ```bash
+cp ../.env.example ../.env && $EDITOR ../.env   # once: HF_ORGANIZATION (+ HF_TOKEN)
 ./build.sh      # build the image (once)
 ./dev.sh        # shell inside the container; ROS + the workspace already sourced
 ```
+
+The repo-root `.env` matters on the PC too: the launches run the pinned
+default policy, and its Hugging Face reference is `HF_ORGANIZATION/...`.
+Without the org every launch stops at once with "empty policy reference"
+(or needs an explicit `policy:=`). `dev.sh` and `sim.sh` carry that
+variable, `HF_TOKEN` and the VLM brain's `VLM_URL` into the container.
+`WOJTEK_POLICY=<org/name[@rev]>` in the same `.env` makes every sim session
+run that policy instead of the pin, with no `policy:=`. It is a desk
+setting only: the robot never reads the variable. The robot runs the
+reference `./deploy.sh --policy` left in its override file, else the pin.
 
 Then, from that shell:
 
@@ -111,14 +122,58 @@ floor again, hand the launch the old scene:
 ./sim.sh model_xml:=/ros2_ws/install/wojtek_pc/share/wojtek_pc/config/scene_mjx.xml
 ```
 
-**Text commands (the VLM contract, #92)**: the web console also shows the
-robot's colour camera and a `forward / left / right / stop` command panel —
-the browser is a human dry-run of the future VLM, which will watch
-`/camera/camera/color/image_raw` and publish `/wojtek/nav_command` and
-nothing else. The panel drives only through that contract, via the
-`text_commander` bridge node (`wojtek_teleop`), which `sim.launch.py`
-starts automatically — safe as a resident, it publishes nothing until
-commanded. The CLI works too:
+**The VLM brain**: the web console's first camera card is the brain panel.
+Type an instruction ("podejdź do fioletowego słupa"), press go, and
+`wojtek_nav`'s brain asks a vision-language model where in the picture
+the target is, verifies the answer, and hands the pixel to the robot's own
+resolver and setpoint driver, which walk there with the costmap as veto.
+The panel shows the brain's status, goto's and the resolver's words, and
+the picture the model last answered on with its point drawn; STOP halts
+the whole chain. It needs the nav stack underneath and a model server:
+
+```bash
+# On the GPU box: Ollama with the model (it listens on that box only)
+ollama pull qwen3-vl:30b-a3b-instruct && ollama serve
+# On the PC: a tunnel to it; the box's name stays in your ssh config
+ssh -f -N -L 11435:127.0.0.1:11434 <gpu box>
+curl -s http://127.0.0.1:11435/api/tags | head -c 200   # the model tag must be listed
+# repo-root .env: VLM_URL=http://host.docker.internal:11435 on a Mac,
+#                 VLM_URL=http://127.0.0.1:11435 on Linux; then
+./sim.sh model_xml:=scene_nav.xml leg_odom:=true nav:=true vlm:=true
+ros2 run wojtek_bringup robot --web-console --vlm            # the robot (PC side)
+```
+
+Ollama answers only on its own machine, so a plain `ollama serve` on
+another box gives the PC "connection refused". The tunnel above gets
+around that. The other way is `OLLAMA_HOST=0.0.0.0:11434 ollama serve` on
+the box with `VLM_URL=http://<that box>:11434`, but that opens the model
+to everyone on the network with no password, so use it only on a network
+you trust. (Where Ollama runs as a system service, `ollama serve` reports
+the port as taken; set `OLLAMA_HOST` in the service instead.) The Mac and
+Linux URLs differ because the container on a Mac has its own network and
+reaches the PC through `host.docker.internal`, while on Linux it shares
+the PC's network.
+
+On the robot the camera is the deck one: `deck_camera:=true`, already in
+the service's launch arguments (`deploy/rpi/wojtek-robot-local.conf`),
+publishes the depth and the colour JPEG that the nav stack and the brain
+read. Add `nav:=true` next to it there, or for a bench test `robot
+--dry-run --web-console --vlm deck_camera:=true nav:=true` passes both
+itself. Do not add `perception:=true` as well: it starts a second
+RealSense driver on the same camera (the launch refuses the pair). That
+path has not been run on the robot yet (see the nav README).
+
+Everything about it -- the contract, what crosses the robot's wifi (the
+camera's JPEG, not the raw image), stopping -- is in
+[`src/wojtek_nav/README.md`](src/wojtek_nav/README.md).
+
+**Text commands (the blind contract, #92)**: the console's second panel
+is a `forward / left / right / stop` command panel — a human dry-run of a
+VLM that watches the camera and publishes `/wojtek/nav_command` and
+nothing else; no obstacle awareness. It drives only through that contract,
+via the `text_commander` bridge node (`wojtek_teleop`), which
+`sim.launch.py` starts automatically — safe as a resident, it publishes
+nothing until commanded. The CLI works too:
 
 ```bash
 ros2 topic pub -1 /wojtek/nav_command std_msgs/String "data: forward"
@@ -144,9 +199,12 @@ per core, policy tick time, drive command, joints, IMU and the console in one
 window.
 
 **Bluetooth Xbox pad**: left stick = vx/yaw, right stick left-right = strafe,
-**A** toggles arm, D-pad up/down steps the standing height; on the `joy`
-paths **Y**/**B** additionally trigger the stand-up / lie-down ramps (browser
-pads keep those on the console buttons). Driving is always live (no
+**A** toggles arm, LB/RB step the standing height; on the `joy` paths
+**Y**/**B** additionally trigger the stand-up / lie-down ramps and the D-pad
+the tricks (browser pads keep those on the console buttons). Full stick
+reaches `gamepad_speed` (default 0.4) of the policy's command box, so the
+robot walks at a fraction of its trained top speed; raise it for open floor.
+Driving is always live (no
 drive-enable gate); a dead-man zeroes `/cmd_vel` if the pad drops off. Two
 paths, same drive mapping:
 
@@ -246,10 +304,16 @@ Flags:
 --web-console   browser operator console on http://localhost:8080 instead
                 of the Qt window (no X11; works from a phone on the AP)
 --gamepad       bluetooth Xbox pad teleop (left stick vx/yaw, right stick
-                strafe, A arms, Y/B stand up / lie down, D-pad height);
+                strafe, A arms, Y/B stand up / lie down, LB/RB height,
+                D-pad tricks);
                 runs ON the RPi against the real robot (pair the pad with
                 the robot), locally with --sim; add --no-console to
                 replace the console entirely
+--vlm           the VLM brain for this session (PC side; --vlm-url /
+                --vlm-model override VLM_URL and the 30B default); the
+                stack underneath needs the camera and the nav stack:
+                nav:=true, plus deck_camera:=true on the robot (the sim
+                renders its own)
 ```
 The stack comes up DISARMED. **Arming is manual** (that's when torque reaches the
 motors) — from another shell in the same container:

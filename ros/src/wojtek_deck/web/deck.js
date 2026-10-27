@@ -13,6 +13,7 @@
 // switch detection off, ?det=cpu or ?det=gpu to pin the detector's backend,
 // ?det=<ws url> for a detector in another process, ?detsrc=<url> to point
 // the camera and the detector at a still image.
+import { attitudeInBase } from "./attitude.js";
 import { Bridge } from "./bridge.js";
 import { Bars, Strip } from "./charts.js";
 
@@ -29,7 +30,8 @@ const DASH = [[], [4, 3], [1, 3]];   // series identity: solid, dashed, dotted
 // ---- state -----------------------------------------------------------------
 let height = 0.125;
 let armed = false, policyOn = false;
-let rpy = [0, 0, 0];          // latest attitude
+let rpy = [0, 0, 0];          // latest attitude, the robot's
+let imuMount = [0, 0, 0];     // how the IMU sits in base_link, from the gateway's hello
 let det = null;               // {w, h, boxes, at}
 
 function lamp(name, on, text) {
@@ -91,6 +93,9 @@ function onGateway(m) {
   if (m.t === "hello") {
     height = m.height_default;
     $("policy").textContent = m.policy || "";
+    // A gateway too old to say how the IMU is mounted gets the raw axes,
+    // which is what the page always showed before.
+    imuMount = Array.isArray(m.imu_mount_rpy) && m.imu_mount_rpy.length === 3 ? m.imu_mount_rpy : [0, 0, 0];
     // Without ?telemetry=on there is nothing on screen for the bridge to
     // fill, so it is not opened at all -- no socket retrying every second
     // against a robot that has no bridge running.
@@ -123,17 +128,15 @@ const deg = r => r * 180 / Math.PI;
 function startBridge(url) {
   bridge = new Bridge(url, {
     "/imu_sensor_broadcaster/imu": m => {
-      const q = m.orientation, w = m.angular_velocity;
-      const roll = Math.atan2(2 * (q.w * q.x + q.y * q.z), 1 - 2 * (q.x * q.x + q.y * q.y));
-      const pitch = Math.asin(Math.max(-1, Math.min(1, 2 * (q.w * q.y - q.z * q.x))));
-      const yaw = Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z));
-      rpy = [roll, pitch, yaw];
+      // The topic is in the IMU's own axes; everything drawn is the robot's.
+      const a = attitudeInBase(m.orientation, m.angular_velocity, imuMount);
+      rpy = [a.roll, a.pitch, a.yaw];
       const t = now();
-      att.push(t, [deg(roll), deg(pitch)]);
-      gyro.push(t, [w.x, w.y, w.z]);
-      $("att-r").textContent = `roll ${deg(roll).toFixed(1)}°`;
-      $("att-p").textContent = `pitch ${deg(pitch).toFixed(1)}°`;
-      $("gyro-z").textContent = `${w.z.toFixed(2)} rad/s`;
+      att.push(t, [deg(a.roll), deg(a.pitch)]);
+      gyro.push(t, a.gyro);
+      $("att-r").textContent = `roll ${deg(a.roll).toFixed(1)}°`;
+      $("att-p").textContent = `pitch ${deg(a.pitch).toFixed(1)}°`;
+      $("gyro-z").textContent = `${a.gyro[2].toFixed(2)} rad/s`;
     },
     "/cmd_vel": m => {
       cmd.push(now(), [m.linear.x, m.linear.y, m.angular.z]);

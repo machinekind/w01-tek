@@ -121,7 +121,7 @@ class GamepadTeleop(Node):
         self.drive_low = [v * self._speed_scale for v in self.cmd_low]
         self.drive_high = [v * self._speed_scale for v in self.cmd_high]
 
-        self._gate = PadDrive(self.cmd_low, self.cmd_high, self.height_range,
+        self._gate = PadDrive(self.drive_low, self.drive_high, self.height_range,
                               self.height_default, timeout_s=self._cmd_timeout,
                               silence_after_s=SILENCE_AFTER_S)
         self._last_state = IDLE

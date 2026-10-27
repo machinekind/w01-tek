@@ -129,13 +129,31 @@ def test_cancel_drops_the_setpoint_before_the_dead_man():
     ctrl = GotoController(goal_timeout=3.0)
     ctrl.set_goal(5.0, 0.0, 0.0)
     assert ctrl.step((0, 0, 0), 0.5, FREE).status == "driving"
-    ctrl.cancel()
+    ctrl.cancel(0.5)
     cmd = ctrl.step((0, 0, 0), 0.6, FREE)
     assert (cmd.vx, cmd.wz, cmd.status) == (0.0, 0.0, "idle")
     assert ctrl.goal is None
     # And a cancelled controller takes the next goal like a fresh one.
-    ctrl.set_goal(1.0, 0.0, 1.0)
-    assert ctrl.step((0, 0, 0), 1.0, FREE).status == "driving"
+    assert ctrl.set_goal(1.0, 0.0, 1.5)
+    assert ctrl.step((0, 0, 0), 1.5, FREE).status == "driving"
+
+
+def test_a_goal_right_after_a_cancel_is_the_cancelled_one_late():
+    """A re-send published just before a stop can land just after it, and
+    must not start the robot again. goto judges that by its own clock, not
+    by the sender's stamp, because the brain and goto can run on different
+    computers whose clocks disagree."""
+    ctrl = GotoController(goal_timeout=3.0)
+    ctrl.set_goal(5.0, 0.0, 0.0)
+    assert ctrl.step((0, 0, 0), 0.5, FREE).status == "driving"
+    ctrl.cancel(0.5)
+    assert ctrl.set_goal(5.0, 0.0, 0.6) is False
+    assert ctrl.goal is None
+    cmd = ctrl.step((0, 0, 0), 0.6, FREE)
+    assert cmd.status == "idle" and cmd.vx == cmd.wz == 0.0
+    # Half a second on, a goal is a real new one again.
+    assert ctrl.set_goal(1.0, 0.0, 1.1) is True
+    assert ctrl.step((0, 0, 0), 1.1, FREE).status == "driving"
 
 
 def test_a_new_goal_replaces_the_old_one_and_restarts_the_clock():

@@ -45,14 +45,9 @@ from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 from wojtek_policy import poses, robots
-from wojtek_policy.policy_source import active_policy, load_policy
-
-# The IMU's rotation in base_link, a copy of body.urdf.xacro's imu_joint rpy:
-# upright, yawed -90 deg (chip +y forward, +x right). Every node that reads
-# the sensor's axes gets it from here, and the simulator emulates the same
-# mount (wojtek_sim.urdf.xacro), so the value is exercised in the sim too.
-# The copy drifting from the URDF is what fed v41 an upside-down gravity.
-IMU_MOUNT_RPY = [0.0, 0.0, -1.5707963]
+# How the IMU sits on the body, and why the number matters, is in imu_mount.
+from wojtek_policy.imu_mount import IMU_MOUNT_RPY
+from wojtek_policy.policy_source import active_policy, desk_policy, load_policy
 
 
 def resolve_scene(model_xml):
@@ -105,7 +100,39 @@ def sim_model_xml(context):
     return os.path.join(get_package_share_directory(package), path)
 
 
+def _refuse_two_camera_drivers(context, hardware):
+    """One camera, one driver: refuse perception:=true with deck_camera:=true.
+
+    perception:=true (the full d435.yaml pipeline) and deck_camera:=true (the
+    panel's camera, which also carries the depth and the JPEG the nav stack
+    and the VLM brain read) both start realsense2_camera_node as
+    /camera/camera on the same D435. The second one finds the device taken,
+    or resets it under the first. Refuse the pair instead of coming up with
+    a camera that works by luck. Robot only: the simulation has no deck
+    camera node, so there the pair is no conflict. Both default to off, so a
+    context that never declared one of them still works.
+    """
+    if hardware != "real":
+        return
+
+    def on(name):
+        value = LaunchConfiguration(name, default="false").perform(context)
+        return value.lower() in ("true", "1")
+
+    if on("perception") and on("deck_camera"):
+        raise ValueError(
+            "perception:=true and deck_camera:=true both start a RealSense "
+            "driver on the one camera (/camera/camera). Pick one: "
+            "deck_camera already publishes the depth and the JPEG that "
+            "nav:=true and the VLM brain read; perception is the full "
+            "d435.yaml pipeline."
+        )
+
+
 def _launch_setup(context, with_rviz, hardware):
+    # Before anything else, the policy download included: a refused pair of
+    # arguments should say so at once.
+    _refuse_two_camera_drivers(context, hardware)
     share = get_package_share_directory("wojtek_bringup")
     policy_share = get_package_share_directory("wojtek_policy")
 
@@ -115,11 +142,14 @@ def _launch_setup(context, with_rviz, hardware):
     joint_map_yaml = os.path.join(policy_share, "config", profile.joint_map)
     # An explicit policy:= wins. Without it the robot's default runs: the
     # override file deploy.sh --policy leaves on the robot, or else the
-    # profile's pin. The launch configuration is set to the answer, so the
-    # nodes declared after this one (the web console) read the same policy.
-    policy_ref = (
-        LaunchConfiguration("policy").perform(context)
-        or active_policy(profile.name)
+    # profile's pin. The desk (hardware "sim") also honours WOJTEK_POLICY
+    # from the repo-root .env (policy_source.desk_policy); the robot never
+    # reads that variable. The launch configuration is set to the answer, so
+    # the nodes declared after this one (the web console) read the same
+    # policy.
+    policy_ref = LaunchConfiguration("policy").perform(context) or (
+        desk_policy(profile.name) if hardware == "sim"
+        else active_policy(profile.name)
     )
     # load_policy refuses a policy trained for other legs than the profile's.
     loaded = load_policy(
@@ -777,7 +807,9 @@ def common_launch_description(
         # Off by default: the depth path is not on the robot's critical path,
         # and a missing driver package would take the whole launch -- and with
         # it the control stack -- down with it. Flip perception:=true in
-        # wojtek-robot.service once the pipeline is proven on hardware.
+        # wojtek-robot.service once the pipeline is proven on hardware, in
+        # place of deck_camera:=true: one driver per camera (see
+        # _refuse_two_camera_drivers).
         DeclareLaunchArgument("perception", default_value="false"),
         # The camera pipeline must not run on the isolated RT cores: the
         # service starts this whole tree under `taskset -c 2,3`, and children
@@ -821,7 +853,7 @@ def common_launch_description(
         ),
         # Local perception for navigation (wojtek_nav): the rolling costmap
         # around the robot in odom, from the depth camera. Off by default,
-        # like the camera it needs (perception:=true on the robot, the
+        # like the camera it needs (deck_camera:=true on the robot, the
         # virtual camera in the sim) and the odometry under it
         # (leg_odom:=true in the sim).
         DeclareLaunchArgument("nav", default_value="false"),

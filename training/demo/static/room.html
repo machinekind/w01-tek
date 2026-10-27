@@ -192,12 +192,7 @@ fetch("/api/info").then(r => r.json()).then(j => {
       .then(r => r.json())
       .then(a => a.ok ? location.reload() : setChip("error", a.error));
   };
-  const label = j.vlm_backend === "futurenav"
-    ? "FutureNav-4B @ " + (j.vlm_url || "action server")
-    : j.vlm_backend === "anthropic"
-      ? (j.vlm_model || "Claude")
-      : "on-device " + (j.vlm_model || "Qwen3-VL-30B (mlx)");
-  $("model").textContent = label;
+  $("model").textContent = (j.vlm_model || "qwen3-vl:30b-a3b-instruct") + " @ Ollama";
 });
 connect();
 

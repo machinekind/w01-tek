@@ -261,7 +261,7 @@ def test_v2_robot_takes_its_legs_map_and_clamp(hardware):
     params = _policy_params(hardware, robot="wojtek_v2")
     assert params["robot"] == "wojtek_v2"
     assert params["clamp_knee"] is False
-    assert params["joint_map_yaml"].endswith("/config/joint_map_identity.yaml")
+    assert params["joint_map_yaml"].endswith("/config/joint_map_v627.yaml")
     # The v6.27 legs' own meshes are in the description.
     assert "legs_v627" in _description(hardware, robot="wojtek_v2")
 
@@ -270,16 +270,16 @@ def test_real_io_node_uses_the_profiles_joint_map():
     """real_io_node converts its named poses with the same map policy_node
     uses, so the two can never disagree about a joint angle."""
     for robot, name in (("wojtek", "joint_map.yaml"),
-                        ("wojtek_v2", "joint_map_identity.yaml")):
+                        ("wojtek_v2", "joint_map_v627.yaml")):
         ctx, nodes = _nodes("real", robot=robot)
         params = _params(_by_executable(nodes, "real_io_node"), ctx)[0]
         assert params["joint_map_yaml"].endswith(f"/config/{name}")
 
 
-def test_v2_mujoco_plant_loads_the_v627_scene_and_identity_map():
+def test_v2_mujoco_plant_loads_the_v627_scene_and_its_joint_map():
     description = _description("sim", robot="wojtek_v2", hw="mujoco")
     assert "mujoco/legs_v627/scene_mjx.xml" in description
-    assert "joint_map_identity.yaml" in description
+    assert "joint_map_v627.yaml" in description
     stock = _description("sim", hw="mujoco")
     assert "config/scene_sim.xml" in stock
     assert "config/joint_map.yaml" in stock

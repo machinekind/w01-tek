@@ -47,7 +47,7 @@ from launch_ros.substitutions import FindPackageShare
 from wojtek_policy import poses, robots
 # How the IMU sits on the body, and why the number matters, is in imu_mount.
 from wojtek_policy.imu_mount import IMU_MOUNT_RPY
-from wojtek_policy.policy_source import active_policy, desk_policy, load_policy
+from wojtek_policy.policy_source import active_policy, load_policy
 
 
 def resolve_scene(model_xml):
@@ -142,14 +142,15 @@ def _launch_setup(context, with_rviz, hardware):
     joint_map_yaml = os.path.join(policy_share, "config", profile.joint_map)
     # An explicit policy:= wins. Without it the robot's default runs: the
     # override file deploy.sh --policy leaves on the robot, or else the
-    # profile's pin. The desk (hardware "sim") also honours WOJTEK_POLICY
-    # from the repo-root .env (policy_source.desk_policy); the robot never
-    # reads that variable. The launch configuration is set to the answer, so
-    # the nodes declared after this one (the web console) read the same
-    # policy.
-    policy_ref = LaunchConfiguration("policy").perform(context) or (
-        desk_policy(profile.name) if hardware == "sim"
-        else active_policy(profile.name)
+    # profile's pin. The desk's WOJTEK_POLICY shortcut arrives here as
+    # policy:= too -- sim.launch.py declares policy_source.env_policy() as
+    # that argument's default -- so nothing in this setup reads the
+    # environment, and the robot's launch never sees the variable. The
+    # launch configuration is set to the answer, so the nodes declared after
+    # this one (the web console) read the same policy.
+    policy_ref = (
+        LaunchConfiguration("policy").perform(context)
+        or active_policy(profile.name)
     )
     # load_policy refuses a policy trained for other legs than the profile's.
     loaded = load_policy(

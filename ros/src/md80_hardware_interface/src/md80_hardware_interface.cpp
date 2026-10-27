@@ -16,8 +16,10 @@
 
 #include "md80_hardware_interface/md80_hardware_interface.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 #include <thread>
 #include <vector>
@@ -33,8 +35,15 @@ namespace md80_hardware_interface
 // time out, hitting a different drive every run (observed on ids 11, 22, 30,
 // 41, 42), so roughly every second launch died with a healthy robot. Retrying
 // is safe -- Candle::addMd80 returns true for an id already on its update list.
-constexpr int ADD_MD80_ATTEMPTS = 3;
-constexpr auto ADD_MD80_RETRY_DELAY = std::chrono::milliseconds(50);
+// First contact with each drive at configure: retry for first_contact_s
+// seconds (URDF <hardware> param, default 5.0) every ADD_MD80_RETRY_DELAY.
+// A drive that is still booting after a motor power-up, or a bus that is
+// recovering from a dropout, answers within a few seconds; the old 3 x 50 ms
+// gave up before that and the whole stack died, to be restarted by the
+// on-robot watchdog minutes later (seen 2026-10-01: can_id 10 "absent" on
+// three consecutive starts, present on the fourth).
+constexpr auto ADD_MD80_RETRY_DELAY = std::chrono::milliseconds(100);
+constexpr double ADD_MD80_FIRST_CONTACT_S_DEFAULT = 5.0;
 hardware_interface::CallbackReturn MD80HardwareInterface::on_init(
   const hardware_interface::HardwareInfo & info)
 {
@@ -215,9 +224,10 @@ hardware_interface::return_type MD80HardwareInterface::read(
   // identical across ALL drives for link_stall_cycles consecutive cycles
   // (URDF <hardware> param, default 200 = 1 s at 200 Hz; 0 disables) is a
   // lost link. Returning ERROR makes the controller manager log "read cycle
-  // resulted in an error" and drop this component, which is exactly what
-  // the on-robot CM watchdog waits for before it restarts the stack once
-  // the drives answer again. Skipped in dry_run (disabled drives can sit
+  // resulted in an error" and drop this component, which is what the
+  // on-robot CM watchdog (deploy/rpi/wojtek-cm-watchdog.sh) waits for: it
+  // stops the service and starts it again once the motor power has been
+  // cycled and the drives answer. Skipped in dry_run (disabled drives can sit
   // at exact zeros) and until the update loop has been started.
   if (update_loop_running_ && !dry_run_ && link_stall_cycles_ > 0) {
     if (raw == last_raw_) {
@@ -232,6 +242,30 @@ hardware_interface::return_type MD80HardwareInterface::read(
       }
     } else {
       stall_cycles_ = 0;
+    }
+  }
+  // Diagnostic snapshots (env MD80_SNAPSHOT=1): a few cycles after the
+  // update loop starts, log every drive's raw position, the raw target the
+  // stream carries, the torque readback and the drive's quick-status word.
+  // Tells enabled-and-holding from enabled-but-idle (CAN watchdog tripped:
+  // positions stream, torque stays 0) without any CLI on the loaded Pi.
+  static const bool snapshot_on = std::getenv("MD80_SNAPSHOT") != nullptr;
+  if (snapshot_on && update_loop_running_) {
+    static std::size_t cyc = 0;
+    ++cyc;
+    if (cyc == 20 || cyc == 100 || cyc == 400 || cyc == 1000 || cyc % 2000 == 0) {
+      std::size_t k = 0;
+      for (auto candle : candle_instances) {
+        for (auto & md : candle->md80s) {
+          RCLCPP_INFO(
+            rclcpp::get_logger(get_name()),
+            "snapshot cyc %zu can_id %d raw_pos %.4f raw_target %.4f tau %.3f qstatus 0x%04x",
+            cyc, md80_info_[k].can_id, md.getPosition(),
+            md80_info_[k].command.position + initial_positions_[k], md.getTorque(),
+            md.getQuickStatus());
+          ++k;
+        }
+      }
     }
   }
   last_raw_ = std::move(raw);
@@ -376,6 +410,12 @@ void MD80HardwareInterface::try_to_initialize_motors()
     RCLCPP_INFO_STREAM(rclcpp::get_logger(get_name()), "Check connection for can_id: " << can_id);
 
     bool added = false;
+    const auto & hw_params = info_.hardware_parameters;
+    const double first_contact_s = hw_params.count("first_contact_s")
+                                     ? std::stod(hw_params.at("first_contact_s"))
+                                     : ADD_MD80_FIRST_CONTACT_S_DEFAULT;
+    const int ADD_MD80_ATTEMPTS = std::max(
+      1, static_cast<int>(first_contact_s * 1000.0 / ADD_MD80_RETRY_DELAY.count()));
     for (int attempt = 1; attempt <= ADD_MD80_ATTEMPTS && !added; ++attempt) {
       for (auto & candle : candle_instances) {
         if (candle->addMd80(can_id, false)) {
@@ -386,10 +426,15 @@ void MD80HardwareInterface::try_to_initialize_motors()
         }
       }
       if (!added && attempt < ADD_MD80_ATTEMPTS) {
-        RCLCPP_WARN_STREAM(
-          rclcpp::get_logger(get_name()),
-          "No answer from can_id " << can_id << " (attempt " << attempt << "/"
-                                   << ADD_MD80_ATTEMPTS << ") -- retrying");
+        // One line per second, not per attempt: ten lines per silent second
+        // would bury the journal during a slow motor power-up.
+        if (attempt % 10 == 1) {
+          RCLCPP_WARN_STREAM(
+            rclcpp::get_logger(get_name()),
+            "No answer from can_id " << can_id << " (attempt " << attempt << "/"
+                                     << ADD_MD80_ATTEMPTS << ", waiting up to "
+                                     << first_contact_s << " s) -- retrying");
+        }
         std::this_thread::sleep_for(ADD_MD80_RETRY_DELAY);
       }
     }
@@ -467,6 +512,61 @@ void MD80HardwareInterface::zero_encoders()
 
 void MD80HardwareInterface::enable_motors()
 {
+  const auto & params = info_.hardware_parameters;
+  // Pre-load every IMPEDANCE drive with its hold target and gains through
+  // registers BEFORE enabling it. The stream frame (FRAME_IMP_CONTROL) that
+  // normally carries them only starts with begin(), after the LAST enable;
+  // until it arrives an enabled drive runs its impedance loop on whatever
+  // target and gains it holds -- after a power cycle its raw zero and the
+  // flashed gains -- so the robot twitches toward the raw zero for the
+  // 10-30 ms the twelve enables take (seen 2026-10-01 as the "jump" at
+  // activation). Each drive is written and read back; a mismatch or a
+  // silent drive is logged, never fatal: the stream still delivers the
+  // right values a few ms later, exactly as before this change. Runs in
+  // dry_run too (a disabled drive produces no torque whatever its target),
+  // which makes dry_run the safe way to check that the registers take the
+  // write. URDF <hardware> param preload_targets (default 1; 0 = off).
+  const bool preload =
+    params.count("preload_targets") ? std::stoi(params.at("preload_targets")) != 0 : true;
+  if (preload) {
+    std::size_t i = 0;
+    for (auto & md80 : md80_info_) {
+      if (md80.control_mode == mab::Md80Mode_E::IMPEDANCE) {
+        auto candle = find_candle_by_motor_can_id(md80.can_id);
+        // Same raw-frame shift as write(): command is activation-relative.
+        const float target = static_cast<float>(md80.command.position + initial_positions_[i]);
+        const float kp = md80.ddq_pid.kp;
+        const float kd = md80.ddq_pid.kd;
+        float target_rb = NAN, kp_rb = NAN, kd_rb = NAN;
+        const bool written = candle->writeMd80Register(
+          md80.can_id, mab::Md80Reg_E::targetPosition, target, mab::Md80Reg_E::motorImpPidKp, kp,
+          mab::Md80Reg_E::motorImpPidKd, kd);
+        const bool read_back =
+          written && candle->readMd80Register(
+                       md80.can_id, mab::Md80Reg_E::targetPosition, target_rb,
+                       mab::Md80Reg_E::motorImpPidKp, kp_rb, mab::Md80Reg_E::motorImpPidKd, kd_rb);
+        const bool match = read_back && std::fabs(target_rb - target) < 1e-3f &&
+                           std::fabs(kp_rb - kp) < 1e-3f && std::fabs(kd_rb - kd) < 1e-4f;
+        if (match) {
+          RCLCPP_INFO_STREAM(
+            rclcpp::get_logger(get_name()),
+            "preloaded can_id " << md80.can_id << " before enable: target " << target
+                                << " rad (raw), kp " << kp << ", kd " << kd);
+        } else {
+          RCLCPP_WARN_STREAM(
+            rclcpp::get_logger(get_name()),
+            "preload before enable NOT confirmed for can_id "
+              << md80.can_id << ": write " << (written ? "ok" : "FAILED") << ", read-back "
+              << (read_back ? "ok" : "FAILED") << ", drive reports target " << target_rb
+              << " kp " << kp_rb << " kd " << kd_rb << " (wanted " << target << " / " << kp
+              << " / " << kd << ") -- the drive may twitch toward its own target until "
+              << "the stream starts");
+        }
+      }
+      ++i;
+    }
+  }
+
   if (dry_run_) {
     RCLCPP_WARN(
       rclcpp::get_logger(get_name()),
@@ -481,7 +581,6 @@ void MD80HardwareInterface::enable_motors()
     // watchdog and sat enabled-but-idle: positions streamed, zero torque,
     // no error flag. Any stagger adds to the first drive's wait, so leave
     // this at 0 unless the drives' watchdog is lengthened to match.
-    const auto & params = info_.hardware_parameters;
     const int stagger_ms =
       params.count("enable_stagger_ms") ? std::stoi(params.at("enable_stagger_ms")) : 0;
     for (auto & md80 : md80_info_) {

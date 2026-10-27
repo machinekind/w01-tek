@@ -23,6 +23,8 @@ shouted over.
   * A height step counts as input: the new set-point has to reach the
     policy even with the sticks centred, so it opens a zeroing burst that
     carries it.
+  * `tick(now, scale)` multiplies the LIVE command by `scale` in [0, 1]
+    (the node's slow mode, toggled on the pad); 1.0 = the full box.
   * `pad_lost` tells the two ZEROING causes apart for the log: the joy
     stream stopped (pad off, out of range, driver gone) versus the sticks
     just went back to centre.
@@ -67,10 +69,12 @@ class PadDrive:
         return (self._joy_stamp is not None
                 and float(now) - self._joy_stamp > self.timeout_s)
 
-    def tick(self, now):
+    def tick(self, now, scale=1.0):
         """(vx, vy, yaw, height) to publish this tick, or None for silence.
 
-        Updates `state` as a side effect; the node reports its changes.
+        `scale` in [0, 1] multiplies the LIVE command (slow mode); it never
+        widens the box. Updates `state` as a side effect; the node reports
+        its changes.
         """
         if self._input_stamp is None:
             self.state = IDLE
@@ -85,6 +89,7 @@ class PadDrive:
         self.state = LIVE
         # Normalized [-1, 1] -> the trained (asymmetric) command box:
         # positive stick scales by high, negative by low.
-        vx, vy, yaw = (v * self.cmd_high[i] if v >= 0 else v * -self.cmd_low[i]
+        k = min(1.0, max(0.0, float(scale)))
+        vx, vy, yaw = (k * (v * self.cmd_high[i] if v >= 0 else v * -self.cmd_low[i])
                        for i, v in enumerate(self._cmd))
         return (vx, vy, yaw, self.height)

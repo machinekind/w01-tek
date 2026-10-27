@@ -95,6 +95,7 @@ private:
   std::array<double, 3> earth_field_ut_{20.0, 0.0, -44.0};
 
   std::string scene_xml_, mesh_dir_, initial_pose_{"home"};
+  std::vector<double> folded_ctrl_;
   bool dry_run_ = false;
 
   // Ground truth: what the real robot cannot know and the simulation can.

@@ -2,7 +2,8 @@
 
 Reads the original wojtek.xml, applies the training edits from the
 spec, and writes wojtek_mjx.xml plus scene_mjx.xml next to it. The
-original files stay untouched. Edits:
+original files stay untouched. `--robot` builds another robot variant
+(robots.py) from its own source file into its own directory. Edits:
   - every mesh geom stops colliding; feet get spheres, the base gets a
     box in two halves
   - the base gets an explicit inertial so the total mass hits a parameter
@@ -16,25 +17,15 @@ import argparse
 import mujoco
 import numpy as np
 
-from wojtek_rl import paths
+from wojtek_rl import paths, robots
 
-# The real foot is a half-disc rubber pad bolted to the sixth-link tip, its
-# arc centered on the fifth/sixth closure pivot, so a pivot-centered sphere
-# of the pad's radius is the right contact model. Radius measured from the
-# pad disc baked into sixth_link.stl (mesh extends 0.046 m past the pivot).
-FOOT_RADIUS = 0.046
-DEFAULT_KP = 20.0
-# kd raised 0.5 -> 1.0 after fbb_v2: the policy buzzed at ~7 Hz, right at the
-# underdamped PD resonance (sqrt(kp/I)/2pi with reflected inertia ~0.01).
-DEFAULT_KD = 1.0
-# Real robot measured at 14 kg on a scale (2026-07-16); supersedes the ~16 kg
-# owner estimate from 2026-07-05 and the original 10.0 placeholder.
-DEFAULT_TOTAL_MASS = 14.0
-# Set at the 16 kg estimate to keep the torque-to-weight ratio that trained
-# well at 10 kg / 6 Nm; kept at 9 for the measured 14 kg, which lands a bit
-# above that ratio (0.64 vs 0.6 Nm/kg). MD80 drives allow 15 Nm; the jump
-# task overrides this per-env (12 Nm) for the launch.
-FORCERANGE = 9.0
+# The stock robot's numbers, under the names the rest of the code and the
+# tests know them by. They live in robots.WOJTEK, next to the other variants.
+FOOT_RADIUS = robots.WOJTEK.foot_radius
+DEFAULT_KP = robots.WOJTEK.kp
+DEFAULT_KD = robots.WOJTEK.kd
+DEFAULT_TOTAL_MASS = robots.WOJTEK.total_mass
+FORCERANGE = robots.WOJTEK.forcerange
 # Base collision box half-sizes, eyeballed from the mesh footprint.
 BASE_BOX_HALFSIZE = (0.17, 0.08, 0.05)
 # The base collides as a chessboard of small boxes over the original box's
@@ -115,33 +106,18 @@ def _xyaxes_to_quat(xyaxes) -> np.ndarray:
     mujoco.mju_mat2Quat(quat, np.column_stack([x, y, z]).flatten())
     return quat
 
-# Leg collision primitives, sized from the link mesh AABBs. Needed for the
+# Leg collision primitives (robots.Robot.leg_collision). Needed for the
 # getup task: without them a fallen robot's legs sink through the floor
 # (only the feet and the base box collide). contype=2 / conaffinity=0 pairs
-# them with the floor (conaffinity 15) and nothing else; the bar capsules
-# stop at x=0.14 so they can never reach the foot sphere at the 0.21 pivot.
-LEG_COLLISION = {
-    "second_link": dict(
-        type=mujoco.mjtGeom.mjGEOM_SPHERE, size=[0.035, 0, 0], pos=[0.055, 0, 0]
-    ),
-    "third_link": dict(
-        type=mujoco.mjtGeom.mjGEOM_CAPSULE,
-        size=[0.028, 0, 0],
-        fromto=[-0.12, 0, 0.03, 0.04, 0, 0.03],
-    ),
-    "fifth_link": dict(
-        type=mujoco.mjtGeom.mjGEOM_CAPSULE,
-        size=[0.012, 0, 0],
-        fromto=[0.02, 0, 0, 0.14, 0, 0],
-    ),
-    "sixth_link": dict(
-        type=mujoco.mjtGeom.mjGEOM_CAPSULE,
-        size=[0.012, 0, 0],
-        fromto=[0.02, 0, 0, 0.14, 0, 0],
-    ),
+# them with the floor (conaffinity 15) and nothing else.
+_GEOM_TYPES = {
+    "sphere": mujoco.mjtGeom.mjGEOM_SPHERE,
+    "capsule": mujoco.mjtGeom.mjGEOM_CAPSULE,
 }
 
 
+# The scene sits next to the robot file it includes, in every variant's
+# directory, so the include stays a bare file name.
 SCENE_XML_TEXT = """<mujoco model="wojtek_mjx_scene">
   <include file="wojtek_mjx.xml"/>
   <statistic center="0 0 0.15" extent="0.8"/>
@@ -162,12 +138,51 @@ SCENE_XML_TEXT = """<mujoco model="wojtek_mjx_scene">
 """
 
 
+def _rest_at_first_key(spec: mujoco.MjSpec) -> None:
+    """Move the model's rest pose to its first keyframe.
+
+    Each hinge gets `ref` = its keyframe angle, and its body is turned by
+    that angle about the joint axis, so the pose drawn in the XML is the
+    keyframe pose and qpos means what it meant before. The base is lifted
+    to the keyframe height.
+    """
+    model = spec.compile()
+    qpos = model.key_qpos[0]
+    for joint in spec.joints:
+        if joint.type != mujoco.mjtJoint.mjJNT_HINGE:
+            continue
+        if np.any(np.asarray(joint.pos) != 0):
+            raise ValueError(f"{joint.name}: a hinge off its body origin is not handled")
+        angle = float(qpos[model.joint(joint.name).qposadr[0]])
+        turn = np.zeros(4)
+        mujoco.mju_axisAngle2Quat(turn, np.asarray(joint.axis, dtype=float), angle)
+        quat = np.zeros(4)
+        mujoco.mju_mulQuat(quat, np.asarray(joint.parent.quat, dtype=float), turn)
+        joint.parent.quat = quat
+        joint.ref = angle
+    root = spec.body("root")
+    root.pos = [root.pos[0], root.pos[1], float(qpos[2])]
+
+
 def build_spec(
-    total_mass: float = DEFAULT_TOTAL_MASS,
-    kp: float = DEFAULT_KP,
-    kd: float = DEFAULT_KD,
+    total_mass: float | None = None,
+    kp: float | None = None,
+    kd: float | None = None,
+    robot: str = paths.DEFAULT_ROBOT,
 ) -> mujoco.MjSpec:
-    spec = mujoco.MjSpec.from_file(str(paths.SOURCE_XML))
+    """The MJX-ready spec of one robot variant. Mass and gains left at None
+    take the variant's own values."""
+    rb = robots.get(robot)
+    total_mass = rb.total_mass if total_mass is None else total_mass
+    kp = rb.kp if kp is None else kp
+    kd = rb.kd if kd is None else kd
+    spec = mujoco.MjSpec.from_file(str(paths.robot_files(robot)["source"]))
+    if rb.rest_pose_from_source_key:
+        _rest_at_first_key(spec)
+    # A CAD export brings its own keyframe; the only keyframe of a built
+    # model is the settled `home`.
+    for key in list(spec.keys):
+        spec.delete(key)
 
     # Mass of everything that is not the base, read from the unmodified model.
     m0 = spec.compile()
@@ -180,27 +195,37 @@ def build_spec(
             geom.contype = 0
             geom.conaffinity = 0
 
-    # 2. One contact sphere per foot, at the foot site on foot_link. Both
-    # linkage branches converge at foot_link; it is the ground contact.
+    # 2. One contact sphere per foot, at the foot site. On the stock robot
+    # both linkage branches converge at foot_link and that is the ground
+    # contact; a variant whose loop closes elsewhere names the body that
+    # carries the pad (robots.Robot.foot_body).
     for leg in paths.LEGS:
         site = spec.site(f"{leg}_foot")
-        body = spec.body(f"{leg}_foot_link")
+        body = spec.body(f"{leg}_{rb.foot_body}")
+        if site.parent.name != body.name:
+            raise ValueError(
+                f"site {site.name} sits on {site.parent.name}, not on the "
+                f"foot body {body.name}; its position would be read in the "
+                "wrong frame"
+            )
         # conaffinity=1 (not 15) so the leg capsules (contype=2) never pair
         # with the feet; feet still pair with the floor and each other.
         body.add_geom(
             name=f"{leg}_foot_sphere",
             type=mujoco.mjtGeom.mjGEOM_SPHERE,
-            size=[FOOT_RADIUS, 0, 0],
-            pos=site.pos.copy(),
+            size=[rb.foot_radius, 0, 0],
+            pos=np.asarray(site.pos) + rb.foot_offset,
             contype=1,
             conaffinity=1,
             group=3,
         )
-        # The foot link is nearly massless. Contacts and an equality
-        # constraint both act through it, so give it a small real mass.
-        body.mass = 0.01
-        body.inertia = [1e-6, 1e-6, 1e-6]
-        body.explicitinertial = True
+        # The closure link is nearly massless and an equality constraint
+        # acts through it (on the stock robot the contact does too), so give
+        # it a small real mass.
+        closure = spec.body(f"{leg}_foot_link")
+        closure.mass = 0.01
+        closure.inertia = [1e-6, 1e-6, 1e-6]
+        closure.explicitinertial = True
         # Global foot velocity, read by the env's feet_slip reward.
         spec.add_sensor(
             name=f"{leg}_foot_linvel",
@@ -211,7 +236,18 @@ def build_spec(
 
     # 2b. Floor-only collision primitives along each leg, for fallen poses.
     for leg in paths.LEGS:
-        for link, kw in LEG_COLLISION.items():
+        # Left and right legs of a variant can be mirror images in the
+        # link's y (the shin of legs_v627 is bent sideways towards its pad).
+        # The foot site says which way: the primitives are written for a leg
+        # whose site has y >= 0 and are mirrored for the others.
+        mirror = -1.0 if spec.site(f"{leg}_foot").pos[1] < 0 else 1.0
+        for link, kw in rb.leg_collision.items():
+            kw = dict(kw, type=_GEOM_TYPES[kw["type"]])
+            for field in ("pos", "fromto"):
+                if field in kw:
+                    v = np.array(kw[field], dtype=float)
+                    v[1::3] *= mirror
+                    kw[field] = v.tolist()
             spec.body(f"{leg}_{link}").add_geom(
                 name=f"{leg}_{link}_floor",
                 contype=2,
@@ -268,42 +304,50 @@ def build_spec(
         act.biasprm[1] = -kp
         act.biasprm[2] = -kd
         act.ctrlrange = joint.range.copy()
-        act.forcerange = [-FORCERANGE, FORCERANGE]
+        act.forcerange = [-rb.forcerange, rb.forcerange]
 
-    # 6. Integration options, MJX-style.
-    spec.option.timestep = 0.004
+    # 6. Integration options, MJX-style. The iteration counts are per
+    # variant; robots.py says why they are what they are.
+    spec.option.timestep = rb.timestep
     spec.option.solver = mujoco.mjtSolver.mjSOL_NEWTON
-    # iterations=1 clears the GPU step-rate gate but diverges in training:
-    # under a flailing exploration policy the single Newton iteration goes
-    # NaN and poisons the whole batch (fbb_v1, dead by 23M steps). Solver
-    # robustness beats the gate heuristic; 2 iterations trains stably.
-    spec.option.iterations = 2
-    spec.option.ls_iterations = 5
+    spec.option.iterations = rb.iterations
+    spec.option.ls_iterations = rb.ls_iterations
+    for suffix, frictionloss in rb.joint_frictionloss.items():
+        for leg in paths.LEGS:
+            spec.joint(f"{leg}_{suffix}").frictionloss = frictionloss
+    if rb.closure_solimp is not None:
+        for eq in spec.equalities:
+            eq.solimp[:2] = rb.closure_solimp
 
     return spec
 
 
-# Chosen in Task 3 via pose_explorer. (first, second, third) per leg.
-# Settled standing height 0.109 m, the design height per the controller's
-# gait code (foot z0 = -0.15 below the hip frame).
-STAND_POSE = {
-    "rear_left": (0.0, -0.2, 3.1),
-    "rear_right": (0.0, -0.2, 3.1),
-    "front_right": (0.0, -0.2, 3.1),
-    "front_left": (0.0, -0.2, 3.1),
-}
+# (first, second, third) per leg of the stock robot; see robots.WOJTEK.
+STAND_POSE = dict(zip(paths.LEGS, robots.WOJTEK.stand_pose))
 
 
-def stand_targets() -> np.ndarray:
-    return np.array([v for leg in paths.LEGS for v in STAND_POSE[leg]])
+def stand_targets(robot: str = paths.DEFAULT_ROBOT) -> np.ndarray:
+    return np.array(robots.get(robot).stand_pose, dtype=float).ravel()
 
 
-def settle_home(model: mujoco.MjModel) -> tuple[np.ndarray, np.ndarray]:
-    """Settle under PD hold and return (qpos, ctrl) for the home keyframe."""
+def settle_home(
+    model: mujoco.MjModel,
+    robot: str = paths.DEFAULT_ROBOT,
+    start_qpos: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Settle under PD hold and return (qpos, ctrl) for the home keyframe.
+
+    `start_qpos` is a full qpos with the loops already closed (a CAD
+    keyframe). Without it the passive joints start at zero and the equality
+    constraints pull the loops shut during the settle, which works on the
+    stock legs and is not guaranteed to land on the right branch elsewhere.
+    """
     data = mujoco.MjData(model)
-    targets = stand_targets()
+    targets = stand_targets(robot)
     qadr = [model.jnt_qposadr[model.actuator_trnid[i, 0]] for i in range(model.nu)]
-    data.qpos[2] = 0.25
+    if start_qpos is not None:
+        data.qpos[:] = start_qpos
+    data.qpos[2] = robots.get(robot).settle_drop_height
     for adr, t in zip(qadr, targets):
         data.qpos[adr] = t
     data.ctrl[:] = targets
@@ -317,40 +361,72 @@ def settle_home(model: mujoco.MjModel) -> tuple[np.ndarray, np.ndarray]:
 
 
 def write_models(
-    total_mass: float = DEFAULT_TOTAL_MASS,
-    kp: float = DEFAULT_KP,
-    kd: float = DEFAULT_KD,
+    total_mass: float | None = None,
+    kp: float | None = None,
+    kd: float | None = None,
     home_qpos: np.ndarray | None = None,
     home_ctrl: np.ndarray | None = None,
+    robot: str = paths.DEFAULT_ROBOT,
 ) -> None:
-    spec = build_spec(total_mass=total_mass, kp=kp, kd=kd)
+    spec = build_spec(total_mass=total_mass, kp=kp, kd=kd, robot=robot)
     if home_qpos is not None:
         spec.add_key(name="home", qpos=home_qpos, ctrl=home_ctrl)
     spec.compile()
-    paths.ROBOT_XML.write_text(spec.to_xml())
-    paths.SCENE_XML.write_text(SCENE_XML_TEXT)
-    print(f"wrote {paths.ROBOT_XML}")
-    print(f"wrote {paths.SCENE_XML}")
+    files = paths.robot_files(robot)
+    files["robot"].write_text(spec.to_xml())
+    files["scene"].write_text(SCENE_XML_TEXT)
+    print(f"wrote {files['robot']}")
+    print(f"wrote {files['scene']}")
+
+
+def write_view(robot: str, home_qpos: np.ndarray, home_ctrl: np.ndarray, **kw) -> None:
+    """A copy of the built model for looking at in a viewer.
+
+    A viewer opens a model with every control at zero, and a zero target is
+    far outside these legs' joint ranges. In this copy a control is an
+    offset from the home target, so the robot holds its stand untouched and
+    the viewer's sliders bend the joints around it. Nothing trains on it.
+    """
+    spec = build_spec(robot=robot, **kw)
+    for act, home in zip(spec.actuators, home_ctrl):
+        act.biasprm[0] = act.gainprm[0] * home
+        act.ctrlrange = np.asarray(act.ctrlrange) - home
+    spec.add_key(name="home", qpos=home_qpos, ctrl=np.zeros(len(home_ctrl)))
+    spec.compile()
+    files = paths.robot_files(robot)
+    files["view_robot"].write_text(spec.to_xml())
+    files["view_scene"].write_text(
+        SCENE_XML_TEXT.replace(files["robot"].name, files["view_robot"].name)
+    )
+    print(f"wrote {files['view_scene']}")
+
+
+def source_stand_qpos(robot: str) -> np.ndarray | None:
+    """The first keyframe of the variant's source model, if it has one."""
+    source = mujoco.MjModel.from_xml_path(str(paths.robot_files(robot)["source"]))
+    return source.key_qpos[0].copy() if source.nkey else None
 
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--total-mass", type=float, default=DEFAULT_TOTAL_MASS)
-    p.add_argument("--kp", type=float, default=DEFAULT_KP)
-    p.add_argument("--kd", type=float, default=DEFAULT_KD)
+    p.add_argument("--robot", default=paths.DEFAULT_ROBOT, choices=robots.NAMES)
+    p.add_argument("--total-mass", type=float, default=None,
+                   help="default: the variant's own (robots.py)")
+    p.add_argument("--kp", type=float, default=None)
+    p.add_argument("--kd", type=float, default=None)
     args = p.parse_args()
     # First pass without keyframe: settle_home needs a floor, which lives in
     # the scene file, so generate, settle against the scene, then regenerate.
-    write_models(total_mass=args.total_mass, kp=args.kp, kd=args.kd)
-    model = mujoco.MjModel.from_xml_path(str(paths.SCENE_XML))
-    qpos, ctrl = settle_home(model)
-    write_models(
-        total_mass=args.total_mass,
-        kp=args.kp,
-        kd=args.kd,
-        home_qpos=qpos,
-        home_ctrl=ctrl,
+    kw = dict(total_mass=args.total_mass, kp=args.kp, kd=args.kd, robot=args.robot)
+    write_models(**kw)
+    model = mujoco.MjModel.from_xml_path(str(paths.robot_files(args.robot)["scene"]))
+    qpos, ctrl = settle_home(
+        model, robot=args.robot, start_qpos=source_stand_qpos(args.robot)
     )
+    write_models(**kw, home_qpos=qpos, home_ctrl=ctrl)
+    if robots.get(args.robot).rest_pose_from_source_key:
+        kw.pop("robot")
+        write_view(args.robot, qpos, ctrl, **kw)
 
 
 if __name__ == "__main__":

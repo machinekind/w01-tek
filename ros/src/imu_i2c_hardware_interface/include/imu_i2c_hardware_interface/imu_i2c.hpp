@@ -64,8 +64,13 @@ public:
 
   const std::string & last_error() const { return last_error_; }
 
+  // Times the magnetometer was re-initialised from read_sample() because
+  // it stopped raising data-ready (see mag_stale_cycles_ below).
+  unsigned mag_reinits() const { return mag_reinits_; }
+
 private:
   bool write_reg(int addr, uint8_t reg, uint8_t val);
+  bool init_mag();
   bool read_regs(int addr, uint8_t reg, uint8_t * buf, std::size_t len);
 
   std::string bus_path_;
@@ -73,6 +78,16 @@ private:
   int addr_mag_;
   int fd_ = -1;
   std::string last_error_;
+  // 2026-09-27, on the robot: the LIS3MDL lost its configuration mid-run
+  // (CTRL_REG3 read 0x03 = power-down, CTRL_REG1 back to 0x18) with the
+  // chip still answering WHO_AM_I. Its output froze, ZYXDA stayed clear,
+  // and the ESKF, left to the gyro bias alone, spun the yaw at up to
+  // 40 deg/s while the robot stood still. Rewriting the control registers
+  // brought it straight back, so read_sample() does that itself after
+  // this many consecutive cycles without a fresh mag sample.
+  int mag_stale_cycles_ = 0;
+  static constexpr int kMagStaleReinit = 200;  // ~1 s at the 200 Hz CM rate
+  unsigned mag_reinits_ = 0;
 };
 
 #endif  // IMU_I2C_HARDWARE_INTERFACE__IMU_I2C_HPP_

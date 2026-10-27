@@ -85,10 +85,15 @@ public:
   /// ctrlrange lower bound instead of a duplicated constant.
   double foldedKneeRad() const;
 
-  /// "home" (the standing keyframe) or "folded" (lying flat, knees on the
-  /// stop -- the real robot's boot pose). Folded is reached by settling from
-  /// home under gravity so the four-bar closure stays consistent.
-  void reset(const std::string & pose);
+  /// "home" (standing exactly at the home targets, the pose the robot is
+  /// held in when its drives are powered) or "folded" (lying, the pose the
+  /// unpowered robot rests in and is assumed to be in at power-on). Folded
+  /// is reached from the stand by a gravity-free servo ramp, lowered onto
+  /// the floor and held there by the servos. `folded_ctrl` is one target
+  /// per actuator (MuJoCo convention: the legs' folded pose from
+  /// wojtek_policy.poses); empty means the stock rule, hips straight and
+  /// knees at the model's own ctrlrange stop.
+  void reset(const std::string & pose, const std::vector<double> & folded_ctrl = {});
 
   /// Take the current joint positions as the zero the states are reported
   /// against (what powering the drives up in this pose would give).
@@ -99,11 +104,16 @@ public:
   int advance(double seconds);
 
   double timestep() const {return model_->opt.timestep;}
+
+  /// Step physics for `seconds` of simulated time.
+  void stepFor(double seconds);
   double simTime() const {return data_->time;}
 
   /// Joint position/velocity/effort in MuJoCo convention, relative to the
   /// latched activation pose (position only -- rates have no offset).
   double jointPosition(int actuator) const;
+  /// Absolute joint position in MuJoCo convention (no activation offset).
+  double jointPositionAbsolute(int actuator) const {return data_->qpos[qpos_adr_[actuator]];}
   double jointVelocity(int actuator) const;
   double jointEffort(int actuator) const;
 
@@ -114,8 +124,12 @@ public:
   /// It rides qfrc_applied, so it stays on until written again; the caller
   /// clamps it, the plant does not. Withheld in dry run like the servo.
   void setFeedForward(int actuator, double tau);
-  /// Bench mode: physics runs, no actuator force is applied.
-  void setDryRun(bool dry_run) {dry_run_ = dry_run;}
+  /// Bench mode, the disabled drives of a real dry run: physics runs, no
+  /// actuator force is applied. MuJoCo's actuation stage is switched off
+  /// for the model (a zeroed ctrl is not enough: for a position servo it
+  /// is a target of 0 rad, and the servo pulls towards it). reset() still
+  /// builds its poses with the servos, as the powered robot is posed.
+  void setDryRun(bool dry_run);
 
   /// IMU as the physical sensor would report it: `mount_quat` is the sensor
   /// frame's orientation in base_link (the real unit is bolted on rotated),
@@ -133,6 +147,8 @@ public:
   std::vector<double> qpos() const;
 
 private:
+  /// Writes dry_run_ into the model's disable flags (no-op before load()).
+  void applyDryRun();
   int actuatorId(const std::string & name) const;
 
   mjModel * model_ = nullptr;

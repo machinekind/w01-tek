@@ -8,6 +8,10 @@ setup(
     name=package_name,
     version="0.1.0",
     packages=[package_name],
+    # Trick clips of the non-stock legs, read with importlib.resources so
+    # they are found under a symlink install and a copy install alike.
+    package_data={package_name: ["data/*.json"]},
+    include_package_data=True,
     data_files=[
         ("share/ament_index/resource_index/packages", [f"resource/{package_name}"]),
         (f"share/{package_name}", ["package.xml"]),

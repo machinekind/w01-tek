@@ -37,6 +37,19 @@ question each: is the link alive and stable enough to build the stack on it.
 
 ## 2. Drive CAN baud: 1M -> 8M (required for SPI)
 
+**Current state (2026-10-05): the drives are flashed to 1M again and the
+stack defaults to `can_baud:=1` with the controller manager at 100 Hz.**
+8M over the HAT worked on the bench but not on the robot's harness: with
+termination only in the two CANdles at the bus ends, every in-line
+connector carries the far terminator, moving a plug dropped frames and
+flash writes, and a lost terminator silenced all twelve drives. At 1M the
+same harness holds. The 8M migration below stays as the procedure for when
+the harness is fixed (twisted 120 R pair, terminators at the true ends,
+e.g. in the last drive -- `candle_bus_test baud` keeps the drive's
+termination bit, so set it there once). Switching direction is just
+`--baud 8 --to 1`; a flash save that fails at 8M usually passes on a
+retry with `--baud 8 --to 8`.
+
 The SPI path runs FDCAN at **8M** (candle upstream: "before running be sure
 all actuators are switched to 8M speed"). Our drives are configured for 1M
 (what the USB stack uses). Switch each drive, **over the USB dongle first**,
@@ -85,9 +98,9 @@ PASS/FAIL per criterion.
 
 * ~~`md80_hardware_interface` hardcodes `BusType_E::USB`~~ DONE 2026-07-17:
   the driver honors the `bus` (`usb`/`spi`) and `can_baud` (1|2|5|8) URDF
-  params; robot/real launches default to `bus:=spi can_baud:=8` and expose
-  both as launch args. Verified on hardware (dry_run bring-up: 12/12 drives
-  at 400 Hz over SPI). Candle-side knobs still belong to the planned candle
+  params; robot/real launches default to `bus:=spi` and, since 2026-10-05,
+  `can_baud:=1` (see section 2), and expose both as launch args. Verified on
+  hardware at 8M (dry_run bring-up: 12/12 drives at 400 Hz over SPI). Candle-side knobs still belong to the planned candle
   rewrite (backlog #9).
 * New I2C IMU hardware interface (or an I2C mode in the existing pkg):
   read the LSM6DS3TR-C + LIS3MDL over `/dev/i2c-1` directly; orientation

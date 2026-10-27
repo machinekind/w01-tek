@@ -1,0 +1,60 @@
+# @package _global_
+# Locomotion on the v6.27 legs: the `locomotion` recipe (stand <-> walk <->
+# trot by commanded speed, commanded stance height) with the lengths moved
+# to the longer legs. The gait clock is slowed by the square root of the
+# leg-length ratio, the way a pendulum slows. The reward and command
+# settings are the ones that won the 2026-09-21 comparison in
+# docs/robots.md. The gait numbers are still untuned starting points.
+# Usage: ./run.sh train +experiment=legs_v627_locomotion
+defaults:
+  - override /task: joystick
+  - override /robot: legs_v627
+
+task:
+  env:
+    # Pose and standing rewards compare against where the joints really
+    # are at each height, not against the targets. The legs sag 0.13 rad at
+    # the knee crank under the robot's weight, which the target-based
+    # reference would count as an error the policy cannot remove.
+    real_pose_ref: true
+    # What the robot can measure: encoders, its own last action, the
+    # command. Every keeper that runs on the robot observes exactly this.
+    # The env default adds the gait clock and the IMU, and the deploy
+    # runtime has no gait clock, so a policy trained with the default
+    # cannot be exported. The first three runs on these legs were lost
+    # that way.
+    obs:
+      include:
+        - joint_pos
+        - joint_vel
+        - last_act
+        - command
+    command:
+      vx: [-0.8, 1.2]
+      vy: [-0.5, 0.5]
+      wz: [-1.0, 1.0]
+      height: [0.28, 0.37]
+      zero_prob: 0.15
+      # Turning was the weak point of the first policy. Draw a clean arc or
+      # a pure turn often enough to train it.
+      arc_prob: 0.2
+      pure_wz_prob: 0.1
+    reward:
+      tracking_sigma: 0.15
+      scales:
+        # The body rocked about a degree in pitch and roll at every step.
+        # These two, tripled and doubled from the stock values, cut that by
+        # a third without shortening the stride.
+        ang_vel_xy: -0.15
+        orientation: -10.0
+    gait:
+      freq: [0.9, 2.0]
+      swing_height: 0.07
+      trot_band: [0.5, 0.8]
+    push:
+      vel: 0.5
+
+ppo:
+  num_timesteps: 300000000
+
+run_name: wojtek_legs_v627_loco

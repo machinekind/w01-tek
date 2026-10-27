@@ -30,6 +30,7 @@ from launch.actions import (
     ExecuteProcess,
     IncludeLaunchDescription,
     OpaqueFunction,
+    SetLaunchConfiguration,
 )
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import (
@@ -43,6 +44,7 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
+from wojtek_policy import poses, robots
 # How the IMU sits on the body, and why the number matters, is in imu_mount.
 from wojtek_policy.imu_mount import IMU_MOUNT_RPY
 from wojtek_policy.policy_source import active_policy, load_policy
@@ -75,6 +77,27 @@ def _cpu_prefix(context, arg):
     """
     cpus = LaunchConfiguration(arg).perform(context)
     return [f"taskset -c {cpus}"] if cpus else None
+
+
+def robot_profile(context):
+    """The robot profile this launch runs, from its robot:= argument."""
+    return robots.get(LaunchConfiguration("robot").perform(context))
+
+
+def sim_model_xml(context):
+    """The scene a simulated plant loads: model_xml:=, or the robot's own.
+
+    An explicit model_xml goes through resolve_scene (a bare file name is
+    one of wojtek_pc's config/ scenes, a path is taken as given); without
+    it the robot profile's scene loads (robot:=, wojtek_policy/robots.py).
+    The plant and the simulated camera both call this, so they always load
+    the same scene and share one physics state.
+    """
+    explicit = LaunchConfiguration("model_xml").perform(context)
+    if explicit:
+        return resolve_scene(explicit)
+    package, path = robot_profile(context).sim_scene
+    return os.path.join(get_package_share_directory(package), path)
 
 
 def _refuse_two_camera_drivers(context, hardware):
@@ -113,10 +136,28 @@ def _launch_setup(context, with_rviz, hardware):
     share = get_package_share_directory("wojtek_bringup")
     policy_share = get_package_share_directory("wojtek_policy")
 
+    # Which robot this is decides the legs in the URDF, the joint map, the
+    # knee clamp and the default policy (wojtek_policy/robots.py).
+    profile = robot_profile(context)
+    joint_map_yaml = os.path.join(policy_share, "config", profile.joint_map)
+    # An explicit policy:= wins. Without it the robot's default runs: the
+    # override file deploy.sh --policy leaves on the robot, or else the
+    # profile's pin. The desk's WOJTEK_POLICY shortcut arrives here as
+    # policy:= too -- sim.launch.py declares policy_source.env_policy() as
+    # that argument's default -- so nothing in this setup reads the
+    # environment, and the robot's launch never sees the variable. The
+    # launch configuration is set to the answer, so the nodes declared after
+    # this one (the web console) read the same policy.
+    policy_ref = (
+        LaunchConfiguration("policy").perform(context)
+        or active_policy(profile.name)
+    )
+    # load_policy refuses a policy trained for other legs than the profile's.
     loaded = load_policy(
-        LaunchConfiguration("policy").perform(context),
+        policy_ref,
         overrides={k: LaunchConfiguration(k).perform(context)
                    for k in ("kp", "kd", "max_torque")},
+        robot=profile.name,
     )
     pd = loaded.pd
     # Feed-forward torque head: read straight from the contract, so a
@@ -128,7 +169,8 @@ def _launch_setup(context, with_rviz, hardware):
     tau_ff_on = bool(tff.get("enable"))
     tau_ff_scale = float(tff.get("scale", 0.0))
     drive_torque = pd["max_torque"] + (tau_ff_scale if tau_ff_on else 0.0)
-    print(f">> policy {loaded.run_name} from {loaded.source}; servo settings "
+    print(f">> robot {profile.name}; "
+          f"policy {loaded.run_name} from {loaded.source}; servo settings "
           f"kp={pd['kp']:g} kd={pd['kd']:g} max_torque={pd['max_torque']:g}"
           + (f"; tau_ff head +-{tau_ff_scale:g} N*m -> drive torque limit "
              f"{drive_torque:g}" if tau_ff_on else ""))
@@ -154,6 +196,7 @@ def _launch_setup(context, with_rviz, hardware):
         f" tau_ff_scale:={tau_ff_scale if tau_ff_on else 0.0}",
         " use_imu:=", use_imu,
         " dry_run:=", LaunchConfiguration("dry_run"),
+        f" legs:={profile.legs}",
     ]
     if hardware == "real":
         xacro_file = os.path.join(share, "urdf", "wojtek_real.urdf.xacro")
@@ -172,13 +215,18 @@ def _launch_setup(context, with_rviz, hardware):
         pc_share = get_package_share_directory("wojtek_pc")
         xacro_file = os.path.join(pc_share, "urdf", "wojtek_sim.urdf.xacro")
         # The plant starts in the pose real_io_node is told the robot is in;
-        # anything else and zeroing would start from a lie.
+        # anything else and zeroing would start from a lie. The folded pose
+        # is the legs' (wojtek_policy.poses), handed over as the ctrl vector
+        # the plant settles under, the same numbers real_io_node ramps to.
+        folded = " ".join(
+            f"{v:.6f}" for v in poses.for_robot(profile.training_robot).folded_ctrl
+        )
         xacro_args += [
             " hw:=", LaunchConfiguration("hw"),
             " boot_pose:=", LaunchConfiguration("boot_pose"),
-            " model_xml:=" + resolve_scene(
-                LaunchConfiguration("model_xml").perform(context)
-            ),
+            f" folded_ctrl:='{folded}'",
+            " model_xml:=" + sim_model_xml(context),
+            " joint_map_yaml:=" + joint_map_yaml,
             # Where the plant broadcasts the TRUE base pose. With the leg
             # odometry owning odom->base_link the truth steps aside to
             # base_link_gt, still in TF for RViz and the drift meters.
@@ -304,6 +352,10 @@ def _launch_setup(context, with_rviz, hardware):
                 {
                     "dry_run": LaunchConfiguration("dry_run"),
                     "boot_pose": LaunchConfiguration("boot_pose"),
+                    # The legs' poses, passive-joint table and trick clips
+                    # follow the profile, like the joint map.
+                    "robot": profile.name,
+                    "joint_map_yaml": joint_map_yaml,
                     # The arm check compares the pose against the policy's
                     # home. On the robot 0.15 rad (the node's default) is
                     # the safety margin. The simulated plant holds nothing
@@ -326,12 +378,16 @@ def _launch_setup(context, with_rviz, hardware):
                     # loads the same files without resolving the ref again.
                     "policy": str(loaded.directory),
                     "policy_source": loaded.source,
+                    # The node checks the policy against the profile again,
+                    # so a policy for other legs cannot slip in by any path.
+                    "robot": profile.name,
+                    "joint_map_yaml": joint_map_yaml,
                     # The driver publishes the chip axes unmodified; this
                     # rotates them into base_link (see IMU_MOUNT_RPY).
                     "imu_mount_rpy": IMU_MOUNT_RPY,
                     "auto_enable": True,  # real_io arming is the gate
                     "soft_start_s": 2.0,
-                    "clamp_knee": True,
+                    "clamp_knee": profile.clamp_knee,
                     "watchdog_timeout_s": 0.2,
                     # Same switch as the sysinfo node above, so one argument
                     # turns both topics on together.
@@ -546,15 +602,43 @@ def _launch_setup(context, with_rviz, hardware):
             output="screen",
         )
     )
-    return nodes
-
-
-DEFAULT_POLICY = active_policy()
+    # The pad's command box and height envelope come from the policy
+    # contract, so the pad is launched here, with the resolved reference, and
+    # not from the static list above: an include there runs before the
+    # SetLaunchConfiguration below and sees the argument's default. With the
+    # pin (no policy:= on the command line) that default is empty, and the
+    # pad drove with its built-in stock box and height (seen 2026-10-23 on
+    # the wojtek_v2 profile: height 0.090..0.170 m against a 0.28..0.37 m
+    # policy). The gamepad argument exists only in the launches built with
+    # with_gamepad, hence the default here.
+    gamepad_on = LaunchConfiguration("gamepad", default="false").perform(
+        context
+    ).lower() in ("true", "1")
+    if gamepad_on:
+        nodes.append(
+            IncludeLaunchDescription(
+                PathJoinSubstitution(
+                    [
+                        FindPackageShare("wojtek_teleop"),
+                        "launch",
+                        "gamepad.launch.py",
+                    ]
+                ),
+                launch_arguments={
+                    "cpus": LaunchConfiguration("gamepad_cpus"),
+                    "speed_scale": LaunchConfiguration("gamepad_speed"),
+                    # The loaded directory, like policy_node and the deck:
+                    # the same files, no second resolution.
+                    "policy": str(loaded.directory),
+                }.items(),
+            )
+        )
+    return [SetLaunchConfiguration("policy", policy_ref)] + nodes
 
 
 def common_launch_description(
     with_rviz, bag_default, with_gamepad=False, hardware="real",
-    policy_default=DEFAULT_POLICY,
+    policy_default="",
 ):
     """LaunchDescription shared by the real-robot and simulation launches.
 
@@ -564,10 +648,11 @@ def common_launch_description(
     arg); hardware is "real" (MD80 + I2C IMU) or "sim" (simulated plugin from
     wojtek_pc's xacro), which selects the URDF and the hardware-specific args;
     policy_default is the policy reference this workflow comes up with when
-    none is given. Every launch takes DEFAULT_POLICY today -- the hook stays
-    because a simulation and the robot may reasonably differ on which policy
-    is the one to look at by default (an experimental one at the desk, a
-    vetted one on the robot); a one-off divergence is `policy:=` instead.
+    none is given. Empty means the robot's default (robots.py), which every
+    launch takes today -- the hook stays because a simulation and the robot
+    may reasonably differ on which policy is the one to look at by default
+    (an experimental one at the desk, a vetted one on the robot); a one-off
+    divergence is `policy:=` instead.
     """
     if hardware not in ("real", "sim"):
         raise ValueError(f"hardware must be 'real' or 'sim', got {hardware!r}")
@@ -578,8 +663,17 @@ def common_launch_description(
         # for a durable real-robot run: policy:=<repo>@<sha>. A Hugging Face
         # reference is answered from the policy store. deploy.sh keeps the
         # default there, and deploy.sh --policy <ref> ships and activates
-        # any other reference. The robot needs no network.
+        # any other reference. The robot needs no network. Empty means the
+        # robot's default: the override file, or else the profile's pin.
         DeclareLaunchArgument("policy", default_value=policy_default),
+        # Which robot this is, as a profile from wojtek_policy/robots.py:
+        # "wojtek" for the stock legs, "wojtek_v2" for the v6.27 legs. It
+        # picks the URDF legs, the joint map, the knee clamp and the default
+        # policy. A policy trained for other legs is refused.
+        DeclareLaunchArgument(
+            "robot", default_value=robots.DEFAULT_ROBOT,
+            choices=list(robots.NAMES),
+        ),
         # Explicit overrides of the policy contract's servo settings (empty =
         # from the contract). E.g. max_torque:=2 for cautious first tests.
         DeclareLaunchArgument("kp", default_value=""),
@@ -626,12 +720,17 @@ def common_launch_description(
     ]
     if hardware == "real":
         args += [
-            # CAN link to the drives: CANdle HAT over SPI at 8M by default (the
-            # drives' flashed baudrate since 2026-07-17). bus:=usb can_baud:=1 =
-            # the legacy USB dongle, only after flashing the drives back to 1M
-            # (ros/hw_tests: candle_bus_test baud).
+            # CAN link to the drives: CANdle HAT over SPI. can_baud must match
+            # the drives' flashed baudrate: 1M since 2026-10-05 (was 8M from
+            # 2026-07-17). On the current harness -- termination only in the
+            # two CANdles at the bus ends, every in-line connector carrying the
+            # far terminator -- 8M lost frames and even flash writes whenever a
+            # plug moved, and a lost terminator silenced ALL drives; 1M rides
+            # it out. 1M feeds the CANdle update loop at ~110 Hz, which is why
+            # controller_manager runs at 100 Hz (real_controllers.yaml).
+            # Re-flash with ros/hw_tests: candle_bus_test baud.
             DeclareLaunchArgument("bus", default_value="spi"),
-            DeclareLaunchArgument("can_baud", default_value="8"),
+            DeclareLaunchArgument("can_baud", default_value="1"),
             # IMU is the Adafruit 5543 (LSM6DS3TR-C + LIS3MDL) straight on I2C1
             # -- imu_i2c_hardware_interface.
             DeclareLaunchArgument("imu_bus", default_value="/dev/i2c-1"),
@@ -655,9 +754,10 @@ def common_launch_description(
                 "hw", default_value="mujoco",
                 choices=["mock", "mujoco"],
             ),
-            # Physics scene for hw:=mujoco; empty = the plugin's default
-            # (scene_sim.xml shipped by wojtek_pc: the training scene plus
-            # the props the camera and its detector have something to see in).
+            # Physics scene for hw:=mujoco; empty = the robot profile's scene.
+            # For the stock robot that is scene_sim.xml shipped by wojtek_pc:
+            # the training scene plus the props the camera and its detector
+            # have something to see in.
             DeclareLaunchArgument("model_xml", default_value=""),
         ]
     if with_rviz:
@@ -695,23 +795,13 @@ def common_launch_description(
             # on the isolated RT cores with no load balancing they shared
             # one core with policy_node and real_io and took a fifth of it.
             DeclareLaunchArgument("gamepad_cpus", default_value=""),
-            # Fraction of the command box full stick reaches; 1.0 = the
-            # policy's trained top speed, far too fast indoors.
-            DeclareLaunchArgument("gamepad_speed", default_value="0.4"),
-            IncludeLaunchDescription(
-                PathJoinSubstitution(
-                    [
-                        FindPackageShare("wojtek_teleop"),
-                        "launch",
-                        "gamepad.launch.py",
-                    ]
-                ),
-                launch_arguments={
-                    "cpus": LaunchConfiguration("gamepad_cpus"),
-                    "speed_scale": LaunchConfiguration("gamepad_speed"),
-                }.items(),
-                condition=IfCondition(LaunchConfiguration("gamepad")),
-            ),
+            # Fraction of the command box full stick reaches with slow
+            # mode off; 1.0 = the policy's trained top speed, too much for
+            # this hardware (tested 2026-10-07), 0.6 is what it copes with.
+            # RB on the pad toggles slow mode (0.4 of the box) for indoors.
+            DeclareLaunchArgument("gamepad_speed", default_value="0.6"),
+            # The include itself is added by _launch_setup, after the policy
+            # reference is resolved: the pad reads the command box from it.
         ]
     args += [
         # RealSense D435 depth (+ colour for the VLM) and the grid reduction.

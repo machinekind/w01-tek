@@ -7,6 +7,7 @@ PY=.venv/bin/python
 if [[ "$(uname)" == "Linux" ]]; then export MUJOCO_GL="${MUJOCO_GL:-egl}"; fi
 case "${1:-}" in
   build) shift; "$PY" -m wojtek_rl.build_model "$@" ;;
+  import-robot) shift; "$PY" -m wojtek_rl.import_robot "$@" ;;  # CAD archive -> a robot variant's source MJCF
   build-terrain) shift; "$PY" -m wojtek_rl.build_terrain "$@" ;;
   pose)  shift; "$PY" -m wojtek_rl.pose_explorer "$@" ;;
   check) shift; "$PY" -m wojtek_rl.check_model_mjx "$@" ;;

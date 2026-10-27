@@ -1,0 +1,60 @@
+# @package _global_
+# QUIET, LOW-IMPACT WALKING on the v6.27 legs (2026-10-22). The goal is
+# not a long stride for its own sake: a lower body oscillation frequency,
+# less mechanical work and softer touchdowns -- the loads the legs and
+# the hip motor flanges see. Each lever is priced directly, with the
+# doses the stock robot's quiet family measured (flat_quiet_v1..v6,
+# QUIET-REPORT-2026-08-12):
+#   * feet_landing -15: downward foot speed^2 before contact (Sony
+#     2502.10983, QuietPaw 2503.05035); from scratch it collapses into
+#     skating, so this is a PHASE-B preset: restore from a converged
+#     walking checkpoint (wojtek_legs_v627_loco_v3). The actor keeps the
+#     encoder-only observation list it inherits; restoring an IMU run
+#     (_v4_imu) needs the same `task.env.obs.include` with gyro and gravity
+#     on the command line, or the restored params do not fit the network.
+#   * the spin exemption that kept pivots alive: fade 0.1, spins pay 35%.
+#   * base_accel -0.02 with the same fade: squared vertical and angular
+#     acceleration of the body, the instrument behind az_p99/vibration.
+#   * energy_cmd 1.0: command-normalized mechanical power, the term that
+#     took the stock walk from 16 W to 10 W (v5).
+#   * the gait clock and the walk->trot band from biomechanics, not from
+#     the stock numbers scaled: dogs lengthen the stride with speed as
+#     D' = 1.04 + 1.36 U' (stride over hind-limb length L, U' = v/sqrt(gL);
+#     Usherwood & Self 2019, PMC6871776), which for L = 0.345 m is 0.7 Hz
+#     at 0.3 m/s, 1.0 Hz at 0.5 and 1.8 Hz at 1.2 -- the band 0.5-1.9 Hz
+#     on the env's speed-linear clock lands within 0.15 Hz of that. The
+#     energy cost per stride is proportional to the stride frequency
+#     (Heglund & Taylor 1988), so every step the clock does not demand is
+#     work saved. The same model and the dog data put the walk->trot
+#     transition at U' = 0.65-0.8, i.e. 1.2-1.5 m/s for these legs: below
+#     that a four-beat walk is the cheaper gait, so the trot band moves to
+#     the top of the command box (1.0-1.3 m/s) instead of 0.5-0.8.
+# Judged on the battery: vibration index, tilt_rate_rms, foot-force
+# proxy (peak base accel), mean power, duty factor and stride span,
+# against wojtek_legs_v627_loco_v3; falls and spin rate guard against
+# motion suppression.
+# Usage:
+#   ./run.sh train +experiment=legs_v627_quiet run_name=<name> \
+#     restore=runs/wojtek_legs_v627_loco_v3/checkpoints/000302284800
+defaults:
+  - legs_v627_locomotion
+
+task:
+  env:
+    gait:
+      freq: [0.5, 1.9]
+      trot_band: [1.0, 1.3]
+    reward:
+      feet_landing_wz_fade: 0.1
+      feet_landing_wz_floor: 0.35
+      base_accel_wz_fade: 0.1
+      base_accel_wz_floor: 0.35
+      scales:
+        feet_landing: -15.0
+        base_accel: -0.02
+        energy_cmd: 1.0
+
+ppo:
+  num_timesteps: 1000000000
+
+run_name: wojtek_legs_v627_quiet

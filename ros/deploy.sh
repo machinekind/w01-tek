@@ -34,14 +34,26 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
-# Secrets + local overrides (UBUNTU_PRO_TOKEN, optional RPI_HOST, ...).
-if [ -f "${HERE}/.env" ]; then
-    set -a; . "${HERE}/.env"; set +a
-fi
+# Two .env files, both gitignored, both optional. The repo-root one holds
+# what the whole repository shares and this script needs for the policy
+# pin: HF_ORGANIZATION, WOJTEK_ROBOT, HF_TOKEN (see ../.env.example). The
+# one next to this script holds the robot's own secrets and overrides:
+# UBUNTU_PRO_TOKEN, WOJTEK_AP_PSK, optional RPI_HOST (see .env.example).
+# The robot's file is read second, so it wins on a name set in both.
+for env_file in "${HERE}/../.env" "${HERE}/.env"; do
+    if [ -f "${env_file}" ]; then
+        set -a; . "${env_file}"; set +a
+    fi
+done
 
 RPI_HOST="${RPI_HOST:-rpi@10.42.0.2}"      # static anchor; same over eth or the RPi's AP
 REMOTE_WS="${REMOTE_WS:-wojtek_ws}"        # relative to the RPi user's home
 ROS_DISTRO="${ROS_DISTRO:-jazzy}"
+# Which robot profile the robot runs (wojtek_policy/robots.py): its pinned
+# policy is resolved below, and --provision writes it into the service's
+# drop-in (deploy/rpi/wojtek-robot-local.conf) together with
+# HF_ORGANIZATION. A plain ./deploy.sh does not touch the drop-in.
+WOJTEK_ROBOT="${WOJTEK_ROBOT:-wojtek}"
 # Keep in sync with docker/Dockerfile's CANDLE_COMMIT.
 CANDLE_COMMIT="7c201d744baa107ee408e3e01694efd1a764a174"
 RESTART=1
@@ -90,6 +102,7 @@ if [ "${PROVISION}" = 1 ]; then
     [ "${ENABLE_ROBOT}" = 1 ] && install_args="--enable-robot"
     ssh "${RPI_HOST}" \
         "UBUNTU_PRO_TOKEN='${UBUNTU_PRO_TOKEN:-}' WOJTEK_AP_PSK='${WOJTEK_AP_PSK:-}' ROS_DISTRO='${ROS_DISTRO}' \
+         WOJTEK_ROBOT='${WOJTEK_ROBOT}' HF_ORGANIZATION='${HF_ORGANIZATION:-}' \
          bash '${REMOTE_WS}/deploy/rpi/install.sh' ${install_args}"
 
     # Kernel/cmdline changes leave /var/run/reboot-required -- reboot + wait so
@@ -117,18 +130,24 @@ rsync -az --delete \
     "${HERE}/src/" "${RPI_HOST}:${REMOTE_WS}/src/"
 
 # Which policy runs is a launch parameter, and the launch files default to
-# the pin in wojtek_policy/policy_source.py. This PC resolves the pin into
-# the store, so the robot never downloads anything and no one runs a
-# prefetch by hand. A resolve failure stops the deploy (set -e) on purpose,
-# because a robot without the default policy in its store would crash-loop.
-# huggingface_hub is needed only for a pin that is not in the store yet. A
-# stored pin resolves offline with the standard library.
-if [ -n "${HF_ORGANIZATION:-}" ]; then
-    echo ">> resolve the default policy into the store"
-    PYTHONPATH="${HERE}/src/wojtek_policy" python3 -m wojtek_policy.policy_source --default
-else
+# the pin in the robot's profile (wojtek_policy/robots.py). WOJTEK_ROBOT
+# names the profile. This PC resolves the pin into the store, so the robot
+# never downloads anything and no one runs a prefetch by hand. A resolve
+# failure stops the deploy (set -e) on purpose, because a robot without
+# the default policy in its store would crash-loop. An unknown robot name
+# stops it too. huggingface_hub is needed only for a pin that is not in the
+# store yet. A stored pin resolves offline with the standard library.
+ROBOT_PIN="$(PYTHONPATH="${HERE}/src/wojtek_policy" python3 -m wojtek_policy.robots "${WOJTEK_ROBOT}")"
+if [ -z "${HF_ORGANIZATION:-}" ]; then
     echo ">> HF_ORGANIZATION unset -- no default policy to resolve"
     echo "   (set it in .env; without it every launch needs an explicit policy:=)"
+elif [ -z "${ROBOT_PIN}" ]; then
+    echo ">> robot ${WOJTEK_ROBOT} has no pinned policy -- no default policy to resolve"
+    echo "   (every launch on it needs an explicit policy:=, or use --policy <ref>)"
+else
+    echo ">> resolve the default policy of robot ${WOJTEK_ROBOT} into the store"
+    PYTHONPATH="${HERE}/src/wojtek_policy" python3 -m wojtek_policy.policy_source \
+        --default --robot "${WOJTEK_ROBOT}"
 fi
 
 # A --policy reference has to reach the store the same way, and a failure to

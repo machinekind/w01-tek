@@ -36,6 +36,10 @@
 #                               perception stack)
 #   ./sim.sh boot_pose:=folded  start in the robot's boot/zeroing pose
 #   ./sim.sh policy:=<ref>      org/name[@rev] or a local artifact directory
+#   ./sim.sh robot:=wojtek_v2   the v6.27 legs (profile in wojtek_policy's
+#                               robots.py; wojtek, the stock legs, is the
+#                               default). Without policy:= it runs that
+#                               profile's own pinned policy
 #   ./sim.sh --benchmark        also start the AprilTag benchmark rig: tripod
 #                               camera render, tag tracker, and the ground-truth
 #                               error monitor (/benchmark/pose_error_mm,

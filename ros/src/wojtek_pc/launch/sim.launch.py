@@ -8,6 +8,7 @@ virtual camera, RViz, the operator console and optionally a gamepad.
                                        [boot_pose:=folded] [camera:=false]
                                        [console:=web|qt|none] [gamepad:=true]
                                        [telemetry:=true] [deck:=false]
+                                       [robot:=wojtek|wojtek_v2]
                                        [leg_odom:=true nav:=true]
                                        [vlm:=true vlm_url:=http://host:11434 vlm_model:=...]
 
@@ -78,6 +79,12 @@ name. The plant loads the same file, so they are solid. model_xml:= takes
 you back to the empty floor (model_xml:=scene_mjx.xml), into the walled
 navigation room (model_xml:=scene_nav.xml), or anywhere else by path.
 
+robot:=wojtek_v2 simulates the v6.27 legs (wojtek_policy/robots.py). The
+profile swaps the URDF legs, the joint map and the knee clamp, and the plant
+loads the legs' own training scene, which has no props. Without policy:= it
+runs the profile's pinned policy (wojtek_v2-quiet-locomotion), like the
+robot. A policy for the other legs is refused at launch.
+
 telemetry:=true adds /wojtek/sysinfo and /wojtek/policy_timing, the same
 opt-in the robot service uses. It is off by default here too. The Foxglove bridge
 stays with viz.launch.py in a simulation, so leave foxglove:= alone unless
@@ -104,8 +111,11 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
-from wojtek_bringup.launch_common import common_launch_description, resolve_scene
-from wojtek_policy.policy_source import desk_policy
+from wojtek_bringup.launch_common import (
+    common_launch_description,
+    sim_model_xml,
+)
+from wojtek_policy.policy_source import env_policy
 
 
 def _camera_node(context):
@@ -128,11 +138,9 @@ def _camera_node(context):
             ),
             parameters=[
                 {
-                    # Resolved by the same function the plant's launch uses:
+                    # The same scene the plant loads, from the same helper:
                     # one scene, one physics state.
-                    "model_xml": resolve_scene(
-                        LaunchConfiguration("model_xml").perform(context)
-                    ),
+                    "model_xml": sim_model_xml(context),
                     "depth_hz": ParameterValue(
                         LaunchConfiguration("camera_depth_hz"), value_type=float
                     ),
@@ -141,21 +149,22 @@ def _camera_node(context):
                     ),
                 }
             ],
-        ),
+        )
     ]
 
 
 def generate_launch_description():
     # RViz on by default (this is the desk workflow), recording opt-in, and
-    # everything else -- nodes, parameters, the arming procedure -- shared
-    # verbatim with the robot bringup, so what you watch here is what the
-    # robot comes up with. The one desk-only default is the policy:
-    # WOJTEK_POLICY from the repo-root .env names it, else the pin
-    # (policy_source.desk_policy). The robot's launch never reads that
-    # variable.
+    # everything else -- nodes, parameters, the arming procedure, the robot
+    # profile and its default policy (robot:=, wojtek_policy/robots.py) --
+    # shared verbatim with the robot bringup, so what you watch here is what
+    # the robot comes up with. The one desk-only default is the policy:
+    # WOJTEK_POLICY from the repo-root .env names it (policy_source.env_policy),
+    # else the profile's default is resolved like on the robot. The robot's
+    # launch never reads that variable.
     ld = common_launch_description(
         with_rviz=True, bag_default="false", hardware="sim", with_gamepad=True,
-        policy_default=desk_policy(),
+        policy_default=env_policy(),
     )
     for action in (
         # D435-compatible virtual camera: a separate node now, because the
@@ -166,6 +175,8 @@ def generate_launch_description():
         DeclareLaunchArgument("camera", default_value="true"),
         DeclareLaunchArgument("camera_depth_hz", default_value="15.0"),
         DeclareLaunchArgument("camera_color_hz", default_value="5.0"),
+        # The scene depends on robot:=, so the node is built once the
+        # arguments are known.
         OpaqueFunction(function=_camera_node),
         # Text-command bridge (wojtek#92), resident by design -- see the
         # module docstring for why that is safe.

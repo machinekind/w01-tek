@@ -93,6 +93,11 @@ class GotoController:
         self._goal, self._goal_time, self._done = None, None, False
         self._cancelled_at = float(now)
 
+    def cancel(self):
+        """Drop the setpoint now, not at the dead-man: the next step is
+        idle (the node's moving->stopped edge sends the one zero)."""
+        self._goal, self._goal_time, self._done = None, None, False
+
     @property
     def goal(self):
         return None if self._done else self._goal

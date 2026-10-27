@@ -189,14 +189,28 @@ TEST_F(Plant, servo_settings_from_the_policy_contract_reach_the_actuator)
 
 TEST_F(Plant, dry_run_withholds_torque_but_keeps_physics_running)
 {
+  // The same command on a live plant is the yardstick: with torque the
+  // joint follows it, in dry run the servo and the feed-forward head are
+  // withheld, so the joint goes where gravity takes it instead.
+  MujocoPlant live;
+  live.load(writeModel(), "/nonexistent/meshes");
+  live.latchActivationPose();
+  live.setCommand(0, 1.0);
+  for (int i = 0; i < 800; ++i) {live.advance(kControlPeriod);}
+  EXPECT_GT(live.jointPosition(0), 0.5);
+
   plant_.setDryRun(true);
   plant_.latchActivationPose();
-  plant_.setCommand(0, 1.0);  // would be a big move with torque
+  const double standing = plant_.basePose()[2];
+  plant_.setCommand(0, 1.0);  // would be the same big move with torque
+  plant_.setFeedForward(0, 3.0);
   for (int i = 0; i < 800; ++i) {
     plant_.advance(kControlPeriod);
   }
-  EXPECT_GT(plant_.simTime(), 0.0);          // time passes
-  EXPECT_LT(plant_.basePose()[2], 0.5);      // and the robot drops
+  EXPECT_GT(plant_.simTime(), 0.0);              // time passes
+  EXPECT_DOUBLE_EQ(plant_.jointEffort(0), 0.0);  // no torque reached the joint
+  EXPECT_LT(plant_.jointPosition(0), 0.5);       // so the command was not followed
+  EXPECT_LT(plant_.basePose()[2], standing);     // while gravity still acts
 }
 
 TEST_F(Plant, feed_forward_torque_acts_on_top_of_the_servo)
@@ -280,6 +294,37 @@ TEST_F(Plant, reset_rejects_a_pose_it_does_not_know)
   EXPECT_THROW(plant_.reset("crouched"), std::runtime_error);
   EXPECT_NO_THROW(plant_.reset("home"));
   EXPECT_NO_THROW(plant_.reset("folded"));
+}
+
+TEST_F(Plant, folded_pose_can_be_given_as_the_legs_own_ctrl_vector)
+{
+  // Other legs fold differently (the v6.27 legs lie with the hips on their
+  // stop), so the launch hands the plant the folded targets of the legs it
+  // runs. With them the robot comes down from the stand with the servos
+  // off and ends on the floor; a vector of the wrong length is refused.
+  plant_.reset("home");
+  const double standing = plant_.basePose()[2];
+  // The stock rule folds this stand-in's one knee to its ctrlrange floor,
+  // 0.425. A vector that asks for something else must be what the plant
+  // follows: the servos hold the lying pose, so the joint sits near the
+  // target it was given, not near the stock rule's.
+  plant_.reset("folded");
+  const double stock_knee = plant_.jointPositionAbsolute(0);
+  EXPECT_NEAR(stock_knee, plant_.foldedKneeRad(), 0.1);
+  std::vector<double> folded(plant_.actuatorNames().size(), 0.9);
+  EXPECT_NO_THROW(plant_.reset("folded", folded));
+  EXPECT_NEAR(plant_.jointPositionAbsolute(0), 0.9, 0.1);
+  EXPECT_GT(std::abs(plant_.jointPositionAbsolute(0) - stock_knee), 0.3);
+  EXPECT_LT(plant_.basePose()[2], standing);
+  std::vector<double> too_long(plant_.actuatorNames().size() + 1, 0.0);
+  EXPECT_THROW(plant_.reset("folded", too_long), std::runtime_error);
+  // Home puts the actuated joints exactly on the home keyframe's targets
+  // (ctrl 1.0 in the stand-in), so a drive powered up there reads zero
+  // offset against them.
+  plant_.reset("home");
+  EXPECT_NEAR(plant_.jointPositionAbsolute(0), 1.0, 1e-6);
+  plant_.latchActivationPose();
+  EXPECT_NEAR(plant_.jointPosition(0), 0.0, 1e-9);
 }
 
 TEST_F(Plant, imu_is_reported_in_the_frame_the_sensor_is_mounted_in)

@@ -15,7 +15,7 @@ from ml_collections import config_dict
 from mujoco import mjx
 from mujoco_playground._src import mjx_env
 
-from wojtek_rl import height_scan, paths
+from wojtek_rl import height_scan, paths, robots
 from wojtek_rl import terrain_env
 from wojtek_rl.base import (
     ABDUCTION_ACTUATORS,
@@ -35,11 +35,12 @@ PRIVILEGED_SIZE = 61  # OBS_SIZE + 3 linvel + 4 contacts
 TROT_PHASE = (0.0, np.pi, 0.0, np.pi)
 WALK_PHASE = (0.0, np.pi, 1.5 * np.pi, 0.5 * np.pi)
 
-# Settled standing height vs uniform leg-extension offset, measured with a
-# 2 s PD-hold settle on the current model (kp=20/kd=1): dsecond in rad on
-# every second joint, dthird = 2*dsecond on every third joint.
-HEIGHT_TABLE = (0.084, 0.094, 0.106, 0.121, 0.139, 0.160, 0.182)
-DSECOND_TABLE = (-0.45, -0.30, -0.15, 0.0, 0.15, 0.30, 0.45)
+# Settled standing height vs uniform leg-extension offset of the stock
+# robot: dsecond in rad on every second joint, dthird = 2*dsecond on every
+# third joint. The env reads its own robot's tables (robots.py); these names
+# stay for the code that means the stock robot.
+HEIGHT_TABLE = robots.WOJTEK.height_table
+DSECOND_TABLE = robots.WOJTEK.dsecond_table
 
 # Body-frame xy of the strip the terrain gate measures roughness over,
 # alongside the four foot positions.
@@ -83,6 +84,10 @@ def tau_ff_swing_cost(tau_ff: jax.Array, contact: jax.Array) -> jax.Array:
 
 def default_config() -> config_dict.ConfigDict:
     return config_dict.create(
+        # Which set of legs (robots.py). Select it with the `robot=` config
+        # group rather than this key alone: the group also sets sim_dt and
+        # the height range that belong to those legs.
+        robot=paths.DEFAULT_ROBOT,
         ctrl_dt=0.02,
         sim_dt=0.004,
         # Physics backend. auto picks warp on a CUDA host and jax elsewhere.
@@ -768,6 +773,8 @@ def default_config() -> config_dict.ConfigDict:
 
 
 class WojtekJoystick(WojtekEnv):
+    supports_robot_variants = True
+
     def __init__(self, config=None, config_overrides=None):
         super().__init__(config or default_config(), config_overrides)
         # Feed-forward torque head (see tau_ff in default_config). Resolved
@@ -805,6 +812,33 @@ class WojtekJoystick(WojtekEnv):
             )
         else:
             self._target_hi = self._ctrlrange[:, 1]
+        # Height -> leg-extension tables of this env's robot. `_ext_second`
+        # and `_ext_third` spread one rung's offsets over the 12 actuators,
+        # with the sign of each leg's mounting (robots.Robot.leg_sign).
+        rb = self._robot
+        self._height_table = jp.array(rb.height_table)
+        self._dsecond_table = jp.array(rb.dsecond_table)
+        self._dthird_table = jp.array(rb.dthird_table)
+        leg_sign = np.repeat(np.array(rb.leg_sign), 3)
+        self._ext_second = jp.array(np.tile([0.0, 1.0, 0.0], 4) * leg_sign)
+        self._ext_third = jp.array(np.tile([0.0, 0.0, 1.0], 4) * leg_sign)
+        h_lo, h_hi = self._config.command.height
+        if h_hi < rb.height_table[0] or h_lo > rb.height_table[-1]:
+            # What a stock experiment preset on other legs looks like: its
+            # command.height wins over the robot group's.
+            raise ValueError(
+                f"command.height={(h_lo, h_hi)} lies outside the standing "
+                f"heights of robot={rb.name!r} "
+                f"({rb.height_table[0]}-{rb.height_table[-1]} m)"
+            )
+        if not rb.has_toggle_angle and (
+            self._config.fall.get("max_toggle_deg", 0.0)
+            or self._config.reward.scales.get("toggle_flat", 0.0)
+        ):
+            raise ValueError(
+                f"fall.max_toggle_deg / reward.scales.toggle_flat measure a "
+                f"toggle angle that robot={rb.name!r} does not have"
+            )
         # Four-bar toggle instrumentation (see fall.max_toggle_deg): per
         # leg, the ids needed to compute the interior angle between
         # sixth_link and foot_link — 180 deg = links collinear = the
@@ -861,7 +895,7 @@ class WojtekJoystick(WojtekEnv):
             # peak; commands above its top saturate there by interp-clamp.
             cut = int(np.argmax(heights)) + 1
             heights, poses = heights[:cut], poses[:cut]
-            dsecond = np.array(DSECOND_TABLE)[:cut]
+            dsecond = np.array(rb.dsecond_table)[:cut]
             if cut < 3 or not np.all(np.diff(heights) > 0):
                 raise ValueError(
                     f"real_pose_ref: unusable settled-height envelope "
@@ -870,6 +904,7 @@ class WojtekJoystick(WojtekEnv):
             self._anchor_heights = jp.array(heights)
             self._anchor_poses = jp.array(poses)
             self._anchor_dsecond = jp.array(dsecond)
+            self._anchor_dthird = jp.array(np.array(rb.dthird_table)[:cut])
         hs = self._config.height_scan
         self._scan_enabled = bool(hs.enable)
         # The exporter rebuilds this env on the flat scene, so an enabled
@@ -1061,7 +1096,8 @@ class WojtekJoystick(WojtekEnv):
         return jp.concatenate([vel, height[None]])
 
     def _settle_height_grid(self):
-        """Kinematic standing family: settle each DSECOND_TABLE rung on a
+        """Kinematic standing family: settle each rung of the robot's
+        dsecond/dthird tables on a
         QUASI-RIGID copy of the model (kp 2000 / kd 100, torque
         unclamped), so sag is ~1e-3 rad and the result is a function of
         the geometry alone — identical for every runtime gains config.
@@ -1095,10 +1131,10 @@ class WojtekJoystick(WojtekEnv):
         home_ctrl = np.asarray(self._home_ctrl)
         n_steps = int(round(2.0 / m.opt.timestep))
         heights, poses = [], []
-        for ds in DSECOND_TABLE:
-            ctrl = np.clip(
-                home_ctrl + np.tile([0.0, 1.0, 2.0], 4) * ds, lo, hi
-            )
+        ext_second = np.asarray(self._ext_second)
+        ext_third = np.asarray(self._ext_third)
+        for ds, dt in zip(self._robot.dsecond_table, self._robot.dthird_table):
+            ctrl = np.clip(home_ctrl + ext_second * ds + ext_third * dt, lo, hi)
             mujoco.mj_resetData(m, d)
             d.qpos[:] = np.asarray(self._home_qpos)
             d.ctrl[:] = ctrl
@@ -1129,12 +1165,14 @@ class WojtekJoystick(WojtekEnv):
     def _height_ctrl(self, height):
         """Ctrl anchor for a commanded standing height (measured table)."""
         if self._config.get("real_pose_ref", False):
-            dsecond = jp.interp(height, self._anchor_heights, self._anchor_dsecond)
+            heights = self._anchor_heights
+            dsecond_tbl, dthird_tbl = self._anchor_dsecond, self._anchor_dthird
         else:
-            dsecond = jp.interp(
-                height, jp.array(HEIGHT_TABLE), jp.array(DSECOND_TABLE)
-            )
-        offset = jp.tile(jp.array([0.0, 1.0, 2.0]), 4) * dsecond
+            heights = self._height_table
+            dsecond_tbl, dthird_tbl = self._dsecond_table, self._dthird_table
+        offset = self._ext_second * jp.interp(
+            height, heights, dsecond_tbl
+        ) + self._ext_third * jp.interp(height, heights, dthird_tbl)
         return jp.clip(
             self._home_ctrl + offset, self._ctrlrange[:, 0], self._ctrlrange[:, 1]
         )

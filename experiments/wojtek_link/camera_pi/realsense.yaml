@@ -1,0 +1,35 @@
+# The camera Pi's RealSense driver (run.sh: namespace /camera, node camera,
+# so the topics are the /camera/camera/... the DGX's resolver reads).
+#
+# The parameter set measured safe on the robot's own Pi for the D435
+# (ros/src/wojtek_bringup/wojtek_bringup/launch_common.py, deck_camera): no
+# point cloud, no sync, no align -- d435.yaml's full set SIGSEGVs the driver
+# on a Pi the moment the RGB sensor starts -- and the sensor's native 424x240
+# depth, so the Pi does no decimation.
+#
+# The rates are set by the camera Pi's wifi to the DGX, not the sensor: its
+# uplink showed a 65 Mbit/s link rate (5 GHz, -57 dBm), a few MB/s real.
+#   colour  640x480 JPEG q80, ~40 KB x 15 fps  ~0.6 MB/s
+#   depth   424x240 16-bit, 203 KB x 6 fps     ~1.2 MB/s
+# 6 Hz depth keeps every colour frame within 83 ms of a depth frame, under
+# pixel_goal_node's max_skew_s (0.1 s). Depth at 15 fps would be 3 MB/s.
+/**:
+  ros__parameters:
+    initial_reset: true               # a D435 that comes up publishing nothing is cured by a reset
+    enable_color: true
+    rgb_camera.color_profile: 640x480x15
+    enable_depth: true
+    depth_module.depth_profile: 424x240x6
+    clip_distance: 3.0                # beyond 3 m the D435's depth is noise (docs/perception/d435-noise.md)
+    enable_infra1: false
+    enable_infra2: false
+    pointcloud.enable: false
+    align_depth.enable: false
+    enable_rgbd: false
+    enable_sync: false
+    publish_tf: true                  # camera_link -> the optical frames; the mount is the robot's URDF
+    tf_publish_rate: 0.0              # static only
+    # The compressed transport's JPEG, encoded in C++ and only while someone
+    # subscribes. The leading dot is image_transport's naming; 95 (its
+    # default) made 120 KB frames, 80 makes 40 KB.
+    .camera.color.image_raw.compressed.jpeg_quality: 80

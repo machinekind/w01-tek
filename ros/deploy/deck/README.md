@@ -141,9 +141,10 @@ In the simulation, the gateway starts by itself:
 
 **6. Open the panel.** Tap `Wojtek Panel` on the Deck. The icon finds
 the machine serving the page by itself: the robot first, then the address
-the PC last gave it, then any host on the Deck's networks with port 8090
-open. A notification names what it picked. From the PC the same, or a
-particular page:
+the PC last gave it, then any host on the Deck's networks that serves the
+panel's page on port 8090 (the icon checks the page, not just the port). A
+notification names what it picked. From the PC the same, or a particular
+page:
 
 ```bash
 ./ros/deck.sh panel                                          # this PC's simulation
@@ -286,7 +287,7 @@ The panel prints the refusal in its log.
 | what you see | what it is | what to do |
 |---|---|---|
 | `./ros/deck.sh` finds nothing | the Deck's sshd died with its session | tap `Deck SSH on` |
-| the icon says "nothing serves the panel" | no gateway on port 8090 on any network the Deck is on | start the robot or the simulation, then tap `Panel RELOAD` |
+| the icon says "nothing serves the panel" | no host on any network the Deck is on serves the panel page on port 8090 | start the robot or the simulation, then tap `Panel RELOAD` |
 | the panel opens on the wrong machine | the robot's gateway is up and wins over the PC | `./ros/deck.sh panel` from the PC, which names the machine |
 | `ERR_CONNECTION_REFUSED` | the gateway is not running | check `~/gateway.log` on the robot |
 | `PAD` stays grey | Steam is running | tap `Steam off (pad)`, then press a pad button on the page |

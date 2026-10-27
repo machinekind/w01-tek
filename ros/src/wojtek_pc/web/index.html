@@ -388,7 +388,15 @@ $("instrstop").onclick = () => {
 };
 function onVlm(s) {
   const out = $("brainout");
-  if (!s) { out.textContent = "brain: (no status yet -- is vlm:=true up?)"; return; }
+  const navLine = `\ngoto: ${navWords.goto ?? "-"}   pixel: ${navWords.pixel ?? "-"}`;
+  // No status: none has come yet, or the brain went away and the console
+  // forgot what it last said. Either way no brain is working on a task, so
+  // no finished colour either.
+  if (!s) {
+    out.textContent = "brain: not running (nothing on wojtek/vlm/status -- is vlm:=true up?)" + navLine;
+    out.className = "";
+    return;
+  }
   const parts = [];
   if (s.instruction) parts.push(`task: ${s.instruction}`);
   parts.push(`step ${s.step ?? "-"}  ${s.action ?? ""}`);
@@ -399,7 +407,7 @@ function onVlm(s) {
   if (s.metres != null) parts.push(`${s.metres} m`);
   if (s.distance_to_target_m != null) parts.push(`target ${s.distance_to_target_m} m`);
   if (s.error) parts.push(`ERROR ${s.error}`);
-  out.textContent = parts.join("  ") + `\ngoto: ${navWords.goto ?? "-"}   pixel: ${navWords.pixel ?? "-"}`;
+  out.textContent = parts.join("  ") + navLine;
   const finished = s.action === "finished";
   out.className = finished ? (s.result === "done" ? "live" : "bad") : "";
 }

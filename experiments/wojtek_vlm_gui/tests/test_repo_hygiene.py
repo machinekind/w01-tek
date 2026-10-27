@@ -24,7 +24,10 @@ SECRET_PATTERNS = [
     re.compile(r"\b[\w.-]+@[\w-]+\.[\w.-]+\b"),            # e-mail addresses
 ]
 ALLOWED_IPS = {"127.0.0.1", "0.0.0.0"}
-TEXT_SUFFIXES = {".py", ".sh", ".toml", ".yaml", ".yml", ".json", ".md", ".repos", ".ini", ""}
+# The operator page (web/*.js, *.html, *.css) is text too, so it is scanned
+# like the Python. "" is what picks up the Dockerfile and .gitignore.
+TEXT_SUFFIXES = {".py", ".sh", ".toml", ".yaml", ".yml", ".json", ".md", ".repos", ".ini",
+                 ".js", ".html", ".css", ""}
 SKIP_DIRS = {"__pycache__", ".pytest_cache", "runs"}
 
 
@@ -49,6 +52,14 @@ def test_no_secret_shaped_values(path):
             if m.group(0) in ALLOWED_IPS:
                 continue
             raise AssertionError(f"{path.relative_to(EXPERIMENT)}: secret-shaped value {m.group(0)!r}")
+
+
+def test_web_page_is_scanned():
+    web = EXPERIMENT / "wojtek_vlm_gui" / "web"
+    page = sorted(p for p in web.rglob("*") if p.is_file())
+    assert page, "the operator page moved; update this guard"
+    scanned = set(_experiment_files())
+    assert [p for p in page if p not in scanned] == []
 
 
 def test_nothing_outside_the_experiment_references_it():

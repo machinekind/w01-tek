@@ -7,12 +7,16 @@ nodes -- no RViz, no GUI. Run visualization/debug on the PC separately:
     ros2 launch wojtek_bringup robot.launch.py [policy:=org/name@sha]
                                                [max_torque:=2.0] [dry_run:=true]
                                                [boot_pose:=home|folded] [bag:=true]
-                                               [gamepad:=true] [perception:=true]
-                                               [nav:=true]
+                                               [gamepad:=true]
+                                               [deck_camera:=true nav:=true | perception:=true]
                                                [telemetry:=true] [foxglove:=true]
                                                [deck:=true deck_cpus:=0,1]
                                                [control_cpus:=3 policy_cpus:=2]
                                                [mock_hw:=true]
+
+One camera driver at a time: deck_camera:=true (the panel's camera, which
+also carries the depth and the JPEG that nav:=true and the VLM brain read)
+or perception:=true (the full d435.yaml pipeline). The launch refuses both.
 
 mock_hw:=true swaps the MD80 drives and the I2C IMU for ros2_control's
 GenericSystem with the same joints, interfaces and sensor, every other node

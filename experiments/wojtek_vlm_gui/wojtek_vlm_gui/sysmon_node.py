@@ -1,6 +1,6 @@
 """The robot's own load, published for the page's Computer panel.
 
-    python3 -m wojtek_vlm_gui.sysmon_node        # on the RPi, ROS 2 sourced
+    cd ~/wojtek_vlm_gui_bench && python3 -m wojtek_vlm_gui.sysmon_node   # on the RPi; README, "The camera bench"
 
 One std_msgs/String a second on wojtek/sys/stat: the JSON of
 `sysmon.Snapshot` (per-core percent busy, the RT cores, load, memory,

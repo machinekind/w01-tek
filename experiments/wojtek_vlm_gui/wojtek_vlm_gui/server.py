@@ -1,6 +1,13 @@
 """The operator page's server: one ROS 2 node, one port, a JS page.
 
-    python3 -m wojtek_vlm_gui.server [--port 8501]      ->  http://localhost:8501
+    python3 -m wojtek_vlm_gui.server [--port 8501] [--host 127.0.0.1]   ->  http://localhost:8501
+
+By default it listens on this computer only. On a Mac, `run.sh gui` passes
+--host 0.0.0.0, because there the container sits on Docker's bridge network;
+the ports line in docker/compose.mac.yaml then decides who reaches it (the
+Mac itself only). The websocket also refuses a handshake whose Origin is not
+the page's own address, so another web page open in the operator's browser
+cannot drive the robot.
 
 Runs on the PC, never on the robot: the RPi only publishes (the camera, its
 depth, sysmon_node's load). GET / serves web/index.html and its script; the
@@ -11,10 +18,11 @@ so a slow browser drops frames instead of lagging behind the robot.
 
 What the page may do on the robot is what the operator page always did:
 the instruction and the cancel (BrainClient), the four operator services
-(arm_switch). Disarm and Lie down also STOP the brain. STOP itself freezes
-the robot (BrainClient.freeze: cancel, then /cmd_vel held at zero) and is
-handled the moment it arrives: every other command runs as its own task, so
-a STOP never waits behind a slow service call or a task send.
+(arm_switch). Disarm and Lie down also STOP the brain, first, before their
+service call. STOP itself freezes the robot (BrainClient.freeze: cancel,
+then /cmd_vel held at zero) and is handled the moment it arrives: every
+other command runs as its own task, so a STOP never waits behind a slow
+service call or a task send.
 """
 
 from __future__ import annotations
@@ -60,6 +68,26 @@ def _jpeg_of(rgb) -> bytes:
     return buf.getvalue()
 
 
+async def run_command(client: BrainClient, cmd) -> dict:
+    """Blocking ROS calls (a subscriber wait, a service round trip) go to a
+    worker thread so the event loop keeps streaming frames. STOP never gets
+    here: ws_endpoint answers it inline (see there). Disarm and Lie down
+    stop the brain before their call, not after it: a page that closes
+    during the call cancels this task at the await, while the robot's call
+    still goes through in its thread."""
+    if cmd["t"] == "task":
+        ok, text = await asyncio.to_thread(client.send, cmd["text"])
+    else:
+        call, stops_brain = SERVICE_CALLS[cmd["name"]]
+        if stops_brain:
+            client.stop()   # first: a page closed mid-call cancels this task at the await below
+        ok, text = await asyncio.to_thread(call, client.node)
+        if stops_brain:
+            text = f"{text} (brain STOP sent)"
+        text = f"{cmd['name']}: {text}"
+    return wire.reply_message(ok, text)
+
+
 def make_app(client: BrainClient) -> Starlette:
     async def index(_request):
         return FileResponse(WEB_DIR / "index.html")
@@ -72,21 +100,6 @@ def make_app(client: BrainClient) -> Starlette:
         return JSONResponse({"seq": client.seq(),
                              "sys_age_s": None if sys_age == float("inf") else round(sys_age, 2),
                              "camera_age_s": None if cam_age == float("inf") else round(cam_age, 2)})
-
-    async def run_command(cmd) -> dict:
-        """Blocking ROS calls (a subscriber wait, a service round trip) go
-        to a worker thread so the event loop keeps streaming frames. STOP
-        never gets here: ws_endpoint answers it inline (see there)."""
-        if cmd["t"] == "task":
-            ok, text = await asyncio.to_thread(client.send, cmd["text"])
-        else:
-            call, stops_brain = SERVICE_CALLS[cmd["name"]]
-            ok, text = await asyncio.to_thread(call, client.node)
-            if stops_brain:
-                client.stop()
-                text = f"{text} (brain STOP sent)"
-            text = f"{cmd['name']}: {text}"
-        return wire.reply_message(ok, text)
 
     async def sender(ws: WebSocket) -> None:
         sent: Dict[str, int] = {}
@@ -104,11 +117,16 @@ def make_app(client: BrainClient) -> Starlette:
                 if depth is not None:
                     await ws.send_bytes(wire.pack_depth(*depth))
                 sent["depth"] = seq["depth"]
+            # The picture goes out before the log, so it usually reaches the
+            # page before its ask line. When the line wins anyway (it landed
+            # between the two reads), the page still puts the picture under
+            # it when it comes: they meet by number.
             if seq["annotated"] != sent.get("annotated"):
-                rgb = client.latest_annotated()
-                if rgb is not None:
+                pinned = client.latest_annotated()
+                if pinned is not None:
+                    picture, rgb = pinned
                     jpeg = await asyncio.to_thread(_jpeg_of, rgb)
-                    await ws.send_bytes(wire.pack_jpeg(wire.TAG_ANNOTATED, jpeg))
+                    await ws.send_bytes(wire.pack_annotated(picture, jpeg))
                 sent["annotated"] = seq["annotated"]
             if seq["log"] != sent.get("log") or seq["nav"] != sent.get("nav"):
                 snap = client.latest()
@@ -128,13 +146,21 @@ def make_app(client: BrainClient) -> Starlette:
             await asyncio.sleep(SEND_TICK_S)
 
     async def answer(ws: WebSocket, cmd) -> None:
-        reply = await run_command(cmd)
+        reply = await run_command(client, cmd)
         try:
             await ws.send_text(json.dumps(reply))
         except (WebSocketDisconnect, RuntimeError):
             pass   # the page went away while the call ran; the call itself happened
 
     async def ws_endpoint(ws: WebSocket) -> None:
+        origin, host = ws.headers.get("origin"), ws.headers.get("host")
+        if not wire.origin_allowed(origin, host):
+            # Another web page in the operator's browser, not ours: refuse
+            # the handshake. Starlette turns a close before accept into an
+            # HTTP 403.
+            client.node.get_logger().warning(f"websocket refused: origin {origin!r} for host {host!r}")
+            await ws.close(code=1008)
+            return
         await ws.accept()
         send_task = asyncio.create_task(sender(ws))
         running = set()
@@ -170,7 +196,9 @@ def make_app(client: BrainClient) -> Starlette:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="The Wojtek VLM operator page (JS) and its ROS 2 node.")
-    ap.add_argument("--host", default="0.0.0.0")
+    ap.add_argument("--host", default="127.0.0.1",
+                    help="address to listen on; 127.0.0.1 keeps the page to this computer, "
+                         "0.0.0.0 opens it to the network")
     ap.add_argument("--port", type=int, default=8501)
     args = ap.parse_args()
     client = start_client()

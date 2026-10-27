@@ -48,6 +48,18 @@ def test_normalised_point_bounds():
     assert normalised_point({"point_2d": [1001, 0]}) is None
     assert normalised_point({"point_2d": [1]}) is None
     assert normalised_point({}) is None
+    # Digit strings are still a usable point.
+    assert normalised_point({"point_2d": ["500", "250"]}) == (0.5, 0.25)
+
+
+@pytest.mark.parametrize("bad", [
+    [500], [], [1, 2, 3], "500,250", 500, {"x": 500, "y": 250}, [None, 5], [[500], [250]],
+    float("nan"), [float("nan"), 0],
+])
+def test_normalised_point_rejects_malformed_shapes(bad):
+    # The node draws and acts on this value only; the raw point_2d never
+    # reaches arithmetic.
+    assert normalised_point({"type": "goal", "point_2d": bad}) is None
 
 
 def test_goal_is_verified_before_it_moves():
@@ -100,17 +112,67 @@ def test_far_target_is_approached_along_the_pixels_bearing():
 
 def test_blocked_approach_looks_again_and_detours_alternating_sides():
     e = Explorer(detour_deg=40)
-    detours = []
+    detours, after = [], []
     for _ in range(3):
         _pointed(e)
         detours.append(e.on_goal_result("no_depth")[3])
-        assert e.on_move_result("blocked", moved_m=0.6) == ("look",)
+        after.append(e.on_move_result("blocked", moved_m=0.6))
     assert detours == [0.0, 40.0, -40.0]
+    # The straight walk looks again; a detoured one turns back onto the
+    # bearing first.
+    assert after == [("look",), ("search", -40.0), ("search", 40.0)]
+    assert e.turn_done() == ("look",)
     _pointed(e)
     e.on_goal_result("no_depth")
     e.on_move_result("reached", moved_m=1.0)
     _pointed(e)
     assert e.on_goal_result("no_depth")[3] == 0.0  # a clear walk restores the bearing
+
+
+def _detoured(e):
+    """A blocked straight approach, then the next approach goes 40 deg off
+    the bearing."""
+    _pointed(e)
+    e.on_goal_result("no_depth")
+    assert e.on_move_result("blocked", moved_m=0.6) == ("look",)
+    _pointed(e)
+    assert e.on_goal_result("no_depth")[3] == 40.0
+
+
+def test_reached_detour_turns_back_onto_the_bearing_before_looking():
+    """After the detour the body points 40 deg off the target, out of the
+    picture: turn back first, or the look says not_visible."""
+    e = Explorer(detour_deg=40)
+    _detoured(e)
+    assert e.on_move_result("reached", moved_m=1.0) == ("search", -40.0)
+    assert e.turn_done() == ("look",)
+    _pointed(e)
+    assert e.on_goal_result("no_depth")[3] == 0.0
+
+
+def test_turning_back_after_a_detour_does_not_count_towards_the_circle():
+    e = Explorer(turn_deg=90, detour_deg=40, max_steps=100)
+    _detoured(e)
+    e.on_move_result("reached", moved_m=1.0)
+    assert e.turned_deg == 0.0
+    for _ in range(4):
+        assert e.on_answer({"type": "not_visible"}) == ("search", 90.0)
+    assert e.on_answer({"type": "not_visible"}) == ("explore", 1.0)
+
+
+def test_explore_never_turns_back():
+    e = Explorer(turn_deg=90, detour_deg=40, max_steps=100)
+    _detoured(e)
+    e.on_move_result("blocked", moved_m=0.3)  # the detour flips to -40 and waits
+    for _ in range(5):
+        e.on_answer({"type": "not_visible"})  # four turns, then the explore
+    assert e.on_move_result("reached", moved_m=1.0) == ("look",)
+
+
+def test_stalled_detour_still_gives_up():
+    e = Explorer(detour_deg=40, min_progress_m=0.25, max_stalls=1, max_steps=100)
+    _detoured(e)
+    assert e.on_move_result("reached", moved_m=0.02)[0] == "gave_up"
 
 
 def test_blocked_explore_still_turns():
@@ -243,6 +305,59 @@ def test_reached_goal_clears_the_block_count():
     e.on_goal_result("reached", distance_m=1.5)
     _pointed(e)
     assert e.on_goal_result("blocked", distance_m=1.3) == ("look",)
+
+
+def _turn_between(e):
+    assert e.on_answer({"type": "not_visible"}) == ("search", 45.0)
+    e.turn_done()
+
+
+def _model_turn_between(e):
+    assert e.on_answer({"type": "turn", "deg": -30}) == ("search", -30.0)
+    e.turn_done()
+
+
+def _approach_between(e):
+    _pointed(e)
+    assert e.on_goal_result("no_depth")[0] == "approach"
+    assert e.on_move_result("reached", moved_m=1.0) == ("look",)
+
+
+def _timeout_between(e):
+    _pointed(e)
+    assert e.on_goal_result("timeout") == ("search", 45.0)
+    e.turn_done()
+
+
+@pytest.mark.parametrize("between", [_turn_between, _model_turn_between, _approach_between, _timeout_between])
+def test_only_a_block_straight_after_a_look_counts_twice(between):
+    """A turn, a walk or another result between two blocks: the robot has
+    moved or the picture changed, so the second block gets its own fresh
+    look too."""
+    e = Explorer()
+    _pointed(e)
+    assert e.on_goal_result("blocked", distance_m=1.8) == ("look",)
+    between(e)
+    _pointed(e)
+    assert e.on_goal_result("blocked", distance_m=1.8) == ("look",)  # a fresh look, not a turn
+
+
+def test_time_budget_gives_up_with_a_reason():
+    e = Explorer(max_s=10.0)
+    assert e.out_of_time(("look",), 9.9) == ("look",)
+    kind, why = e.out_of_time(("search", 45.0), 10.0)
+    assert kind == "gave_up" and "time budget" in why and "10 s" in why
+
+
+def test_a_step_that_ends_the_task_late_keeps_its_result():
+    e = Explorer(max_s=10.0)
+    assert e.out_of_time(("done",), 50.0) == ("done",)
+    late = ("gave_up", "no progress: 3 moves in a row covered less than 0.25 m each")
+    assert e.out_of_time(late, 50.0) == late
+
+
+def test_time_budget_default_matches_the_node():
+    assert Explorer().max_s == 600.0
 
 
 def test_gives_up_after_max_steps():

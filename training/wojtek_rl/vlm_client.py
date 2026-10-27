@@ -118,6 +118,9 @@ class OpenAIVlmClient:
     life of this instance -- share one OpenAIVlmClient across concurrent
     eval episodes rather than building a fresh one per episode, so requests
     reuse the connection pool. Call close() when done with it.
+
+    By default a failed request goes straight back to the navigator; a long
+    batch run passes retries= to wait out a server restart.
     """
 
     def __init__(
@@ -130,7 +133,11 @@ class OpenAIVlmClient:
         max_tokens: int = 300,
         temperature: float = 0.0,
         timeout_s: float = VLM_TIMEOUT_S,
+        retries: int = 0,  # extra tries after the first failed request
+        retry_backoff_s: float = 12.0,  # before extra try k, wait k times this
     ):
+        if retries < 0:
+            raise ValueError(f"retries must be 0 or more, got {retries}")
         self.base_url = _normalize_base_url(base_url)
         self.model = model
         self.api_key = api_key
@@ -139,6 +146,8 @@ class OpenAIVlmClient:
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.timeout_s = timeout_s
+        self.retries = retries
+        self.retry_backoff_s = retry_backoff_s
         self._format = _response_format(actions)
         self._client = None  # httpx.AsyncClient, created on first use
 
@@ -174,24 +183,29 @@ class OpenAIVlmClient:
         client = self._ensure_client()
         headers = {"Authorization": f"Bearer {self.api_key}"}
         t0 = time.monotonic()
-        # Connection errors and 5xx ride out a server restart (Ollama reloads
-        # the weights); anything else fails fast to the navigator.
+        # By default a failed request goes straight back to the navigator,
+        # which already lets a goal survive a couple of failed steps. A long
+        # batch run passes retries= so connection errors and 5xx answers wait
+        # out an Ollama restart instead of failing episodes. Any other answer,
+        # like a 404 for an unknown model, is never retried.
         resp = None
-        for attempt in range(4):
-            if attempt:
-                await asyncio.sleep(12.0 * attempt)
+        last_err = None
+        for attempt in range(self.retries + 1):
+            if attempt > 0:
+                await asyncio.sleep(self.retry_backoff_s * attempt)
             try:
                 resp = await client.post(
                     f"{self.base_url}/chat/completions", json=payload, headers=headers
                 )
             except httpx.TransportError as e:
+                last_err = e
                 logger.warning(f"vlm connect attempt {attempt + 1}: {_safe_err(e)}")
                 continue
             if resp.status_code < 500:
                 break
             logger.warning(f"vlm 5xx attempt {attempt + 1}: {_safe_err(resp.text[:120])}")
         if resp is None:
-            raise RuntimeError("VLM endpoint unreachable after retries")
+            raise RuntimeError(f"VLM server unreachable at {self.base_url}: {_safe_err(last_err)}")
         latency_ms = (time.monotonic() - t0) * 1000
         if resp.status_code != 200:
             raise RuntimeError(f"VLM endpoint {resp.status_code}: {_safe_err(resp.text[:200])}")

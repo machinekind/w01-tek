@@ -33,7 +33,8 @@ The page is also the VLM's seat. Two panels:
     (wojtek_nav's vlm_brain_node), the brain's status JSON
     (wojtek/vlm/status), goto's and the pixel resolver's status words
     (wojtek/nav/status, wojtek/nav/pixel_status) and the picture the model
-    last answered on (wojtek/vlm/annotated) come back. STOP sends an empty
+    last answered on (wojtek/vlm/annotated) come back. The brain's status
+    is forgotten when the brain goes away. STOP sends an empty
     instruction (the brain halts) AND wojtek/nav/cancel directly, so goto
     drops its setpoint even when no brain is running.
   * The text-command panel (wojtek#92): forward/left/right/stop on
@@ -71,6 +72,7 @@ from sensor_msgs.msg import CompressedImage, Image, Imu, JointState
 from std_msgs.msg import Empty, String
 from std_srvs.srv import SetBool, Trigger
 
+from wojtek_policy.imu_mount import IMU_MOUNT_RPY, attitude_in_base
 from wojtek_policy.policy_source import load_meta
 from wojtek_pc import camera_spec
 
@@ -136,6 +138,12 @@ class ConsoleNode(Node):
         # Same reference policy_node gets (HF repo id or local directory);
         # empty = the conservative default limits below.
         self.declare_parameter("policy", "")
+        # The IMU is bolted on turned a quarter turn; this is how, so its
+        # readings can be turned into the robot's roll, pitch and heading.
+        # The default is the robot's own mount, so a console started by
+        # hand, without a launch file, shows the right numbers too.
+        self.declare_parameter("imu_mount_rpy", list(IMU_MOUNT_RPY))
+        self._imu_mount = [float(v) for v in self.get_parameter("imu_mount_rpy").value]
         self.cmd_low = list(DEFAULT_CMD_LOW)
         self.cmd_high = list(DEFAULT_CMD_HIGH)
         self.height_range = list(DEFAULT_HEIGHT_RANGE)
@@ -189,8 +197,12 @@ class ConsoleNode(Node):
             durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.vlm_status = None
         self.nav_status = {"goto": None, "pixel": None}
-        self.create_subscription(
+        self._vlm_sub = self.create_subscription(
             String, "wojtek/vlm/status", self._on_vlm_status, latched_reliable)
+        # A brain that dies takes its latched status with it, but our copy
+        # stays. This check forgets it, so the page doesn't show a dead
+        # brain as still busy.
+        self.create_timer(1.0, self._check_brain)
         self.create_subscription(
             String, "wojtek/nav/status",
             lambda m: self._on_nav_status("goto", m), latched_reliable)
@@ -247,12 +259,10 @@ class ConsoleNode(Node):
             self.emit({"t": "config", **self.config()})
 
     def _on_imu(self, msg):
-        import math
+        # The topic carries the sensor's own frame; the page shows the robot's.
         q, w = msg.orientation, msg.angular_velocity
-        roll = math.atan2(2 * (q.w * q.x + q.y * q.z), 1 - 2 * (q.x * q.x + q.y * q.y))
-        pitch = math.asin(max(-1.0, min(1.0, 2 * (q.w * q.y - q.z * q.x))))
-        yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
-        self.imu_rpy_gyro = ((roll, pitch, yaw), (w.x, w.y, w.z))
+        self.imu_rpy_gyro = attitude_in_base(
+            (q.x, q.y, q.z, q.w), (w.x, w.y, w.z), self._imu_mount)
 
     def _want_frame(self):
         """The has_clients gate keeps the resident console free when no page
@@ -322,6 +332,22 @@ class ConsoleNode(Node):
         except ValueError:
             self.vlm_status = {"raw": msg.data[:200]}
         self.emit({"t": "vlm", "status": self.vlm_status})
+
+    def _check_brain(self):
+        """Forget the brain's last status once nothing publishes it.
+
+        Runs on the ROS thread, like _on_vlm_status, so the two never race.
+        A brain stopped with Ctrl-C drops off within a second; one that
+        crashed or lost the wifi only once DDS gives up on it, some 10-20 s
+        later.
+        """
+        if self.vlm_status is None:
+            return
+        # The subscription's own name, not the literal string: it is the
+        # name after any remapping, and count_publishers does not remap.
+        if self.count_publishers(self._vlm_sub.topic_name) == 0:
+            self.vlm_status = None
+            self.emit({"t": "vlm", "status": None})
 
     def _on_nav_status(self, key, msg):
         self.nav_status[key] = msg.data

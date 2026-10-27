@@ -1,10 +1,12 @@
 # Experiment: the operator GUI for Wojtek's VLM brain
 
-> **Status: EXPERIMENTAL. Not production; nothing here is deployed to the robot.**
-> Nothing here is deployed by `ros/deploy.sh`, and no package here is a
-> dependency of `wojtek_bringup`. It runs on the PC next to the simulation
-> or next to the robot's ROS 2 graph; launching, arming and disarming the
-> robot remain human actions. Interfaces are unstable by definition.
+> **Status: EXPERIMENTAL. Not production.** Nothing here is deployed by
+> `ros/deploy.sh`, and no package here is a dependency of `wojtek_bringup`.
+> All of it runs on the PC, next to the simulation or next to the robot's
+> ROS 2 graph, with one exception: for the camera bench, `sysmon_node`, a
+> small read-only reader of the RPi's load, is copied to the RPi and started
+> there by hand (see "The camera bench"). Launching, arming and disarming
+> the robot remain human actions. Interfaces are unstable by definition.
 
 A JavaScript page on http://localhost:8501 (served by `wojtek_vlm_gui.server`) where the operator types a task
 ("go to the purple pillar"), watches Wojtek's VLM brain work through it
@@ -54,6 +56,9 @@ services.
   `VLM_MODEL` in the repo-root `.env`, read by `ros/sim.sh` into the
   `wojtek_robot` container and by `brain.launch.py`. The only inference
   route is Ollama on the DGX, reached through an ssh tunnel from the PC.
+  The tunnel listens on the PC's own 127.0.0.1, so the address in
+  `VLM_URL` depends on the OS: 127.0.0.1 on Linux, host.docker.internal on
+  macOS (step 1 below).
 - Arming stays a human button. Disarm and Lie down also STOP the brain,
   because disarming stops the motors, not a task that would otherwise
   keep publishing goals into a disarmed robot.
@@ -67,14 +72,23 @@ services.
 # 1. every session: the tunnel to the DGX's Ollama (alias in your ssh config, never in the tree)
 ssh -f -N -L 11435:127.0.0.1:11434 <dgx alias>
 curl -s http://127.0.0.1:11435/api/tags | head -c 200      # the model tag must be listed
-#    root .env: VLM_URL=http://host.docker.internal:11435  VLM_MODEL=qwen3-vl:30b-a3b-instruct
+#    root .env: VLM_MODEL=qwen3-vl:30b-a3b-instruct, and VLM_URL as the sim's container sees the tunnel:
+#      Linux: VLM_URL=http://127.0.0.1:11435             (the container shares the PC's network)
+#      macOS: VLM_URL=http://host.docker.internal:11435  (Docker runs in a VM; that name is the Mac)
 
 # 2. the sim with Pawel's nav stack and the brain
 ./ros/sim.sh model_xml:=scene_nav.xml leg_odom:=true nav:=true vlm:=true
 
 # 3. the page
-./experiments/wojtek_vlm_gui/run.sh gui        # http://localhost:8501
+./experiments/wojtek_vlm_gui/run.sh gui        # http://localhost:8501 (this computer only)
 ```
+
+The page's server listens on this computer only, and it refuses a
+websocket whose Origin is not the page's own address, so another web page
+open in the operator's browser cannot drive the robot. To use the page
+from another device, pass `--host 0.0.0.0` (`run.sh gui --host 0.0.0.0`,
+Linux) or change the ports line in `docker/compose.mac.yaml` (Mac). Then
+anything on that network can arm the robot.
 
 In the page: `Stand up`, then `Arm`, then type the task. Use the
 `-instruct` model tags only: Ollama ignores `think=false` on the thinking
@@ -107,6 +121,29 @@ it publishes a second odom -> base_link.
 ROS_DOMAIN_ID=43 ./experiments/wojtek_vlm_gui/run.sh walker
 ROS_DOMAIN_ID=43 ./experiments/wojtek_vlm_gui/run.sh gui     # http://localhost:8501
 ```
+
+`sysmon_node` is the one piece that has to run on the RPi, because the
+Computer panel's numbers live in the RPi's `/proc`. `ros/deploy.sh` never
+copies it, so it goes over by hand, into its own folder outside
+`~/wojtek_ws`: deploy's `--delete` copy of the workspace must never pick it
+up, and it must not become part of the robot's workspace.
+
+```bash
+# on the PC, from the repository root; <robot> is the RPi's ssh address (RPI_HOST, the one ros/deploy.sh uses)
+rsync -a --delete --exclude __pycache__ --exclude web \
+  experiments/wojtek_vlm_gui/wojtek_vlm_gui <robot>:wojtek_vlm_gui_bench/
+# then in an ssh shell on the RPi (its ~/.bashrc sources ROS 2 on the robot's own domain)
+cd ~/wojtek_vlm_gui_bench && taskset -c 1 python3 -m wojtek_vlm_gui.sysmon_node
+```
+
+It only reads `/proc` and `/sys` and publishes one message a second.
+Ctrl-C stops it, and `rm -rf ~/wojtek_vlm_gui_bench` removes it. Start it
+from an ssh shell, not as a one-shot `ssh <robot> 'python3 ...'`: a shell
+that is not interactive skips the ROS block in `~/.bashrc`. `python3 -m`
+finds the package in the current folder, and it needs only the standard
+library, rclpy and std_msgs, which the RPi's ROS install already has.
+`taskset -c 1` puts it on the core it shares with the bridge in the
+measurements below.
 
 The page is laid out as a chat: the operator's tasks on the right, the
 brain's steps on the left in plain words ("I see the chair, heading
@@ -158,7 +195,9 @@ also ends the task.
 
 A task typed while nobody subscribes to the instruction topic (no session
 with `vlm:=true`) is refused in the page with a message, never dropped
-silently. A stop word (`stop`, empty, the brain's own `stój`) typed as a
+silently. A task still waiting for the brain when STOP is pressed is
+dropped with a message too, so a stop is never followed by the task it
+stopped. A stop word (`stop`, empty, the brain's own `stój`) typed as a
 task is a STOP, with the same freeze.
 
 ## Layout
@@ -172,12 +211,12 @@ task is a STOP, with the same freeze.
 | `wojtek_vlm_gui/brain_client.py` | the ROS 2 node: instruction and cancel out, status, picture and camera JPEG in |
 | `wojtek_vlm_gui/sysmon.py` | the computer panel's readers of /proc and /sys (pure) |
 | `wojtek_vlm_gui/arm_switch.py` | the operator's service calls |
-| `wojtek_vlm_gui/server.py` | the page's server: one ROS node, the page on `/`, the websocket on `/ws` |
+| `wojtek_vlm_gui/server.py` | the page's server: one ROS node, the page on `/`, the websocket on `/ws`; listens on this computer only and refuses a websocket from any other page's Origin |
 | `wojtek_vlm_gui/web/` | the page itself: `index.html`, `app.js`, `style.css` (no build step) |
-| `wojtek_vlm_gui/wire.py` | the websocket protocol: JSON text frames, tagged binary frames for the camera, the annotated picture and the depth (pure) |
+| `wojtek_vlm_gui/wire.py` | the websocket protocol: JSON text frames, tagged binary frames for the camera, the annotated picture (numbered for its `ask` line) and the depth (pure) |
 | `wojtek_vlm_gui/walker.py`, `walker_node.py` | the bench's legs: /cmd_vel integrated into odom->base_link and the page's Walk guide |
-| `wojtek_vlm_gui/sysmon_node.py` | the robot's load on `/wojtek/sys/stat`, the only piece that runs on the robot |
-| `tests/` | model-free: the log, the client against a mock node, the switch, the machine parsers, the hygiene guard |
+| `wojtek_vlm_gui/sysmon_node.py` | the robot's load on `/wojtek/sys/stat`, the only piece that runs on the robot, copied there and started by hand (see The camera bench) |
+| `tests/` | model-free: the log, the client against a mock node, the switch, the server's command path, the machine parsers, what `run.sh` hands the container, the hygiene guard |
 
 ```bash
 ./experiments/wojtek_vlm_gui/run.sh test                      # in the container
@@ -198,6 +237,7 @@ EXP_PY=<python with pytest> ./experiments/wojtek_vlm_gui/run.sh test   # on the 
 
 The page talks to the robot's graph over the WiFi AP exactly as it talks
 to the sim, with the brain running on the PC (`ros2 run wojtek_bringup
-robot --web-console --vlm`, the RPi stack with `perception:=true
-nav:=true`). Launching, arming and disarming stay human actions outside
-this experiment. Not run yet.
+robot --web-console --vlm`) and the RPi stack with
+`deck_camera:=true nav:=true` (the service already has deck_camera).
+Launching, arming and disarming stay human actions outside this
+experiment. Not run yet.

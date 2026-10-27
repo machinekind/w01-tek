@@ -55,7 +55,11 @@ class BrainClient:
         self.log = TaskLog()
         self.goto_status: Optional[str] = None
         self.pixel_status: Optional[str] = None
-        self._annotated: Optional[np.ndarray] = None
+        self._annotated: Optional[np.ndarray] = None   # the brain's newest picture
+        # True from a picture's arrival until an ask line takes it.
+        self._annotated_new = False
+        # The picture of the newest ask line that got one, with its number.
+        self._pinned: Optional[Tuple[int, np.ndarray]] = None
         self._jpeg: Optional[bytes] = None
         self._jpeg_at: float = 0.0
         self._sys: Optional[Dict[str, Any]] = None
@@ -70,10 +74,16 @@ class BrainClient:
         self._pub_zero = node.create_publisher(Twist, limits.CMD_VEL_TOPIC, 10)
         self._freeze_until = 0.0
         self._holding = False
+        # How many STOPs have gone out so far. A task that was still waiting
+        # for the brain when a STOP went out must not be sent after it.
+        self._stops = 0
+        # Before the brain's status: when a picture and its ask line are both
+        # waiting, rclpy runs them in the order they were subscribed, and the
+        # picture has to come first.
+        node.create_subscription(Image, limits.ANNOTATED_TOPIC, self._on_annotated, 1)
         node.create_subscription(String, limits.VLM_STATUS_TOPIC, self._on_status, LATCHED)
         node.create_subscription(String, limits.GOTO_STATUS_TOPIC, self._on_goto, LATCHED)
         node.create_subscription(String, limits.PIXEL_STATUS_TOPIC, self._on_pixel, LATCHED)
-        node.create_subscription(Image, limits.ANNOTATED_TOPIC, self._on_annotated, 1)
         # The camera's JPEG: best-effort, depth 1, the sensor profile the
         # driver and the brain use; a late frame is dropped, never queued.
         node.create_subscription(CompressedImage, limits.CAMERA_TOPIC, self._on_camera,
@@ -87,22 +97,34 @@ class BrainClient:
 
     def send(self, text: str) -> Tuple[bool, str]:
         """Publish a task. A stop word is a stop. Refuses, with a message,
-        when no brain subscribes within the wait: never a silent no-op."""
+        when no brain subscribes within the wait: never a silent no-op.
+        A STOP that lands while the task waits for the brain drops the task
+        with an error reply, instead of sending it after the stop."""
         text = text.strip()
         if is_stop_word(text):
             return self.freeze()
+        with self._lock:
+            stops = self._stops
+        # The wait sleeps, so it runs outside the lock.
         if not self._brain_listening():
             return False, (f"no brain is listening on {limits.INSTRUCTION_TOPIC} "
                            "(is the session up with vlm:=true?)")
-        self._pub_instruction.publish(String(data=text))
+        # Check and publish under one lock, so a STOP cannot slip in between.
+        with self._lock:
+            if self._stops != stops:
+                return False, f"not sent, STOP came first: {text}"
+            self._pub_instruction.publish(String(data=text))
         return True, f"sent: {text}"
 
     def stop(self) -> Tuple[bool, str]:
         """The web console's order: the cancel first (goto and the resolver
         drop their goal even with no brain running), then the empty
-        instruction (the brain halts and reports `cancelled`)."""
-        self._pub_cancel.publish(Empty())
-        self._pub_instruction.publish(String(data=""))
+        instruction (the brain halts and reports `cancelled`). Every STOP
+        goes through here, so it also drops a task still waiting in send()."""
+        with self._lock:
+            self._stops += 1
+            self._pub_cancel.publish(Empty())
+            self._pub_instruction.publish(String(data=""))
         return True, "STOP sent"
 
     def freeze(self, hold_s: float = limits.FREEZE_HOLD_S,
@@ -160,10 +182,16 @@ class BrainClient:
         if status is None:
             return
         with self._lock:
-            # The brain publishes the annotated picture right before the
-            # `ask` status of the same step; pin it to that line.
-            if status.get("action") == "ask" and self._annotated is not None:
-                status["_image"] = self._annotated
+            # The brain sends the picture just before the ask line of the
+            # same step. Number it and write the number on the line, so the
+            # page puts it under the right line even when it joins mid-task.
+            # A picture goes to one ask only; an ask with no new picture
+            # gets none.
+            if status.get("action") == "ask" and self._annotated_new:
+                self._seq["annotated"] += 1
+                status["_picture"] = self._seq["annotated"]
+                self._pinned = (self._seq["annotated"], self._annotated)
+                self._annotated_new = False
             self.log.push(status)
             self._seq["log"] += 1
 
@@ -183,7 +211,7 @@ class BrainClient:
         img = np.frombuffer(bytes(msg.data), dtype=np.uint8).reshape(msg.height, msg.width, 3)
         with self._lock:
             self._annotated = img
-            self._seq["annotated"] += 1
+            self._annotated_new = True
 
     def _on_camera(self, msg) -> None:
         with self._lock:
@@ -232,9 +260,11 @@ class BrainClient:
         with self._lock:
             return self._depth
 
-    def latest_annotated(self) -> Optional[np.ndarray]:
+    def latest_annotated(self) -> Optional[Tuple[int, np.ndarray]]:
+        """The newest picture that went to an ask line, with the number that
+        line carries; None before the first."""
         with self._lock:
-            return self._annotated
+            return self._pinned
 
     def latest_sysmon(self) -> Tuple[Optional[Dict[str, Any]], float]:
         """The robot's last load reading as published and its age in

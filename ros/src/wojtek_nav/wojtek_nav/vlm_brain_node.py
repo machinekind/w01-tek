@@ -43,6 +43,7 @@ output. `url` is the server's base URL, with or without /v1. The policy itself i
 """
 
 import base64
+import http.client
 import io
 import json
 import math
@@ -68,6 +69,7 @@ from wojtek_nav.vlm_brain import (
     VERIFY_SCHEMA,
     Explorer,
     chat_url,
+    normalised_point,
     parse_answer,
     pixel_ray,
     ray_heading,
@@ -282,11 +284,13 @@ class VlmBrainNode(Node):
     def annotate(self, jpeg, frame, point=None, text=""):
         """The picture the model answered on, with its point drawn, to
         wojtek/vlm/annotated. Decoded here, once per look; the verify call's
-        picture is never decoded."""
+        picture is never decoded. `point` is the model's point as (u, v) in
+        0..1, the one the explorer acts on (normalised_point); None when the
+        model gave no usable point, and then only the caption is drawn."""
         im = PILImage.open(io.BytesIO(jpeg)).convert("RGB")
         dr = ImageDraw.Draw(im)
         if point is not None:
-            x, y = point[0] / 1000.0 * im.width, point[1] / 1000.0 * im.height
+            x, y = point[0] * im.width, point[1] * im.height
             r = 14
             dr.ellipse([x - r, y - r, x + r, y + r], outline=(255, 40, 0), width=4)
             dr.line([x - 2 * r, y, x + 2 * r, y], fill=(255, 40, 0), width=2)
@@ -386,18 +390,24 @@ class VlmBrainNode(Node):
         self.instruction = instruction
         ex = Explorer(self._g("turn_deg"), self._g("done_within_m"), self._g("approach_m"),
                       max_steps=int(self._g("max_steps")), max_blind=int(self._g("max_blind")),
-                      min_progress_m=self._g("min_progress_m"), max_stalls=int(self._g("max_stalls")))
+                      min_progress_m=self._g("min_progress_m"), max_stalls=int(self._g("max_stalls")),
+                      max_s=self._g("max_s"))
         self.step_no = 0
         t_start = time.time()
         action = ("look",)
         frame = None
         self._running = True
         try:
-            while time.time() - t_start < self._g("max_s"):
+            while True:
                 # Deliver what arrived during a model call (ask() does not
                 # spin), then honour it before the next step moves anything.
+                # A stop that came during the last step beats the budget.
                 self.spin(0.05)
                 self.check_interrupt()
+                # Out of time ends the task as gave_up, but a step that
+                # already finished it keeps its own result. This is also
+                # what ends the loop: do not drop it.
+                action = ex.out_of_time(action, time.time() - t_start)
                 kind = action[0]
                 if kind in Explorer.TERMINAL:
                     if kind == "gave_up":
@@ -412,7 +422,10 @@ class VlmBrainNode(Node):
                     self.step_no += 1
                     frame = self.fresh_frame()
                     answer, dt, jpeg = self.ask(frame, task_prompt(instruction), SCHEMA)
-                    self.annotate(jpeg, frame, answer.get("point_2d") if answer.get("type") == "goal" else None,
+                    # The checked point, never the raw point_2d: a malformed
+                    # one draws no marker instead of killing the node.
+                    point = normalised_point(answer) if answer.get("type") == "goal" else None
+                    self.annotate(jpeg, frame, point,
                                   f"#{self.step_no} {answer.get('type')} {answer.get('label', '')} ({dt:.1f}s)")
                     self.status(action="ask", answer=answer, latency_s=round(dt, 2))
                     action = ex.on_answer(answer)
@@ -428,7 +441,12 @@ class VlmBrainNode(Node):
                 elif kind == "approach":
                     _, metres, point, detour = action
                     heading = self.pixel_heading(frame, point)
-                    if heading is not None:
+                    if heading is None:
+                        # No intrinsics or TF for the pixel: the walk goes
+                        # straight ahead with no detour, so there is none
+                        # to turn back from after it.
+                        detour = ex.detour = 0.0
+                    else:
                         heading += math.radians(detour)
                     res, moved = self.step_forward(metres, heading)
                     self.status(action=kind, metres=metres, result=res,
@@ -449,16 +467,16 @@ class VlmBrainNode(Node):
             result = "cancelled" if self.new_instruction == "" else "replaced"
             self.status(action="finished", result=result)
             return result
-        except (RuntimeError, OSError, KeyError, ValueError) as exc:
-            # No frame, the model unreachable or answering garbage: stop
-            # what moves and say why, instead of dying under the operator.
+        except (RuntimeError, OSError, http.client.HTTPException, KeyError, ValueError) as exc:
+            # No frame, the model unreachable, its reply cut off halfway
+            # (the standard library does not count that as an OSError), or
+            # an answer that is garbage: stop what moves and say why,
+            # instead of dying under the operator.
             self.halt()
             self.status(action="finished", result="error", error=f"{type(exc).__name__}: {exc}")
             return "error"
         finally:
             self._running = False
-        self.status(action="finished", result="timeout")
-        return "timeout"
 
     def serve(self):
         """One task from the parameter, then whatever arrives on the topic."""

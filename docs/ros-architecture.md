@@ -222,17 +222,30 @@ Parametry: `model_xml` (puste = przygotuj MJX z share z przepisaniem meshdir), `
 
 Nie ma topicu statusu arm/enable — konsola śledzi stan lokalnie z odpowiedzi serwisów. rclpy spinuje w wątku tła, do GUI przez sygnały Qt.
 
-**Node: `web_console`** (`web_console.py`) — przeglądarkowy bliźniak konsoli Qt (jeden port 8080: strona + websocket JSON), działa bez X11 (macOS, telefony na AP robota). Te same moduły co Qt plus **panel VLM** (#92): podgląd kamery kolorowej i komendy tekstowe — przeglądarka to "fotel VLM-a", człowiek widzi dokładnie to, co przyszły VLM (obraz z `/camera/.../image_raw`) i steruje wyłącznie przez jego kontrakt (`/wojtek/nav_command` → `text_commander` → `/cmd_vel`), nigdy przez `/cmd_vel` bezpośrednio. Klatki JPEG (Pillow, jakość 80) idą binarnymi ramkami websocketu obok nietkniętego protokołu JSON; subskrypcja kamery ma QoS sensor-data (best-effort — domyślny QoS nie odebrałby nic). Bez Pillow lub bez kamery panel po prostu nie pokazuje klatek, reszta konsoli działa.
+**Node: `web_console`** (`web_console.py`) — przeglądarkowy bliźniak konsoli Qt (jeden port 8080: strona + websocket JSON), działa bez X11 (macOS, telefony na AP robota). Te same moduły co Qt plus dwa panele VLM-a:
+
+* **panel mózgu** — polecenie wpisane w przeglądarce idzie na `/wojtek/vlm/instruction` do `vlm_brain_node` (`wojtek_nav`; w symie `vlm:=true`, z PC dla robota `robot --vlm`). Z powrotem przychodzą: status mózgu (JSON z `/wojtek/vlm/status`), słowa statusu `goto_node` i resolvera pikseli (`/wojtek/nav/status`, `/wojtek/nav/pixel_status`) oraz obraz, na którym model ostatnio odpowiadał, z narysowanym punktem (`/wojtek/vlm/annotated`). STOP wysyła puste polecenie (mózg staje) i do tego `/wojtek/nav/cancel` wprost, więc `goto_node` porzuca cel nawet wtedy, gdy mózg nie działa. Tematy samego mózgu opisuje [README `wojtek_nav`](../ros/src/wojtek_nav/README.md#the-brain-vlm_brain_node).
+* **panel komend tekstowych** (#92) — `forward`/`left`/`right`/`stop` na `/wojtek/nav_command` → `text_commander` → `/cmd_vel`. To ślepy kontrakt, który człowiek może przećwiczyć ręcznie.
+
+Żaden z paneli VLM-a nie publikuje `/cmd_vel` sam. Kamera: domyślnie konsola bierze gotowy JPEG z węzła kamery (`/camera/camera/color/image_raw/compressed`; na robocie robi go plugin compressed z image_transport, w symie kamera publikuje go sama). Przekazuje go bez przekodowania, najwyżej `camera_hz` (10) klatek na sekundę. Przez wifi robota idą wtedy dziesiątki kilobajtów na klatkę zamiast megabajtów surowego obrazu. `camera_compressed:=false` (w `robot`: `--raw-camera`) bierze surowy `image_raw` i koduje go tutaj (Pillow, jakość 80). To wyjście dla robota bez pluginu, a także dla starego `mujoco_sim_node`, który publikuje tylko surowy obraz. Obrazy idą binarnymi ramkami websocketu. Pierwszy bajt mówi, co to jest (0 kamera, 1 obraz mózgu), a protokół JSON zostaje tekstowy. Subskrypcje kamery mają QoS sensor-data (best-effort — domyślny QoS nie odebrałby nic). Statusy są latched (reliable + transient local), więc świeżo otwarta strona od razu widzi ostatni stan. Bez Pillow kamera JPEG działa dalej; znika tylko surowy fallback i obraz mózgu. Bez kamery panel nie pokazuje klatek, a reszta konsoli działa.
 
 | Kierunek | Interfejs | Typ |
 |---|---|---|
-| sub | `/camera/camera/color/image_raw` (rgb8 → JPEG do przeglądarek) | `sensor_msgs/Image` |
-| pub | `/wojtek/nav_command` (panel VLM; wymaga `text_commander` — w symulacji startuje automatycznie z `sim.launch.py`) | `std_msgs/String` |
+| sub | `/camera/camera/color/image_raw/compressed` (domyślnie; JPEG przekazany bez zmian, najwyżej `camera_hz`) | `sensor_msgs/CompressedImage` |
+| sub | `/camera/camera/color/image_raw` (tylko z `camera_compressed:=false`; rgb8 → JPEG przez Pillow) | `sensor_msgs/Image` |
+| sub | `/wojtek/vlm/status` (JSON mózgu, latched) | `std_msgs/String` |
+| sub | `/wojtek/nav/status`, `/wojtek/nav/pixel_status` (latched) | `std_msgs/String` |
+| sub | `/wojtek/vlm/annotated` (obraz z punktem modelu; wymaga Pillow) | `sensor_msgs/Image` |
+| pub | `/wojtek/vlm/instruction` (panel mózgu; puste = stop) | `std_msgs/String` |
+| pub | `/wojtek/nav/cancel` (STOP panelu mózgu) | `std_msgs/Empty` |
+| pub | `/wojtek/nav_command` (panel komend; wymaga `text_commander` — w symulacji startuje automatycznie z `sim.launch.py`) | `std_msgs/String` |
 | pub | `/cmd_vel`, `/wojtek/joint_targets` + serwisy — jak konsola Qt | — |
+
+Parametry: `policy` (referencja polityki, z niej box komend), `port` (8080), `camera_compressed` (true), `camera_hz` (10).
 
 **Launche:**
 
-* `sim.launch.py` — robot_state_publisher + mujoco_sim_node + policy_node (imu_mount_rpy=`IMU_MOUNT_RPY`, jak na robocie; soft_start 0.5 s, bez clamp_knee) + text_commander (#92; rezydentny — milczy dopóki nie dostanie komendy) + RViz. Argumenty: `rviz`, `initial_pose`, `camera` (true), `camera_depth_hz`, `camera_color_hz`. Argumenty `name:=value` przechodzą z `./sim.sh` przez `robot.py` (np. `./sim.sh camera:=false`).
+* `sim.launch.py` — robot_state_publisher + mujoco_sim_node + policy_node (imu_mount_rpy=`IMU_MOUNT_RPY`, jak na robocie; soft_start 0.5 s, bez clamp_knee) + text_commander (#92; rezydentny — milczy dopóki nie dostanie komendy) + RViz. Argumenty: `rviz`, `initial_pose`, `camera` (true), `camera_depth_hz`, `camera_color_hz`, `console` (`web`|`qt`|`none`, domyślnie `web`), `vlm` (+ `vlm_url`, `vlm_model`; mózg z `wojtek_nav/brain.launch.py`, wymaga `nav:=true`). Argumenty `name:=value` przechodzą z `./sim.sh` przez `robot.py` (np. `./sim.sh camera:=false`).
 * `viz.launch.py` — czyste PC-side dla żywego robota: RViz (czyta `/robot_description` i `/tf` z RPi po DDS), opcjonalnie PlotJuggler, oraz rosbag całego runu **na żądanie** (`bag:=true`, do `~/wojtek_bags/run_<timestamp>`; domyślnie wyłączony). Zero hardware'u, zero RSP.
 
 ## 4. `md80_hardware_interface` — napędy (C++, plugin ros2_control)

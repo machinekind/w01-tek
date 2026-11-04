@@ -14,6 +14,7 @@ and result application: training/docs/sysid.md.
 
 import argparse
 import csv
+import hashlib
 import json
 from datetime import datetime
 from pathlib import Path
@@ -22,8 +23,9 @@ import mujoco
 import numpy as np
 from loguru import logger
 
-from wojtek_rl import paths
+from wojtek_rl import robots
 from wojtek_rl.sysid.bag import read_bag
+from wojtek_rl.sysid.inputs import resolve_inputs
 from wojtek_rl.sysid.dataset import build_dataset
 from wojtek_rl.sysid.mount import air_model, median_quat
 from wojtek_rl.sysid.rollout import make_evaluator
@@ -37,14 +39,22 @@ from wojtek_rl.sysid.space import (
 _EXTRA_HINT = "sysid needs the 'sysid' extra: cd training && uv sync --extra sysid"
 
 
-def _parse_args():
+def _parse_args(argv=None):
     p = argparse.ArgumentParser(
         prog="sysid", description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--bag", required=True, help="ros2 bag directory (or file)")
     p.add_argument("--out", default="", help="output dir (default runs/sysid_<ts>)")
-    p.add_argument("--xml", default=str(paths.SCENE_XML))
+    p.add_argument("--robot", choices=robots.NAMES, default="wojtek",
+                   help="training variant; selects its model and URDF joint map")
+    p.add_argument("--xml", default=None, help="override the selected variant's model")
+    p.add_argument("--joint-map", default=None, help="override its URDF-to-MuJoCo map")
+    p.add_argument("--targets-topic", default="/wojtek/joint_targets")
+    p.add_argument("--states-topic", default="/wojtek/joint_states_abs",
+                   help="absolute URDF joint states; current /joint_states is boot-relative")
+    p.add_argument("--imu-topic", default="/imu/data",
+                   help="optional base-frame orientation; use --base-quat for a level rig")
     p.add_argument(
         "--base-quat", default="",
         help="rig orientation as 'w,x,y,z' (world<-base); a level "
@@ -74,7 +84,13 @@ def _parse_args():
         help="command grid step, 0 = one command per physics step",
     )
     p.add_argument("--backend", default="auto", choices=("auto", "jax", "warp"))
-    return p.parse_args()
+    args = p.parse_args(argv)
+    try:
+        selected = resolve_inputs(args.robot, args.xml, args.joint_map)
+    except ValueError as e:
+        p.error(str(e))
+    args.xml, args.joint_map = str(selected.xml), str(selected.joint_map)
+    return args
 
 
 def main():
@@ -93,7 +109,11 @@ def main():
 
     base_model = mujoco.MjModel.from_xml_path(args.xml)
     act_names = [base_model.actuator(i).name for i in range(base_model.nu)]
-    sig = read_bag(args.bag, act_names)
+    sig = read_bag(
+        args.bag, act_names, joint_map_yaml=args.joint_map,
+        targets_topic=args.targets_topic, states_topic=args.states_topic,
+        imu_topic=args.imu_topic,
+    )
     if args.base_quat:
         quat = np.array([float(v) for v in args.base_quat.split(",")])
     elif sig.quat is not None:
@@ -167,6 +187,10 @@ def main():
         "baseline_params": space.describe(u0),
         "genome": best_u.tolist(),
         "config": vars(args),
+        "input_sha256": {
+            key: hashlib.sha256(Path(value).read_bytes()).hexdigest()
+            for key, value in (("xml", args.xml), ("joint_map", args.joint_map))
+        },
     }
     (out / "best.json").write_text(json.dumps(result, indent=2) + "\n")
     _plot(out, ds, ev, space, best_u, u0, act_names)
@@ -178,7 +202,7 @@ def main():
         kd = np.mean(list(result["params"].get("kd", {"": 1.0}).values()))
         logger.info(
             f"to bake into the model: ./training/run.sh build "
-            f"--kp {kp:.1f} --kd {kd:.2f}  (or train with "
+            f"--robot {args.robot} --kp {kp:.1f} --kd {kd:.2f}  (or train with "
             f"++task.env.pd_kp={kp:.1f} ++task.env.pd_kd={kd:.2f})"
         )
 

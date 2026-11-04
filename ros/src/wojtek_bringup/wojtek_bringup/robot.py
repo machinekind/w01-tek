@@ -11,14 +11,14 @@ session and tears them down on Ctrl-C:
     only "real" way to run it; there is no non-RT path, and
   * visualization on the PC (RViz/PlotJuggler), locally in this container.
 
-The RPi is NOT set to auto-start on boot -- the stack runs only for the duration
-of this command, leaving the RPi free for other launches during development.
+Provisioning controls boot autostart through --enable-robot. This command starts
+the service for its session and stops it on exit.
 
   --dry-run   BENCH mode: launch on the RPi WITHOUT RT and with no torque, for
               testing. --sim: MuJoCo sim locally, no RPi.
 
-The stack comes up DISARMED -- arming stays manual (that's when torque reaches
-the motors); the commands are printed once it's up. Needs SSH to the RPi from
+The stack comes up DISARMED: policy targets are blocked, but active drives can
+hold position and pose ramps can move them. Arming stays manual. Needs SSH to the RPi from
 the container (docker/compose.yaml mounts ~/.ssh; network_mode:host reaches .2).
 """
 import argparse
@@ -115,8 +115,9 @@ def web_console_cmd(args):
 
 ARMING_HINT = """
 >> Stack is up and DISARMED. Use the operator console (opens with this command,
-   unless --no-console): pose the robot in the boot pose (home), check it matches
-   RViz, then Zero -> Stand up -> ARM with its buttons; the XY pad drives it.
+   unless --no-console). Confirm the configured boot pose: the installed service
+   uses folded; a manual launch defaults to home. Check RViz, then use
+   Zero -> Stand up -> ARM. Disarmed drives may still hold torque.
    Raw service calls still work as a fallback:
      ros2 service call /wojtek/zero      std_srvs/srv/Trigger
      ros2 service call /wojtek/stand_up  std_srvs/srv/Trigger
@@ -143,7 +144,8 @@ def main():
     ap.add_argument("--gamepad", action="store_true",
                     help="bluetooth Xbox pad teleop (joy driver + gamepad_teleop): "
                          "left stick vx/yaw, right stick strafe, A arms, "
-                         "D-pad height. Runs ON the RPi against the real robot "
+                         "Y/B stand/lie, Back/Start height, RB slow, D-pad tricks. "
+                         "Runs ON the RPi against the real robot "
                          "(pair the pad with the robot); with --sim it runs "
                          "here (pair with this machine). Combine with "
                          "--no-console to replace the console entirely")
@@ -279,7 +281,8 @@ def main():
         if args.foxglove:
             print(">> foxglove_bridge up -- open the Foxglove app and connect to "
                   "ws://localhost:8765 (3D panel reads /robot_description; "
-                  "Teleop panel drives /cmd_vel)")
+                  "Teleop topic: /wojtek/cmd_vel/external with command_mux:=true, "
+                  "otherwise /cmd_vel). Direct /cmd_vel bypasses the mux.")
 
     # ---- operator console (local GUI: arm/pose/jog/drive) ------------------
     # The manual-control surface for this session; comes up alongside viz so the
@@ -322,7 +325,7 @@ def main():
         if args.sim:
             print(">> gamepad teleop is part of the sim launch (gamepad:=true): "
                   "left stick vx/yaw, right stick strafe, A arms, "
-                  "Y/B stand up / lie down, D-pad height")
+                  "Y/B stand / lie, Back/Start height, RB slow, D-pad tricks")
         elif not args.dry_run:
             print(">> gamepad teleop is resident in the RPi service "
                   "(gamepad:=true) -- pair the pad with the RPi and drive")

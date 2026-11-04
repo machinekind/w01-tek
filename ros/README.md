@@ -1,363 +1,149 @@
-# wojtek_ws
+# Wojtek ROS workspace
 
-ROS 2 Jazzy workspace for the four-bar-bot ("wojtek"). The system is split
-across **two machines** talking over DDS:
+ROS 2 Jazzy controls the robot and runs the same policy/I/O stack in MuJoCo.
+The PC uses Docker; the robot uses native Ubuntu with RT configuration.
+CycloneDDS domain 42 connects the Linux PC and robot.
 
-- **PC** — development + visualization (RViz, PlotJuggler, MuJoCo sim, teleop).
-  Runs in Docker; no ROS install on the host.
-- **RPi 5** — the robot: the hard real-time control loop (`ros2_control` 400 Hz,
-  MD80/candle, IMU, policy). Native Ubuntu + RT kernel, no Docker.
-
-They share `ROS_DOMAIN_ID=42` over CycloneDDS. The RPi is a fixed anchor at
-`10.42.0.2` on whichever link is up — ethernet cable when docked, its own wifi
-AP (`wojtek-link`) when mobile. See [`deploy/rpi/README.md`](deploy/rpi/README.md).
-
----
-
-## PC (dev / viz) — quickstart
-
-Everything ROS-side on the PC happens **inside the container**. Enter it once,
-work in the shell — the workspace is a lab you walk into, not a set of wrapper
-scripts:
-
-```bash
-cp ../.env.example ../.env && $EDITOR ../.env   # once: HF_ORGANIZATION (+ HF_TOKEN)
-./build.sh      # build the image (once)
-./dev.sh        # shell inside the container; ROS + the workspace already sourced
-```
-
-The repo-root `.env` matters on the PC too: the launches run the pinned
-default policy, and its Hugging Face reference is `HF_ORGANIZATION/...`.
-Without the org every launch stops at once with "empty policy reference"
-(or needs an explicit `policy:=`). `dev.sh` and `sim.sh` carry that
-variable, `HF_TOKEN` and the VLM brain's `VLM_URL` into the container.
-`WOJTEK_POLICY=<org/name[@rev]>` in the same `.env` makes every sim session
-run that policy instead of the pin, with no `policy:=`. It is a desk
-setting only: the robot never reads the variable. The robot runs the
-reference `./deploy.sh --policy` left in its override file, else the pin.
-
-Then, from that shell:
-
-```bash
-ros2 launch wojtek_pc sim.launch.py      # the whole simulation session
-```
-
-That one launch brings up the plant (MuJoCo), the robot's own control stack
-(ros2_control at 400 Hz, `real_io_node`, `policy_node`), the virtual D435,
-RViz and the operator console. Ctrl-C tears the session down; the container
-stays for the next one. Open a second `./dev.sh` shell for service calls,
-`ros2 topic echo` and teleop while it runs.
-
-Useful arguments (`ros2 launch wojtek_pc sim.launch.py --show-args` lists all):
-
-```bash
-hw:=mock            # no dynamics, just the node graph (fast, CI-friendly)
-boot_pose:=folded   # start from the real boot/zeroing pose
-console:=qt|none    # Qt window instead of the browser, or nothing
-gamepad:=true       # bluetooth Xbox pad paired with THIS machine
-camera:=false       # no virtual D435 (weak machines)
-rviz:=false         # headless
-```
-
-The startup procedure is the robot's, on purpose — see
-[`../docs/sim-test-contract.md`](../docs/sim-test-contract.md) for what a
-simulation run does and does not prove.
-
-`./sim.sh` from the host collapses the above into one command: it starts the
-container, sorts out X11/XQuartz, picks RViz (Linux/X11) or Foxglove (macOS,
-headless) for the platform, and runs the session. Every `name:=value` argument
-passes straight through to `sim.launch.py`, so the launch vocabulary above is
-the only one:
-
-```bash
-./sim.sh                          # sim + viz + web console, Ctrl-C tears down
-./sim.sh hw:=mock console:=none   # any launch argument passes through
-./sim.sh --rviz | --foxglove      # override the platform viz default
-```
-
-The operator console (drive pad, arm/pose buttons, jog, telemetry) is the
-**web console** by default — open <http://localhost:8080> in any browser (a
-phone on the robot's AP works too). Drive commands are dead-man guarded:
-if the page goes silent mid-drive, `/cmd_vel` is zeroed.
-
-**Deck panel** — the handheld cockpit (`wojtek_deck`, on by default in
-the sim): open <http://localhost:8090>. Camera, pad in the browser, charts
-straight from the Foxglove bridge (`--foxglove`), and the drive dead-man on
-the robot side. The panel also boxes what it sees in the camera, running
-YOLOX in the browser on the handheld rather than on the robot; that needs
-`src/wojtek_deck/fetch_assets.sh` once, which `deploy.sh` runs for you. See
-[`src/wojtek_deck/README.md`](src/wojtek_deck/README.md).
-
-**Things to look at** — the simulated world is not an empty floor. The
-training scene is a checkerboard plane and nothing else, which is what a
-walking policy needs and gives the panel's detector nothing to find, so the
-simulation loads `src/wojtek_pc/config/scene_sim.xml`: the same scene plus a
-few props standing around the spawn.
-
-| prop          | where it stands   | the panel names it from        |
-| ------------- | ----------------- | ------------------------------ |
-| sports ball   | ahead and left    | 1 to 3 m                       |
-| fire hydrant  | ahead and right   | 1 to 3 m (best inside 2 m)     |
-| stop sign     | left, turn ~55°   | 1 to 3 m (best inside 2 m)     |
-| traffic light | right, turn ~75°  | 1.5 to 3 m (too tall closer)   |
-| clock         | behind, turn ~160°| 1 to 3 m                       |
-| person        | straight ahead    | 5.5 m and further              |
-
-The props were picked by rendering the camera view and asking the panel's
-own YOLOX-nano what it saw; every one that stayed is named with better than
-even confidence over the range above, mostly 0.8 to 0.95. They are short
-because the camera sits 0.21 m off the floor looking 15° down — at two
-metres the top of the picture is only 0.75 m up — and the person stands far
-back for the same reason: from two metres away a person is a pair of legs
-and reads as nobody.
-
-The plant loads the same file, so the props are solid and the robot bumps
-into them. They are static bodies, so `/sim/qpos` has exactly the layout it
-had before and neither the policy nor the training model knows they exist.
-Their pictures are drawn by `config/props/make_textures.py`, committed next
-to it; run it only when you want a sign to look different. To walk the empty
-floor again, hand the launch the old scene:
-
-```bash
-./sim.sh model_xml:=/ros2_ws/install/wojtek_pc/share/wojtek_pc/config/scene_mjx.xml
-```
-
-**The VLM brain**: the web console's first camera card is the brain panel.
-Type an instruction ("podejdź do fioletowego słupa"), press go, and
-`wojtek_nav`'s brain asks a vision-language model where in the picture
-the target is, verifies the answer, and hands the pixel to the robot's own
-resolver and setpoint driver, which walk there with the costmap as veto.
-The panel shows the brain's status, goto's and the resolver's words, and
-the picture the model last answered on with its point drawn; STOP halts
-the whole chain. It needs the nav stack underneath and a model server:
-
-```bash
-# On the GPU box: Ollama with the model (it listens on that box only)
-ollama pull qwen3-vl:30b-a3b-instruct && ollama serve
-# On the PC: a tunnel to it; the box's name stays in your ssh config
-ssh -f -N -L 11435:127.0.0.1:11434 <gpu box>
-curl -s http://127.0.0.1:11435/api/tags | head -c 200   # the model tag must be listed
-# repo-root .env: VLM_URL=http://host.docker.internal:11435 on a Mac,
-#                 VLM_URL=http://127.0.0.1:11435 on Linux; then
-./sim.sh model_xml:=scene_nav.xml leg_odom:=true nav:=true vlm:=true
-ros2 run wojtek_bringup robot --web-console --vlm            # the robot (PC side)
-```
-
-Ollama answers only on its own machine, so a plain `ollama serve` on
-another box gives the PC "connection refused". The tunnel above gets
-around that. The other way is `OLLAMA_HOST=0.0.0.0:11434 ollama serve` on
-the box with `VLM_URL=http://<that box>:11434`, but that opens the model
-to everyone on the network with no password, so use it only on a network
-you trust. (Where Ollama runs as a system service, `ollama serve` reports
-the port as taken; set `OLLAMA_HOST` in the service instead.) The Mac and
-Linux URLs differ because the container on a Mac has its own network and
-reaches the PC through `host.docker.internal`, while on Linux it shares
-the PC's network.
-
-On the robot the camera is the deck one: `deck_camera:=true`, already in
-the service's launch arguments (`deploy/rpi/wojtek-robot-local.conf`),
-publishes the depth and the colour JPEG that the nav stack and the brain
-read. Add `nav:=true` next to it there, or for a bench test `robot
---dry-run --web-console --vlm deck_camera:=true nav:=true` passes both
-itself. Do not add `perception:=true` as well: it starts a second
-RealSense driver on the same camera (the launch refuses the pair). That
-path has not been run on the robot yet (see the nav README).
-
-Everything about it -- the contract, what crosses the robot's wifi (the
-camera's JPEG, not the raw image), stopping -- is in
-[`src/wojtek_nav/README.md`](src/wojtek_nav/README.md).
-
-**Text commands (the blind contract, #92)**: the console's second panel
-is a `forward / left / right / stop` command panel — a human dry-run of a
-VLM that watches the camera and publishes `/wojtek/nav_command` and
-nothing else; no obstacle awareness. It drives only through that contract,
-via the `text_commander` bridge node (`wojtek_teleop`), which
-`sim.launch.py` starts automatically — safe as a resident, it publishes
-nothing until commanded. The CLI works too:
-
-```bash
-ros2 topic pub -1 /wojtek/nav_command std_msgs/String "data: forward"
-```
-
-Speeds are parameters (`v_forward` 0.3 m/s, `w_turn` 0.5 rad/s) and a 2 s
-dead-man (`command_timeout`) stops the robot when commands stop coming —
-keep clicking (or talking) to keep walking.
-
-3D visualization: `sim.launch.py` opens RViz over X11 (`./dev.sh` sets up the
-access). On macOS GL-heavy RViz over X11 is slow, so run the launch with
-`rviz:=false` and start `foxglove_bridge` from `viz.launch.py foxglove:=true`
-in a second shell — then open the native
-[Foxglove](https://foxglove.dev/download) app and connect to
-`ws://localhost:8765` (add a 3D panel). The web console can live INSIDE
-Foxglove as a panel — see
-[`foxglove/wojtek-console-panel`](foxglove/wojtek-console-panel/README.md)
-(`npm run local-install`, restart Foxglove, add the "Wojtek console" panel).
-
-There is a ready-made view to import once, in
-[`foxglove/layouts`](foxglove/layouts/README.md): temperature, throttling, CPU
-per core, policy tick time, drive command, joints, IMU and the console in one
-window.
-
-**Bluetooth Xbox pad**: left stick = vx/yaw, right stick left-right = strafe,
-**A** toggles arm, LB/RB step the standing height; on the `joy` paths
-**Y**/**B** additionally trigger the stand-up / lie-down ramps and the D-pad
-the tricks (browser pads keep those on the console buttons). Full stick
-reaches `gamepad_speed` (default 0.4) of the policy's command box, so the
-robot walks at a fraction of its trained top speed; raise it for open floor.
-Driving is always live (no
-drive-enable gate); a dead-man zeroes `/cmd_vel` if the pad drops off. Two
-paths, same drive mapping:
-
-- The **web console reads a pad in the browser** (Gamepad API): pair the pad
-  with whatever machine the browser runs on (macOS included), open the
-  console page and press any pad button — the sticks take over the drive pad.
-- `sim.launch.py gamepad:=true` runs the in-container `joy` driver +
-  `gamepad_teleop` (from `wojtek_teleop`) alongside the console. Linux only:
-  the container sees the pad through the `/dev` mount, Docker on macOS cannot
-  pass input devices (use the browser pad path above there).
-- On the real robot the pad can pair with the **RPi itself** — no PC in the
-  loop: `robot.launch.py gamepad:=true` (the `wojtek_teleop` package is part
-  of the RPi build; bluez/ERTM groundwork comes from `deploy/rpi/install.sh`,
-  pairing itself is a one-time `bluetoothctl` scan/pair/trust/connect).
-
-`console:=qt` switches to the original Qt operator console (an X11 app).
-On macOS that needs a one-time XQuartz setup, and XQuartz has to be running
-before you enter the container:
-
-```bash
-brew install --cask xquartz
-defaults write org.xquartz.X11 nolisten_tcp -bool false   # allow TCP :6000
-```
-
-For the real robot you also need the link profile, once, on the host:
-
-```bash
-./deploy/pc/setup-net.sh   # create the wojtek-eth profile
-```
-
-and then, from the container shell, `ros2 launch wojtek_pc viz.launch.py`
-(RViz/PlotJuggler against the live robot) or `ros2 run wojtek_bringup robot`
-(see "Run the robot" below).
-
-`wojtek_pc` was called `wojtek_viz` until 2026-08-06 (it carries the
-simulator, not just visualization). A workspace built before the rename keeps
-the old package in its overlay and shadows the new one; clear it once with
-`rm -rf build/wojtek_viz install/wojtek_viz` before rebuilding.
-
-`setup-net.sh` makes a normal internet cable "just work"; dock the robot by
-cable with `nmcli con up wojtek-eth`. (Details: the "PC side" table in
-[`deploy/rpi/README.md`](deploy/rpi/README.md).)
-
-## RPi (robot) — quickstart
-
-**Fresh RPi**, from nothing:
-
-1. Flash the card (downloads + verifies the image, writes cloud-init with your
-   SSH key auto-injected):
-   ```bash
-   ./deploy/rpi/flash-card.sh /dev/sdX      # check `lsblk` for the right device!
-   ```
-   Put the card in the Pi, dock it by cable (`nmcli con up wojtek-eth`), power on
-   — it comes up reachable at `10.42.0.2`. (Image identity: [`deploy/rpi/IMAGE.md`](deploy/rpi/IMAGE.md).)
-2. Put your Ubuntu Pro token in `.env` (copy `.env.example`) — needed once for
-   the RT kernel.
-3. From the PC:
-   ```bash
-   ./deploy.sh --provision      # ROS + RT kernel + RT tuning + network + build
-   ```
-   Idempotent — safe to re-run. It reboots the Pi once (RT kernel) and continues.
-
-**Routine redeploy** (after editing code):
-```bash
-./deploy.sh                    # rsync src + colcon build on the Pi (fast)
-./deploy.sh --policy <ref>     # ... and run this policy instead of the pin
-```
-`--policy` takes a Hugging Face reference (`org/name[@revision]`). It fetches
-that policy, syncs it, and leaves the robot running it. A plain `./deploy.sh`
-puts the pinned default back.
-
-The pin belongs to a robot profile in `wojtek_policy/robots.py`. `WOJTEK_ROBOT`
-in the repo-root `.env` (next to `HF_ORGANIZATION`; `deploy.sh` reads that file
-as well as `ros/.env`) names the profile whose pin `deploy.sh` resolves, and it
-defaults to `wojtek`, the stock legs. The launch files take the same name as `robot:=`
-next to `policy:=`. It sets the URDF legs, the joint map, the knee clamp and
-the default policy, and a policy trained for other legs is refused.
-
-## Run the robot
-
-You work from **one container shell** — enter it once, drive everything from
-there. The RPi stack is started **for the session** (not on boot — that keeps
-the RPi free for other launches during dev), and always over its **RT systemd
-service** (there's no non-RT way to run it):
-
-```bash
-./dev.sh                          # enter the container (once)
-ros2 run wojtek_bringup robot     # start the RPi RT stack (over SSH) + RViz
-```
-Flags:
-```
---dry-run       BENCH: launch on the RPi WITHOUT RT and no torque (testing only)
---sim           MuJoCo sim instead of the RPi (no hardware)
---no-viz        skip RViz;   --plotjuggler  also open PlotJuggler
---foxglove      foxglove_bridge instead of RViz (native Foxglove app on
-                ws://localhost:8765 -- the fast path on macOS)
---web-console   browser operator console on http://localhost:8080 instead
-                of the Qt window (no X11; works from a phone on the AP)
---gamepad       bluetooth Xbox pad teleop (left stick vx/yaw, right stick
-                strafe, A arms, Y/B stand up / lie down, LB/RB height,
-                D-pad tricks);
-                runs ON the RPi against the real robot (pair the pad with
-                the robot), locally with --sim; add --no-console to
-                replace the console entirely
---vlm           the VLM brain for this session (PC side; --vlm-url /
-                --vlm-model override VLM_URL and the 30B default); the
-                stack underneath needs the camera and the nav stack:
-                nav:=true, plus deck_camera:=true on the robot (the sim
-                renders its own)
-```
-The stack comes up DISARMED. **Arming is manual** (that's when torque reaches the
-motors) — from another shell in the same container:
-```bash
-ros2 service call /wojtek/zero      std_srvs/srv/Trigger
-ros2 service call /wojtek/stand_up  std_srvs/srv/Trigger
-ros2 service call /wojtek/arm       std_srvs/srv/SetBool "{data: true}"
-ros2 run teleop_twist_keyboard teleop_twist_keyboard      # drive
-```
-Ctrl-C in the `robot` shell tears down both sides (stops the RT service + viz).
-Wind down gently first: disarm, then `ros2 service call /wojtek/lie_down
-std_srvs/srv/Trigger`.
-
-### Watching a run
-
-Two topics say how the run is going. `/wojtek/sysinfo` is the state of the
-computer: CPU per core, memory, SoC temperature, the Raspberry Pi throttle
-flags, free space where the bag is written, and wifi traffic.
-`/wojtek/policy_timing` is per control tick: how long the policy step took and
-how far apart the ticks landed. A run that records lands both in the bag with
-everything else, so a stutter can be matched against a hot or throttled Pi
-afterwards.
-
-`telemetry:=true` publishes the two topics. `foxglove:=true` opens a bridge on
-port 8765, so the native Foxglove app connects to the robot with nothing
-running on the PC. A manual `robot.launch.py` run has all of this off, the
-same way it does not record. Ask for what you want with `telemetry:=true
-foxglove:=true bag:=true`. The RPi service passes all three, so a
-service-driven run is watchable live and readable back afterwards. Import
-[`foxglove/layouts/robot-dashboard.json`](foxglove/layouts/README.md) to see
-it plotted.
-
-## Layout
-
-| Path | What |
+| Task | Guide |
 |---|---|
-| `build.sh` / `dev.sh`      | PC: build image / enter container |
-| `sim.sh`                  | PC: one-command sim session from the host (container + X11 + platform viz around `sim.launch.py`) |
-| `deploy/pc/setup-net.sh`  | PC: create the `wojtek-eth` link profile |
-| `deploy.sh`               | host orchestrator: provision + build the RPi |
-| `.env.example`            | template for secrets (Ubuntu Pro token) |
-| `deploy/rpi/flash-card.sh`| flash a fresh card: image + cloud-init + SSH key |
-| `deploy/rpi/`             | RPi provisioning: `install.sh`, network + service configs, `IMAGE.md`, `cloud-init/` |
-| `deploy/wojtek-robot.service` | RPi systemd unit (RT control stack) |
-| `src/`                    | ROS 2 packages (`wojtek_bringup`, `wojtek_policy`, `wojtek_pc`, hardware ifaces) |
-| `foxglove/`               | Foxglove extras: the console panel extension and the dashboard layout |
-| `docker/`                 | PC image + compose |
+| Choose hardware, profile and policy | [Compatibility](../docs/compatibility.md) |
+| Run locally without hardware | [Simulation](../docs/simulation.md) |
+| Drive with a pad or Steam Deck | [Operations](../docs/operations.md) |
+| Connect your software | [Integration](../docs/integration.md) |
+| Understand the node graph | [Architecture](../docs/ros-architecture.md) |
+| Diagnose or recover a run | [Troubleshooting](../docs/troubleshooting.md) |
+| Configure visual navigation | [Navigation](src/wojtek_nav/README.md) |
+
+All host commands below run from the repository root.
+
+## PC setup
+
+Install Docker with Compose. On first setup, copy `.env.example` to `.env` and
+set `HF_ORGANIZATION` plus credentials for private keeper access. Existing files
+should be edited, not overwritten. Alternatively use a local exported policy
+pair; see [policy lifecycle](../training/docs/policy-lifecycle.md).
+
+```bash
+./ros/build.sh
+./ros/sim.sh --foxglove
+```
+
+The simulation loads the stock profile's pinned policy. It opens the web console
+on `http://localhost:8080` and Deck panel on `http://localhost:8090`.
+Foxglove connects to `ws://localhost:8765`. Stand/arm/drive using the
+[operator sequence](../docs/operations.md); launch does not arm the robot.
+
+For ROS commands, open a container shell:
+
+```bash
+./ros/dev.sh
+# Inside the container:
+ros2 launch wojtek_pc sim.launch.py --show-args
+```
+
+The workspace is already sourced. Rebuild the image when system/package
+requirements change. Linux supports native input devices and direct DDS
+networking. macOS simulation uses published browser/Foxglove ports; use browser
+pad input. The supplied cable-network setup uses Linux NetworkManager.
+
+Useful sim arguments:
+
+```bash
+./ros/sim.sh hw:=mock rviz:=false console:=none  # graph/lifecycle, no physics
+./ros/sim.sh --foxglove robot:=wojtek_v2         # new-leg profile and matching pin
+./ros/sim.sh --foxglove telemetry:=true         # CPU and policy timing topics
+./ros/sim.sh --rviz gamepad:=true               # Linux joy driver
+./ros/sim.sh --foxglove command_mux:=true       # opt-in command ownership
+```
+
+The mux starts with autonomy inhibited; see [command ownership](../docs/command-ownership.md)
+for enabling it, handing over and routing external clients.
+
+`WOJTEK_POLICY` in the repo-root `.env` overrides the sim policy reference.
+The robot ignores it. A launch accepts `policy:=<org/name@commit>` or a local
+directory visible **inside** the container. `ros/policies/` is mounted at
+`/ros2_ws/policies/`; a host home-directory path is not automatically mounted.
+Missing private access is not a Docker failure: supply an authorized reference
+or export a compatible local policy through the training workflow.
+
+## Provision the robot
+
+Confirm the physical revision and power arrangement before provisioning or
+powered tests. The [hardware guide](../docs/hardware.md) records commissioning
+requirements. For the image and network, see [RPi image](deploy/rpi/IMAGE.md)
+and [network setup](deploy/rpi/README.md).
+
+From a Linux operator PC:
+
+```bash
+./ros/deploy/pc/setup-net.sh
+./ros/deploy/rpi/flash-card.sh /dev/sdX  # replace with the verified target card
+./ros/deploy.sh --provision
+```
+
+Provisioning requires the settings in `ros/.env.example`, including the Ubuntu
+Pro token for the RT kernel and AP password. Shared policy/profile settings live
+in the repo-root `.env`. `WOJTEK_ROBOT=wojtek_v2` selects new legs;
+`--provision` writes that selection into the service drop-in.
+
+Provisioning installs the RT service and CM watchdog. Without `--enable-robot`,
+it disables robot boot autostart, including when previously enabled. Add that
+flag only for a commissioned robot intended to start its stack on boot.
+The command may reboot the RPi after kernel changes.
+
+Routine deployment:
+
+```bash
+./ros/deploy.sh --no-restart          # sync and build without a service restart
+./ros/deploy.sh --policy <reference> # fetch/sync a policy override
+./ros/deploy.sh                     # return to the profile's pinned policy
+```
+
+Deployment builds `--packages-up-to wojtek_bringup`, which includes gamepad,
+Deck gateway and camera dependencies. It also fetches/syncs policy and detector
+assets. Restart occurs only when requested and the robot service is enabled;
+an active but disabled service is not automatically restarted. Inspect its state
+instead of assuming that a completed deploy changed a running process.
+
+## Run the physical robot
+
+After the physical boot pose and commissioning checks in the
+[operator runbook](../docs/operations.md):
+
+```bash
+./ros/dev.sh
+# Inside the container:
+ros2 run wojtek_bringup robot --web-console --foxglove
+```
+
+The wrapper starts the configured RPi service over SSH and local visualization.
+Ctrl-C stops both. The service starts disarmed, but the hardware can already
+hold torque. Stand/lie ramps also move while disarmed.
+
+`--sim` runs locally. `--dry-run` is a separate non-RT bench launch with drive
+commands suppressed. `--gamepad` documents the robot-paired pad path; the
+installed service already includes that driver. `--vlm` starts the PC-side brain,
+but the robot service must separately include its camera and `nav:=true`.
+`--policy` and launch tokens affect sim/bench launches; they do not rewrite the
+RT service's launch arguments. Use deployment/service configuration for that.
+
+## Recording and live diagnostics
+
+On the robot, inspect the effective unit:
+
+```bash
+systemctl cat wojtek-robot.service
+```
+
+The base unit enables bags, telemetry and Foxglove, but the installed
+`10-local.conf` replaces its command: **bags are off, telemetry and Foxglove
+remain off**, while Deck, camera and gamepad are on. To record/watch a planned
+run, add `bag:=true bag_cpus:=0,1 telemetry:=true foxglove:=true` to the effective
+launch after checking the board's resource budget. Manual launches also default
+to recording/telemetry off.
+
+`/wojtek/sysinfo` reports computer health; `/wojtek/policy_timing` reports control
+tick timing. Import the [Foxglove layout](foxglove/layouts/README.md). Robot bags
+default to `~/wojtek_bags/run_<timestamp>`; PC-container bags use the persistent
+`wojtek_bags` Docker volume. See [troubleshooting](../docs/troubleshooting.md) for
+inspection and recovery.

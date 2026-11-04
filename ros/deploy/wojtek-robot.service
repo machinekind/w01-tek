@@ -62,8 +62,8 @@ Environment=CYCLONEDDS_URI=file:///etc/cyclonedds-rpi.xml
 # tick next to the control data. foxglove:=true opens the bridge on port 8765,
 # which is how the same run is watched live from a PC. Both stay on the
 # non-isolated cores (sysinfo_cpus and foxglove_cpus default to 0,1).
-# The deck panel's gateway needs aiohttp, which the RPi gets from wheels in
-# ~/py_deps (no pypi route from the robot; see ros/deploy/deck/README.md).
+# Current deployment installs Python dependencies, including aiohttp, through
+# rosdep. Keep this optional wheel search path for legacy images using ~/py_deps.
 # setup.bash prepends ROS's own path to this, so the order stays right.
 Environment=PYTHONPATH=/home/rpi/py_deps
 # deck:=true deck_camera:=true: the panel's gateway and its colour camera,

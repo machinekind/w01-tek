@@ -1,82 +1,90 @@
-# Kontrakt testowy symulacji
+# Simulation test contract
 
-Co znaczy „sprawdzone w symulacji" i czego symulacja **nie** sprawdza. Cel:
-run na robocie ma być formalnością, a nie pierwszym uruchomieniem kodu. Bez
-tej listy nie ma kryterium „wierne dość" i praca nad symulacją nigdy się nie
-kończy.
+A simulation run exercises ROS behavior and modeled dynamics. It does not certify
+physical hardware. Use the [simulation guide](simulation.md) for setup and the
+[operator runbook](operations.md) for the startup sequence.
 
-Uruchomienie (w kontenerze — wszystko ROS-owe na PC działa w kontenerze):
+The following checks are acceptance criteria, not a claim that every row has
+passed on the current revision. Record commit, robot profile, policy reference,
+scene, host, result and log/bag path for each validation run.
+
+## Choose a plant
+
+From a configured PC container:
 
 ```bash
-./ros/dev.sh
-ros2 launch wojtek_pc sim.launch.py hw:=mock rviz:=false     # logika stacku
-ros2 launch wojtek_pc sim.launch.py hw:=mujoco               # + fizyka
+ros2 launch wojtek_pc sim.launch.py hw:=mock rviz:=false
+# Or, in a separate session after stopping the first:
+ros2 launch wojtek_pc sim.launch.py hw:=mujoco
 ```
 
-## A. Co musi przejść przed każdym runem na robocie
+Both need a compatible policy. `mock` echoes commands as states; it cannot walk
+or fall. `mujoco` supplies physics and the virtual camera. Both use the shared
+controller graph, including zeroing, pose ramps and the policy-target gate.
 
-Kolumna „plant" mówi, czy wystarczy `hw:=mock` (szybko, bez fizyki), czy
-potrzebny jest `hw:=mujoco`.
+## Acceptance checks
 
-| # | Scenariusz | Kryterium | Plant |
-|---|---|---|---|
-| 1 | Bring-up | 4 kontrolery `active` (`joint_state_broadcaster`, `imu_sensor_broadcaster`, `magnetometer_broadcaster`, `forward_position_controller`), komponent `WojtekSim` aktywny, zero ERROR w logu | mock |
-| 2 | Kolejność spawnów | spawner nie wywala się na braku interfejsu; broadcastery łapią sensor `imu` | mock |
-| 3 | Stan po starcie | `real_io_node` zgłasza DISARMED, `/forward_position_controller/commands` **milczy** | mock |
-| 4 | `zero` | serwis zwraca `success`, korekta ≈ 0 gdy robot jest w `boot_pose` | mock |
-| 5 | `stand_up` | rampa startuje, po niej pozycja = home | mock |
-| 6 | `arm` | po `stand_up` przechodzi; komendy zaczynają płynąć | mock |
-| 7 | Odmowa: `arm` w trakcie rampy | `success=False`, „ramp running" | mock |
-| 8 | Odmowa: `lie_down` gdy ARMED | `success=False`, „armed" | mock |
-| 9 | Odmowa: `arm` przy skoku > `max_arm_jump_rad` | `success=False` (ustaw pozę daleko od home i spróbuj) | mujoco |
-| 10 | `disarm` → `lie_down` | rampa do folded, komendy przestają się odświeżać | mock |
-| 11 | Watchdog `policy_node` | po ucięciu `/cmd_vel` polityka wchodzi w stan bezpieczny w `watchdog_timeout_s` | mock |
-| 12 | `dry_run:=true` | stany lecą, moment nie jest aplikowany | mujoco |
-| 13 | Rate'y | `/joint_states` i `/imu_sensor_broadcaster/imu` na oczekiwanej częstotliwości (patrz uwaga niżej) | mock |
-| 14 | Bag | `bag:=true` tworzy `bag_dir/run_<stamp>` i nagrywa | mock |
-| 15 | Pad / teleop | `/cmd_vel` z pada i z `teleop_twist_keyboard` rusza polityką | mock |
-| 16 | `text_commander` | `/wojtek/nav_command` → `/cmd_vel`, dead-man po 2 s | mock |
-| 17 | Chód | robot stoi po `stand_up` i idzie na komendę bez upadku | mujoco |
-| 18 | `boot_pose:=folded` | pełna sekwencja folded → zero → stand_up → arm | mujoco |
-| 19 | Kamera | `/camera/camera/depth/*` i `/color/*` publikują (`sim_camera_node`) | mujoco |
-| 20 | Ground truth | `TF odom→base_link`, `/odom_vel`, `/sim/rtf` (≈1,0 gdy fizyka nadąża) | mujoco |
-| 21 | Drzewo TF | **każda** ramka odpytywalna z `odom` (36/36), nie tylko obecna w buforze — patrz uwaga o stemplach niżej | mujoco |
+| Check | Expected result | Plant |
+|---|---|---|
+| Bring-up | Hardware component and position controller active; joint/IMU/magnetometer broadcasters active with IMU enabled; no unexplained errors | mock |
+| Initial state | I/O adapter reports disarmed; no forwarded policy targets | mock |
+| Zero | Succeeds only while disarmed, after joint states arrive and with no ramp; offset matches the declared boot pose | mock |
+| Stand | Service reports ramp started; wait for `stand_up: ramp complete`; final pose approaches home | mock, then MuJoCo |
+| Arm | Refused during a ramp and when too far from home; accepted after a valid stand | mock, then MuJoCo |
+| Pose/trick exclusion | Stand, lie and tricks refuse while armed; zero refuses during a ramp | mock |
+| Disarm | Policy targets stop being forwarded; this is not a torque-removal or ramp-cancel test | mock |
+| Lie | After disarm, the ramp completes toward the profile's folded target | MuJoCo; see new-leg limit below |
+| Command loss | Stop the sole `/cmd_vel` source; policy velocity command becomes zero after 0.5 s, with height retained | mock |
+| Required-sensor loss | Remove a required observation; policy output stops after the 0.2 s sensor watchdog | mock |
+| Pad/console | One selected source drives; release/disconnect produces a stop | MuJoCo |
+| Navigation cancel | While moving, cancel drops the goal; late goals inside the 0.5 s hold-off do not resume it | MuJoCo |
+| Walking | Selected policy stands and follows commands without falling for the declared test interval | MuJoCo |
+| Camera | Depth/colour topics and CameraInfo arrive; image and TF timestamps permit projection | MuJoCo |
+| TF | Look up every required frame from `odom`; merely listing frame names is insufficient | MuJoCo |
+| Recording | `bag:=true` creates a readable bag containing the requested topics | either |
+| Timing | Compare measured rates with config; record `/sim/rtf`, which should be near 1 for wall-time operation | MuJoCo |
 
-## B. Czego symulacja NIE pokryje
+Useful inspection commands:
 
-„Przeszło w sim" **nie** znaczy „przejdzie na robocie". Te rzeczy weryfikuje
-się wyłącznie na sprzęcie (`robot.launch.py dry_run:=true`, potem jazda):
+```bash
+ros2 control list_controllers
+ros2 control list_hardware_components
+ros2 topic hz /joint_states
+ros2 topic hz /imu_sensor_broadcaster/imu
+ros2 topic echo /sim/rtf
+ros2 run tf2_ros tf2_echo odom base_link
+```
 
-- **candle/CAN**: losowe timeouty MD80, flakujący zapis do flasha, terminacja
-  magistrali, baudrate napędów.
-- **Real-time na RPi**: jitter pętli 400 Hz przy kernelu RT, affinity/izolacja
-  rdzeni, throttling termiczny SoC.
-- **Sieć**: DDS po wifi, zerwania linku, discovery między maszynami.
-- **Fizyka, której model nie ma**: tarcie i luz w przekładniach, ripple
-  momentu, podatność konstrukcji, poślizg stopy na realnej podłodze.
-- **Czujniki**: hard-iron magnetometru od magnesów w napędach, bias żyra,
-  kwantyzacja enkoderów, opóźnienia I2C/CAN. (Wchodzą do symulacji jako
-  parametry w kolejnym etapie — do tego czasu są poza kontraktem.)
+Current configuration is controller manager 100 Hz, joint and IMU broadcasters
+50 Hz, and magnetometer broadcaster 100 Hz. Policy frequency comes from the
+loaded contract, normally 50 Hz. Subscriber timing measurements add overhead;
+record the host and load rather than treating one reading as a guarantee.
 
-## C. Uwagi z pierwszego przejścia (2026-08-06)
+## Known differences and limits
 
-- Punkty 1-8, 10 i 13 przeszły na `hw:=mock` przy pierwszym uruchomieniu.
-- **`hw:=mujoco` przeszło 1-8, 10, 17, 19** tego samego dnia: plugin `MujocoHardwareInterface` ładuje się, robot stoi po `stand_up` (TF `odom→base_link` z=0,118 m), po `arm` **chodzi** — na `/cmd_vel` 0,3 m/s przejechał 1,64 m z dryfem bocznym 13 mm. RTF 0,998. Kamera: depth 15,0 Hz 424x240 `16UC1` na `camera_depth_optical_frame`, color 5,0 Hz.
-- **Kamera to teraz osobny node** (`sim_camera_node`), bo fizyka siedzi w `ros2_control_node` (C++), a renderer jest w Pythonie: plugin publikuje `/sim/qpos`, node lustruje to we własnej kopii modelu. Jedna fizyka zostaje źródłem prawdy. **Odstępstwo:** stemple obrazów to czas dotarcia pozy, nie tick fizyki, który ją wyprodukował (różnica = transport jednej małej wiadomości po localhoście).
-- **`/sim/reset` NIE zostało przeniesione.** Stary `mujoco_sim_node` je miał; reset fizyki pod aktywnymi kontrolerami i uzbrojonym `real_io_node` jest wątpliwy, a restart launcha jest tani. Do dorobienia, jeśli okaże się potrzebne.
-- Ground truth z pluginu: `TF odom→base_link`, `/odom_vel`, `/sim/rtf`, `/sim/qpos` — domyślnie 100 Hz (`ground_truth_rate_hz`), bo 400 Hz to nie tempo dla TF.
-- **Stemple czasu: pułapka, na którą już wpadliśmy.** `controller_manager` liczy cykle **zegarem monotonicznym**, więc `time` podawane do `read()` to sekundy od bootu, a broadcastery/`real_io_node`/`robot_state_publisher` stemplują **czasem ROS**. Ground truth stemplowany tym pierwszym dawał drzewo TF, w którym połowa ramek jest w buforze, ale **żadna z nich nie daje się odpytać** z `odom` (`ExtrapolationException`) — wygląda jak „brakuje połowy transformów", a jest niezgodnością epok. Plugin stempluje więc zegarem swojego noda, nie argumentem `read()`. Sprawdzanie samych nazw ramek tego nie łapie: trzeba zrobić `lookup_transform` dla każdej.
-- W kontenerze renderer potrzebuje `MUJOCO_GL=egl` (inaczej MuJoCo wybiera backend, który **przerywa proces**, nie zgłasza wyjątku).
-- **Rate'y (13) wymagają decyzji, nie tylko odczytu.** `real_controllers.yaml`
-  ustawia `publish_rate: 200.0` dla `joint_state_broadcaster` i `100.0` dla
-  `imu_sensor_broadcaster`, ale w Jazzy tempo publikacji bierze się z
-  `update_rate` kontrolera — `publish_rate` jest ignorowany. Zmierzone: oba
-  publikują **400 Hz** (`magnetometer_broadcaster`, który ma `update_rate:
-  100`, faktycznie chodzi 100 Hz). Czyli robot też publikuje 2× i 4× częściej
-  niż zakładano, co obciąża DDS na RPi. Poprawka to zmiana klucza w yamlu,
-  ale zmienia zachowanie robota — do świadomej decyzji.
-- Kontener nie ma `huggingface_hub`, więc bring-up pada na starcie
-  (`No module named 'huggingface_hub'`), a domyślna referencja polityki w
-  `launch_common.py` wskazuje nieistniejącą rewizję. Do symulacji trzeba dziś
-  podać `policy:=<HF_ORGANIZATION>/wojtek-stiff-height-locomotion@2f385eb...`.
-  To ten sam otwarty problem, który blokuje autostart na robocie.
+- Hardware arm tolerance is 0.15 rad; sim uses 0.35 rad to allow post-ramp sag.
+  Validate the stricter gate separately before claiming hardware readiness.
+- The new legs' folded hip target exceeds the exported model range. Primitive
+  colliders also differ from the physical lying geometry. See
+  [robot variants](../training/docs/robots.md); do not claim folded-pose fidelity
+  from this model until those mismatches are resolved.
+- `leg_odom:=false` uses simulator truth. Test navigation with `leg_odom:=true`
+  to expose the odometry drift that hardware consumers will see.
+- The current launch has no `/sim/reset` service. Stop and restart it. The old
+  standalone simulator's reset interface is not the current contract.
+- The camera mirrors `/sim/qpos` into its own model. Its timestamp is receive
+  time, so transport/render latency is not an exact physical camera model.
+- `dry_run:=true` tests command suppression. It does not reproduce electrical
+  drive-disable behavior; inspect the selected plant's dynamics separately.
+
+## Hardware-only validation
+
+Simulation does not establish CAN reliability or termination, drive firmware
+behavior, encoder zero accuracy, battery or power integrity, real-time jitter,
+thermal limits, wireless discovery/recovery, sensor calibration, or measured
+friction/backlash/compliance. Camera mount and floor-noise checks are also
+physical measurements. The [hardware guide](hardware.md) tracks those checks.
+
+A passing report must identify its tested scope. Keep older measurements as
+historical evidence with their original profile, scene and commit; rerun the
+relevant acceptance checks after changing a model, policy or control contract.

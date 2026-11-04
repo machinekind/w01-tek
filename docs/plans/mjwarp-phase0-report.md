@@ -1,5 +1,11 @@
 # Phase-0 report: MJWarp feasibility
 
+This is a historical July 2026 investigation, including hypotheses corrected
+later in the report. For installation use the [training quickstart](../../training/README.md)
+and committed lockfile. In particular, the initial Warp 1.14 conclusion below
+was rejected; the supported pair pins `mujoco-mjx==3.10.0` and
+`warp-lang==1.13.0`.
+
 **Status:** the GPU spike is complete (RTX 4090, vast.ai, 2026-07-10). The 2-GPU pmap
 smoke remains open. It waits for a cluster node and does not block G0.
 **Date started:** 2026-07-10
@@ -9,7 +15,7 @@ The spike script lived at `training/wojtek_rl/spike_warp.py`. It was temporary b
 
 ---
 
-## 1. Version set (resolved on Mac/darwin CPU, current pins)
+## 1. Initial version set and superseded hypothesis
 
 Installed and import-verified via `uv sync` against the committed `uv.lock`:
 
@@ -22,7 +28,7 @@ Installed and import-verified via `uv sync` against the committed `uv.lock`:
 | brax | 0.14.2 | newer than the plan's ≥0.12.1 floor |
 | playground | 0.2.0 | newer than the plan's ≥0.0.4 floor |
 
-**Finding — the dep bump may be unnecessary.** The current pins already expose the complete MJWarp backend API:
+**Initial hypothesis, rejected in section 4:** these versions exposed the MJWarp backend API:
 - `mjx.put_model(m, impl="warp")` — `impl` accepts `"warp"`; `Impl` enum = {CPP, C, JAX, WARP}.
 - `mjx.make_data(m, impl="warp", naconmax=…, naccdmax=…, njmax=…)` — all three budget knobs present; docstring: "maximum … across all worlds" (i.e. total across the vmapped batch — A2 autosizing must scale by num_envs).
 

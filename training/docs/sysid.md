@@ -16,27 +16,35 @@ each scoring window has to guess the floating base and contact state,
 neither is observable, and the optimizer launders that error into
 whatever parameters resist motion (validated twice on ground-truth sim
 bags: converged fits produced confident, wrong values). Ground bags are
-still useful as a held-out validation set: replay them under identified
-vs default parameters and compare.
+still useful as a held-out validation set, but this fixed-base fitter is not
+a walking-bag replay tool. See [digital-twin validation](digital-twin.md).
 
 Install the extra once:
 
 ```bash
-cd training && uv sync --extra sysid
+uv sync --project training --locked --extra dev --extra sysid
 ```
 
 ## 1. Record a bag
 
 Rest the robot's belly on a raised support so all four legs hang and
 swing freely, and keep it still for the whole recording. A level rig is
-the model's default upright orientation — no IMU or `--base-quat`
-needed. The tool needs two topics, plus one optional:
+the model's default upright orientation. Use `--base-quat 1,0,0,0` for that
+rig so a sensor-frame orientation cannot silently change the base orientation.
+The tool needs two topics, plus one optional:
 
 | topic | msg | role |
 |---|---|---|
 | `/wojtek/joint_targets` | `sensor_msgs/JointState` | commanded positions (input) |
-| `/joint_states` | `sensor_msgs/JointState` | measured positions (fit target) |
-| `/imu/data` | `sensor_msgs/Imu` | rig orientation (skippable: pass `--base-quat` instead) |
+| `/wojtek/joint_states_abs` | `sensor_msgs/JointState` | measured absolute URDF positions (fit target) |
+| `/imu/data` | `sensor_msgs/Imu` | optional orientation of the **base**, not the mounted sensor |
+
+Current ROS `/joint_states` is boot-relative and cannot be converted with the
+URDF joint map alone. Older simulation bags used absolute `/joint_states`;
+read those with `--states-topic /joint_states` only after confirming their
+coordinate convention. `--targets-topic` and `--imu-topic` select alternatives.
+The current IMU broadcaster uses the mounted sensor frame; use an explicit
+measured base quaternion instead of passing that stream as base orientation.
 
 The excitation program is designed so each parameter has a phase that
 pins it:
@@ -56,47 +64,57 @@ pins it:
 The full program is ~2 min; any phase is skippable via its `*_sec`
 parameter.
 
-### From the ROS MuJoCo sim (ground-truth validation)
+### Recording and excitation
 
-The sim's parameters are known (kp=20, kd=1, damping=0.05, armature=0.01,
-frictionloss=0.01), so a bag recorded against it validates the whole
-pipeline: the tool should recover those values. Note the stock sim node
-spawns the robot standing on the floor — for a clean air-style
-validation bag the robot model should be held off the ground, so treat
-sim bags from the stock node as plumbing checks, not recovery tests.
+Prepare a fixed-base simulated rig or a physically supported air rig first.
+The regular ROS simulation starts on the ground; it is not a system-identification
+fixture. Simulated recovery tests must use the model's actual gains/limits,
+including the loaded policy contract, rather than assume historical defaults.
+
+Before excitation, an operator must select the matching profile, zero the robot,
+prepare command ownership and stop policy/teleop output. The excitation node
+publishes joint targets; it does not prepare the rig or open the arm gate. The
+repository does not provide a complete automatic air-rig bringup.
 
 ```bash
-# terminal 1: the simulator
-ros2 run wojtek_pc mujoco_sim_node
+# In a sourced ROS container, against the prepared rig:
+ros2 bag record -o bags/sysid_air \
+  /wojtek/joint_targets /wojtek/joint_states_abs
 
-# terminal 2: the recorder
-ros2 bag record -o bags/sysid_air /wojtek/joint_targets /joint_states /imu/data
-
-# terminal 3: the excitation program (anchors at the current pose, then
-# ramps -> paired-amplitude chirps -> steps -> multisine; ~2 min)
-ros2 run wojtek_pc sysid_excitation
+# A second ROS shell, stock legs. Anchor on absolute joint states.
+ros2 run wojtek_pc sysid_excitation --ros-args \
+  -r joint_states:=/wojtek/joint_states_abs -p amplitude_scale:=0.5
 ```
 
-Stop the recording when the node logs `program done`.
+For new legs, also set `joint_map_yaml` to the installed
+`wojtek_policy/config/joint_map_v627.yaml`; locate that package with
+`ros2 pkg prefix --share wojtek_policy`. The excitation map and fitting map must
+agree. Stop the recording when the node logs `program done`; it continues
+holding the anchor until stopped.
 
 ### From the real robot
 
-Same recorder and excitation node against the real bringup, robot on its
-belly on the raised support. Start with `--ros-args -p amplitude_scale:=0.5` on
-the first run and be ready on the kill switch; check that no leg can hit
+Use the recorder and excitation node above with the robot's belly on the raised
+support. Confirm the physical motor-power isolation procedure first; disarm is
+not torque-off. Start with reduced amplitude and check that no leg can hit
 the frame, the floor, or another leg at full amplitude before scaling up.
 
 Do not fit on policy-driven (walking/teleop) bags: the policy feeds
 measured state back into the commands, which biases closed-loop
 identification, and contact-rich open-loop replays diverge from any
 initial-state error regardless of parameters. Use walking bags as a
-held-out validation set — replay them under identified vs default
-parameters and compare.
+held-out validation set for a separate ground-contact comparison workflow.
 
 ## 2. Fit
 
 ```bash
-./training/run.sh sysid --bag bags/sysid_air
+# Repository root. Bag paths passed to run.sh are relative to training/.
+./training/run.sh sysid --bag /absolute/path/to/sysid_air \
+  --robot wojtek --base-quat 1,0,0,0 --backend jax
+
+# New-leg model and coordinate map:
+./training/run.sh sysid --bag /absolute/path/to/sysid_v2_air \
+  --robot legs_v627 --base-quat 1,0,0,0 --backend jax
 ```
 
 The fit always runs against the fixed-base model: the free joint is
@@ -105,6 +123,13 @@ removed and the base is welded clear of the floor, oriented by
 the model's upright default — which is already correct for a level
 belly-on-support rig. The orientation only sets which way gravity pulls
 on the legs; pass `--base-quat` for a tilted rig.
+
+`--robot` selects the generated model and its URDF-to-MuJoCo map together.
+`--xml` and `--joint-map` permit measured custom inputs. Known cross-variant
+model/map combinations are refused. A bag does not identify its physical robot
+automatically: record its unit, revision, zeroing and calibration alongside it.
+Selection and coordinate conversion are covered by model-free tests; this does
+not establish physical fitting accuracy for the new legs.
 
 Useful options (defaults in parentheses):
 
@@ -128,23 +153,24 @@ Useful options (defaults in parentheses):
   deterministic, so the suspect is a rugged/deceptive landscape — e.g.
   silent contact-buffer overflow for stiff candidates (see
   `data_budget_kwargs`); undiagnosed. GPU-jax is fast enough for sysid.
-- `--ctrl-dt` (physics step, 4 ms): command grid; latency is expressed in
+- `--ctrl-dt` (selected model's physics step): command grid; latency is expressed in
   these steps and interpolated fractionally, so it stays continuous.
 
 Outputs land in `training/runs/sysid_<timestamp>/`:
 
-- `best.json` — identified physical values (plus baseline), genome, config
+- `best.json` — identified physical values (plus baseline), genome, resolved
+  model/map paths, selected robot/topics and SHA-256 hashes of both input files
 - `history.csv` — per-generation best/mean RMS error
 - `fit.png` — measured vs sim-default vs sim-identified traces, window 0
 
 ## 3. Apply the result
 
-- **kp/kd** → `./training/run.sh build --kp <v> --kd <v>` regenerates the
+- **kp/kd** → `./training/run.sh build --robot <variant> --kp <v> --kd <v>` regenerates the
   model, or override per run with `++task.env.pd_kp=` / `++task.env.pd_kd=`.
 - **damping/armature/frictionloss** → edit the joint defaults in
-  `ros/src/wojtek_description/mujoco/wojtek.xml` and rebuild (`run.sh
-  build`); do not hand-edit the generated `wojtek_mjx.xml`.
-- **latency** → steps are on the ctrl grid (default 4 ms each); mirror it
+  variant's source `wojtek.xml` and rebuild (`run.sh build --robot <variant>`);
+  check variant-specific overrides in `robots.py`. Do not hand-edit generated XML.
+- **latency** → steps are on the selected control grid; mirror it
   in training with `++task.env.latency.enable=true` and min/max substeps
   around the identified value.
 - **torque_scale** (when identified from a deliberately saturating bag) →

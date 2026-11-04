@@ -6,6 +6,9 @@ in `training/wojtek_rl`. Commands below are written from the repository root;
 environment modules remain the final source of truth, while Hydra YAML supplies
 overrides on top of them.
 
+Start with the [training quickstart](../README.md) for installation and a first
+run, or [policy promotion](policy-lifecycle.md) for evaluation and deployment.
+
 ## Backend terminology
 
 Wojtek uses **MJWarp**—the Warp implementation of MuJoCo's MJX API—for normal
@@ -87,7 +90,7 @@ Defined in [`conf/config.yaml`](../wojtek_rl/conf/config.yaml).
 | `obs` | `full` | Actor sensor-suite group: `full` or `no_imu`. It writes `task.env.obs.include`. |
 | `run_name` | timestamped task name | Output is `training/runs/<run_name>`. The automatic name is `<task>_<timestamp>`, prefixed with `smoke_` for a smoke run. Set it for reproducible, named runs. |
 | `seed` | `0` | PPO random seed. |
-| `smoke` | `false` | Trainer-level tiny CPU-friendly setting; `./training/run.sh smoke` also forces it and disables WandB. |
+| `smoke` | `false` | Legacy small PPO settings. `run.sh smoke` forces CPU and disables WandB, but CPU training compilation is too slow for the supported check workflow. Use the bounded GPU check in the training README. |
 | `restore` | `null` | Checkpoint directory to warm start from. Relative paths are relative to `training/`, e.g. `restore=runs/base/checkpoints/000100000000`. |
 | `domain_rand` | `true` | Enables the legacy model randomization and permits explicitly enabled `dr.*` additions. The four expanded `dr.*` switches still default false. Set false only to remove all model DR. |
 | `rnd.enable` | `false` | Random Network Distillation exploration bonus (arXiv 1810.12894). Enabled, training runs the vendored trainer fork [`wojtek_rl/ppo_rnd.py`](../wojtek_rl/ppo_rnd.py) (brax 0.14.2 `ppo/train.py` with fenced insertions): a frozen random target MLP plus a trained predictor over one observation component; the predictor's per-transition MSE — novelty of the reached state — is RMS-normalized, scaled by `rnd.coef` and added to the env reward before GAE. Single reward stream (no separate intrinsic value head). RND state is not checkpointed; a restored run re-learns the predictor. Disabled runs stay on stock `brax` `ppo.train`. |
@@ -910,16 +913,26 @@ using the preset.
 | `import-robot` | `./training/run.sh import-robot --robot R --archive <sim_robot.tgz>`; writes a variant's source MJCF and visual meshes from a CAD export. See [Robot variants](robots.md). |
 | `pose` | `./training/run.sh pose [--second RAD --third RAD --kp K]`; renders linkage pose samples; `--kp` defaults to `20`. |
 | `check` | `./training/run.sh check [--robot R --gpu --backend {jax,warp,auto} --nenv N --nsteps N]`; static checks plus a small MJX/JAX fallback compile by default. Use `--gpu --backend warp` to exercise the primary MJWarp CUDA path. GPU CLI defaults: backend `jax`, `nenv=4096`, `nsteps=200`. |
+| `build-terrain` / `check-terrain` | Generate an arena, then check geometry/contact constraints. `build-terrain` selects arena geometry; `check-terrain` selects the arena and backend. See each command's `--help`; terrain currently uses stock legs. |
+| `friction-probe` | `./training/run.sh friction-probe --help`; compare sampled foot-friction settings with the effective contacts on the selected backend. |
 | `train` | `./training/run.sh train [Hydra overrides]`; writes checkpoints and `run.json` to `training/runs/<run_name>`. |
-| `smoke` | `./training/run.sh smoke [Hydra overrides]`; tiny CPU pipeline check with WandB disabled. A selected preset can override smoke's short PPO budget, so use `++ppo.num_timesteps=100000` when combining a preset with smoke. |
+| `smoke` | Legacy CPU training command, retained in the script but not recommended or used as a validation gate. Resolve configuration, run a GPU model check and then a bounded GPU train instead; see [quickstart](../README.md). |
 | `eval` | `./training/run.sh eval --run runs/<name> [--x-vel V --y-vel V --yaw-vel W --height H --steps N --out FILE --video-size WxH --overlay-torque --overlay-camera]`; renders a rollout. See "Rendering videos" below for the three render switches. |
 | `video-probe` | `./training/run.sh video-probe --run runs/<name> [--arena {flat,train,eval} --cell NAME --seconds S --fps F --vx V --camera NAME --out FILE --list-cells]`; renders the showcase clip: 960x720 with every overlay on. `--cell` films one measurement cell of the eval arena from the spawn `terrain-scan` uses; `--arena train`/`eval` needs a terrain run. Output lands in `training/videos/<run_name>/` unless `--out` says otherwise. |
 | `battery` | `./training/run.sh battery --run runs/<name> [--out FILE --alpha A --lag-tau T]`; writes the fixed comparison battery. `--alpha`/`--lag-tau` are eval-only plant perturbations, see "Robustness grid (eval-only)" below. |
 | `courses` | `./training/run.sh courses --run runs/<name> [--seeds N --only NAME... --video --video-size WxH --overlay-torque --overlay-camera --paths --out FILE --list]`; writes the path-following course benchmark. `--list` prints the catalogue without loading a run. See "Course benchmark" below. |
 | `imu-grid` | `./training/run.sh imu-grid --runs runs/<name>... [--bias-levels B... --axes x y z --noise-gyro S... --vib-gain G... --cross-noise-vib --latency-substeps D... --lag-tau T... --seeds N --stand-sec S --walk-sec S --walk-vx V --out FILE]`; writes the IMU robustness grid. Its axes are pinned gyro bias, white gyro noise, the gyro-vib feedback loop, pinned control latency, and actuator-torque lag, and they can be combined in one cell. See "IMU robustness grid" below. |
 | `report` | `./training/run.sh report --run runs/<name> [--out-json FILE --out-md FILE]`; writes battery, torque, power, impact proxy, and termination summary. |
+| `terrain-scan` | `./training/run.sh terrain-scan --help`; measure a terrain policy across the fixed arena cells. Record backend and arena revision with results. |
 | `export` | `./training/run.sh export --run runs/<name> [--out DIR]`; writes `policy.npz` plus `policy_meta.json`, the schema-2 deployment contract built from the run's env (`wojtek_rl/deploy_contract.py`), and validates the deploy runtime end-to-end against the env before writing. |
 | `app` | `./training/run.sh app [--host HOST --port PORT]`; runs the interactive navigation demo. `WOJTEK_RUN_DIR`, `HOST`, and `PORT` environment variables supply defaults; see [demo README](../demo/README.md). |
+| `distill` | `./training/run.sh distill +experiment=terrain_distill [Hydra overrides]`; DAgger student training from routed teacher checkpoints. Resolve configuration and supply compatible teachers first. |
+| `sysid` | `./training/run.sh sysid --bag PATH --robot wojtek`; fixed-base actuator fitting with the selected model/map. See [sysid](sysid.md) for topics, rig preparation and validation. |
+| `room-assets` / `build-room` / `room` | Download/process a scan, assemble its scene and run the exported-policy room demo. See [demo setup](../demo/README.md). |
+| `grid` | `./training/run.sh grid --help`; build the occupancy representation used by navigation evaluation. |
+| `scan-bench` | `./training/run.sh scan-bench --help`; compare local-planner behavior. See [SCAN planner](scan-planner.md). |
+| `nav-eval` | `./training/run.sh nav-eval --help`; kinematic navigation episodes and VLM scoring, distinct from physical locomotion evaluation. Requires the `eval` extra. |
+| `nav-episode` | `./training/run.sh nav-episode --goal 'go to the bed' --policy <reference>`; headless VLM navigation through the plain-MuJoCo room simulation. Requires room assets and the model server. |
 | `test` | `./training/run.sh test [pytest args]`; runs `training/tests/unit` — model-free, ~3 s, safe in an edit loop. |
 | `test-slow` | `./training/run.sh test-slow [pytest args]`; runs `training/tests/integration` — builds and steps real MJX models, 6m23s cold. Sets `JAX_COMPILATION_CACHE_DIR=training/.jax_cache` so repeat runs reuse compiled executables (measured on one file: 45s cold, 16s warm; the whole suite's warm time was not measured). |
 | `test-all` | `./training/run.sh test-all [pytest args]`; both suites, with the same compilation cache. |
@@ -1307,16 +1320,16 @@ own trained value on that axis. `BISECT_VIB` is the bracket, written as
 ## Job payload configuration
 
 Every script in `training/jobs/` is a parameterized, reusable tool. Experiment-
-specific values enter through environment variables declared with a `param`
-line, and the as-run instance of a finished experiment is archived in its
+specific values enter through environment variables declared at the top of the
+script, and the as-run instance of a finished experiment is archived in its
 keeper's Hugging Face repo under `hpc/` — see
 [`training/CLAUDE.md`](../CLAUDE.md) for the convention.
 
-A payload's own declaration is the authoritative list of its variables,
-their kinds and their defaults. Print it with `--describe`:
+A payload's shell declarations are the authoritative list of its variables
+and defaults. Read them before running it:
 
 ```bash
-bash training/jobs/train.sh --describe
+sed -n '1,45p' training/jobs/train.sh
 ```
 
 [`training/jobs/train.sh`](../jobs/train.sh) takes `EXPERIMENT` (the name passed
@@ -1324,8 +1337,9 @@ as `+experiment`), `RUN_NAME`, `NUM_ENVS` (`++ppo.num_envs`, a whole-machine
 total), `BATCH` (`++ppo.batch_size`), the terrain and wandb switches, and
 `EXTRA` for additional space-separated Hydra overrides.
 
-Use the same resolve/smoke/probe/full-run ladder on an appropriate local or
-single-GPU environment before spending a large multi-GPU budget.
+There is no `--describe` mode: invoking the payload starts its work. Use the
+resolve/model-check/bounded-GPU-run sequence in the training README before a
+large multi-GPU run.
 
 ## Process environment defaults
 
@@ -1336,5 +1350,5 @@ way a command runs:
 |---|---|
 | `train` | Sets `XLA_FLAGS=--xla_gpu_triton_gemm_any=true` and `XLA_PYTHON_CLIENT_MEM_FRACTION=0.9` only when those variables are not already set. |
 | `smoke`, `battery`, `courses`, `report`, `export` | `run.sh` sets `JAX_PLATFORMS=cpu`; `sim.backend=auto` therefore resolves to the MJX/JAX backend. |
-| `eval`, `app` | `run.sh` defaults `MUJOCO_GL=egl` on Linux only; macOS leaves it unset so mujoco picks its native GL. Set it explicitly to override. |
-| `app` | Defaults `WOJTEK_RUN_DIR=policies/fbb_v3`, `HOST=127.0.0.1`, and `PORT=8010`. The demo is a joystick-specific presentation layer, not a generic evaluator for arbitrary task/configuration shapes. |
+| `eval` | `run.sh` defaults `MUJOCO_GL=egl` on Linux only; macOS leaves it unset so MuJoCo picks its native GL. |
+| `app` | Legacy path: its wrapper defaults EGL even on macOS. Defaults `WOJTEK_RUN_DIR=policies/fbb_v3`, `HOST=127.0.0.1`, and `PORT=8010`; the artifact is not supplied. It builds a default stock environment rather than reconstructing arbitrary run settings. Use the room demo or ROS simulation for current workflows. |

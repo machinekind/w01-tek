@@ -1,0 +1,12 @@
+/**:
+  ros__parameters:
+    address: "127.0.0.1"
+    port: 8766
+    capabilities: [connectionGraph, assets]
+    client_topic_whitelist: ["a^"]
+    service_whitelist: ["a^"]
+    param_whitelist: ["a^"]
+    topic_whitelist:
+      - "^/(tf|tf_static|robot_description|wojtek/.*|joint_states|imu_sensor_broadcaster/imu|camera/camera/color/image_raw/compressed)$"
+    asset_uri_allowlist:
+      - '^package://wojtek_description/[-a-zA-Z0-9_./]+\.(stl|dae|png|jpg)$'

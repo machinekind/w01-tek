@@ -123,6 +123,7 @@ def _setup(context, *args, **kwargs):
             Node(
                 package=PKG,
                 executable="goto_node",
+                remappings=[("cmd_vel", LaunchConfiguration("cmd_vel_topic", default="/cmd_vel"))],
                 output="screen",
                 parameters=[{"goal_timeout": float(arg("goal_timeout"))}],
                 prefix=prefix,
@@ -151,6 +152,7 @@ def generate_launch_description():
     share = get_package_share_directory(PKG)
     return LaunchDescription(
         [
+            DeclareLaunchArgument("cmd_vel_topic", default_value="/cmd_vel"),
             DeclareLaunchArgument(
                 "params_file", default_value=f"{share}/config/costmap.yaml",
                 description="Costmap settings; see the file's commentary.",

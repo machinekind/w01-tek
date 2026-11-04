@@ -13,9 +13,9 @@ virtual camera, RViz, the operator console and optionally a gamepad.
                                        [vlm:=true vlm_url:=http://host:11434 vlm_model:=...]
 
 This is `robot.launch.py` with the hardware plugin swapped -- same
-controller_manager at 200 Hz, same broadcasters, same real_io_node, same
-policy_node parameters (see wojtek_bringup/launch_common.py, which both
-launches share). So the startup procedure is the robot's procedure:
+controller_manager at 100 Hz, broadcasters and real_io_node. The shared launch
+keeps policy settings aligned; the arm-position tolerance differs (sim 0.35 rad,
+real 0.15 rad). The startup procedure is the robot's procedure:
 
   1. Launch. The policy runs immediately but real_io_node starts DISARMED.
   2. ros2 service call /wojtek/zero std_srvs/srv/Trigger
@@ -116,6 +116,7 @@ from wojtek_bringup.launch_common import (
     sim_model_xml,
 )
 from wojtek_policy.policy_source import env_policy
+from wojtek_bringup.command_routing import command_topic
 
 
 def _camera_node(context):
@@ -183,6 +184,7 @@ def generate_launch_description():
         Node(
             package="wojtek_teleop",
             executable="text_commander",
+            remappings=[("cmd_vel", command_topic("text"))],
             output="screen",
         ),
         # The manual-control surface, so a session never needs raw service
@@ -194,6 +196,7 @@ def generate_launch_description():
         Node(
             package="wojtek_pc",
             executable="web_console",
+            remappings=[("cmd_vel", command_topic("console"))],
             output="screen",
             condition=IfCondition(
                 EqualsSubstitution(LaunchConfiguration("console"), "web")
@@ -205,6 +208,7 @@ def generate_launch_description():
         Node(
             package="wojtek_pc",
             executable="console",
+            remappings=[("cmd_vel", command_topic("console"))],
             output="screen",
             condition=IfCondition(
                 EqualsSubstitution(LaunchConfiguration("console"), "qt")
@@ -230,6 +234,7 @@ def generate_launch_description():
             launch_arguments={
                 "url": LaunchConfiguration("vlm_url"),
                 "model": LaunchConfiguration("vlm_model"),
+                "cmd_vel_topic": command_topic("brain"),
             }.items(),
             condition=IfCondition(LaunchConfiguration("vlm")),
         ),

@@ -18,7 +18,8 @@ from pathlib import Path
 
 import pytest
 from launch import LaunchContext
-from launch.actions import SetLaunchConfiguration
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetLaunchConfiguration
+from launch.utilities import normalize_to_list_of_substitutions, perform_substitutions
 from launch_ros.actions import Node
 from launch_ros.utilities import evaluate_parameters
 
@@ -354,3 +355,131 @@ def test_the_chosen_policy_reaches_later_nodes():
 def test_unknown_robot_is_refused():
     with pytest.raises(ValueError, match="no_such_robot"):
         _nodes("sim", robot="no_such_robot")
+
+
+def _load_launch(package, filename):
+    path = PKG_DIR.parent / package / "launch" / filename
+    spec = importlib.util.spec_from_file_location(f"routing_{package}_{filename}", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _declare_defaults(description, context):
+    for action in description.entities:
+        if isinstance(action, DeclareLaunchArgument):
+            action.execute(context)
+
+
+def _remaps(node, context):
+    return {
+        perform_substitutions(context, source): perform_substitutions(context, target)
+        for source, target in node._Node__remappings
+    }
+
+
+def _include(actions, filename, context):
+    for action in actions:
+        if not isinstance(action, IncludeLaunchDescription):
+            continue
+        source = action.launch_description_source
+        # Expanding a source loads its description; it does not start nodes.
+        # location is the resulting string, not a list of substitutions.
+        source.get_launch_description(context)
+        if source.location.endswith(filename):
+            return action
+    raise AssertionError(f"missing launch include {filename}")
+
+
+def _include_arguments(action, context):
+    def expand(value):
+        return perform_substitutions(context, normalize_to_list_of_substitutions(value))
+
+    return {
+        expand(name): expand(value)
+        for name, value in action.launch_arguments
+    }
+
+
+@pytest.mark.parametrize("hardware", ["real", "sim"])
+def test_shared_launch_keeps_command_mux_opt_in(hardware):
+    description = launch_common.common_launch_description(
+        with_rviz=False, bag_default="false", hardware=hardware,
+    )
+    argument, = [
+        action for action in description.entities
+        if isinstance(action, DeclareLaunchArgument) and action.name == "command_mux"
+    ]
+    context = LaunchContext()
+    argument.execute(context)
+    assert context.launch_configurations["command_mux"] == "false"
+
+
+@pytest.mark.parametrize("hardware", ["real", "sim"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_shared_launch_routes_deck_pad_and_nav_and_gates_disarm(hardware, enabled):
+    """Check actual node/include wiring, not only command_topic's string result."""
+    context = _context(
+        hardware, command_mux=str(enabled).lower(), gamepad="true", nav="true",
+    )
+    description = launch_common.common_launch_description(
+        with_rviz=False, bag_default="false", with_gamepad=True, hardware=hardware,
+    )
+    _declare_defaults(description, context)
+    actions = launch_common._launch_setup(context, with_rviz=False, hardware=hardware)
+    nodes = [action for action in actions if isinstance(action, Node)]
+
+    def topic(source):
+        return f"/wojtek/cmd_vel/{source}" if enabled else "/cmd_vel"
+
+    assert _remaps(_by_executable(nodes, "deck_gateway"), context)["cmd_vel"] == topic("deck")
+    mux = _by_executable(nodes, "command_mux")
+    assert mux.condition.evaluate(context) is enabled
+    assert _remaps(mux, context) == {"/wojtek/cmd_vel/selected": "/cmd_vel"}
+    io = _by_executable(nodes, "real_io_node")
+    assert _params(io, context)[0]["cancel_navigation_on_disarm"] is enabled
+
+    for source, filename, package, candidates, executable in (
+        ("pad", "gamepad.launch.py", "wojtek_teleop", actions, "gamepad_teleop"),
+        ("nav", "costmap.launch.py", "wojtek_nav", description.entities, "goto_node"),
+    ):
+        included = _include(candidates, filename, context)
+        arguments = _include_arguments(included, context)
+        assert arguments["cmd_vel_topic"] == topic(source)
+        child = LaunchContext()
+        child.launch_configurations.update(arguments)
+        module = _load_launch(package, filename)
+        _declare_defaults(module.generate_launch_description(), child)
+        node = _by_executable(module._setup(child), executable)
+        assert _remaps(node, child)["cmd_vel"] == topic(source)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("console", ["web", "qt", "none"])
+def test_sim_routes_its_console_text_and_brain_publishers(enabled, console):
+    context = _context("sim", command_mux=str(enabled).lower(), console=console, vlm="true")
+    description = _load_launch("wojtek_pc", "sim.launch.py").generate_launch_description()
+    _declare_defaults(description, context)
+    nodes = [action for action in description.entities if isinstance(action, Node)]
+
+    for executable, source, active in (
+        ("text_commander", "text", True),
+        ("web_console", "console", console == "web"),
+        ("console", "console", console == "qt"),
+    ):
+        # Match the complete executable: "console" also occurs in web_console.
+        node, = [n for n in nodes if str(n._Node__node_executable) == executable]
+        assert (node.condition is None or node.condition.evaluate(context)) is active
+        expected = f"/wojtek/cmd_vel/{source}" if enabled else "/cmd_vel"
+        assert _remaps(node, context)["cmd_vel"] == expected
+
+    included = _include(description.entities, "brain.launch.py", context)
+    arguments = _include_arguments(included, context)
+    expected = "/wojtek/cmd_vel/brain" if enabled else "/cmd_vel"
+    assert arguments["cmd_vel_topic"] == expected
+    child = LaunchContext()
+    child.launch_configurations.update(arguments)
+    brain = _load_launch("wojtek_nav", "brain.launch.py").generate_launch_description()
+    _declare_defaults(brain, child)
+    node, = [action for action in brain.entities if isinstance(action, Node)]
+    assert _remaps(node, child)["cmd_vel"] == expected

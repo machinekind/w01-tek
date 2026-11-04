@@ -1,14 +1,10 @@
-"""Unit tests for text_commander's pure command core (CommandState).
+"""Pure tests for text command mapping, timeout and cancellation.
 
-Pure python -- no rclpy, no ROS graph. Run anywhere:
+Run without ROS:
     pytest ros/src/wojtek_teleop/test/test_text_commander.py
 
-CommandState is the whole behaviour of the node minus the rclpy shell:
-`handle(command, now)` validates and arms a command, `twist_to_publish(now)`
-is what the 20 Hz timer asks -- (vx, wz) while a command is active, exactly
-one (0, 0) on stop/timeout (policy_node latches the last /cmd_vel forever,
-so the zero message is mandatory), then None so other drive sources are not
-shouted over.
+The core emits velocity while active, one zero on stop/cancel/timeout,
+then silence. A cancelled command must not resume when autonomy is enabled.
 """
 
 import sys
@@ -16,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from wojtek_teleop.text_commander import CommandState  # noqa: E402
+from wojtek_teleop.text_command_state import CommandState  # noqa: E402
 
 V = 0.3
 W = 0.5
@@ -128,3 +124,28 @@ class TestUnknownCommand:
         s = make_state()
         assert not s.handle("banana", now=0.0)
         assert s.twist_to_publish(now=0.0) is None
+
+
+class TestCancel:
+    def test_cancel_forgets_command_before_deadline(self):
+        s = make_state()
+        s.handle("forward", now=0.0)
+        assert s.twist_to_publish(now=0.1) == (V, 0.0)
+        s.cancel()
+        assert s.twist_to_publish(now=0.2) == (0.0, 0.0)
+        # Re-enabling the mux must not revive this source's old command.
+        assert s.twist_to_publish(now=0.8) is None
+        assert s.twist_to_publish(now=1.5) is None
+
+    def test_cancel_while_idle_does_not_publish(self):
+        s = make_state()
+        s.cancel()
+        assert s.twist_to_publish(now=0.0) is None
+
+    def test_only_a_new_command_can_restart_after_cancel(self):
+        s = make_state()
+        s.handle("forward", now=0.0)
+        s.cancel()
+        assert s.twist_to_publish(now=0.1) == (0.0, 0.0)
+        assert s.handle("left", now=0.2)
+        assert s.twist_to_publish(now=0.3) == (0.0, W)

@@ -48,6 +48,7 @@ from wojtek_policy import poses, robots
 # How the IMU sits on the body, and why the number matters, is in imu_mount.
 from wojtek_policy.imu_mount import IMU_MOUNT_RPY
 from wojtek_policy.policy_source import active_policy, load_policy
+from wojtek_bringup.command_routing import command_topic
 
 
 def resolve_scene(model_xml):
@@ -351,6 +352,9 @@ def _launch_setup(context, with_rviz, hardware):
             parameters=[
                 {
                     "dry_run": LaunchConfiguration("dry_run"),
+                    "cancel_navigation_on_disarm": ParameterValue(
+                        LaunchConfiguration("command_mux", default="false"), value_type=bool
+                    ),
                     "boot_pose": LaunchConfiguration("boot_pose"),
                     # The legs' poses, passive-joint table and trick clips
                     # follow the profile, like the joint map.
@@ -489,6 +493,7 @@ def _launch_setup(context, with_rviz, hardware):
         Node(
             package="wojtek_deck",
             executable="deck_gateway",
+            remappings=[("cmd_vel", command_topic("deck"))],
             output="screen",
             condition=IfCondition(LaunchConfiguration("deck")),
             prefix=f"taskset -c {deck_cpus}" if deck_cpus else None,
@@ -627,12 +632,19 @@ def _launch_setup(context, with_rviz, hardware):
                 launch_arguments={
                     "cpus": LaunchConfiguration("gamepad_cpus"),
                     "speed_scale": LaunchConfiguration("gamepad_speed"),
+                    "cmd_vel_topic": command_topic("pad"),
                     # The loaded directory, like policy_node and the deck:
                     # the same files, no second resolution.
                     "policy": str(loaded.directory),
                 }.items(),
             )
         )
+    nodes.append(Node(
+        package="wojtek_teleop", executable="command_mux", output="screen",
+        condition=IfCondition(LaunchConfiguration("command_mux", default="false")),
+        remappings=[("/wojtek/cmd_vel/selected", "/cmd_vel")],
+        prefix=_cpu_prefix(context, "ui_cpus"),
+    ))
     return [SetLaunchConfiguration("policy", policy_ref)] + nodes
 
 
@@ -666,6 +678,8 @@ def common_launch_description(
         # any other reference. The robot needs no network. Empty means the
         # robot's default: the override file, or else the profile's pin.
         DeclareLaunchArgument("policy", default_value=policy_default),
+        DeclareLaunchArgument("command_mux", default_value="false",
+                              description="Opt-in command ownership; autonomy starts inhibited."),
         # Which robot this is, as a profile from wojtek_policy/robots.py:
         # "wojtek" for the stock legs, "wojtek_v2" for the v6.27 legs. It
         # picks the URDF legs, the joint map, the knee clamp and the default
@@ -872,6 +886,7 @@ def common_launch_description(
             launch_arguments={
                 "cpus": LaunchConfiguration("nav_cpus"),
                 "costmap": LaunchConfiguration("nav_costmap"),
+                "cmd_vel_topic": command_topic("nav"),
             }.items(),
             condition=IfCondition(LaunchConfiguration("nav")),
         ),

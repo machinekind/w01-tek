@@ -29,6 +29,7 @@ from wojtek_nav.vlm_brain import DEFAULT_MODEL, DEFAULT_URL
 def generate_launch_description():
     return LaunchDescription(
         [
+            DeclareLaunchArgument("cmd_vel_topic", default_value="/cmd_vel"),
             DeclareLaunchArgument(
                 "url",
                 default_value=EnvironmentVariable("VLM_URL", default_value=DEFAULT_URL),
@@ -62,6 +63,7 @@ def generate_launch_description():
             Node(
                 package="wojtek_nav",
                 executable="vlm_brain_node",
+                remappings=[("cmd_vel", LaunchConfiguration("cmd_vel_topic"))],
                 output="screen",
                 # Every string pinned as str: launch_ros YAML-parses bare
                 # values, so an all-digit model tag would reach

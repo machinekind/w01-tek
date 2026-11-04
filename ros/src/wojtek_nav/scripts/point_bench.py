@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Offline pointing benchmark against the Ollama VLM endpoint.
 
-For every captured frame (index.json from e2e_nav.py's `capture`) and every
+For every reviewed frame (index.json from capture_frames.py) and every
 object visible in it, ask the model to point at the object; score the pixel
 against the projected truth and, through the frame's own depth image, the
 metric error of the resolved point (the same maths pixel_goal_node runs).
@@ -55,14 +55,14 @@ SCHEMA = {
 }
 
 
-def prompt(name, fmt, lang):
+def prompt(name, fmt, lang, width=848, height=480):
     obj = NAMES.get(name, ABSENT.get(name))[0 if lang == "en" else 1]
     if lang == "en":
         task = f"Task: walk to {obj}."
     else:
         task = f"Zadanie: podejdź do: {obj}."
     if fmt == "absolute":
-        coords = "point_2d = [x, y] in pixels of this image (848 wide, 480 high)."
+        coords = f"point_2d = [x, y] in pixels of this image ({width} wide, {height} high)."
     else:
         coords = "point_2d = [x, y], integers 0-1000 normalised to the image width and height."
     return (
@@ -101,7 +101,7 @@ def ask(url, model, jpeg_b64, text, use_schema, max_tokens=60, timeout=120):
     return msg, dt, usage
 
 
-def parse(msg, fmt):
+def parse(msg, fmt, width=848, height=480):
     s = msg.strip()
     if s.startswith("```"):
         s = s.strip("`")
@@ -113,15 +113,15 @@ def parse(msg, fmt):
     if d.get("type") == "goal" and isinstance(d.get("point_2d"), list) and len(d["point_2d"]) == 2:
         a, b = float(d["point_2d"][0]), float(d["point_2d"][1])
         if fmt == "absolute":
-            d["u_norm"], d["v_norm"] = a / 848.0, b / 480.0
+            d["u_norm"], d["v_norm"] = a / width, b / height
         else:
             d["u_norm"], d["v_norm"] = a / 1000.0, b / 1000.0
     return d
 
 
-def resolve(depth, u_norm, v_norm, kc, kd, radius=4):
+def resolve(depth, u_norm, v_norm, kc, kd, radius=4, width=848, height=480):
     """pixel_goal.py's chain: colour pixel -> depth pixel -> patch median -> point."""
-    u_c, v_c = u_norm * 848.0, v_norm * 480.0
+    u_c, v_c = u_norm * width, v_norm * height
     tx, ty = (u_c - kc[2]) / kc[0], (v_c - kc[5]) / kc[4]
     u_d, v_d = kd[2] + kd[0] * tx, kd[5] + kd[4] * ty
     h, w = depth.shape
@@ -137,6 +137,30 @@ def resolve(depth, u_norm, v_norm, kc, kd, radius=4):
     return ((u_d - kd[2]) / kd[0] * zm, (v_d - kd[5]) / kd[4] * zm, zm)
 
 
+def validate_annotation(entry):
+    """Refuse unreviewed captures; an absent target must be labelled explicitly."""
+    # Legacy labelled fixtures have no annotation_status field; keep accepting
+    # that format. New captures explicitly start as unreviewed, even once labelled.
+    if entry.get("annotation_status", "reviewed") != "reviewed":
+        raise ValueError(f"frame {entry['i']}: annotate truth and set annotation_status to reviewed")
+    truth = entry.get("truth")
+    if not isinstance(truth, dict) or not truth:
+        raise ValueError(f"frame {entry['i']}: at least one reviewed label is required")
+    for name, target in truth.items():
+        if name not in NAMES and name not in ABSENT:
+            raise ValueError(f"frame {entry['i']}: unknown label {name!r}; add its prompt name first")
+        if not isinstance(target, dict) or type(target.get("visible")) is not bool:
+            raise ValueError(f"frame {entry['i']}: {name} needs a boolean visible value")
+        if target["visible"]:
+            coords = [target.get("u_norm"), target.get("v_norm")]
+            if not all(isinstance(v, (int, float)) and math.isfinite(v) and 0 <= v <= 1 for v in coords):
+                raise ValueError(f"frame {entry['i']}: {name} needs finite normalized coordinates in [0, 1]")
+    width, height = entry.get("colour_width", 848), entry.get("colour_height", 480)
+    if type(width) is not int or type(height) is not int or width <= 0 or height <= 0:
+        raise ValueError(f"frame {entry['i']}: invalid colour dimensions")
+    return width, height
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--frames", required=True)
@@ -149,37 +173,42 @@ def main():
     a = ap.parse_args()
     frames = Path(a.frames)
     index = json.load(open(frames / "index.json"))
+    # Validate the whole fixture before making any model requests.
+    for e in index:
+        if "error" not in e:
+            validate_annotation(e)
     rows = []
     for e in index:
         if "error" in e:
             continue
         i = e["i"]
+        width, height = validate_annotation(e)
         jpeg = base64.b64encode((frames / f"frame_{i:02d}.jpg").read_bytes()).decode()
         depth = np.load(frames / f"frame_{i:02d}_depth.npy")
         kc, kd = e["k_colour"], e["k_depth"]
         # the truth in the camera frame, for the metric error: re-derive from the
         # truth pixel and the frame's depth (what a perfect pointer would get)
         queries = [(n, t) for n, t in e["truth"].items() if t["visible"]]
-        absent = [n for n in e["truth"] if not e["truth"][n]["visible"]] or list(ABSENT)[:1]
-        for name, t in queries + [(n, None) for n in absent[:1]]:
+        absent = [n for n in e["truth"] if not e["truth"][n]["visible"]]
+        for name, t in queries + [(n, None) for n in absent]:
             try:
-                msg, dt, usage = ask(a.url, a.model, jpeg, prompt(name, a.fmt, a.lang), a.json_schema)
+                msg, dt, usage = ask(a.url, a.model, jpeg, prompt(name, a.fmt, a.lang, width, height), a.json_schema)
             except Exception as ex:  # noqa: BLE001
                 rows.append(dict(frame=i, obj=name, error=f"{type(ex).__name__}: {ex}"))
                 print(f"frame {i} {name}: ERROR {ex}", flush=True)
                 continue
-            d = parse(msg, a.fmt)
+            d = parse(msg, a.fmt, width, height)
             row = dict(frame=i, obj=name, visible=t is not None, seconds=round(dt, 2),
                        out_tokens=usage.get("completion_tokens"), raw=msg[:160], parsed=bool(d))
             if t is None:
                 row["correct"] = bool(d and d.get("type") in ("not_visible", "turn"))
                 row["hallucinated"] = bool(d and d.get("type") == "goal")
             elif d and d.get("type") == "goal":
-                du = (d["u_norm"] - t["u_norm"]) * 848.0
-                dv = (d["v_norm"] - t["v_norm"]) * 480.0
+                du = (d["u_norm"] - t["u_norm"]) * width
+                dv = (d["v_norm"] - t["v_norm"]) * height
                 row["px_err"] = round(math.hypot(du, dv), 1)
-                p_model = resolve(depth, d["u_norm"], d["v_norm"], kc, kd)
-                p_truth = resolve(depth, t["u_norm"], t["v_norm"], kc, kd)
+                p_model = resolve(depth, d["u_norm"], d["v_norm"], kc, kd, width=width, height=height)
+                p_truth = resolve(depth, t["u_norm"], t["v_norm"], kc, kd, width=width, height=height)
                 if p_model and p_truth:
                     row["metric_err_m"] = round(math.dist(p_model, p_truth), 3)
                     row["range_model_m"] = round(p_model[2], 2)
@@ -190,7 +219,7 @@ def main():
                 if row["depth_ok"]:
                     row["correct"] = bool(row["metric_err_m"] < 0.25)
                 else:
-                    row["correct"] = bool(row["px_err"] < 60.0)
+                    row["correct"] = bool(row["px_err"] < 60.0 * width / 848.0)
                     row["judged_by"] = "pixel (no depth at this range)"
             else:
                 row["correct"] = False

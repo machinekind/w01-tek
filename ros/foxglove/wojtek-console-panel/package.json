@@ -20,5 +20,10 @@
     "@foxglove/extension": "^2",
     "create-foxglove-extension": "^1",
     "typescript": "^5"
+  },
+  "overrides": {
+    "tar": "^7.5.22",
+    "webpack": "^5.112.2",
+    "rimraf": "^6.1.4"
   }
 }

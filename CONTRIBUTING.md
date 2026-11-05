@@ -1,6 +1,6 @@
 # Contributing to Wojtek
 
-Start with the [documentation home](docs/README.md). Read [CLAUDE.md](CLAUDE.md)
+Start with the [documentation home](docs/README.md). Read [AGENTS.md](AGENTS.md)
 before changing training, models, experiments or deployment. Experiments stay
 outside the production dependency graph. Do not commit credentials, private machine
 identities, generated runs, weights or recordings.
@@ -42,7 +42,7 @@ Changes under an experiment need `./experiments/<experiment>/run.sh test` as
 described in that experiment's README.
 
 Environment/model/randomization changes additionally need the integration suite;
-see the complete [validation matrix](CLAUDE.md#validation-by-change-type).
+see the complete [validation matrix](AGENTS.md#validation-by-change-type).
 Do not run CPU training as a smoke test. For ROS changes,
 run the affected package's tests in the ROS development container. Pure modules
 can also be tested from a Python environment with their declared dependencies;

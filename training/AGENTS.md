@@ -1,7 +1,7 @@
 # Training project guide
 
-Read the root `CLAUDE.md` first for the resolve/bounded-run/full-run workflow and
-the validation rules. This file adds the payload conventions for
+Read the root [AGENTS.md](../AGENTS.md) first for the resolve/bounded-run/full-run
+workflow and the validation rules. This file adds the payload conventions for
 `training/jobs/`. As everywhere in the repository, new code is Apache-2.0
 (`license = "Apache-2.0"` in `pyproject.toml`) unless the author explicitly
 asks for a different license.
@@ -51,6 +51,6 @@ payloads below.
 | `terrain_scan.sh` | Eval-only terrain measurement suite: builds the fixed measurement arena and scores checkpoints on it. |
 | `terrain_sizing.sh` | Bounded terrain training slices at several env counts, reporting peak GPU memory and steps/s per size. |
 
-Per the root `CLAUDE.md`, do not start a remote training job without explicit
-user authorization — resolve locally first, and keep wandb enabled on every
+Per the root [AGENTS.md](../AGENTS.md), do not start a remote training job without
+explicit user authorization — resolve locally first, and keep wandb enabled on every
 real run (offline mode needs no key and can be synced later).

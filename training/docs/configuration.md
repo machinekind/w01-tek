@@ -1323,7 +1323,7 @@ Every script in `training/jobs/` is a parameterized, reusable tool. Experiment-
 specific values enter through environment variables declared at the top of the
 script, and the as-run instance of a finished experiment is archived in its
 keeper's Hugging Face repo under `hpc/` — see
-[`training/CLAUDE.md`](../CLAUDE.md) for the convention.
+[`training/AGENTS.md`](../AGENTS.md) for the convention.
 
 A payload's shell declarations are the authoritative list of its variables
 and defaults. Read them before running it:

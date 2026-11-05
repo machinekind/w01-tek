@@ -43,7 +43,7 @@ is the ROS 2 stack this workspace grew out of.
 - [Documentation home](docs/README.md)
 - [Contributing and checks](CONTRIBUTING.md)
 - [Validation record](docs/validation.md)
-- [Agent guide](CLAUDE.md)
+- [Agent guide](AGENTS.md)
 - [Training configuration reference](training/docs/configuration.md)
 - [Guided RL notebook](learning/wojtek_rl_course/README.md) — Colab, step by step: how Wojtek
   is trained, and your policy against the deployed keeper

@@ -15,6 +15,23 @@ command) can be exported for the robot.
 
 ## Selecting a variant
 
+The current ROS profile maps the physical v6.37a legs to the v6.27 kinematic
+family. The names differ by layer:
+
+| Layer | New-leg identifier |
+|---|---|
+| CAD/source model family | v6.27 |
+| Physical mesh revision described in the operating notes | v6.37a |
+| Training/build/sysid | `legs_v627` |
+| ROS launch | `robot:=wojtek_v2` |
+| Provisioning environment | `WOJTEK_ROBOT=wojtek_v2` |
+
+`WOJTEK_ROBOT` does not select a training variant or change a running service.
+Provisioning writes it into the robot's service; ROS launches take `robot:=`
+explicitly. Confirm the installed leg revision during commissioning. See the
+[compatibility matrix](../../docs/compatibility.md) and
+[training quickstart](../README.md).
+
 ```bash
 # Build the variant's model once. The stock model is built by plain `build`.
 ./training/run.sh build --robot legs_v627
@@ -147,9 +164,10 @@ reached 13.6 mm at 0.3 rad. Moving to it means changing `timestep` in
 `robots.py` and `sim_dt` in the config group. A GPU step-rate measurement
 should come first.
 
-These measurements ran on CPU MuJoCo. The step rate on a GPU under MJWarp has
-not been measured. `check --robot legs_v627 --gpu --backend warp` measures it
-and scales the result by the timestep before comparing with the Go1 gate.
+These solver measurements ran on CPU MuJoCo. The later training run below
+measured GPU training throughput. For a new machine/settings combination,
+`check --robot legs_v627 --gpu --backend warp` measures physics step rate and
+scales it by the timestep before comparing with the Go1 gate.
 
 ## First trained policy
 

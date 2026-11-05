@@ -8,8 +8,9 @@ They are plain bash. Nothing outside this repository is needed to run one.
 
 ## Running one
 
-Set up the training project the usual way, so `training/.venv` exists, then
-run a script from anywhere:
+Follow the [training quickstart](../README.md) to create `training/.venv`,
+resolve the configuration and pass a bounded GPU check. Then run a script
+from anywhere:
 
 ```bash
 EXPERIMENT=locomotion bash training/jobs/train.sh

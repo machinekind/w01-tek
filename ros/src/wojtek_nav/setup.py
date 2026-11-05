@@ -25,6 +25,7 @@ setup(
             "goto_node = wojtek_nav.goto_node:main",
             "pixel_goal_node = wojtek_nav.pixel_goal_node:main",
             "vlm_brain_node = wojtek_nav.vlm_brain_node:main",
+            "goal_client = wojtek_nav.goal_client:main",
         ],
     },
 )

@@ -164,6 +164,23 @@ def test_a_new_goal_replaces_the_old_one_and_restarts_the_clock():
     assert ctrl.step((0, 0, 0), 5.0, FREE).status == "driving"
 
 
+def test_repeated_cancel_restarts_the_hold_off():
+    ctrl = GotoController(cancel_hold_off=0.5)
+    ctrl.set_goal(5.0, 0.0, 0.0)
+    ctrl.cancel(1.0)
+    ctrl.cancel(1.4)
+    assert ctrl.set_goal(5.0, 0.0, 1.6) is False
+    assert ctrl.step((0, 0, 0), 1.6, FREE).status == "idle"
+    assert ctrl.set_goal(1.0, 0.0, 2.0) is True
+
+
+def test_restarted_clock_does_not_extend_cancel_hold_off():
+    ctrl = GotoController(cancel_hold_off=0.5)
+    ctrl.cancel(10.0)
+    assert ctrl.set_goal(1.0, 0.0, 0.0) is True
+    assert ctrl.step((0, 0, 0), 0.0, FREE).status == "driving"
+
+
 def test_blocked_line_ahead_still_lets_the_robot_turn_towards_its_goal():
     """Mid-turn the heading sweeps across whatever stands beside the robot;
     that must not freeze it. Blocked is for a robot pointed at its goal."""

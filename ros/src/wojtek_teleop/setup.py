@@ -23,6 +23,7 @@ setup(
         "console_scripts": [
             "gamepad_teleop = wojtek_teleop.gamepad_teleop:main",
             "text_commander = wojtek_teleop.text_commander:main",
+            "command_mux = wojtek_teleop.command_mux_node:main",
         ],
     },
 )

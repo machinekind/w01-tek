@@ -111,6 +111,13 @@ def test_goto_gets_the_dead_man(launch_mod):
     assert _params(goto, ctx)[0]["goal_timeout"] == pytest.approx(2.5)
 
 
+@pytest.mark.parametrize("target", [None, "/wojtek/cmd_vel/nav"])
+def test_goto_output_can_be_routed_without_changing_standalone_default(launch_mod, target):
+    ctx = _context(**({"cmd_vel_topic": target} if target else {}))
+    goto = _by_executable(launch_mod._setup(ctx), "goto_node")
+    assert _remaps(goto, ctx)["cmd_vel"] == (target or "/cmd_vel")
+
+
 def test_pixel_goal_reads_the_costmaps_depth_stream(launch_mod):
     ctx = _context(depth_topic="/d/image", depth_info_topic="/d/info")
     node = _by_executable(launch_mod._setup(ctx), "pixel_goal_node")

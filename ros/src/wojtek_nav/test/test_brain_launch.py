@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 from launch import LaunchContext
+from launch.actions import DeclareLaunchArgument
+from launch.utilities import perform_substitutions
 from launch_ros.actions import Node
 from launch_ros.utilities import evaluate_parameters
 
@@ -71,3 +73,20 @@ def test_arguments_reach_the_node(launch_mod, monkeypatch):
     assert params["model"] == "qwen3-vl:30b"
     assert params["compressed"] is False
     assert params["instruction"] == "podejdź do fioletowego słupa"
+
+
+@pytest.mark.parametrize("target", [None, "/wojtek/cmd_vel/brain"])
+def test_brain_output_can_be_routed_without_changing_standalone_default(launch_mod, target):
+    description = launch_mod.generate_launch_description()
+    context = LaunchContext()
+    if target:
+        context.launch_configurations["cmd_vel_topic"] = target
+    for action in description.entities:
+        if isinstance(action, DeclareLaunchArgument):
+            action.execute(context)
+    node, = [action for action in description.entities if isinstance(action, Node)]
+    remaps = {
+        perform_substitutions(context, source): perform_substitutions(context, destination)
+        for source, destination in node._Node__remappings
+    }
+    assert remaps["cmd_vel"] == (target or "/cmd_vel")

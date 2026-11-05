@@ -70,7 +70,7 @@ import rclpy
 from ament_index_python.packages import get_package_share_directory
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Empty, Float64MultiArray
 from std_srvs.srv import SetBool, Trigger
 
 from wojtek_policy.joint_map import JointMap
@@ -89,6 +89,7 @@ class RealIoNode(Node):
         self.declare_parameter("joint_map_yaml", f"{share}/config/joint_map.yaml")
         self.declare_parameter("max_arm_jump_rad", 0.15)
         self.declare_parameter("dry_run", False)
+        self.declare_parameter("cancel_navigation_on_disarm", False)
         self.declare_parameter("boot_pose", "home")
         self.declare_parameter("folded_knee_rad", poses.FOLDED_KNEE_RAD)
         self.declare_parameter("ramp_duration_s", 4.0)
@@ -147,6 +148,7 @@ class RealIoNode(Node):
             JointState, "wojtek/joint_targets", self._on_targets, 10
         )
         self._pub_abs = self.create_publisher(JointState, "wojtek/joint_states_abs", 10)
+        self._pub_nav_cancel = self.create_publisher(Empty, "wojtek/nav/cancel", 10)
         self._pub_cmd = self.create_publisher(
             Float64MultiArray, "forward_position_controller/commands", 10
         )
@@ -370,6 +372,8 @@ class RealIoNode(Node):
     def _srv_arm(self, req, res):
         if not req.data:
             self._armed = False
+            if self.get_parameter("cancel_navigation_on_disarm").value:
+                self._pub_nav_cancel.publish(Empty())
             res.success, res.message = True, "disarmed"
             return res
         if self._ramp_timer is not None:

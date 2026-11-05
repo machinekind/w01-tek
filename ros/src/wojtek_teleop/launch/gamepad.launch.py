@@ -46,6 +46,7 @@ def _setup(context, *args, **kwargs):
         Node(
             package="wojtek_teleop",
             executable="gamepad_teleop",
+            remappings=[("cmd_vel", LaunchConfiguration("cmd_vel_topic", default="/cmd_vel"))],
             output="screen",
             prefix=prefix,
             parameters=[{
@@ -61,6 +62,7 @@ def _setup(context, *args, **kwargs):
 def generate_launch_description():
     return LaunchDescription(
         [
+            DeclareLaunchArgument("cmd_vel_topic", default_value="/cmd_vel"),
             # Which /dev/input device the joy driver opens (0 = first pad).
             DeclareLaunchArgument("device_id", default_value="0"),
             # Policy reference whose contract sets the stick command box

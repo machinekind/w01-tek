@@ -1,55 +1,88 @@
-# RPi base OS image
+# Raspberry Pi image and provisioning
 
-The robot RPi runs a **stock Ubuntu Server image** — we do NOT keep a binary
-image blob in git (multi-GB, opaque, drifts). Instead this file pins its
-identity so anyone can flash the exact same base, and `deploy/rpi/install.sh`
-turns a fresh flash into a provisioned robot.
+The repository provisions a stock Ubuntu Server image instead of distributing a
+preconfigured SD-card image. Commands below run from the repository root on a
+Linux host. The flashing script uses Linux block devices, `lsblk`, `partprobe`,
+mount tools, `dd`, `xz`, `curl` and `sha256sum`.
 
-## Exact image
+## Image identity
 
-| | |
+| Field | Repository setting |
 |---|---|
-| Distro   | Ubuntu Server 24.04.x LTS (Noble Numbat) |
-| Verified on | 24.04.4 LTS |
-| Arch     | arm64 |
-| Flavor   | `preinstalled-server` for Raspberry Pi (`+raspi`) |
-| Hardware | Raspberry Pi 5 (8 GB) |
+| Image pinned by `flash-card.sh` | Ubuntu Server 24.04.4 LTS |
+| Architecture | arm64 |
+| Flavor | `preinstalled-server-arm64+raspi` |
+| Previously documented hardware validation | Raspberry Pi 5, 8 GB |
+| ROS distribution installed by default | Jazzy |
 
-Download page: https://ubuntu.com/download/raspberry-pi
-Direct (point release, adjust `24.04.N` to the latest):
-```
-https://cdimage.ubuntu.com/releases/24.04/release/ubuntu-24.04.4-preinstalled-server-arm64+raspi.img.xz
-```
+Current control configuration also contains Pi 3 tuning. That does not extend
+the image-validation record to every Pi model. Record the actual board, image,
+kernel and test outcome when commissioning a new unit.
 
-## Verify before flashing
+The script obtains the pinned image and `SHA256SUMS` from Ubuntu's release
+server, then checks the checksum before writing. If that image is no longer at
+the configured URL, resolve the download/pin explicitly. Do not assume an
+unverified newer point release is interchangeable.
+
+## Prepare the host and card
+
+1. Set up the Ethernet link using [Robot networking](README.md).
+2. Copy `.env.example` to `.env` if needed, and configure the robot profile and
+   policy organization/access. Put `UBUNTU_PRO_TOKEN` and `WOJTEK_AP_PSK` in
+   `ros/.env`, using `ros/.env.example` as the template.
+3. Identify the removable card with `lsblk`. Flashing erases the selected device.
+   Use the whole card path, not a partition.
+
+Inspect the proposed operation first; replace `/dev/sdX` with the actual card:
 
 ```bash
-# Fetch the official checksums and check the download against them:
-curl -O https://cdimage.ubuntu.com/releases/24.04/release/SHA256SUMS
-sha256sum -c SHA256SUMS 2>/dev/null | grep 'preinstalled-server-arm64+raspi'
-# -> ...+raspi.img.xz: OK
+./ros/deploy/rpi/flash-card.sh /dev/sdX --dry-run
+./ros/deploy/rpi/flash-card.sh /dev/sdX
 ```
 
-## Flash + first-boot config
+The script asks for the device path again before erasing. It injects an existing
+SSH public key into cloud-init; `--key /path/to/key.pub` chooses another public
+key. The first boot uses the repository's static robot address.
 
-The scripted way (does download, verify, flash, and cloud-init with your SSH
-key injected — all of the below in one command):
+`--image /path/to/image.img.xz` uses a local image **without checksum verification
+by the script**. Verify that image against its official checksum before selecting
+it. Retain its name and checksum in the unit record.
+
+## Provision the robot
+
+Boot the Pi with Ethernet attached to the configured PC. Keep the motors
+unpowered during initial provisioning and inspect the intended service/profile
+before enabling normal operation.
 
 ```bash
-./deploy/rpi/flash-card.sh /dev/sdX      # check `lsblk` for the right device!
+./ros/deploy.sh --provision
 ```
 
-Then boot the Pi **docked by cable** (PC on `wojtek-eth`, so it has internet via
-NAT), and from the PC run `./deploy.sh --provision`.
+Provisioning installs ROS, the RT kernel, tuning, network and services, then
+builds the robot workspace. The Ubuntu Pro token is used for RT-kernel setup.
+The script may reboot the Pi and wait for SSH to return.
 
-Manual fallback, if you'd rather not use the script:
-1. Flash with Raspberry Pi Imager or `xzcat ...img.xz | sudo dd of=/dev/sdX bs=4M status=progress`.
-2. Copy `deploy/rpi/cloud-init/{user-data,network-config,meta-data}` onto the FAT
-   `system-boot` partition — paste your SSH public key into `user-data` first.
-   This gives the Pi its hostname, your key, and static `10.42.0.2` on eth0.
+Without `--enable-robot`, provisioning disables robot-service boot autostart;
+this does not stop a service that is already running. `--enable-robot` explicitly
+requests autostart. Provisioning also installs/enables the controller-manager
+watchdog, so stop both services before later bench work. See
+[Commissioning](../../../docs/commissioning.md) before first motor operation.
 
-## Note on point releases
+## Verify the resulting installation
 
-Ubuntu refreshes the `24.04.x` image over time; the download page always serves
-the latest. Provisioning is version-tolerant (it's just apt on top), so a newer
-`24.04.x` is fine. Bump the "Verified on" row when you move to a new one.
+On the Pi, record:
+
+```bash
+tr -d '\0' < /proc/device-tree/model
+cat /etc/os-release
+uname -r
+cat /sys/kernel/realtime
+systemctl cat wojtek-robot.service
+systemctl is-enabled wojtek-robot.service wojtek-cm-watchdog.service
+```
+
+An RT kernel exposes `1` in `/sys/kernel/realtime`. Check the complete service,
+including its drop-in, for the intended robot profile, folded boot pose and
+recording settings. Compare the actual installation with the
+[hardware record](../../../docs/hardware-evidence.md); an image download or
+successful build alone is not a physical acceptance test.

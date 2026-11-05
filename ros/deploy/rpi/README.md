@@ -1,72 +1,86 @@
-# RPi networking: ethernet cable ⇄ self-hosted wifi AP
+# Robot networking
 
-The RPi is a **fixed anchor at `10.42.0.2`** and picks its link automatically:
+The provisioned Pi uses `10.42.0.2` on the active robot link. These addresses are
+part of the repository's network design. Check for a conflicting `10.42.0.0/24`
+network on the development PC before using it.
 
-| Situation            | Link                | RPi IP      | PC IP           | Internet on RPi     |
-|----------------------|---------------------|-------------|-----------------|---------------------|
-| Cable docked         | eth0 (static)       | 10.42.0.2   | 10.42.0.1       | yes, via PC NAT     |
-| No cable (mobile)    | wlan0 AP `wojtek-link` | 10.42.0.2 | DHCP .10–.50    | no (robot anchor)   |
+| Connection | Robot | PC or handheld | Robot internet access |
+|---|---|---|---|
+| Ethernet to a configured Linux PC | `eth0`, `10.42.0.2` | PC `10.42.0.1` | Through the PC's shared connection |
+| Robot's `wojtek-link` Wi-Fi AP | `wlan0`, `10.42.0.2` | DHCP `.10`–`.50` | No uplink supplied by the AP |
 
-`wojtek-net.service` watches `eth0`'s carrier: cable present → tear the AP down
-and use eth; cable absent → bring the `wlan0` AP up. Same `.2` on both
-interfaces is safe because they are mutually exclusive.
+`wojtek-net.service` watches Ethernet carrier. With a cable present it disables
+the AP; without one it enables the AP. Moving between links can interrupt SSH,
+DDS and operator connections. Test the transition while the robot is stationary.
 
-The PC stays `10.42.0.1` over the cable (`wojtek-eth`, NM shared). On the AP
-path the PC associates to `wojtek-link` and gets a DHCP lease from the RPi.
+## Provisioning
 
-## Files
+From the repository root, use the [image procedure](IMAGE.md), then
+`./ros/deploy.sh --provision`. The network phase of `install.sh` installs:
 
-| File                     | Goes to                                   |
-|--------------------------|-------------------------------------------|
-| `60-wojtek.yaml`         | `/etc/netplan/60-wojtek.yaml` (chmod 600) |
-| `hostapd.conf`           | `/etc/hostapd/hostapd.conf`               |
-| `dnsmasq-wojtek.conf`    | `/etc/dnsmasq.d/wojtek.conf`              |
-| `wojtek-net-switch.sh`   | `/usr/local/sbin/` (chmod +x)             |
-| `wojtek-net.service`     | `/etc/systemd/system/`                    |
+| File | Destination |
+|---|---|
+| `60-wojtek.yaml` | `/etc/netplan/60-wojtek.yaml` |
+| `hostapd.conf` | `/etc/hostapd/hostapd.conf` |
+| `dnsmasq-wojtek.conf` | `/etc/dnsmasq.d/wojtek.conf` |
+| `wojtek-net-switch.sh` | `/usr/local/sbin/wojtek-net-switch.sh` |
+| `wojtek-net.service` | `/etc/systemd/system/wojtek-net.service` |
 
-## Install
+Set `WOJTEK_AP_PSK` in the gitignored `ros/.env` before provisioning. The installer
+fills the AP passphrase at runtime. Do not put it in a committed configuration.
+The first boot's cloud-init supplies static Ethernet addressing; the installer
+refuses the disruptive first DHCP-to-static change over an existing SSH link.
 
-You don't wire this by hand — it's phase 4 of `deploy/rpi/install.sh`, run for
-you by `./deploy.sh --provision` from the PC (see the top-level README and
-`IMAGE.md`). `install.sh` is idempotent: it drops the files above into place,
-points hostapd at its conf, leaves hostapd/dnsmasq disabled (the switch runs
-them on demand), swaps netplan to the static-eth `60-wojtek.yaml`, disables the
-cloud-init network default, and enables `wojtek-net.service`.
+## Linux PC with NetworkManager
 
-The one thing the script deliberately WON'T do is the very first eth renumber
-(DHCP → static `.2`) while you're connected over that same eth — that would drop
-SSH. On a fresh Pi the static `.2` comes from the `cloud-init/` network-config
-at first boot instead (see `IMAGE.md`), so by the time `install.sh` runs, eth0
-is already `.2` and it just re-applies cleanly.
-
-## PC side (NetworkManager)
-
-The PC has ONE ethernet port (`enp67s0`) that does double duty, so its role is
-chosen by which profile is active — NM can't tell by the cable alone:
-
-| Profile                  | autoconnect | ipv4   | Role                                  |
-|--------------------------|-------------|--------|---------------------------------------|
-| `Połączenie przewodowe 1`| **yes**     | auto   | DEFAULT: any cable = DHCP client (home internet) |
-| `wojtek-eth`             | **no**      | shared | RPi dock: PC = 10.42.0.1, DHCP+NAT to the RPi |
-| `wojtek-link 1`          | yes         | auto   | wifi client of the RPi's AP (mobile)  |
-
-So plugging the home internet cable "just works" (DHCP). To **dock the RPi by
-cable** instead, activate the shared profile explicitly:
+Run on the host, from the repository root:
 
 ```bash
-nmcli con up wojtek-eth       # dock: PC serves .1 + NAT, talk to RPi over eth
-nmcli con up "Połączenie przewodowe 1"   # undock: back to home-internet DHCP
+./ros/deploy/pc/setup-net.sh             # auto-detect an Ethernet interface
+# Or: ./ros/deploy/pc/setup-net.sh <interface>
+nmcli con up wojtek-eth
+nmcli -f GENERAL.DEVICE,IP4.ADDRESS device show
 ```
 
-(`wojtek-eth` is `autoconnect no` on purpose — otherwise NM grabs every cable
-as the wojtek net and its 10.42.0.0/24 route hijacks SSH to the RPi away from
-the wifi path.) The old PC-side `wojtek-link` AP profile was deleted; the PC is
-a client now.
+Confirm the selected Ethernet interface has `10.42.0.1/24` before provisioning
+the Pi. `wojtek-eth` uses shared mode and intentionally has autoconnect disabled,
+so an ordinary Internet cable can still use your normal wired profile. To switch
+back, use `nmcli con show` to find that profile, then activate it with
+`nmcli con up '<profile name>'`.
 
-## Test the failover
+This script requires NetworkManager. It does not configure macOS Internet
+Sharing or another Linux network manager. Configure an equivalent static link
+and routing there, or use the robot AP for operation after provisioning on a
+supported host.
 
-- **Cable in:** `ip -4 addr show eth0` → `10.42.0.2`; `hostapd` inactive.
-- **Cable out:** within a few seconds `hostapd` active, `wlan0` has `10.42.0.2`;
-  connect the PC to `wojtek-link` (psk: the `WOJTEK_AP_PSK` value from `.env`) → PC gets a `.10–.50`
-  lease; `ros2 topic list` sees the robot.
-- `journalctl -t wojtek-net -f` shows each switch decision.
+## Mobile operation
+
+Join `wojtek-link` using the passphrase configured during provisioning. The AP
+provides an on-link address and deliberately advertises neither a default route
+nor DNS. A client with another network connection can retain its Internet route.
+The robot itself still has no Internet uplink through this AP.
+
+Policies and browser assets must already be cached on the robot. The
+[operator guide](../../../docs/operations.md) covers the panel and pad paths;
+the [ROS guide](../../README.md) covers policy deployment.
+
+## Verify the link
+
+On the Pi:
+
+```bash
+ip -4 addr show eth0
+ip -4 addr show wlan0
+systemctl status wojtek-net.service hostapd dnsmasq
+journalctl -t wojtek-net -b --no-pager
+```
+
+With cable connected, expect `eth0` at `.2` and `hostapd` inactive. With the
+cable removed, expect `wlan0` at `.2`, `hostapd` active and AP clients receiving
+`.10`–`.50`. Discovery also requires matching `ROS_DOMAIN_ID=42` and CycloneDDS.
+Use a sourced ROS shell for `ros2 node list` and `ros2 topic list`; a working SSH
+link alone does not establish DDS connectivity.
+
+If the PC reaches the wrong interface, inspect its routes and active network
+profiles before changing robot addresses. Keep network testing separate from a
+moving-robot session.

@@ -21,7 +21,7 @@
 # answering on the ssh port -- wifi and cable both, since the Deck may sit
 # on either -- and remembers it in ~/.config/wojtek/deck-host until it stops
 # answering. Nothing about the machine is committed: this repository is
-# public (see CLAUDE.md).
+# public (see AGENTS.md).
 #
 # If nothing answers at all, the Deck's sshd is down and no command from here
 # can start it -- that is what the "Deck SSH on" icon ./deck.sh install puts

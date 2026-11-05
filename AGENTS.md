@@ -7,6 +7,9 @@ training wrappers, not the physics engine. Treat training configuration as an
 explicit, reviewable experiment input: resolve it before launching a run and
 keep the command, seed, and resulting run directory together.
 
+Start with the [documentation home](docs/README.md) for task guides and
+[CONTRIBUTING](CONTRIBUTING.md) for setup, checks and writing conventions.
+
 ## Repository map and boundaries
 
 - `training/` is the Hydra-configured MuJoCo MJX/Brax PPO project, with
@@ -16,6 +19,9 @@ keep the command, seed, and resulting run directory together.
   `training/videos/`, caches, and WandB directories—not in commits.
 - `ros/` is the deployment and robot-control workspace.  Treat real-robot
   launch and policy deployment as human-authorized, safety-sensitive actions.
+  Hardware activation can enable torque; disarm only blocks policy targets,
+  and scripted poses can move the robot while disarmed. Read the
+  [operator runbook](docs/operations.md) before powered work.
 - `ros/src/wojtek_description/mujoco/wojtek.xml` is the model source;
   `wojtek_mjx.xml` and `scene_mjx.xml` are generated via `./training/run.sh
   build`.  Do not hand-edit generated XML.
@@ -35,8 +41,8 @@ keep the command, seed, and resulting run directory together.
   tree.
 - The VLM brain (`ros/src/wojtek_nav`) has one model server: Ollama serving
   `qwen3-vl:30b-a3b-instruct` on port 11434 (OpenAI-compatible, `/v1`),
-  reached through `VLM_URL`/`VLM_MODEL` in the gitignored `.env`.  There is
-  no other inference backend in this repository.
+  reached through `VLM_URL`/`VLM_MODEL` in the gitignored `.env`. See the
+  [navigation guide](ros/src/wojtek_nav/README.md) for its setup and limits.
 - `learning/` holds self-contained learning guides for tools and hardware
   around Wojtek (the SO-101 arms with LeRobot's web GUI, and the Colab
   notebook on training Wojtek's walking policy).  Nothing in `ros/` or
@@ -51,7 +57,7 @@ keep the command, seed, and resulting run directory together.
 - Use **Wojtek** everywhere: prose, artifact names, run names, and new paths.
   `fbb-*` survives only where it is a literal identifier of an existing
   configuration or published artifact.
-- Remote execution and machine provisioning live in a separate private
+- Remote training execution and compute provisioning live in a separate private
   operations repository; this repository holds only cluster-agnostic job
   payloads under `training/jobs/`.
 - This repository is public.  Never commit credentials or the identity of
@@ -71,8 +77,20 @@ keep the command, seed, and resulting run directory together.
   `setup.py`/`pyproject.toml`.  The only exception is the GPL-licensed IMU
   firmware directories; see `NOTICE`.
 
-## Start with the training reference
+## References by task
 
+- [Hardware](docs/hardware.md) and [compatibility](docs/compatibility.md) —
+  physical revisions, model/policy selection and missing build evidence.
+  A simulation model is not a measured [digital twin](training/docs/digital-twin.md).
+- [ROS architecture](docs/ros-architecture.md) and [integration](docs/integration.md)
+  — node contracts and external clients. Read [command ownership](docs/command-ownership.md)
+  before changing control arbitration and [network access](docs/network-access.md)
+  before exposing a gateway.
+- [Operations](docs/operations.md) and [simulation](docs/simulation.md) —
+  pad/Steam Deck controls, startup, shutdown and recovery.
+- [Training quickstart](training/README.md) and
+  [policy lifecycle](training/docs/policy-lifecycle.md) — resolve, train,
+  evaluate, export, deploy and roll back a policy.
 - [Training configuration reference](training/docs/configuration.md) — every
   Hydra group, root setting, task setting, domain-randomization switch, PPO
   setting, experiment preset, and command-mode usage.  Its "Course benchmark"
@@ -106,7 +124,7 @@ training project before invoking Python.
 ./training/run.sh train --cfg job --resolve
 
 # Resolve an intended change before spending GPU time.
-./training/run.sh train +experiment=locomotion \
+./training/run.sh train +experiment=locomotion_stiff_v1 \
   ++ppo.num_timesteps=300000000 --cfg job --resolve
 
 # The train/checkpoint path is checked with a short bounded run on a GPU
@@ -138,8 +156,14 @@ Rules for agents changing or launching training:
 
 ## Validation by change type
 
+Set up the documentation environment as described in
+[CONTRIBUTING](CONTRIBUTING.md#validate-a-change), then run the applicable checks
+from the repository root.
+
 ```bash
 # Documentation-only change
+.venv-docs/bin/python -m unittest discover -s scripts -p 'test_*.py'
+.venv-docs/bin/python scripts/check_docs.py
 git diff --check
 
 # Training config or Python change
@@ -157,6 +181,11 @@ git diff --check
 ./training/run.sh check
 ```
 
+For ROS changes, run the affected package's tests in the ROS development
+container. Pure-Python tests alone do not validate launch composition or
+hardware behavior. Record the checks actually run and their limits; see the
+[validation record](docs/validation.md) for existing evidence.
+
 `test` and `test-slow` are a hard split: `tests/unit` never instantiates an
 env or puts a model on device (a guard test enforces it), which is why it
 stays fast enough to run on every edit.  `tests/integration` pays real MJX
@@ -167,8 +196,9 @@ change is validated.
 ## Common commands
 
 ```bash
-# Full training (choose a unique run name for a durable run)
-./training/run.sh train +experiment=locomotion run_name=wojtek_locomotion seed=1
+# Full stock-robot training (choose a unique run name for a durable run)
+./training/run.sh train +experiment=locomotion_stiff_v1 \
+  run_name=wojtek_locomotion seed=1
 
 # Evaluate, compare, and prepare a completed joystick policy for ROS
 ./training/run.sh report --run runs/wojtek_locomotion
@@ -176,6 +206,11 @@ change is validated.
 ./training/run.sh eval --run runs/wojtek_locomotion --x-vel 0.3 --height 0.125
 ./training/run.sh export --run runs/wojtek_locomotion
 ```
+
+`locomotion_stiff_v1` uses actor observations supported by the ROS exporter.
+Its default budget is 800 million steps; resolve and validate a bounded run
+before starting it. For the new legs, follow the
+[variant quickstart](training/README.md#choose-the-robot-and-build-its-model).
 
 Generated training outputs live below `training/runs/` and are intentionally
 ignored by Git.  Do not commit checkpoints, videos, or WandB artifacts.
@@ -187,10 +222,15 @@ on the launch files.  A Hugging Face reference is resolved from the
 gitignored policy store (`ros/policies/`).  The pinned default lives in
 the robot profile (`wojtek_policy/robots.py`), and `WOJTEK_ROBOT` in
 the repo-root `.env` (next to `HF_ORGANIZATION`) picks the profile,
-`wojtek` by default; the launch files take the same name as `robot:=`.  `ros/deploy.sh` resolves that pin into the
-store and syncs the store to the RPi, which has no internet.  `ros/deploy.sh --policy
-<ref>` fetches a one-off reference, syncs it, and makes the robot run it, and
-a plain `ros/deploy.sh` returns the robot to the pin.  On the PC,
+`wojtek` by default; the launch files take the same name as `robot:=`.
+Provisioning writes that profile into the robot service; changing `.env`
+alone does not update an installed service.
+`ros/deploy.sh` resolves that pin into the store and syncs it to the RPi,
+which has no internet. `ros/deploy.sh --policy <ref>` fetches and syncs a
+one-off reference and writes the robot's policy override. It restarts an
+installed, enabled service unless `--no-restart` is set. A plain
+`ros/deploy.sh` clears the override and restores the profile pin for the
+next service start. On the PC,
 `WOJTEK_POLICY` in the gitignored `.env` makes the simulation run that
 reference instead of the pin; the robot launch never reads it.
 Changing the deployed policy is a config change, not a code change.

@@ -11,6 +11,7 @@ __pycache__/
 .env
 *.pyc
 .venv/
+.venv-docs/
 
 # Personal dispatch config for the gpu-ops tool; .gpu-ops.example is the
 # committed template.

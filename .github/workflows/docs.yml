@@ -1,0 +1,32 @@
+name: Documentation
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  links-and-defaults:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install documentation checker
+        run: |
+          python3 -m venv .venv-docs
+          .venv-docs/bin/python -m pip install --require-hashes -r scripts/requirements-docs.txt
+      - name: Test documentation checker
+        run: .venv-docs/bin/python -m unittest discover -s scripts -p 'test_*.py'
+      - name: Check links and runtime defaults
+        run: .venv-docs/bin/python scripts/check_docs.py
+      - name: Check whitespace
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ -n "$PR_BASE" ]; then
+            git diff --check "$PR_BASE...$PR_HEAD"
+          else
+            git diff --check HEAD^ HEAD
+          fi

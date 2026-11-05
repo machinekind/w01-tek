@@ -21,6 +21,8 @@
   <depend>python3-numpy</depend>
   <depend>wojtek_policy</depend>
   <depend>wojtek_description</depend>
+  <!-- Operator diagnostics use `ros2 control list_controllers`. -->
+  <exec_depend>ros2controlcli</exec_depend>
   <!-- Robot-side pad teleop: an exec_depend keeps it inside deploy.sh's
        "packages-up-to wojtek_bringup" build, so gamepad:=true has the
        node available on the RPi. -->

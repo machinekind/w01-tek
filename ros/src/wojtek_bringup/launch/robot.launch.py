@@ -8,7 +8,7 @@ nodes -- no RViz, no GUI. Run visualization/debug on the PC separately:
                                                [robot:=wojtek|wojtek_v2]
                                                [max_torque:=2.0] [dry_run:=true]
                                                [boot_pose:=home|folded] [bag:=true]
-                                               [gamepad:=true]
+                                               [gamepad:=true] [command_mux:=true]
                                                [deck_camera:=true nav:=true | perception:=true]
                                                [telemetry:=true] [foxglove:=true]
                                                [deck:=true deck_cpus:=0,1]
@@ -37,38 +37,29 @@ default policy, and a policy trained for other legs is refused. The systemd
 service passes the robot:= that `deploy.sh --provision` wrote into its
 drop-in from WOJTEK_ROBOT (deploy/rpi/wojtek-robot-local.conf).
 
-Recording note: manual runs of this file do not record by default (record
-on demand: bag:=true bag_cpus:=0,1). The systemd service
-(ros/deploy/wojtek-robot.service) passes exactly those flags, so every
-service-driven run leaves a lossless on-robot bag -- the black box of a
-real run, now that PC viz also records on demand only. Bags go to
-bag_dir/run_<timestamp> (bag_dir defaults to ~/wojtek_bags).
+Recording, telemetry and Foxglove are opt-in: bag:=true, telemetry:=true and
+foxglove:=true. The installed robot-local drop-in disables all three, overriding
+the base service. Inspect `systemctl cat wojtek-robot.service` for the effective
+configuration. Bags go to bag_dir/run_<timestamp> (default: ~/wojtek_bags).
 
-Telemetry is opt-in, like recording. A manual run publishes no
-/wojtek/sysinfo and no /wojtek/policy_timing, and starts no Foxglove
-bridge. Ask for them with telemetry:=true foxglove:=true. The systemd
-service passes both, so a service-driven run can be watched live on port
-8765 and read back from its own bag afterwards.
-
-Startup/arming procedure is unchanged from real.launch.py:
-  1. Power the motors and launch this file (any robot pose is fine). The
-     policy runs immediately but real_io_node starts DISARMED -- no commands
-     reach the motors.
-  2. Physically pose the robot in the boot pose (default boot_pose:=home)
-     and compare against RViz on the PC.
-  3. ros2 service call /wojtek/zero std_srvs/srv/Trigger
-  4. ros2 service call /wojtek/stand_up std_srvs/srv/Trigger
-  5. ros2 service call /wojtek/arm std_srvs/srv/SetBool '{data: true}'
-  6. When done: disarm, then /wojtek/lie_down to ramp gently down to folded.
+For a commissioned robot, follow docs/operations.md:
+  1. With motor power removed, position the robot in its configured boot pose.
+     A manual launch defaults to home; the installed service uses folded.
+  2. Apply power using the commissioned procedure, then launch. The hardware
+     enables the drives unless dry_run:=true. Disarmed blocks policy targets;
+     it does not remove torque, and pose ramps can still move the robot.
+  3. Check joint feedback and the declared pose, then call /wojtek/zero.
+  4. Call /wojtek/stand_up and wait for the ramp-complete log.
+  5. Call /wojtek/arm with '{data: true}' only after checking the home stance.
+  6. To finish, cancel autonomy, disarm, lie down and wait for ramp completion.
+     Stop the service and remove motor power using the commissioned procedure.
 """
 
 from wojtek_bringup.launch_common import common_launch_description
 
 
 def generate_launch_description():
-    # Headless (no RViz). Recording is opt-in here; the systemd service
-    # opts in (see the recording note above). The pad teleop is robot-side
-    # only, so this is the launch that can bring it up (gamepad:=true).
+    # Headless (no RViz), with optional recording and robot-side pad teleop.
     return common_launch_description(
         with_rviz=False, bag_default="false", with_gamepad=True
     )

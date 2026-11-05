@@ -1,139 +1,115 @@
-# wojtek_perception_bringup
+# RealSense perception bringup
 
-Prototype. Brings up the RealSense D435 depth stream and its
-post-processing settings (plus colour/RGBD for the VLM). The sensor only:
-what is built on the streams is the navigation stack's.
+This package starts a RealSense D435 driver with the full bench processing
+configuration. The robot's normal Deck camera is a lighter path in
+`wojtek_bringup`; both can feed navigation, but only **one driver may open the
+camera**. See [architecture](../../../docs/ros-architecture.md) and
+[navigation](../wojtek_nav/README.md).
+
+## Choose a camera path
+
+| Path | Use | Streams/settings |
+|---|---|---|
+| `deck_camera:=true` in robot bringup | Operator panel and current navigation setup | Colour 640×480×30 JPEG; raw depth 424×240×15 by default |
+| Standalone `perception.launch.py` | Bench experiments with full post-processing | Depth 848×480×15, decimated to 424×240; colour 1280×720×15, aligned depth and RGBD |
+| `perception:=true` in robot bringup | Full pipeline with lower sensor rates | Depth 848×480×6 and colour 1280×720×6; camera transform supplied by robot URDF |
+| `sim_camera_node` | ROS MuJoCo | D435-compatible topics and intrinsics; no physical device |
+
+The launch refuses `deck_camera:=true perception:=true`. The full colour/RGBD
+path has substantially higher CPU and DDS cost; its existence does not establish
+that it fits a given RPi alongside control.
+
+## Bench launch
+
+Inside the ROS container on a Linux host with the camera available:
 
 ```bash
 ros2 launch wojtek_perception_bringup perception.launch.py
 ros2 launch wojtek_perception_bringup perception.launch.py --show-args
 ```
 
-```
-realsense2_camera ──depth 424x240@15──► (viz; the driver's own cloud)
-   (plain node)   │     ~3 MB/s          /camera/camera/depth/image_rect_raw
-                  ├──── colour 1280x720@15 ──────────────────────► (VLM, SLAM)
-                  │     ~41 MB/s          /camera/camera/color/image_raw
-                  ├──── aligned depth 1280x720@15 ───────────────► (SLAM)
-                  │                       /camera/camera/aligned_depth_to_color/image_raw
-                  └──── RGBD 1280x720@15 ────────────────────────► (VLM)
-                        ~69 MB/s          /camera/camera/rgbd
-```
+Parameters come from `config/d435.yaml`; launch overrides such as
+`depth_profile:=`, `color_profile:=` and `enable_color:=` take precedence.
+`extrinsics:=false` omits this launch's static body-to-camera transform when
+another node already owns it.
 
-(Two in-package consumers used to sit in this diagram and are gone: the
-depth->8x8 grid reduction for the SCAN-planner -- ~0.8 of a Pi 4 core,
-removed 2026-08 with that path -- and `cloud_accumulate_node`, the
-odom-frame accumulated cloud, removed 2026-09 once the SLAM's own map
-superseded it. The grid's bench results stay recorded below.)
-
-848x480 comes off the depth sensor; `decimation_filter.filter_magnitude: 2`
-halves each dimension before anything is published, so what crosses DDS is
-424x240x16 bit at 15 Hz. Both rates are constrained by what the D435
-actually offers (depth 6/15/30/60/90, colour 6/15/30/60), and 6 is the slowest
-colour rate the sensor has, which is still ~12x what the VLM's ~0.3-0.5 Hz
-decision loop needs.
-
-Colour and RGBD are on by default (`enable_color:=false` drops both) and are
-**deliberately more than the machine can deliver**: at 848x480x15 the RGBD
-message is 2.04 MB and a Python subscriber received ~70% of them, with the
-kernel dropping nothing (0 UDP buffer errors) -- it is deserialisation that
-cannot keep up. At 1280x720 expect proportionally worse. That is an accepted
-trade for now; the fix, when one is needed, is a C++ consumer in the driver's
-own process (see the composition note in the launch file), not more bandwidth.
-
-**Geometry consumers use the RAW depth topic, not the aligned one.**
-Alignment reprojects depth into the colour intrinsics, and measured on this
-unit that narrows the horizontal field of view from 90.8 deg to 70.0 deg
-(fx 418.0 -> 605.6) -- a quarter of the view, lost at the sides where
-obstacles are. The one consumer that needs the aligned product is the SLAM:
-it registers depth to colour by definition, because its features are
-colour-image features. That is a cost it pays for loop closure, not a
-recommendation for anything else.
-
-## Why this is a `*_bringup`
-
-It composes the third-party `realsense2_camera` driver and `tf2_ros`
-with this package's measured `config/`. A single-node subsystem does not
-need one -- `wojtek_teleop` carries its own `gamepad.launch.py` and that
-is the right shape for it.
-
-The launch runs standalone and is includable. The one singleton in it is the
-camera->body static transform, so that is opt-out (`extrinsics:=false`) for
-the case where the robot bringup already owns that TF edge.
-
-The config files are ordinary ROS parameter files (`/**: ros__parameters:`)
-loaded by the nodes themselves, so `--params-file` and `ros2 param dump`
-work on them like on any other node's config. Launch arguments layer single
-overrides on top (`depth_profile:=`, `color_profile:=`, `enable_color:=`):
-each entry of `parameters=` becomes its own `--params-file` in list order,
-and the last one wins.
-
-## Status
-
-| piece | state |
+| Topic | Meaning |
 |---|---|
-| camera settings | measured on hardware, see `config/d435.yaml` |
-| camera -> body extrinsics | the design mount (0.32 m ahead, 0.07 m up, 15 deg down; `config/extrinsics.yaml`, the same numbers as the URDF and `camera_spec.py`, cross-checked by tests). On the robot the URDF publishes the edge (`with_camera_mount`); this file is for a standalone launch. **Not yet confirmed by measurement on the head** |
-| odom-frame accumulated cloud | REMOVED 2026-09 (superseded by the SLAM's map) |
-| depth -> 8x8 grid reduction | REMOVED 2026-08 (fed only the dropped SCAN-planner path) |
+| `/camera/camera/depth/image_rect_raw` | Raw optical-frame depth; use for geometry |
+| `/camera/camera/depth/camera_info` | Intrinsics for that depth image |
+| `/camera/camera/color/image_raw/compressed` | Colour JPEG; preferred for off-board viewing/VLM |
+| `/camera/camera/color/camera_info` | Colour intrinsics |
+| `/camera/camera/aligned_depth_to_color/image_raw` | Depth reprojected into colour geometry, when alignment is enabled |
+| `/camera/camera/rgbd` | Combined colour/depth product, when enabled |
 
-## What has actually been verified
+Use sensor-data QoS for image/CameraInfo subscribers. Inspect actual endpoints
+and encodings with `ros2 topic info -v` and `ros2 topic echo --once` before
+connecting a new consumer.
 
-Bench numbers behind `config/d435.yaml`, measured on serial `030522071460`
-(fx 418.0, baseline 50.13 mm), scene at 2-4 m:
+## Geometry and calibration
 
-| setting | effect |
+Geometry consumers use raw depth. On the measured camera, colour alignment
+reduced horizontal field of view from 90.8° to 70.0°. A pixel selected in the
+colour image therefore needs proper reprojection into raw depth; array indices
+cannot be copied between the images. `pixel_goal_node` handles this conversion
+using both CameraInfo streams and TF.
+
+The design camera mount is 0.32 m forward, 0.07 m up and pitched 15° down relative
+to the base. The URDF, sim camera and `config/extrinsics.yaml` carry matching
+values. **Physical mount measurement remains open.** Check the selected robot's
+geometry; a shared design value is not proof of the assembled mount.
+
+A 1° pitch error moves a floor projection roughly 52 mm vertically at 3 m,
+which can create a false obstacle. Commissioning should record the mount,
+intrinsics, serial/firmware, stream profiles, calibration method and repeatable
+floor/known-target residuals. Define acceptance tolerances for the intended
+navigation range before calling the calibration complete.
+
+## Recorded measurements and limits
+
+The existing bench results, at 2–4 m, support these configuration choices:
+
+| Change | Recorded effect |
 |---|---|
-| `visual_preset: 3` (HIGH_ACCURACY) vs default | temporal noise at 3-4 m: 97 -> 33 mm |
-| `temporal_filter.filter_smooth_delta: 100` vs the default 20 | 2-3 m: 39 -> 10 mm; at 20 the filter is measurably *worse* than none at range |
-| `laser_power` 150 -> 360 | ~15% on the default preset, nothing on HIGH_ACCURACY |
-| reduction to an 8x8 grid (removed) | noise 1.8x better (not 80x -- stereo noise is spatially correlated), fill 74% -> 100% |
+| HIGH_ACCURACY preset | Temporal noise at 3–4 m fell from 97 to 33 mm |
+| Temporal filter delta 20 → 100 on the default preset | At 2–3 m noise fell from 41 to 28 mm |
+| HIGH_ACCURACY + temporal delta 100, versus default without a temporal filter | At 2–3 m noise fell from 39 to 10 mm |
+| Laser power 150 → 360 | About 15% improvement on default preset; none on HIGH_ACCURACY |
 
-Depth error grows with the square of range (`sigma ~= 0.002*z^2` m on this
-unit at HIGH_ACCURACY), which is why `clip_distance` is 3.0: past that the
-radial error exceeds a 0.05 m map cell.
+See [D435 noise measurements](../../../docs/perception/d435-noise.md) for the
+conditions. The original measurement scripts are not committed, so reproducing
+the measurements requires completing that tooling. These are historical bench
+results, not a fresh validation of the current robot.
 
-## Traps
+The old 8×8 reduction and accumulated-cloud nodes were removed. SLAM was also
+archived; no persistent map replaces them in the current launch. Navigation now
+uses a local rolling costmap. Negative obstacles and step-height decisions are
+not established capabilities.
 
-- **Parameter names.** `config/d435.yaml` targets `realsense2_camera` 4.54+.
-  The driver has renamed parameters across releases and silently ignores
-  names it does not know. Check with `ros2 param list /camera/camera` before
-  believing a setting took effect.
-- **No component container, on purpose.** Zero-copy needs two C++ nodes in
-  one process. The RPi hosts no container (nothing else in this workspace
-  creates one; `ros2_control_node` is a standalone process). So the depth
-  crosses DDS on loopback: 424x240x2 B at 15 Hz is ~3 MB/s, which is
-  affordable. The SLAM nodes are C++ and composable, so moving them into
-  the driver's process is the change that would make a container worth
-  introducing -- once the SLAM runs on the robot at a rate where the
-  serialisation shows up.
-- **Pitch beats sensor noise.** 1 deg of camera pitch error puts a floor
-  point 52 mm off at 3 m; the sensor's own noise there is ~33 mm. A constant
-  mounting error reads downstream as a permanent phantom obstacle. Measure
-  the extrinsics before trusting anything.
-- **Angular resolution, not noise, is the limit at range.** At a 0.25 m
-  mount height one cell of an 8x8 grid covers ~2 m of floor at 2 m range.
-  This grid says "flat / rising / obstacle"; it does not resolve stair
-  treads.
-- **On the RPi, IRQ affinity.** `isolcpus` does not move interrupts. The
-  xHCI interrupts from the camera will land on the isolated RT cores unless
-  `irqaffinity=` is set, and that shows up as control-loop jitter
-  correlated with what the camera is looking at.
-- **Power.** The D435 draws ~700 mA on USB3. An underpowered RPi supply
-  makes the camera drop out under load, which looks exactly like a bad
-  cable.
+## Diagnose the camera
+
+```bash
+ros2 node list
+ros2 param list /camera/camera
+ros2 topic info -v /camera/camera/depth/image_rect_raw
+ros2 topic hz /camera/camera/depth/image_rect_raw
+ros2 run tf2_ros tf2_echo base_link camera_link
+```
+
+Check for a second driver, missing JPEG plugin, incorrect parameter names,
+USB/power dropouts, and camera work on the control cores. Driver parameter names
+change across versions; inspect what the installed node actually declares.
+The [troubleshooting guide](../../../docs/troubleshooting.md) covers system load
+and recovery.
 
 ## Tests
 
+In a ROS-enabled environment, with the workspace sourced:
+
 ```bash
 cd ros/src/wojtek_perception_bringup
-source /opt/ros/jazzy/setup.bash
-PYTHONPATH=$PWD:$PYTHONPATH python3 -m pytest test/ -q   # no camera needed
+PYTHONPATH=$PWD:$PYTHONPATH python3 -m pytest test/ -q
 ```
 
-(`PYTHONPATH=$PWD` alone replaces the ROS paths instead of extending them,
-and then `rclpy`/`launch` do not import.)
-
-Covers the launch file's composition logic (which nodes get created, the
-parameter files they load, the argument overrides on top of them, and that
-the measured settings are still in the config).
+These tests check launch composition and configuration, not physical depth
+accuracy or mounting calibration.

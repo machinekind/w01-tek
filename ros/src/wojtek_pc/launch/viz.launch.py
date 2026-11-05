@@ -22,10 +22,9 @@ volume, and most viz sessions are watching, not experiments worth
 keeping. Caveat when recording: the bag is only as complete as the
 link. Over ethernet (docked) it is effectively lossless; over wifi --
 especially once the robot is on its own AP and moving -- best-effort
-topics can drop samples and a dropped link leaves a gap. The RPi service
-already records every run on-robot losslessly (wojtek-robot.service
-passes bag:=true bag_cpus:=0,1); a manual robot.launch.py run records
-with the same flags.
+topics can drop samples and a dropped link leaves a gap. The installed RPi
+service drop-in disables recording. Enable bag:=true bag_cpus:=0,1 explicitly
+for a measured recording session; on-robot recording can also drop samples.
 Bags land in bag_dir/run_<timestamp> (bag_dir defaults to ~/wojtek_bags).
 
 Teleop needs its own terminal (it reads the keyboard on stdin), so run it

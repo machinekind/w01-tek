@@ -1,312 +1,314 @@
-# wojtek_nav
+# Visual navigation
 
-Navigation for Wojtek: **local perception** and the **setpoint driver** on
-top of it. A rolling costmap in the `odom` frame, built from the depth
-camera, that remembers what the fixed ~90-degree camera (the raw depth's
-field of view; colour-aligned depth sees 70) can no longer see;
-and `goto_node`, which walks straight at the setpoint a VLM hands over and
-stops when the costmap says the line ahead is blocked. The perception is
-stock image_pipeline + nav2 composed by a launch; the driver is ours.
+`wojtek_nav` turns a language instruction or metric setpoint into velocity
+commands. A VLM selects and verifies a visual target; the pixel resolver uses
+depth and TF to locate it; the setpoint driver turns and walks toward it.
+A rolling local costmap can veto forward motion into known obstacles.
+
+The core route has recorded **stock-robot simulation** results. The direct
+RPi camera/costmap/PC-brain route still needs hardware validation, including
+camera mounting and CPU budget. New-leg navigation geometry is not validated.
+Experimental remote deployments have separate capabilities and evidence; their
+results do not validate this launch. Start with [compatibility](../../../docs/compatibility.md).
+
+## Run the stock simulation
+
+Prerequisites: a built ROS image, a compatible policy, and an Ollama server
+with `qwen3-vl:30b-a3b-instruct`. See [ROS setup](../../README.md) and
+[simulation](../../../docs/simulation.md). There is no committed minimum GPU/RAM
+benchmark or pinned Ollama binary version; record those for your deployment.
+
+On the model host, start Ollama if no service is already running:
 
 ```bash
-ros2 launch wojtek_nav costmap.launch.py                                   # standalone, against a running camera + odometry
-ros2 launch wojtek_pc sim.launch.py model_xml:=scene_nav.xml leg_odom:=true nav:=true   # a sim session
-ros2 launch wojtek_bringup robot.launch.py deck_camera:=true nav:=true     # the robot (not run yet)
+ollama serve
 ```
 
-```
-depth image ──► crop_decimate ──► point_cloud_xyz ──► nav2_costmap_2d ──► /wojtek/nav/costmap ──┐
-(424x240)       (every 4th px)    /wojtek/nav/points   (rolling 6x6 m)     /wojtek/nav/voxel_grid │
-TF odom->base_link (leg_odometry), base_link->camera (URDF / driver) ──┘                          ▼
-/wojtek/nav/goal (PoseStamped: the VLM's next setpoint) ─────────────────────────► goto_node ──► /cmd_vel
-                                                                                    /wojtek/nav/status
+In another shell on that host:
+
+```bash
+ollama pull qwen3-vl:30b-a3b-instruct
+ollama list
 ```
 
-| piece | where |
+For a remote model host, tunnel its loopback endpoint from the PC. Use an SSH
+alias from your own configuration:
+
+```bash
+ssh -N -L 11435:127.0.0.1:11434 <model-host-alias>
+```
+
+Keep the tunnel running. In the repo-root `.env`, set `VLM_URL` to
+`http://127.0.0.1:11435` on Linux, or `http://host.docker.internal:11435` on macOS.
+These differ because the Linux container shares host networking, while Docker
+Desktop uses a bridge. If the model runs locally, use its actual local port
+instead. Check the tunnel from the PC:
+
+```bash
+curl --fail http://127.0.0.1:11435/api/tags
+```
+
+The requested tag should appear. Then, from the repository root:
+
+```bash
+./ros/sim.sh --foxglove model_xml:=scene_nav.xml \
+  leg_odom:=true nav:=true vlm:=true telemetry:=true
+```
+
+Open `http://localhost:8080`. Complete zero → stand → arm using the
+[operator runbook](../../../docs/operations.md), then enter “walk to the purple
+pillar” in the brain panel. Leave other drive sources idle.
+
+In a second `./ros/dev.sh` shell, inspect or submit a task:
+
+```bash
+ros2 topic echo /wojtek/vlm/status
+# In another shell while watching status:
+ros2 topic pub --once /wojtek/vlm/instruction std_msgs/msg/String \
+  '{data: "walk to the purple pillar"}'
+# Stop the task:
+ros2 topic pub --once /wojtek/nav/cancel std_msgs/msg/Empty '{}'
+```
+
+A completed task reports JSON with `action: "finished"` and a result such as
+`done`, `gave_up`, `cancelled`, `replaced` or `error`. It does not auto-arm.
+An unarmed robot can accept a task but make no progress. Status includes the
+instruction, step and timestamp, not a unique request ID; use a single task
+owner. See the [integration guide](../../../docs/integration.md) for client
+lifecycle and the bounded metric-goal example.
+
+## Components and contracts
+
+```text
+raw depth → crop/decimate → point cloud → rolling costmap ─────┐
+colour JPEG → VLM → pixel + image stamp → pixel resolver ──┐  │
+                                                         ▼  ▼
+metric goal (odom) ─────────────────────────────────────→ goto → /cmd_vel
+```
+
+`costmap.launch.py` starts the local perception chain, goto and pixel resolver.
+`brain.launch.py` starts the VLM client. To supply your own metric goals, omit
+the brain; to run against an existing camera and odometry, launch the costmap
+standalone. `nav_costmap:=false` starts goto without the depth chain or resolver.
+
+### Metric goals
+
+| Interface | Contract |
 |---|---|
-| odometry (`odom->base_link`) | `wojtek_odometry`; on the robot by default, in the sim with `leg_odom:=true` |
-| depth stream | the deck camera's RealSense node on the robot (`deck_camera:=true`, started by `wojtek_bringup`, raw depth at 424x240), `sim_camera_node` (sim); the RAW depth, 90 deg of view |
-| camera extrinsics | the design mount in both worlds: the sim URDF (`with_camera`) and the robot's (`with_camera_mount`, `body.urdf.xacro`), the robot's still to be confirmed with a tape measure (see the perception README) |
-| costmap settings | `config/costmap.yaml` -- what the map is for and what every number follows from |
-| test world | `wojtek_pc/config/scene_nav.xml`: a corridor with two branches, a crate, a pillar, a 0.15 m box |
+| `/wojtek/nav/goal` | `geometry_msgs/PoseStamped`; position is the setpoint, orientation is ignored |
+| Frame/time | `odom` is used directly; another frame is transformed at the message timestamp. A zero timestamp requests latest TF. |
+| Refresh | Goal expires 3 s after receipt by default; resend while the task owns control. |
+| Output | `geometry_msgs/Twist` at 20 Hz while moving; one zero on transition to stopped, then silence |
+| `/wojtek/nav/status` | `std_msgs/String`: `idle`, `turning`, `driving`, `blocked`, `reached`; reliable/transient-local, depth 1 |
+| `/wojtek/nav/cancel` | `std_msgs/Empty`; clears the setpoint and rejects incoming goals for 0.5 s |
 
-## What the costmap is and is not
+Goals and cancel use reliable/volatile QoS with depth 10. A current goal in
+`base_link` should carry the timestamp of the observation that produced it;
+otherwise inference delay moves the meaning of “ahead.” Goal expiry uses the
+receiver's clock, not the source timestamp.
 
-It is not a map of the world. It is a 6 x 6 m window that moves with the
-robot and answers, per 5 cm cell: obstacle, free, or never seen. The
-frame is `odom` because over a 6 m window the leg odometry's drift is
-centimetres; there is no `map` frame and nothing needs one.
+Goto defaults to 0.3 m/s forward speed, 0.5 rad/s yaw and 0.15 m reach tolerance.
+It turns first when the target bearing is large and never strafes. It does not
+plan a route around an obstacle. A blocked forward path can still allow turning
+toward the goal; this is not a full swept-body collision check.
 
-The property that matters is **memory**. The camera is a cone to the
-front on a fixed head, blind to the sides and behind. A cell marked while
-the crate was in view stays marked after the body has turned away from it
--- until the robot either sees through that cell again (a ray to a floor
-point behind it clears it) or drives far enough that it leaves the window.
-Free cells are kept the same way. That is what stops the robot turning
-into the thing it walked past a moment ago.
+### Pixel goals
 
-Three decisions behind the configuration (the file argues each number):
+`/wojtek/nav/pixel_goal` uses `geometry_msgs/PointStamped` with a project-specific
+meaning:
 
-- **Two observation sources on one cloud.** `depth_mark` marks from 6 cm
-  above the floor up; `depth_clear` clears with rays down to the floor.
-  One source cannot do both: either the floor becomes a wall or nothing
-  ever clears.
-- **Heights are in odom, levelled by the IMU.** The body pitches a few
-  degrees with every step, 15 cm at 3 m; the odometry carries roll/pitch
-  from the IMU, so the floor stays flat in this frame and the 6 cm margin
-  holds. This is also why the camera's pitch extrinsic will matter on the
-  robot: 1 degree of it is 5 cm at 3 m, a permanent phantom step.
-- **Decimate before deprojecting.** The costmap ray-traces every point it
-  is given through its 3D voxel grid. 424x240 is 100k rays a frame;
-  every 4th pixel is 6k, and at a 5 cm cell that still over-samples.
+- `header.stamp`: source colour-image timestamp.
+- `point.x/y`: normalized image coordinates; values above 1 are interpreted as
+  absolute pixels. Prefer normalized coordinates consistently.
+- `point.z`: standoff in metres; 0 selects the default 0.7 m.
 
-## Verified (sim, 2026-09-25)
+The resolver uses colour/depth CameraInfo and optical-frame TF, then takes the
+median of a depth patch from the nearest timestamp (default maximum skew 0.1 s).
+It transforms the target once into `odom` and resends the standoff goal, avoiding
+repeated transforms through an expired camera-frame timestamp.
 
-`scene_nav.xml`, `wojtek-stiff-height-locomotion`, depth 15 fps: the
-crate 2 m ahead-right is marked from the spawn (23 lethal cells in its
-0.6 x 0.6 m box), stays marked after walking 1.1 m towards it (34), and
-**stays marked after a 92-degree turn in place that takes it out of the
-view** (44). The window follows the robot; free cells behind persist.
-Costmap published at ~1.7 Hz, updated at 5 Hz.
+`/wojtek/nav/pixel_status` is a latched string: `idle`, `resolving`, `no_frame`,
+`no_depth`, `no_tf`, `sent`, `reached`, `blocked`, `timeout`, `replaced` or
+`cancelled`. `/wojtek/nav/pixel_target` is the resolved object point in `odom`.
+Both use reliable/transient-local QoS. Images/CameraInfo use sensor-data QoS.
+The resolver waits through brief blocked states, and ends on a terminal result
+or the configured time limit. A new pixel replaces the previous goal.
 
-What the sim cannot show: sensor noise on the floor (the 6 cm margin is
-against a noiseless floor here), the extrinsics error, and the CPU cost on
-the RPi -- three C++ nodes at 15 fps and 6k points is a fraction of a core
-on the PC, unmeasured on the robot.
+### VLM task loop
 
-## The setpoint driver (`goto_node`)
+`/wojtek/vlm/instruction` accepts a `std_msgs/String`; a new instruction replaces
+the running task. The node reads colour JPEG, asks for `goal`, `turn`,
+`not_visible` or `done`, and verifies a proposed target with a second question
+before sending its pixel. Arrival is decided from execution/target distance,
+not solely the model's `done` answer.
 
-The contract, decided 2026-09-25: the VLM does the strategy, the robot
-keeps the reflexes. A setpoint is a `geometry_msgs/PoseStamped` on
-`/wojtek/nav/goal`, ~1 m ahead, about once a second; the robot walks
-straight at it (turning in place first when it is far off the nose) and
-stops when it gets there. No local planner: which way round the crate is
-the VLM's call, from the picture. What the robot vetoes on its own is a
-collision: a few cells along the line ahead are probed in the costmap,
-and an inscribed/lethal one stops the robot with status `blocked` --
-including against the thing it walked past a moment ago and can no
-longer see. Turning towards the goal stays allowed while blocked; only a
-robot pointed at its goal with an obstacle ahead has nothing left to try.
+The loop explores by turning when the target is absent, can approach along the
+viewing ray when depth is unavailable, and tries a detour after blockage. Default
+budgets are 30 steps, 600 s, 8 blind approaches and 3 stalled moves. These bound
+an attempt; they do not establish navigation reliability.
 
-- **Frame and time.** Any frame TF resolves: a goal in `base_link` with
-  the *picture's* stamp is transformed to `odom` at that stamp, so the
-  point the VLM meant survives the seconds the robot walked on during
-  inference. A goal in `odom` is taken as is.
-- **Dead-man.** A setpoint expires `goal_timeout` (3 s) after arrival;
-  the VLM must keep talking. The stop is one zero `/cmd_vel` and then
-  silence, the same protocol as `text_commander`, so a pad or console can
-  take over without a shouting match.
-- **Status** on `/wojtek/nav/status` (latched): `idle` / `turning` /
-  `driving` / `blocked` / `reached` -- what a VLM loop reads before it
-  decides the next point.
-- **Non-holonomic on purpose.** The policy can strafe; the camera cannot.
-  A robot that walks sideways walks blind.
+`/wojtek/vlm/status` carries latched JSON in `std_msgs/String`. Common fields are
+`step`, `instruction`, `t` and `action`; action-specific fields include `result`,
+`error`, `answer`, `latency_s` and target distance. `/wojtek/vlm/annotated` shows
+the frame and selected point. The JSON is a project interface, not a ROS action
+with request/result correlation.
 
-Verified (sim, 2026-09-25): a setpoint straight through the crate stops
-the robot `blocked` 1 m short of it and `idle` after the dead-man; a
-setpoint past the crate on its free side is `reached` within 6 cm of the
-truth. The pure controller (`goto.py`) has its own desk tests.
+`VLM_MODEL` or `brain.launch.py model:=` selects another Ollama tag. A replacement
+must accept image input and the structured response schemas in `vlm_brain.py`;
+an OpenAI-compatible URL alone does not prove compatibility. Run the same
+present/absent-target and cancellation cases before treating another model as
+supported. The current repository provides only this Ollama backend.
 
-## The pixel resolver (`pixel_goal_node`)
+## Stop and hand over
 
-Decided 2026-09-25: the VLM hands over a **pixel**, not metres. It sees a
-JPEG and answers with where on it to walk; everything metric happens on
-the robot, from the depth image taken with that picture. The node is the
-one piece between a VLM client and `goto`:
+An empty instruction, `stop`, the panel's STOP button or `/wojtek/nav/cancel`
+ends the task. Goto clears its goal; on its next control tick with a valid pose
+it emits the stop transition. The resolver stops resending goals, and the brain
+halts its own turn command. Late goals within 0.5 s of cancel are ignored.
+If pose is unavailable, the policy's command timeout remains the fallback.
 
-```
-colour pixel (u, v) + picture stamp ──► depth pixel on the same viewing ray
-   ──► patch median of the depth image nearest that stamp ──► pinhole point in
-   camera_depth_optical_frame ──► odom at the picture's stamp (leg odometry)
-   ──► standoff 0.7 m in front of the object, facing it ──► /wojtek/nav/goal
-```
+The default direct `/cmd_vel` path has no ownership arbiter. Cancel navigation
+before taking over with a pad/Deck, and stop other sources before starting a
+new task. Disarm closes the policy-target gate but does not cancel the brain.
+Neither cancel nor disarm removes motor torque.
 
-- **Input** `/wojtek/nav/pixel_goal` (`geometry_msgs/PointStamped`):
-  `header.stamp` is the colour picture's stamp, `point.x`/`point.y` the
-  pixel normalised to the colour image (a VLM adapter divides Qwen's
-  0-1000 by 1000; a value above 1 is taken as an absolute pixel),
-  `point.z` a standoff in metres (0 = the `standoff_m` parameter). No new
-  message package: the contract is documented, not typed, until it grows
-  a second field.
-- **Depth, not the colour image.** The node keeps the raw depth stream in
-  a ring keyed by stamp and picks the frame nearest the picture's (within
-  `max_skew_s`, 0.1 s). It needs the colour *intrinsics* to map the pixel
-  through the viewing ray, never the colour bytes.
-- **Resolved once, re-sent in odom.** goto expires a setpoint 3 s after
-  it arrived, and its TF buffer keeps 10 s: a camera-frame goal re-sent for
-  longer than that is dropped (seen in the sim: the robot stopped 0.4 m
-  short). So the object point is transformed once, at the picture's
-  stamp, and the standoff setpoint goes out in `odom` every `repeat_s`
-  until goto says `reached` (after the send: a setpoint already within
-  goto's tolerance -- the target closer than the standoff -- is `reached`
-  at once, with no `driving` before it), has said `blocked` for `blocked_hold_s`
-  (goto turns while blocked and may go on; a moment of it is not a
-  failure), or `max_goal_s` passed.
-- **Status** on `/wojtek/nav/pixel_status` (latched): `resolving` /
-  `no_frame` / `no_depth` / `no_tf` / `sent` / `reached` / `blocked` /
-  `timeout` / `replaced`; the object point on `/wojtek/nav/pixel_target`
-  (odom) for the map view and the eval. A new pixel replaces the goal in
-  flight.
+Shared launches support `command_mux:=true` for explicit ownership; in that
+mode manual takeover and disarm cancel navigation and inhibit autonomy.
+Enable autonomy explicitly before a new task. For standalone launches, set
+`cmd_vel_topic:=/wojtek/cmd_vel/nav` on `costmap.launch.py` and
+`cmd_vel_topic:=/wojtek/cmd_vel/brain` on `brain.launch.py`.
+See [command ownership](../../../docs/command-ownership.md) for the complete
+setup and current validation limits.
 
-Verified (sim, 2026-09-25, `scene_nav.xml`, the crate's near face
-projected into the colour image as the "VLM's" pixel): the resolved point
-is within 2 mm of the truth in the robot's own frame, three runs, and the
-robot stops 0.85 m from the crate (standoff plus goto's tolerance). In
-`odom` the same point is off by the odometry's drift at that moment
-(0.3-0.4 m late in a session of turns): the robot and the goal share that
-frame, so the approach does not care; a persistent map would.
+## Costmap behavior and limits
 
-What the picture cannot fix: a point the VLM puts on the object (not the
-floor) is what the standoff is for; a target closer than ~0.8 m falls out
-of the 15-degree-down camera's view, so ask for `done`/`turn` there, not a
-pixel; a setpoint whose straight line clips an obstacle is goto's known
-limit -- the VLM must hand over the way round as the next pixel.
+The costmap is a 6×6 m rolling window in `odom`, with 5 cm cells and a retained
+history of observed obstacles. Depth is decimated before projection. Separate
+marking and clearing sources distinguish obstacles above 6 cm from floor rays;
+IMU/odometry levels the cloud. Settings and rationale are in `config/costmap.yaml`.
 
-## The brain (`vlm_brain_node`)
+The current controller treats **missing grids, unknown cells and positions
+outside the grid as free**, and does not check grid freshness. Therefore,
+`nav:=true` alone does not guarantee a working obstacle veto. Verify the map
+and its update rate before a test; `nav_costmap:=false` provides no local
+costmap protection. Sensor loss is not a certified obstacle-stop mechanism.
 
-The loop on top: a user's instruction in, an exploration until the target
-is seen, never a guessed goal. The policy is `wojtek_nav/vlm_brain.py`
-(pure, desk-tested); the node talks to Ollama serving
-qwen3-vl:30b-a3b-instruct (its OpenAI-compatible endpoint, JSON-schema
-structured output) and to the two nodes above.
+Other limits:
 
-```bash
-# 1. On the GPU box: Ollama serving the model on port 11434.
-ollama pull qwen3-vl:30b-a3b-instruct && ollama serve
-# 2. On the PC: VLM_URL=http://<that box>:11434 in the repo-root .env (see .env.example), then
-./ros/sim.sh model_xml:=scene_nav.xml leg_odom:=true nav:=true vlm:=true   # the sim session
-ros2 run wojtek_bringup robot --web-console --vlm    # the robot (PC side; the RPi stack
-                                                     # needs nav:=true in the service's
-                                                     # launch arguments, its deck_camera:=true
-                                                     # is the camera -- or --dry-run
-                                                     # deck_camera:=true nav:=true on the bench)
-# 3. Type the instruction into the web console's brain panel (http://localhost:8080),
-#    or from a shell:
-ros2 topic pub -1 /wojtek/vlm/instruction std_msgs/String "data: podejdź do fioletowego słupa"
-ros2 topic pub -1 /wojtek/vlm/instruction std_msgs/String "data: stop"     # or the panel's STOP
-```
+- No persistent SLAM map or general route planner is in the current launch.
+- Negative obstacles can look unknown; step-height decisions are unfinished.
+- Camera mounting is still a design value awaiting physical measurement.
+- The fixed camera has blind regions; close targets can leave its image.
+- Stock camera, scene and footprint assumptions do not validate new-leg use.
 
-On the robot the camera is the deck panel's (`deck_camera:=true`, already
-in the service's launch arguments, `ros/deploy/rpi/wojtek-robot-local.conf`):
-colour at 640x480 and the raw depth at 424x240, which is what the costmap,
-the pixel resolver and the brain read. Add only `nav:=true` there. Do not
-add `perception:=true` next to it. That starts a second RealSense driver
-on the same camera under the same name, with d435.yaml's point cloud,
-alignment and sync on, and that set crashes the driver on the Pi (see the
-deck camera's note in `wojtek_bringup/launch_common.py`). Keep
-`deck_camera_depth` at its default (true): without the depth the costmap
-and the pixel resolver have nothing to read.
+## Physical deployment
 
-`brain.launch.py` is the one node with its arguments (`url`, `model`,
-`instruction`, `image_topic`, `compressed`); `url` takes the server's
-base URL with or without `/v1`, and defaults to `VLM_URL` from the
-environment. The model is qwen3-vl:30b-a3b-instruct (`model`, else
-`VLM_MODEL`).
+The documented robot-side camera path is `deck_camera:=true nav:=true` in the
+effective RT service configuration. The installed service already enables the
+Deck camera, but navigation is opt-in. Keep `deck_camera_depth:=true`; depth is
+required by both resolver and costmap. Do not also set `perception:=true`.
 
-**What crosses the robot's wifi.** The brain runs on the PC, next to the
-model, and reads the camera node's own JPEG
-(`/camera/camera/color/image_raw/compressed`, image_transport's plugin
-on the robot at quality 80, the sim camera's own sibling in the sim):
-~100 KB a frame at 1280x720 where the raw image is 2.7 MB, the stream
-that pulled 19 MB/s out of the Pi and stretched the policy's tick gaps
-(`ros/hw_tests/perf`). The web console takes the same JPEG. The robot
-needs the plugin installed (`ros/deploy/deck/README.md`, step 4);
-`compressed:=false` reads the raw image on a robot without it.
+On the PC, `ros2 run wojtek_bringup robot --web-console --vlm` adds the brain to
+that configured robot session. Its `nav:=` tokens do not reconfigure the RT
+service. The brain and web console read camera JPEG to limit wireless traffic;
+`compressed:=false` is a raw-image fallback with substantially higher bandwidth.
+Use the [camera guide](../wojtek_perception_bringup/README.md) and
+[operator runbook](../../../docs/operations.md) to prepare the hardware route.
 
-**Stopping.** An empty instruction or `stop` on `/wojtek/vlm/instruction`
-cancels the task: the brain publishes `/wojtek/nav/cancel`
-(`std_msgs/Empty`), which goto and the pixel resolver both read -- goto
-drops its setpoint now (one zero Twist, then idle) rather than at its 3 s
-dead-man, and ignores goals for half a second after it so a re-send
-already on its way cannot start the robot again; the resolver stops
-re-sending (`cancelled`) -- and zeroes any
-turn of its own. The console's STOP sends the cancel directly as well, so
-it works with no brain running; and the brain reads that topic too, so a
-cancel from anywhere (a hand-typed `ros2 topic pub`) ends its task rather
-than being answered with a search turn. A new instruction mid-task does the same
-and then starts the new one (`replaced`). A model that cannot be reached
-or a camera that goes quiet ends the task with `error` in the status
-and the same halt, not a dead node.
+## Evaluation and recorded evidence
 
-Every step: a fresh colour frame → the model answers `goal` (a pixel) /
-`turn` / `not_visible` / `done` under the schema → a `goal` is **verified**
-with a second yes/no question that repeats the task (kind, colour, size)
-→ only then the pixel goes to `pixel_goal_node`. `not_visible` turns 45°
-and looks again; after a full circle it steps 1 m forward. A target
-beyond the depth window (`no_depth`: 0 % of the patch past 3 m) is
-approached 1 m **along the pixel's bearing** (the viewing ray through the
-colour camera_info and TF, fixed in `odom` once) and looked at again; a
-`blocked` approach looks again and detours 40° off the bearing, left then
-right. A detoured walk ends with the body 40° off the target, out of the
-picture, so the robot turns back onto the bearing before it looks. A
-`blocked` goal looks again once (a fresh picture re-resolves the
-target from where the robot stands: the leg odometry under-reads a long
-walk by up to ~30 % in the sim, so a setpoint fixed metres back can put
-the robot at the target with odom saying otherwise), and turns if the goal
-from that fresh look is blocked again. **Arrival is the executive's
-call**: `done` when goto reached or was blocked at the setpoint and the
-resolved object point is within
-`done_within_m` (1.1 m);
-the model's own `done` is not trusted (a thin pillar never "fills the
-view"). Status JSON on `/wojtek/vlm/status`, the picture with the model's
-point on `/wojtek/vlm/annotated` -- both shown live in the web console's
-brain panel, next to goto's and the resolver's status words; a new task
-on `/wojtek/vlm/instruction` replaces the running one.
+For a repeatable simulated evaluation, record commit, profile, policy pin,
+scene/spawn, model digest/tag, Ollama version, host/GPU and launch arguments.
+Restart the scene between cases and collect status, `/cmd_vel`, TF and timing:
 
-The loop cannot run forever: `max_steps` (30) looks, `max_s` (600 s),
-`max_blind` (8) approaches in a row that never bring the target into the
-depth window, or `max_stalls` (3) moves in a row that covered less than
-`min_progress_m` (0.25 m) each end the task as `gave_up`, the reason
-latched in the status's `error` (e.g. `no progress: 3 moves in a row
-covered less than 0.25 m each` -- what a robot that was never armed
-gets). When the time runs out the reason reads `time budget spent: 600 s
-without reaching the target`; a step that finishes the task after the
-budget has run out keeps its own result (a late `done` stays `done`).
+| Case | Check |
+|---|---|
+| Visible target | Correct object selected; final distance and elapsed time recorded |
+| Target initially behind | Exploration finds it without inventing a visible target |
+| Look-alike objects | Verification rejects wrong colour/size/identity |
+| Absent target | Attempt ends within budgets; fabricated goals counted |
+| Obstacle on direct line | Costmap is present; blocked behavior and any detour recorded |
+| Cancel while moving | Motion command stops; late goal cannot immediately restart it |
+| Model/camera failure | Task reports error or timeout; no stale task resumes on reconnect |
+| Unarmed robot | Task reports lack of progress instead of reporting success |
 
-Measured (sim, 2026-09-25, `scene_nav.xml`, qwen3-vl:30b-a3b-instruct on
-Ollama on the DGX): "podejdź do fioletowego słupa" from a pose facing
-away: 4 turns, then goal → `reached` in 25 s. "podejdź do niskiej
-pomarańczowej skrzynki" from behind the pillar: 6 steps, 55 s, the robot
-stopped 0.8 m from the box; on the way the model twice took the big
-orange crate for the low box (both orange) and the first approach ran
-into the pillar's costmap halo -- the verification and the turn-after-
-block are what got it out. Per call: pointing 1.1-1.5 s, verify 0.2 s.
+Historical stock-sim results from September 2026 include 25 s and 55 s target
+approaches, and a 66 s approach from beyond the depth window ending 0.77 m from
+the pillar. These are individual observations, not a success-rate benchmark.
+A nine-frame pointing test reported median metric error around 0.15–0.18 m,
+with false “chair” detections in 4 of 9 absent-object queries.
 
-Measured (sim, 2026-09-26, same model, default spawn 4.8 m from the
-pillar -- beyond the 3 m depth window; machinekind/w01-tek#42): 5 steps,
-66 s to `done` 0.77 m from the pillar's surface (ground truth from
-`/sim/qpos`). One blind approach along the bearing (0.84 m odom, 1.01 m
-true), one into the crate's halo (`blocked`), a 40° detour round it, then
-the depth resolved at 2.26 m and the pixel goal finished it. Unarmed (the
-robot never moves), the same task ends after 3 steps as `gave_up`.
+### Build a labelled pointing fixture
 
-`scripts/point_bench.py` is the offline pointing benchmark: nine sim
-frames with the objects' true pixels and depth, per-object queries and
-absent-object queries, scored in metres through the same maths as the
-resolver. On it qwen3-vl:30b-a3b-instruct points to a median 0.15-0.18 m,
-but invented a "chair" on the only visible box in 4 of 9 absent cases --
-the reason the loop verifies before it moves.
-
-## Next
-
-The verification prompt against look-alikes (the crate/low-box case), a
-larger pointing set with masks. Then: negative obstacles (a hole or a step down is *missing* floor, which
-this costmap reads as unknown, not as danger) and the step-height decision
-for a legged robot (the 0.15 m box is a wall here; whether it should be is
-the policy's business).
-
-## Tests
+Use a stationary stock simulation with the camera running. Inside the ROS
+container, capture one matched pair at a time:
 
 ```bash
-cd ros/src/wojtek_nav && PYTHONPATH=$PWD:$PYTHONPATH python3 -m pytest test/ -q
+python3 /ros2_ws/src/wojtek_nav/scripts/capture_frames.py --out /tmp/wojtek-point-frames
 ```
 
-Launch composition (the nodes in order, the decimated pair published
-where image_transport looks for it, the cloud landing on the topic both
-observation sources read, CPU pins; the brain launch's defaults and its
-`VLM_URL`), the costmap file's invariants (rolling window in odom,
-footprint covers the measured robot, marking/clearing split by floor
-height, ranges match the camera), the go-to controller on a desk
-(reaches, turns first, obeys the limits, blocks and resumes, dead-man,
-cancel, turns while blocked), the pixel resolver's maths and its goal
-tracker, and the brain's policy (answers in, actions out, no model).
+Each call appends a JPEG, depth array in millimetres and intrinsics/timestamps to
+`index.json`. It refuses timestamp skew above 0.1 s by default and writes no
+object labels. Use one capture process at a time. Move to another test view,
+stop motion, and capture again. Export the directory from the PC host before
+recreating the container:
+
+```bash
+docker cp wojtek_robot:/tmp/wojtek-point-frames "$HOME/wojtek-point-frames"
+```
+
+Review each JPEG and edit its entry's `truth`. For example, only when the pillar
+is visible at the image centre and a chair is absent:
+
+```json
+"annotation_status": "reviewed",
+"truth": {
+  "pillar": {"visible": true, "u_norm": 0.5, "v_norm": 0.5},
+  "chair": {"visible": false}
+}
+```
+
+Normalize a marked pixel as `x / colour_width`, `y / colour_height`. The current
+prompt vocabulary is `crate`, `pillar`, `low_box`, `chair`, `person`; add a name
+to the script's prompt table before using another object. Label only known
+visible/absent cases. Capture rejects no objects itself, and the scorer refuses
+unreviewed/empty annotations instead of guessing an absent target.
+
+From an environment with NumPy and access to the model endpoint:
+
+```bash
+python3 ros/src/wojtek_nav/scripts/point_bench.py \
+  --frames "$HOME/wojtek-point-frames" --url http://127.0.0.1:11435/v1 \
+  --model qwen3-vl:30b-a3b-instruct --json-schema --tag baseline
+```
+
+The report records pointing error, explicit absent-object errors and latency.
+Colour dimensions come from the captured frame. Metric scoring uses the stored
+intrinsics and a shared viewing-ray approximation; it does not apply a measured
+physical colour-to-depth extrinsic. Use this fixture for the stock simulation,
+and validate physical-camera projection separately before interpreting its
+metric errors. A human point is a reference annotation, not exact geometric
+truth. Archive labels, images, model digest and versions with the report. The
+original nine-frame fixture is not committed, so this creates a new baseline.
+
+### Automated checks
+
+From the repository root with pytest and NumPy, run the model-free checks:
+
+```bash
+PYTHONPATH=ros/src/wojtek_nav:$PYTHONPATH python3 -m pytest \
+  ros/src/wojtek_nav/test/test_goto.py \
+  ros/src/wojtek_nav/test/test_pixel_goal.py \
+  ros/src/wojtek_nav/test/test_vlm_brain.py \
+  ros/src/wojtek_nav/test/test_point_capture.py -q
+```
+
+For launch-composition tests, use the ROS container with its workspace sourced:
+
+```bash
+cd /ros2_ws/src/wojtek_nav
+PYTHONPATH=$PWD:$PYTHONPATH python3 -m pytest test/ -q
+```
+
+These checks do not exercise a live model, ROS transport, physical sensors or a
+powered robot. Capture synchronization still needs a live ROS camera test.

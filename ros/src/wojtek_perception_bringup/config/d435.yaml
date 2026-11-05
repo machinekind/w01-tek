@@ -18,8 +18,11 @@
 #                                    below the frame-to-frame jump at range,
 #                                    so the filter treats real noise as
 #                                    motion and passes it through -- measured
-#                                    *worse* than no filter at 3-4 m. At 100
-#                                    it works: 39 -> 10 mm at 2-3 m.
+#                                    *worse* than no filter at 3-4 m. Changing
+#                                    delta 20 -> 100 on DEFAULT reduced noise
+#                                    41 -> 28 mm at 2-3 m. HIGH_ACCURACY with
+#                                    delta 100 gave 10 mm, versus 39 mm on
+#                                    DEFAULT without a temporal filter.
 #   decimation magnitude 2           848x480 -> 424x240. Halves the host cost
 #                                    of the spatial filter, which is the
 #                                    expensive one, at no measured accuracy

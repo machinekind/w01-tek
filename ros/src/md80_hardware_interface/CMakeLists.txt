@@ -45,4 +45,11 @@ ament_export_libraries(md80_hardware_interface)
 ament_export_dependencies(hardware_interface pluginlib rclcpp rclcpp_lifecycle
                           std_msgs)
 
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+
+  ament_add_gtest(test_drive_response_age test/test_drive_response_age.cpp)
+  target_include_directories(test_drive_response_age PRIVATE include)
+endif()
+
 ament_package()

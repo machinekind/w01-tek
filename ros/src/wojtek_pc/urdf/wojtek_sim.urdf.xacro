@@ -78,9 +78,9 @@
   <xacro:wojtek_body with_camera="true" legs="$(arg legs)" />
 
   <!-- Same interface set as wojtek_bringup's wojtek_joint macro: a position
-       command (impedance target) and position/velocity/effort states. The
-       gains travel as params so the mujoco plugin can write them into the
-       actuators; the mock ignores them. -->
+       command and position, velocity, effort and response_age states.
+       The simulation plugin applies the gains to the actuators.
+       The mock hardware ignores the gains. -->
   <xacro:macro name="wojtek_sim_joint" params="name kp kd max_torque tau_ff:=false tau_ff_scale:=0.0">
     <joint name="${name}">
       <command_interface name="position" />
@@ -94,6 +94,10 @@
         <param name="initial_value">0.0</param>
       </state_interface>
       <state_interface name="effort">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <!-- The simulated hardware keeps each drive's response_age at 0.0. -->
+      <state_interface name="response_age">
         <param name="initial_value">0.0</param>
       </state_interface>
       <param name="ddq_kp">${kp}</param>

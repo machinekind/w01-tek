@@ -185,6 +185,7 @@ hardware_interface::CallbackReturn MujocoHardwareInterface::on_init(
   position_.assign(joint_names_.size(), 0.0);
   velocity_.assign(joint_names_.size(), 0.0);
   effort_.assign(joint_names_.size(), 0.0);
+  response_age_.assign(joint_names_.size(), 0.0);
   command_.assign(joint_names_.size(), 0.0);
   tau_ff_command_.assign(joint_names_.size(), 0.0);
   tau_ff_scale_.assign(joint_names_.size(), 0.0);
@@ -319,6 +320,7 @@ MujocoHardwareInterface::export_state_interfaces()
       joint_names_[i], hardware_interface::HW_IF_VELOCITY, &velocity_[i]);
     interfaces.emplace_back(
       joint_names_[i], hardware_interface::HW_IF_EFFORT, &effort_[i]);
+    interfaces.emplace_back(joint_names_[i], "response_age", &response_age_[i]);
   }
   if (has_imu_) {
     for (const auto & [name, slot] : kImuSlots) {

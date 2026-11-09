@@ -36,6 +36,10 @@
       <state_interface name="effort">
         <param name="initial_value">0.0</param>
       </state_interface>
+      <!-- The mock hardware keeps each drive's response_age at 0.0. -->
+      <state_interface name="response_age">
+        <param name="initial_value">0.0</param>
+      </state_interface>
     </joint>
   </xacro:macro>
 

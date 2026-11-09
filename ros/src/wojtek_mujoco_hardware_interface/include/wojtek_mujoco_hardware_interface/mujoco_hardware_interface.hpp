@@ -80,6 +80,8 @@ private:
   /// Actuator index in the model per exported joint.
   std::vector<int> actuator_of_joint_;
   std::vector<double> position_, velocity_, effort_, command_;
+  /// Each simulated drive's response_age stays at 0.0.
+  std::vector<double> response_age_;
   /// The feed-forward torque head (tau_ff policies): an `effort` command on
   /// every joint next to `position`, clamped to +-tau_ff_scale_ per joint
   /// before it reaches the plant, the way the training sim clamps it.

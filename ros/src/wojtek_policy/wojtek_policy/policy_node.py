@@ -19,8 +19,10 @@ parameters differ:
                                   the PD servo, clamped separately from
                                   max_torque)
               /wojtek/policy_timing (wojtek_telemetry/PolicyTiming; how long
-                                  the policy step took and how far apart the
-                                  ticks landed. Only with publish_timing)
+                                  the policy step took. It reports the tick
+                                  interval. It reports sensor ages at tick
+                                  start. The node publishes it when
+                                  publish_timing is true.)
   services    /wojtek/enable (std_srvs/SetBool), /wojtek/reset (std_srvs/Trigger)
 
 The policy itself (wojtek_policy.policy.WojtekPolicy) works in the MuJoCo/training
@@ -43,6 +45,7 @@ from wojtek_policy.command_gate import CommandGate
 from wojtek_policy.joint_map import JointMap
 from wojtek_policy.policy import WojtekPolicy, gravity_from_quat
 from wojtek_policy.policy_source import resolve_policy
+from wojtek_policy.timing import InputSamples, stamp_to_ns
 
 
 def rpy_to_mat(r, p, y):
@@ -124,8 +127,11 @@ class PolicyNode(Node):
             fill=self.policy.command_fill,
         )
         self._cmd_expired = False
-        self._joints_stamp = None
-        self._imu_stamp = None
+        # The watchdog uses arrival times from the node clock.
+        # Telemetry tracks sample timestamps separately.
+        self._joints_arrival = None
+        self._imu_arrival = None
+        self._samples = InputSamples()
         self._enabled = self.get_parameter("auto_enable").value
         self._enable_time = None
         self._was_running = False
@@ -164,6 +170,8 @@ class PolicyNode(Node):
 
     # -- inputs --------------------------------------------------------------
     def _on_joints(self, msg):
+        # joints_wait_ms includes the time spent processing the message.
+        arrival_ns = self.get_clock().now().nanoseconds
         idx = {n: i for i, n in enumerate(msg.name)}
         try:
             order = [idx[n] for n in self.joint_names]
@@ -174,7 +182,8 @@ class PolicyNode(Node):
             self._dq_urdf = np.array([msg.velocity[i] for i in order])
         else:
             self._dq_urdf = np.zeros(12)
-        self._joints_stamp = self.get_clock().now()
+        self._samples.note_joints(arrival_ns, stamp_to_ns(msg.header.stamp))
+        self._joints_arrival = self.get_clock().now()
 
     def _on_imu(self, msg):
         gyro = np.array(
@@ -209,7 +218,8 @@ class PolicyNode(Node):
                 g = alpha * g + (1.0 - alpha) * g_meas
             self._grav_filt = g / np.linalg.norm(g)
             self._gravity_base = self.imu_mount @ self._grav_filt
-        self._imu_stamp = self.get_clock().now()
+        self._samples.note_imu(stamp_to_ns(msg.header.stamp))
+        self._imu_arrival = self.get_clock().now()
 
     def _on_cmd(self, msg):
         # Clip to the command box the policy trained on: never ask it to
@@ -260,6 +270,7 @@ class PolicyNode(Node):
 
     def _tick(self):
         period_ms = 0.0
+        ages = None
         if self._timing_pub is not None:
             # Taken at the top of every tick, including the ones that hold.
             # That way the period says what the timer did, even over a
@@ -268,15 +279,19 @@ class PolicyNode(Node):
             if self._last_tick_t is not None:
                 period_ms = (tick_t - self._last_tick_t) * 1e3
             self._last_tick_t = tick_t
+            # Sample ages require the same clock as the header stamps.
+            ages = self._samples.ages(
+                self.get_clock().now().nanoseconds, self.policy.uses_imu
+            )
         if not self._enabled:
             self._was_running = False
             return
         # Require fresh data for every sensor the policy observes -- and only
         # those: an IMU-blind policy (springy obs layout) keeps running
         # through an IMU dropout.
-        fresh = self._fresh(self._joints_stamp)
+        fresh = self._fresh(self._joints_arrival)
         if self.policy.uses_imu:
-            fresh = fresh and self._fresh(self._imu_stamp)
+            fresh = fresh and self._fresh(self._imu_arrival)
         if not fresh:
             if self._was_running:
                 self.get_logger().warning(
@@ -359,6 +374,11 @@ class PolicyNode(Node):
                 timing.header.stamp = msg.header.stamp
                 timing.inference_ms = inference_ms
                 timing.period_ms = period_ms
+                (
+                    timing.joints_age_ms,
+                    timing.joints_wait_ms,
+                    timing.imu_age_ms,
+                ) = ages
                 self._timing_pub.publish(timing)
             except Exception as err:
                 if not self._timing_failed:
@@ -381,8 +401,13 @@ def main():
         from rclpy.experimental import EventsExecutor
         executor = EventsExecutor()
         executor.add_node(node)
-    except ImportError:
+        node.get_logger().info("executor: rclpy.experimental.EventsExecutor")
+    except ImportError as err:
         executor = None
+        node.get_logger().warning(
+            f"executor: default SingleThreadedExecutor (EventsExecutor "
+            f"unavailable: {err})"
+        )
     try:
         if executor is not None:
             executor.spin()

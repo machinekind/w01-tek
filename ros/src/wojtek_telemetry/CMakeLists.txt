@@ -3,12 +3,14 @@ project(wojtek_telemetry)
 
 find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
+find_package(builtin_interfaces REQUIRED)
 find_package(std_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   msg/SysInfo.msg
   msg/PolicyTiming.msg
-  DEPENDENCIES std_msgs)
+  msg/IoTiming.msg
+  DEPENDENCIES builtin_interfaces std_msgs)
 
 # The node is a single file installed as a program, not as an importable
 # Python package. A package directory called wojtek_telemetry would land in

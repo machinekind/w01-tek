@@ -36,6 +36,10 @@ poses of its legs.
               field (tau_ff policies); torque is frame-offset-free, so no
               boot shift applies. The launch spawns that controller only
               for tau_ff policies -- without it the publication is inert.)
+              /wojtek/io_timing uses wojtek_telemetry/IoTiming.
+              The adapter publishes one sample per received target when
+              publish_timing is true. Each sample records target age,
+              the joint_states relay delay and command publication status.
   services    /wojtek/arm      (std_srvs/SetBool)  -- gate actually sending commands
               /wojtek/stand_up (std_srvs/Trigger)  -- slow ramp current -> home
               /wojtek/lie_down (std_srvs/Trigger)  -- slow ramp current -> folded
@@ -65,6 +69,8 @@ share one frame and /wojtek/zero is exact. Still verify the first powered test
 with dry_run:=true + /wojtek/arm false.
 """
 
+import math
+
 import numpy as np
 import rclpy
 from ament_index_python.packages import get_package_share_directory
@@ -74,6 +80,9 @@ from std_msgs.msg import Empty, Float64MultiArray
 from std_srvs.srv import SetBool, Trigger
 
 from wojtek_policy.joint_map import JointMap
+from wojtek_telemetry.msg import IoTiming
+
+from wojtek_bringup.timing import age_ms
 
 from wojtek_policy import poses, robots, tricks
 
@@ -94,6 +103,7 @@ class RealIoNode(Node):
         self.declare_parameter("folded_knee_rad", poses.FOLDED_KNEE_RAD)
         self.declare_parameter("ramp_duration_s", 4.0)
         self.declare_parameter("ramp_rate_hz", 50.0)
+        self.declare_parameter("publish_timing", False)
 
         # Joint order and the poses are robot constants (poses.py, per set
         # of legs), not properties of whichever policy is loaded -- arming
@@ -155,6 +165,14 @@ class RealIoNode(Node):
         self._pub_effort = self.create_publisher(
             Float64MultiArray, "forward_effort_controller/commands", 10
         )
+        self._timing_pub = None
+        if self.get_parameter("publish_timing").value:
+            self._timing_pub = self.create_publisher(
+                IoTiming, "wojtek/io_timing", 10
+            )
+        self._timing_failed = False
+        # The relay delay is NaN until the first joint state sample.
+        self._state_relay_ms = math.nan
         self.create_service(SetBool, "wojtek/arm", self._srv_arm)
         self.create_service(
             Trigger, "wojtek/stand_up", lambda req, res: self._srv_ramp(
@@ -198,6 +216,13 @@ class RealIoNode(Node):
         if len(msg.velocity) == len(msg.name):
             out.velocity = [msg.velocity[i] for i in order]
         self._pub_abs.publish(out)
+        if self._timing_pub is not None:
+            try:
+                self._state_relay_ms = age_ms(
+                    self.get_clock().now().nanoseconds, msg.header.stamp
+                )
+            except Exception as err:
+                self._timing_error(err)
 
         # Passive four-bar joints follow from the knee angles; without them
         # robot_state_publisher has no TF for the lower-leg links and RViz
@@ -221,21 +246,52 @@ class RealIoNode(Node):
         self._pub_abs.publish(passive)
 
     def _on_targets(self, msg):
+        armed = self._armed
+        sent = False
         idx = {n: i for i, n in enumerate(msg.name)}
         try:
             target_abs = np.array([msg.position[idx[n]] for n in self.joint_names])
         except KeyError as e:
             self.get_logger().warning(f"target missing joint {e}")
-            return
-        effort = None
-        if len(msg.effort) == len(msg.name):
-            # tau_ff policies: feed-forward torque riding the same message.
-            effort = np.array([msg.effort[idx[n]] for n in self.joint_names])
-        if not self._armed:
-            return
-        self._send_cmd(target_abs - self._offset_urdf, effort)  # boot-relative
+        else:
+            effort = None
+            if len(msg.effort) == len(msg.name):
+                # Policies with tau_ff send torque in the target message.
+                effort = np.array([msg.effort[idx[n]] for n in self.joint_names])
+            if armed:
+                # Command positions are relative to the boot pose.
+                sent = self._send_cmd(target_abs - self._offset_urdf, effort)
+        # Rejected targets also receive a timing sample.
+        if self._timing_pub is not None:
+            self._publish_timing(msg.header.stamp, armed, sent)
+
+    def _publish_timing(self, target_stamp, armed, command_sent):
+        # Commands continue after telemetry failures.
+        # The adapter logs only the first failure.
+        try:
+            now = self.get_clock().now()
+            timing = IoTiming()
+            timing.header.stamp = now.to_msg()
+            timing.target_stamp = target_stamp
+            timing.target_age_ms = age_ms(now.nanoseconds, target_stamp)
+            timing.state_relay_ms = self._state_relay_ms
+            timing.armed = armed
+            timing.command_sent = command_sent
+            self._timing_pub.publish(timing)
+        except Exception as err:
+            self._timing_error(err)
+
+    def _timing_error(self, err):
+        if not self._timing_failed:
+            self._timing_failed = True
+            self.get_logger().error(
+                f"cannot publish io timing: {err}. Commands keep flowing "
+                f"and this is not reported again."
+            )
 
     def _send_cmd(self, cmd_rel, effort=None):
+        # The return value is True only after a position command is published.
+        # It is False for rejected commands and during dry_run.
         # Last line of defense: a non-finite target must never reach the
         # drives (tau = kp*(NaN - q) ...). Upstream guards exist in
         # policy_node, but this topic is open to anyone. A bad effort drops
@@ -248,7 +304,7 @@ class RealIoNode(Node):
             self.get_logger().error(
                 "non-finite motor command -- dropping", throttle_duration_sec=1.0
             )
-            return
+            return False
         if self.get_parameter("dry_run").value:
             eff = (
                 f" effort {np.array2string(effort, precision=2)}"
@@ -258,7 +314,7 @@ class RealIoNode(Node):
                 f"dry_run cmd: {np.array2string(cmd_rel, precision=3)}{eff}",
                 throttle_duration_sec=1.0,
             )
-            return
+            return False
         out = Float64MultiArray()
         out.data = cmd_rel.tolist()
         self._pub_cmd.publish(out)
@@ -266,6 +322,7 @@ class RealIoNode(Node):
             tau = Float64MultiArray()
             tau.data = effort.tolist()
             self._pub_effort.publish(tau)
+        return True
 
     def _srv_ramp(self, res, target_urdf, name):
         if self._armed:
@@ -413,6 +470,10 @@ def main():
         executor.add_node(node)
     except ImportError:
         executor = None
+    node.get_logger().info(
+        "executor: EventsExecutor" if executor is not None
+        else "executor: default (rclpy.spin), EventsExecutor unavailable"
+    )
     try:
         if executor is not None:
             executor.spin()

@@ -368,6 +368,10 @@ def _launch_setup(context, with_rviz, hardware):
                     # never arms in the sim (seen by every E2E harness so
                     # far, each raising it at runtime). Sim only.
                     **({"max_arm_jump_rad": 0.35} if hardware == "sim" else {}),
+                    # The telemetry argument also controls policy timing.
+                    "publish_timing": ParameterValue(
+                        LaunchConfiguration("telemetry"), value_type=bool
+                    ),
                 }
             ],
         ),

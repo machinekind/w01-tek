@@ -135,12 +135,12 @@ On the robot, inspect the effective unit:
 systemctl cat wojtek-robot.service
 ```
 
-The base unit enables bags, telemetry and Foxglove, but the installed
-`10-local.conf` replaces its command: **bags are off, telemetry and Foxglove
-remain off**, while Deck, camera and gamepad are on. To record/watch a planned
-run, add `bag:=true bag_cpus:=0,1 telemetry:=true foxglove:=true` to the effective
-launch after checking the board's resource budget. Manual launches also default
-to recording/telemetry off.
+The base unit enables bags, telemetry and Foxglove. The installed
+`10-local.conf` replaces its command. The drop-in disables bags.
+It enables telemetry, the Foxglove bridge on port 8765, Deck, camera and gamepad.
+Check the board's resource budget before recording a planned run.
+Add `bag:=true bag_cpus:=0,1` to the effective launch to record the run.
+Manual launches leave recording, telemetry and Foxglove disabled by default.
 
 `/wojtek/sysinfo` reports computer health; `/wojtek/policy_timing` reports control
 tick timing. Import the [Foxglove layout](foxglove/layouts/README.md). Robot bags

@@ -172,9 +172,9 @@ See the [navigation contract](../ros/src/wojtek_nav/README.md),
 ## Deployment and observation
 
 The installed service drop-in selects the robot profile, folded boot pose,
-gamepad, Deck gateway and camera. It disables bags and leaves telemetry and
-Foxglove at their default false values. This overrides the base unit, which
-contains different flags. Inspect `systemctl cat wojtek-robot.service` on the
+gamepad, Deck gateway, camera, telemetry and the Foxglove bridge. It disables
+bags. The drop-in replaces the base unit's launch flags. Inspect
+`systemctl cat wojtek-robot.service` on the
 robot; the effective unit is the authority.
 
 When requested, `/wojtek/sysinfo` reports computer health and

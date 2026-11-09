@@ -37,9 +37,12 @@ default policy, and a policy trained for other legs is refused. The systemd
 service passes the robot:= that `deploy.sh --provision` wrote into its
 drop-in from WOJTEK_ROBOT (deploy/rpi/wojtek-robot-local.conf).
 
-Recording, telemetry and Foxglove are opt-in: bag:=true, telemetry:=true and
-foxglove:=true. The installed robot-local drop-in disables all three, overriding
-the base service. Inspect `systemctl cat wojtek-robot.service` for the effective
+A manual launch requires bag:=true for recording.
+It requires telemetry:=true for telemetry.
+It requires foxglove:=true for the Foxglove bridge.
+The installed service drop-in enables telemetry and the Foxglove bridge.
+It leaves bags disabled. It replaces the base service's command.
+Inspect `systemctl cat wojtek-robot.service` for the effective
 configuration. Bags go to bag_dir/run_<timestamp> (default: ~/wojtek_bags).
 
 For a commissioned robot, follow docs/operations.md:

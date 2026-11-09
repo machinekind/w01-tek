@@ -20,7 +20,7 @@ Commands marked **robot** run over SSH on the RPi; other ROS commands run inside
 | Legs go soft while service says active | Controller process/component state and `Drive link lost` log | Follow lost-link recovery below; active systemd status alone does not prove active hardware. |
 | Deck `PAD` stays grey | Steam controller capture, browser focus and pad press | Stop Steam with the helper, focus the page and press a button. |
 | Deck camera absent | Camera node, compressed topic and gateway log | Use one camera driver; check JPEG plugin and USB/power before changing resolution. |
-| Deck charts empty | `?telemetry=on`, bridge reachability, telemetry topics | Enable the requested sources; the installed service drop-in leaves these off. |
+| Deck charts empty | `?telemetry=on`, bridge reachability, telemetry topics | The installed service drop-in enables telemetry and the bridge. A manual launch requires `telemetry:=true foxglove:=true`. |
 | No bag after a session | Effective `bag:=` and recording process | Recording is opt-in; confirm a bag directory while the run is active. |
 | VLM connection refused | Ollama readiness and tunnel; container's host address | Use the [VLM setup](../ros/src/wojtek_nav/README.md); remote loopback is not the PC's loopback. |
 | Navigation task stalls | Camera/depth/TF, arm state, costmap and status reason | Inspect the named failure; a missing costmap is not evidence of clear space. |

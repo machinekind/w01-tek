@@ -50,8 +50,8 @@ Run only one bridge per port. Charts use `?telemetry=on`; the bridge defaults to
 the page host on port 8765, with `?bridge=ws://host:port` as an override.
 
 The physical robot's installed service drop-in enables Deck and camera, with
-`deck_cpus:=0,1`. It does **not** enable telemetry or Foxglove; add those to the
-effective service configuration for charts. `deploy.sh` builds the package,
+`deck_cpus:=0,1`. It also enables telemetry and the Foxglove bridge for the
+charts. `deploy.sh` builds the package,
 resolves dependencies and syncs detector assets.
 
 ## Controls and state

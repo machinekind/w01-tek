@@ -19,6 +19,8 @@
 
   <xacro:arg name="kp" default="40.0" />
   <xacro:arg name="kd" default="1.6" />
+  <!-- Abduction kp; the launch passes the contract pd.kp_per_actuator[0]. -->
+  <xacro:arg name="kp_abd" default="40.0" />
   <xacro:arg name="max_torque" default="9.0" />
   <!-- Feed-forward torque head (tau_ff policies): exposes an `effort`
        command interface per joint on top of `position`. The launch sets it
@@ -67,7 +69,7 @@
     <xacro:wojtek_mock_ros2_control use_imu="$(arg use_imu)" tau_ff="$(arg tau_ff)" />
   </xacro:if>
   <xacro:unless value="$(arg mock_hw)">
-    <xacro:wojtek_ros2_control kp="$(arg kp)" kd="$(arg kd)" max_torque="$(arg max_torque)"
+    <xacro:wojtek_ros2_control kp="$(arg kp)" kp_abd="$(arg kp_abd)" kd="$(arg kd)" max_torque="$(arg max_torque)"
       usb_port="$(arg usb_port)" bus="$(arg bus)" can_baud="$(arg can_baud)"
       dry_run="$(arg dry_run)" tau_ff="$(arg tau_ff)" />
     <xacro:if value="$(arg use_imu)">

@@ -714,3 +714,26 @@ def test_joint_map_home_within_urdf_limits_for_second_joint():
     jm = JointMap(CONFIG / "joint_map.yaml")
     urdf_home = jm.to_urdf(META["actuator_names"], np.array(HOME))
     assert np.all(np.isfinite(urdf_home))
+
+
+def test_tau_ff_limit_is_separate_from_scale(tmp_path):
+    """tau_ff_limit clips the torque head without changing its scale."""
+    bias24 = np.zeros(24, np.float32)
+    bias24[12:] = 3.0  # tanh(3) * scale ~ 0.995 * scale
+    meta = dict(META)
+    meta.update(action_size=24, tau_ff={"enable": True, "scale": 6.0, "limit": 2.0})
+    np.savez(
+        tmp_path / "policy.npz",
+        norm_mean=np.zeros(meta["obs_size"], np.float32),
+        norm_std=np.ones(meta["obs_size"], np.float32),
+        hidden_0_kernel=np.zeros((meta["obs_size"], 48), np.float32),
+        hidden_0_bias=np.concatenate([bias24, np.zeros(24, np.float32)]),
+    )
+    (tmp_path / "policy_meta.json").write_text(json.dumps(meta))
+    pol = WojtekPolicy(tmp_path / "policy.npz")
+    assert pol.tau_ff_scale == 6.0 and pol.tau_ff_limit == 2.0
+    pol.step(np.zeros(3), np.array([0, 0, -1.0]), np.zeros(12), np.zeros(12), np.zeros(3))
+    assert np.allclose(pol.last_tau_ff, 2.0)
+    over = WojtekPolicy(tmp_path / "policy.npz", tau_ff_limit=5.0)
+    over.step(np.zeros(3), np.array([0, 0, -1.0]), np.zeros(12), np.zeros(12), np.zeros(3))
+    assert np.allclose(over.last_tau_ff, np.tanh(3.0) * 6.0 if np.tanh(3.0) * 6.0 < 5.0 else 5.0)

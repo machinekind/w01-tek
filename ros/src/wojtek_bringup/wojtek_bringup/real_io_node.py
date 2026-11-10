@@ -65,12 +65,15 @@ share one frame and /wojtek/zero is exact. Still verify the first powered test
 with dry_run:=true + /wojtek/arm false.
 """
 
+import json
+from pathlib import Path
+
 import numpy as np
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Empty, Float64MultiArray
+from std_msgs.msg import Empty, Float64, Float64MultiArray
 from std_srvs.srv import SetBool, Trigger
 
 from wojtek_policy.joint_map import JointMap
@@ -119,6 +122,27 @@ class RealIoNode(Node):
         # Measured (activation-relative) -> absolute URDF. Starts assuming the
         # robot was in the boot pose at activation; /wojtek/zero recomputes it.
         self._offset_urdf = self.boot_urdf.copy()
+        # Live abduction splay: rad, + = feet OUTWARD, added to every command
+        # (ramps, holds, policy targets; not to what the policy observes).
+        # Training convention outward = -,+,-,+ for RL,RR,FR,FL abduction.
+        # Set by wojtek/abd_splay (Float64; pad X/LB); 0 at every start.
+        self._splay = 0.0
+        self._splay_urdf = np.zeros(12)
+        self._last_cmd_rel = None
+        # Per-joint zero trim (URDF rad, actuator order), measured by posing
+        # the robot in its true standing pose: trim = home - reading. Lives
+        # in ~/wojtek_ws/zero_trim.json (2026-11-09); absent = no trim.
+        self.declare_parameter("zero_trim_file", str(Path.home() / "wojtek_ws" / "zero_trim.json"))
+        tf = Path(self.get_parameter("zero_trim_file").value)
+        if tf.is_file():
+            trim = np.array(json.loads(tf.read_text())["trim_urdf"], float)
+            if trim.shape != (12,) or np.max(np.abs(trim)) > 0.35:
+                raise ValueError(f"{tf}: bad zero trim {trim}")
+            self._offset_urdf = self._offset_urdf + trim
+            self.get_logger().warn(
+                f"zero trim from {tf} applied (max {np.max(np.abs(trim)):.3f} rad): "
+                f"{np.round(trim, 3).tolist()}"
+            )
 
         # Passive four-bar joints for RViz: (name, poly coeffs, index of the
         # actuated joint of that leg which drives them), plus the joints
@@ -167,6 +191,7 @@ class RealIoNode(Node):
             )
         )
         self.create_service(Trigger, "wojtek/zero", self._srv_zero)
+        self.create_subscription(Float64, "wojtek/abd_splay", self._on_splay, 10)
         self.declare_parameter("trick_start_tolerance_rad", 0.3)
         for trick in self.tricks.names:
             self.create_service(
@@ -197,6 +222,9 @@ class RealIoNode(Node):
         out.position = q_abs.tolist()
         if len(msg.velocity) == len(msg.name):
             out.velocity = [msg.velocity[i] for i in order]
+        if len(msg.effort) == len(msg.name):
+            # Reported drive torque (apt policies observe it).
+            out.effort = [msg.effort[i] for i in order]
         self._pub_abs.publish(out)
 
         # Passive four-bar joints follow from the knee angles; without them
@@ -235,7 +263,24 @@ class RealIoNode(Node):
             return
         self._send_cmd(target_abs - self._offset_urdf, effort)  # boot-relative
 
+    def _on_splay(self, msg):
+        s = float(np.clip(msg.data, -0.15, 0.25))
+        if not np.isfinite(s):
+            return
+        mjc = np.zeros(12)
+        mjc[0::3] = s * np.array([-1.0, 1.0, -1.0, 1.0])
+        self._splay = s
+        self._splay_urdf = self.jmap.vel_to_urdf(self.joint_names, mjc)
+        self.get_logger().info(
+            f"abduction splay {s:+.3f} rad ({np.degrees(s):+.1f} deg, + = outward)")
+        # A held pose (after a ramp, disarmed) only moves when re-sent.
+        if (self._last_cmd_rel is not None and self._ramp_timer is None
+                and not self._armed):
+            self._send_cmd(self._last_cmd_rel)
+
     def _send_cmd(self, cmd_rel, effort=None):
+        self._last_cmd_rel = np.array(cmd_rel, float)
+        cmd_rel = self._last_cmd_rel + self._splay_urdf
         # Last line of defense: a non-finite target must never reach the
         # drives (tau = kp*(NaN - q) ...). Upstream guards exist in
         # policy_node, but this topic is open to anyone. A bad effort drops

@@ -55,7 +55,7 @@
        1 since 2026-10-05 (8 from the 2026-07-17 HAT migration until then;
        the harness could not hold 8M, see launch_common.py). The launch
        passes it; see ros/hw_tests/README.md for the per-drive baud tool. -->
-  <xacro:macro name="wojtek_ros2_control" params="kp kd max_torque usb_port bus:=spi can_baud:=1 dry_run:=false tau_ff:=false">
+  <xacro:macro name="wojtek_ros2_control" params="kp kd max_torque usb_port bus:=spi can_baud:=1 dry_run:=false tau_ff:=false kp_abd:=80.0">
     <ros2_control name="MD80HardwareInterface" type="system">
       <hardware>
         <plugin>md80_hardware_interface/MD80HardwareInterface</plugin>
@@ -67,19 +67,19 @@
         <param name="dry_run">${dry_run}</param>
       </hardware>
 
-      <xacro:wojtek_joint name="front_left_first_joint" can_id="10" kp="${kp}" kd="${kd}" max_torque="${max_torque}" tau_ff="${tau_ff}" />
+      <xacro:wojtek_joint name="front_left_first_joint" can_id="10" kp="${kp_abd}" kd="${kd}" max_torque="${max_torque}" tau_ff="${tau_ff}" />
       <xacro:wojtek_joint name="front_left_second_joint" can_id="11" kp="${kp}" kd="${kd}" max_torque="${max_torque}" tau_ff="${tau_ff}" />
       <xacro:wojtek_joint name="front_left_third_joint" can_id="12" kp="${kp}" kd="${kd}" max_torque="${max_torque}" tau_ff="${tau_ff}" />
 
-      <xacro:wojtek_joint name="front_right_first_joint" can_id="20" kp="${kp}" kd="${kd}" max_torque="${max_torque}" tau_ff="${tau_ff}" />
+      <xacro:wojtek_joint name="front_right_first_joint" can_id="20" kp="${kp_abd}" kd="${kd}" max_torque="${max_torque}" tau_ff="${tau_ff}" />
       <xacro:wojtek_joint name="front_right_second_joint" can_id="21" kp="${kp}" kd="${kd}" max_torque="${max_torque}" tau_ff="${tau_ff}" />
       <xacro:wojtek_joint name="front_right_third_joint" can_id="22" kp="${kp}" kd="${kd}" max_torque="${max_torque}" tau_ff="${tau_ff}" />
 
-      <xacro:wojtek_joint name="rear_right_first_joint" can_id="30" kp="${kp}" kd="${kd}" max_torque="${max_torque}" tau_ff="${tau_ff}" />
+      <xacro:wojtek_joint name="rear_right_first_joint" can_id="30" kp="${kp_abd}" kd="${kd}" max_torque="${max_torque}" tau_ff="${tau_ff}" />
       <xacro:wojtek_joint name="rear_right_second_joint" can_id="31" kp="${kp}" kd="${kd}" max_torque="${max_torque}" tau_ff="${tau_ff}" />
       <xacro:wojtek_joint name="rear_right_third_joint" can_id="32" kp="${kp}" kd="${kd}" max_torque="${max_torque}" tau_ff="${tau_ff}" />
 
-      <xacro:wojtek_joint name="rear_left_first_joint" can_id="40" kp="${kp}" kd="${kd}" max_torque="${max_torque}" tau_ff="${tau_ff}" />
+      <xacro:wojtek_joint name="rear_left_first_joint" can_id="40" kp="${kp_abd}" kd="${kd}" max_torque="${max_torque}" tau_ff="${tau_ff}" />
       <xacro:wojtek_joint name="rear_left_second_joint" can_id="41" kp="${kp}" kd="${kd}" max_torque="${max_torque}" tau_ff="${tau_ff}" />
       <xacro:wojtek_joint name="rear_left_third_joint" can_id="42" kp="${kp}" kd="${kd}" max_torque="${max_torque}" tau_ff="${tau_ff}" />
     </ros2_control>

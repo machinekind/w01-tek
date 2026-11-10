@@ -97,6 +97,21 @@ class GamepadTeleop(Node):
         # RB toggles slow mode: sticks reach slow_scale of the box instead
         # of speed_scale (both fractions of the box). Starts off.
         self._btn_slow = self.declare_parameter("slow_button", 5).value              # RB
+        self._btn_splay_out = self.declare_parameter("splay_out_button", 2).value   # X
+        self._btn_splay_in = self.declare_parameter("splay_in_button", 4).value     # LB
+        self._splay_step = self.declare_parameter("splay_step", 0.01).value
+        self._splay = 0.0
+        self._splay_prev = (0, 0)
+        from std_msgs.msg import Float64 as _F64
+        self._F64 = _F64
+        self._splay_pub = self.create_publisher(_F64, "wojtek/abd_splay", 10)
+        # Turbo (2026-11-09): sticks reach normal_fraction of the speed box;
+        # the right trigger (analog, rests at +1, fully pressed -1) scales
+        # that up to the full box. RB slow mode still overrides both.
+        self._ax_turbo = self.declare_parameter("turbo_axis", 5).value             # RT
+        self._normal_fraction = float(self.declare_parameter("normal_fraction", 0.5).value)
+        self._turbo = 0.0
+        self._rt_rest_seen = False
         self._slow_scale = min(1.0, max(
             0.0, float(self.declare_parameter("slow_scale", 0.4).value)))
         # Extra deadzone on top of the joy driver's own, rescaled so full
@@ -207,6 +222,13 @@ class GamepadTeleop(Node):
         return self.get_clock().now().nanoseconds / 1e9
 
     def _on_joy(self, msg):
+        rt = self._axis(msg, self._ax_turbo) if 0 <= self._ax_turbo < len(msg.axes) else 1.0
+        # Some drivers report 0 until the trigger is first touched: treat
+        # only the pressed half (below 0) as turbo, mapped 0..1.
+        if rt > 0.5:
+            self._rt_rest_seen = True
+        t = (1.0 - rt) / 2.0 if self._rt_rest_seen else -rt
+        self._turbo = min(1.0, max(0.0, t))
         self._gate.joy(
             self._now(),
             self._shape(self._axis(msg, self._ax_vx)),
@@ -249,6 +271,15 @@ class GamepadTeleop(Node):
             height = self._gate.step_height(self._now(), step)
             self.get_logger().info(f"height set-point {height:.3f} m")
         self._height_btn_prev = (h_dn, h_up)
+
+        # X / LB: abduction splay +/- splay_step (feet out / in), press edge.
+        b_out = msg.buttons[self._btn_splay_out] if self._btn_splay_out < len(msg.buttons) else 0
+        b_in = msg.buttons[self._btn_splay_in] if self._btn_splay_in < len(msg.buttons) else 0
+        if (b_out and not self._splay_prev[0]) or (b_in and not self._splay_prev[1]):
+            self._splay = max(-0.15, min(0.25, self._splay + (self._splay_step if b_out else -self._splay_step)))
+            self._splay_pub.publish(self._F64(data=float(self._splay)))
+            self.get_logger().info(f"splay set-point {self._splay:+.3f} rad")
+        self._splay_prev = (b_out, b_in)
 
         # D-pad: one trick per direction, on the press edge (the hat
         # reports -1/0/+1 per axis; +1 = up on y, +1 = left on x).
@@ -321,7 +352,8 @@ class GamepadTeleop(Node):
         # nobody holds it, and an idle pad must not overwrite whatever else
         # (deck, console) drives /cmd_vel.
         now = self._now()
-        out = self._gate.tick(now, self._slow_scale if self._slow else self._speed_scale)
+        frac = self._normal_fraction + (1.0 - self._normal_fraction) * self._turbo
+        out = self._gate.tick(now, self._slow_scale if self._slow else self._speed_scale * frac)
         state = self._gate.state
         if state != self._last_state:
             if state == ZEROING and self._gate.pad_lost(now):

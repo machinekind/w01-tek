@@ -24,6 +24,9 @@ APT_COMMAND_HIGH = [1.2, 0.4, 1.0]
 
 def build_meta(pack: dict, wz_max=None, tau_ff_limit=5.0) -> dict:
     lo, hi = list(APT_COMMAND_LOW), list(APT_COMMAND_HIGH)
+    if pack.get("cmd_max"):  # limits baked into the pack (apt_np clips to them too)
+        hi = [min(h, float(c)) for h, c in zip(hi, pack["cmd_max"])]
+        lo = [max(l, -float(c)) for l, c in zip(lo, pack["cmd_max"])]
     if wz_max is not None:
         lo[2], hi[2] = -abs(wz_max), abs(wz_max)
     kp = list(pack["kp_rep"])

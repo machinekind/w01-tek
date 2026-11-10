@@ -17,7 +17,7 @@ Per control step (50 Hz) call  qc, tau_ff = ctl.step(gyro, grav, acc, q, dq, tau
 and send to the drives:  position target qc (12, rad, absolute), feed-forward torque tau_ff (12, Nm, TRUE units; divide by
 S = 2.09 for the reported units the MD80 takes), with PD kp/kd in reported units as stored in the meta (80/60/60, 2).
 """
-import json, math, pickle, sys, time
+import json, math, os, pickle, sys, time
 import numpy as np
 
 NA, NZ, D, NH = 12, 16, 64, 8
@@ -51,7 +51,10 @@ def ln(g, b, x):
 def tlayer(p, x):
     """x (L, D) -> (L, D); post-LN transformer layer as tnet.layer (batch of one)."""
     L = x.shape[0]
-    qkv = (x @ p["qkv.W"] + p["qkv.b"]).reshape(L, 3, NH, D // NH)   # fused q/k/v (deploy speed)
+    if "qkv.W" not in p:                                         # fuse q/k/v once (deploy speed)
+        p["qkv.W"] = np.concatenate([p["q.W"], p["k.W"], p["v.W"]], 1)
+        p["qkv.b"] = np.concatenate([p["q.b"], p["k.b"], p["v.b"]], 0)
+    qkv = (x @ p["qkv.W"] + p["qkv.b"]).reshape(L, 3, NH, D // NH)
     q, k, v = (qkv[:, i].transpose(1, 0, 2) for i in range(3))
     a = _softmax(q @ k.transpose(0, 2, 1) / math.sqrt(D // NH))
     h = (a @ v).transpose(1, 0, 2).reshape(L, D)
@@ -108,11 +111,12 @@ class AptNumpy:
         self.rec = {"z.W": g("rec.z.W"), "z.b": g("rec.z.b"), "qry": g("rec.qry"), "out.W": g("rec.out.W"), "out.b": g("rec.out.b"), "L": tl("rec")}
         self.dec = {"z.W": g("dec.z.W"), "z.b": g("dec.z.b"), "qry": g("dec.qry"), "out.W": g("dec.out.W"), "out.b": g("dec.out.b"), "L": tl("dec")}
         self.feat_mu, self.feat_sd, self.tau_scale = g("feat_mean"), g("feat_std"), g("tau_scale")
-        for net in (self.rec, self.dec):                       # fuse q/k/v weights once
-            for L in net["L"]:
-                L["qkv.W"] = np.concatenate([L["q.W"], L["k.W"], L["v.W"]], 1)
-                L["qkv.b"] = np.concatenate([L["q.b"], L["k.b"], L["v.b"]], 0)
         self.QSL = slice(21, 33)
+        self.sym = bool(m.get("sym_net", 0))       # actor mirror-equivariant by construction: mu(o) = (f(o) + M f(M o)) / 2
+        if self.sym:
+            self.obs_perm, self.obs_sign = np.asarray(z["obs_perm"], int), g("obs_sign")
+            self.act_perm, self.act_sign = np.asarray(z["act_perm"], int), g("act_sign")
+        self.lpf = float(m.get("act_lpf", 0.0))    # first-order low-pass on the drive commands (qc, ff), as in training
         self.reset()
 
     def reset(self):
@@ -121,9 +125,17 @@ class AptNumpy:
         self.taub = np.zeros((3, NA)); self.auxb = np.zeros((3, NA)); self.zb = np.zeros((3, NZ))
         self.gsel = np.zeros(10); self.gout = np.full(10, 0.5); self.psi = 0.5; self.g = 0
         self.hist = None
+        self.qc_prev, self.ff_prev = self.home.copy(), np.zeros(NA)
 
     # --- networks
     def policy(self, obs):
+        mu, est = self._policy(obs)
+        if self.sym:
+            mum, _ = self._policy(self.obs_sign * obs[self.obs_perm])
+            mu = 0.5 * (mu + self.act_sign * mum[self.act_perm])
+        return mu, est
+
+    def _policy(self, obs):
         xn = np.clip((obs - self.ns_mean) / self.ns_std, -10, 10)
         cur, seq = xn[:self.NCUR], xn[self.NCUR:].reshape(self.H, self.F)
         e = self.enc
@@ -146,6 +158,9 @@ class AptNumpy:
     def step(self, gyro, grav, acc, q_abs, dq, tau_rep, cmd):
         q = np.asarray(q_abs, np.float64) - self.home
         dq = np.asarray(dq, np.float64)
+        cmd = np.asarray(cmd, np.float64)
+        if self.m.get("cmd_max"):  # hard command limits [vx, vy, wz] baked into the pack (e.g. wz 0.5 rad/s: Michal 2026-11-10, turning too fast)
+            cmd = np.clip(cmd, -np.asarray(self.m["cmd_max"]), np.asarray(self.m["cmd_max"]))
         p3 = lambda b, x: np.concatenate([x[None], b[:-1]], 0)
         self.qb = np.tile(q[None], (3, 1)) if self.qb is None else p3(self.qb, q)
         self.qdb = np.tile(dq[None], (3, 1)) if self.qdb is None else p3(self.qdb, dq)
@@ -166,6 +181,10 @@ class AptNumpy:
             qc, ff = np.clip(qref + td / self.kp_true, self.lo, self.hi), np.zeros(NA)
         else:
             qc, ff = np.clip(qref, self.lo, self.hi), td
+        if self.lpf > 0:
+            qc = self.qc_prev + self.lpf * (qc - self.qc_prev)
+            ff = self.ff_prev + self.lpf * (ff - self.ff_prev)
+        self.qc_prev, self.ff_prev = qc.copy(), ff.copy()
         if tick:
             self.gout = np.concatenate([[psi], self.gout[:-1]])
             self.gsel = np.concatenate([[float(g)], self.gsel[:-1]])
@@ -213,7 +232,14 @@ def export(policy_pkl, prior_pkl, out_npz):
     arrs.update(ns_mean=np.asarray(b["ns"]["mean"]), ns_var=np.asarray(b["ns"]["var"]), home=np.asarray(b["home"]), lo=np.asarray(b["lo"]),
                 hi=np.asarray(b["hi"]), kp_true=np.asarray(b["kp"]), kd_true=np.asarray(b["kd"]), feat_mean=np.asarray(P["feat_mean"]),
                 feat_std=np.asarray(P["feat_std"]), tau_scale=np.asarray(P["tau_scale"]))
-    meta = dict(name=cfg["name"], kind="apt", gait=gait, act_mode=cfg["act_mode"], pd_anchor=cfg["pd_anchor"], anchor_mix=cfg["anchor_mix"],
+    if cfg.get("sym_net"):
+        import mirror_wrap
+        od, zs = int(b["NCUR"] + b["H"] * b["F"]), np.array([1.0] * 8 + [-1.0] * 8)
+        ro = mirror_wrap.mirror_obs(np.arange(1, od + 1, dtype=np.float64), zsign=zs)
+        ra = mirror_wrap.mirror_act(np.arange(1, NZ + NA + 2, dtype=np.float64), zsign=zs)
+        arrs.update(obs_perm=np.abs(ro).astype(np.int64) - 1, obs_sign=np.sign(ro), act_perm=np.abs(ra).astype(np.int64) - 1, act_sign=np.sign(ra))
+    cmax = [float(x) for x in os.environ["CMD_MAX"].split(",")] if os.environ.get("CMD_MAX") else None
+    meta = dict(name=cfg["name"] + (os.environ.get("NAME_SUFFIX", "")), cmd_max=cmax, sym_net=int(cfg.get("sym_net", 0)), act_lpf=float(cfg.get("act_lpf", 0.0)), kind="apt", gait=gait, act_mode=cfg["act_mode"], pd_anchor=cfg["pd_anchor"], anchor_mix=cfg["anchor_mix"],
                 a_scale=cfg["a_scale"], aux=cfg["aux"], S=cfg["S"], kp_rep=cfg["kp_rep"], kd_rep=cfg["kd_rep"], cap_rep=cfg["cap_rep"],
                 ctrl_dt=cfg["ctrl_dt"], H=int(b["H"]), F=int(b["F"]), NCUR=int(b["NCUR"]), GE=int(b["GE"]), NZ=NZ, NA=NA,
                 n_est=len(pr["est"]), n_act=len(pr["act"]), obs_dim=int(b["NCUR"] + b["H"] * b["F"]),

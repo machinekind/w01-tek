@@ -90,7 +90,8 @@ def height_anchor(home_ctrl, height, ctrl_low, ctrl_high, table=None):
 
 
 class WojtekPolicy:
-    def __init__(self, npz_path, meta_path=None, clamp_knee=False, robot=None):
+    def __init__(self, npz_path, meta_path=None, clamp_knee=False, robot=None,
+                 tau_ff_limit=None):
         npz_path = Path(npz_path)
         meta_path = Path(meta_path) if meta_path else npz_path.with_name(
             "policy_meta.json"
@@ -146,6 +147,14 @@ class WojtekPolicy:
         tff = m.get("tau_ff") or {}
         self.tau_ff_enabled = bool(tff.get("enable"))
         self.tau_ff_scale = float(tff.get("scale", 0.0))
+        # Clip on the feed-forward torque, separate from the scale that maps
+        # the network output to N*m. Default = the scale (the historical
+        # +-scale clip); the contract may carry "limit", and the caller
+        # (policy_node param tau_ff_limit > 0) overrides both.
+        if tau_ff_limit is not None and float(tau_ff_limit) > 0:
+            self.tau_ff_limit = float(tau_ff_limit)
+        else:
+            self.tau_ff_limit = float(tff.get("limit", self.tau_ff_scale))
         n_targets = len(m["home_ctrl"])
         self._action_dim = (
             2 * n_targets if self.tau_ff_enabled else n_targets
@@ -279,8 +288,8 @@ class WojtekPolicy:
         if self.tau_ff_enabled:
             self.last_tau_ff = np.clip(
                 filt[12:] * self.tau_ff_scale,
-                -self.tau_ff_scale,
-                self.tau_ff_scale,
+                -self.tau_ff_limit,
+                self.tau_ff_limit,
             ).astype(np.float32)
         targets = self.anchor_ctrl + filt[:12] * self.action_scale
         targets = np.clip(targets, self.target_low, self.target_high)

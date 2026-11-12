@@ -169,6 +169,10 @@ def _launch_setup(context, with_rviz, hardware):
     tff = loaded.meta.get("tau_ff") or {}
     tau_ff_on = bool(tff.get("enable"))
     tau_ff_scale = float(tff.get("scale", 0.0))
+    # The clip actually applied (policy_node tau_ff_limit > 0 overrides
+    # the contract's limit, which defaults to the scale).
+    _lim = float(LaunchConfiguration("tau_ff_limit").perform(context) or 0.0)
+    tau_ff_scale = _lim if _lim > 0 else float(tff.get("limit", tau_ff_scale))
     drive_torque = pd["max_torque"] + (tau_ff_scale if tau_ff_on else 0.0)
     print(f">> robot {profile.name}; "
           f"policy {loaded.run_name} from {loaded.source}; servo settings "
@@ -190,6 +194,9 @@ def _launch_setup(context, with_rviz, hardware):
     # I2C address for the real drives, a physics backend for the simulated one.
     xacro_args = [
         f" kp:={pd['kp']} kd:={pd['kd']} max_torque:={drive_torque}",
+        # Abduction gain: the contract's per-actuator kp when it has one
+        # (apt policies train 60/45/45), else the common kp.
+        f" kp_abd:={float((loaded.meta.get('pd') or {}).get('kp_per_actuator', [pd['kp']])[0])}",
         f" tau_ff:={'true' if tau_ff_on else 'false'}",
         # The head's own clamp. The real drives take the summed cap above;
         # the simulated plant clamps servo and head separately, like the
@@ -326,9 +333,13 @@ def _launch_setup(context, with_rviz, hardware):
             package="wojtek_odometry",
             executable="leg_odometry_node",
             output="screen",
-            # Shares the policy's core: the budget above was measured with
-            # the two together there.
-            prefix=_cpu_prefix(context, "policy_cpus"),
+            # Shares the policy's core by default; odom_cpus moves it off
+            # (apt policies need the whole core, 2026-11-09).
+            prefix=_cpu_prefix(
+                context,
+                "odom_cpus" if LaunchConfiguration("odom_cpus").perform(context)
+                else "policy_cpus",
+            ),
             # input_stride 2: the abs joint stream arrives at ~50 Hz
             # (joint_state_broadcaster's rate), and the per-message
             # kinematics costs ~6 ms on the robot's A72 -- 25 Hz processing
@@ -392,6 +403,12 @@ def _launch_setup(context, with_rviz, hardware):
                     "auto_enable": True,  # real_io arming is the gate
                     "soft_start_s": 2.0,
                     "clamp_knee": profile.clamp_knee,
+                    "output_lpf_alpha": ParameterValue(
+                        LaunchConfiguration("output_lpf_alpha"), value_type=float
+                    ),
+                    "tau_ff_limit": ParameterValue(
+                        LaunchConfiguration("tau_ff_limit"), value_type=float
+                    ),
                     "watchdog_timeout_s": 0.2,
                     # Same switch as the sysinfo node above, so one argument
                     # turns both topics on together.
@@ -692,6 +709,9 @@ def common_launch_description(
         # from the contract). E.g. max_torque:=2 for cautious first tests.
         DeclareLaunchArgument("kp", default_value=""),
         DeclareLaunchArgument("kd", default_value=""),
+        # Feed-forward torque clip (N*m) for tau_ff policies; 0 = contract.
+        DeclareLaunchArgument("tau_ff_limit", default_value="0.0"),
+        DeclareLaunchArgument("output_lpf_alpha", default_value="1.0"),
         DeclareLaunchArgument("max_torque", default_value=""),
         # The IMU switch is a question on both sides: use_imu:=false brings the
         # stack up with the sensor absent (unwired on the robot, left out of
@@ -724,6 +744,7 @@ def common_launch_description(
         # few times a second. That is small, but it still has no business on
         # the isolated RT cores, so this one defaults to 0,1. Empty = inherit.
         DeclareLaunchArgument("sysinfo_cpus", default_value="0,1"),
+        DeclareLaunchArgument("odom_cpus", default_value=""),
         # foxglove_bridge on port 8765, so the native Foxglove app connects
         # to the robot directly. Off for manual runs, like the recorder and
         # the telemetry above. The RPi service opts in with foxglove:=true.

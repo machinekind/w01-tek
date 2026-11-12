@@ -42,6 +42,7 @@ from wojtek_policy import poses
 from wojtek_policy.command_gate import CommandGate
 from wojtek_policy.joint_map import JointMap
 from wojtek_policy.policy import WojtekPolicy, gravity_from_quat
+from wojtek_policy.apt_policy import AptPolicy, is_apt_meta
 from wojtek_policy.policy_source import resolve_policy
 
 
@@ -76,6 +77,15 @@ class PolicyNode(Node):
         # rpy). Sim publishes IMU already in base_link -> zeros.
         self.declare_parameter("imu_mount_rpy", [0.0, 0.0, 0.0])
         self.declare_parameter("clamp_knee", False)
+        # Feed-forward torque clip in N*m; <= 0 keeps the contract's
+        # (tau_ff.limit, else tau_ff.scale).
+        self.declare_parameter("tau_ff_limit", 0.0)
+        # Output low-pass for apt policies (1.0 = off); read every tick, so
+        # `ros2 param set /wojtek_policy output_lpf_alpha 0.5` acts live.
+        self.declare_parameter("output_lpf_alpha", 1.0)
+        # Output low-pass for apt policies (1.0 = off); read every tick, so
+        # `ros2 param set /wojtek_policy output_lpf_alpha 0.72` acts live.
+        self.declare_parameter("output_lpf_alpha", 1.0)
         self.declare_parameter("auto_enable", True)
         self.declare_parameter("soft_start_s", 1.0)
         self.declare_parameter("watchdog_timeout_s", 0.2)
@@ -98,11 +108,15 @@ class PolicyNode(Node):
         self._policy_source = (
             self.get_parameter("policy_source").value or resolved.source
         )
-        self.policy = WojtekPolicy(
+        # "kind": "apt" contracts (APT-RL / SkillQuad) run their own numpy
+        # controller behind the same interface (apt_policy.py).
+        policy_cls = AptPolicy if is_apt_meta(resolved.meta) else WojtekPolicy
+        self.policy = policy_cls(
             resolved.npz,
             meta_path=resolved.meta,
             clamp_knee=self.get_parameter("clamp_knee").value,
             robot=self.get_parameter("robot").value,
+            tau_ff_limit=self.get_parameter("tau_ff_limit").value,
         )
         if self.policy.joint_names != poses.ACTUATOR_NAMES:
             raise ValueError(
@@ -117,6 +131,9 @@ class PolicyNode(Node):
         self._q_urdf = None  # (12,) latest, actuator order
         self._dq_urdf = None
         self._gyro_base = None
+        self._acc_base = None  # IMU specific force, base frame (apt)
+        self._tau_urdf = None  # drive-reported torque, actuator order (apt)
+        self._needs_acc_tau = getattr(self.policy, "needs_acc_tau", False)
         self._gravity_base = None
         self._grav_filt = np.array([0.0, 0.0, -1.0])
         self._gate = CommandGate(
@@ -151,7 +168,8 @@ class PolicyNode(Node):
         self.create_timer(self.policy.ctrl_dt, self._tick)
         pd = self.policy.meta.get("pd", {})
         tff = (
-            f", tau_ff head +-{self.policy.tau_ff_scale:g} N*m (driver must "
+            f", tau_ff head scale {self.policy.tau_ff_scale:g} clip "
+            f"+-{self.policy.tau_ff_limit:g} N*m (driver must "
             "apply effort on top of the PD servo, separate clamp)"
             if self.policy.tau_ff_enabled else ""
         )
@@ -174,6 +192,8 @@ class PolicyNode(Node):
             self._dq_urdf = np.array([msg.velocity[i] for i in order])
         else:
             self._dq_urdf = np.zeros(12)
+        if len(msg.effort) == len(msg.name):
+            self._tau_urdf = np.array([msg.effort[i] for i in order])
         self._joints_stamp = self.get_clock().now()
 
     def _on_imu(self, msg):
@@ -181,6 +201,10 @@ class PolicyNode(Node):
             [msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z]
         )
         self._gyro_base = self.imu_mount @ gyro
+        self._acc_base = self.imu_mount @ np.array([
+            msg.linear_acceleration.x, msg.linear_acceleration.y,
+            msg.linear_acceleration.z,
+        ])
         q = msg.orientation
         have_quat = (
             not self.get_parameter("gravity_from_accel").value
@@ -305,6 +329,15 @@ class PolicyNode(Node):
         inputs = [self._q_urdf, self._dq_urdf, cmd]
         if self.policy.uses_imu:
             inputs += [self._gyro_base, self._gravity_base]
+        if self._needs_acc_tau:
+            if self._acc_base is None or self._tau_urdf is None:
+                self.get_logger().warning(
+                    "apt policy: no IMU acc or drive torque yet -- holding",
+                    throttle_duration_sec=1.0,
+                )
+                self._was_running = False
+                return
+            inputs += [self._acc_base, self._tau_urdf]
         if not np.all(np.isfinite(np.concatenate(inputs))):
             self.get_logger().warning(
                 "non-finite sensor input -- holding (no targets published)",
@@ -326,7 +359,17 @@ class PolicyNode(Node):
             else np.array([0.0, 0.0, -1.0])
         )
         step_t = time.perf_counter()
-        targets_mjc = self.policy.step(gyro, gravity, q_mjc, dq_mjc, cmd)
+        extra = {}
+        if hasattr(self.policy, "output_lpf_alpha"):
+            self.policy.output_lpf_alpha = min(1.0, max(0.01, float(
+                self.get_parameter("output_lpf_alpha").value)))
+        if self._needs_acc_tau:
+            # Torques flip sign like velocities between conventions.
+            extra = dict(
+                acc=self._acc_base,
+                tau_rep=self.jmap.vel_to_mjc(self.joint_names, self._tau_urdf),
+            )
+        targets_mjc = self.policy.step(gyro, gravity, q_mjc, dq_mjc, cmd, **extra)
         inference_ms = (time.perf_counter() - step_t) * 1e3
 
         # Soft start: blend from the measured pose to the policy output.

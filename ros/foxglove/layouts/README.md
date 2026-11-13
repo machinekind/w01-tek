@@ -28,18 +28,18 @@ change the URL to `http://<robot>:8080`.
 The system panels read `/wojtek/sysinfo` and `/wojtek/policy_timing`, both
 from `wojtek_telemetry`. A run publishes them only with `telemetry:=true`,
 and it opens the bridge on port 8765 only with `foxglove:=true`. The base
-unit (`ros/deploy/wojtek-robot.service`) passes both; the provisioning
-drop-in (`ros/deploy/rpi/wojtek-robot-local.conf`) overrides `ExecStart`
-without them, so a provisioned robot needs the two added there, or a
-`perf.sh run full` session. A manual `robot.launch.py` run needs them on
-the command line.
+unit in `ros/deploy/wojtek-robot.service` passes both flags.
+The provisioning drop-in in `ros/deploy/rpi/wojtek-robot-local.conf` also passes
+both flags. An existing robot keeps its current drop-in until the next
+`./ros/deploy.sh --provision`.
+A manual `robot.launch.py` run needs both flags on the command line.
 
 Connect Foxglove to the robot directly. A simulation session gets its bridge
 from `viz.launch.py` in the dev container instead, on `ws://localhost:8765`.
 
 A recording covers all topics, so the same layout works on a bag afterwards.
-The service and `real.launch.py` record by default. A manual
-`robot.launch.py` run needs `bag:=true`.
+`real.launch.py` records by default. The provisioned service and a manual
+`robot.launch.py` run need `bag:=true`.
 
 ## `e2e.json`: the whole pipeline on one screen
 

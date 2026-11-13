@@ -89,7 +89,8 @@ GPU detector on the chosen panel origin; use it for the operator network.
 The camera and command connection work without Foxglove. Charts require a
 bridge on the same host at port 8765, unless `?bridge=ws://host:port` overrides
 it. System charts also require `telemetry:=true`. The installed robot drop-in
-leaves telemetry/Foxglove off; configure those explicitly if wanted.
+enables telemetry and the Foxglove bridge. A manual launch requires
+`telemetry:=true foxglove:=true`.
 
 Controls differ from the ROS Xbox driver: Deck LB/RB change height, the right
 trigger increases speed, and the D-pad plays tricks. See the full

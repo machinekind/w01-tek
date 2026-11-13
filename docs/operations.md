@@ -61,8 +61,10 @@ systemctl is-enabled wojtek-robot.service
 systemctl status wojtek-cm-watchdog.service --no-pager
 ```
 
-The repository's installed drop-in enables gamepad, Deck and camera; bags,
-telemetry and Foxglove are off. A locally edited service may differ. Boot
+The repository's installed drop-in enables gamepad, Deck, camera and telemetry.
+It enables the Foxglove bridge on port 8765. It leaves bags disabled.
+A locally edited service may differ. A service provisioned before this change
+keeps its previous settings. Boot
 startup is enabled only when provisioning used `--enable-robot`.
 
 ## Start, zero, stand and drive

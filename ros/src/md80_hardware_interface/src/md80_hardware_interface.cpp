@@ -19,9 +19,11 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <limits>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
@@ -50,11 +52,14 @@ hardware_interface::CallbackReturn MD80HardwareInterface::on_init(
   if (hardware_interface::SystemInterface::on_init(info) != CallbackReturn::SUCCESS) {
     return CallbackReturn::ERROR;
   }
+  logger_ = rclcpp::get_logger(get_name());
 
   const auto motors_size = info_.joints.size();
   RCLCPP_INFO_STREAM(rclcpp::get_logger(get_name()), "Requesting " << motors_size << " motors.");
   md80_info_.resize(motors_size);
   initial_positions_.resize(motors_size);
+  // State interface storage must exist before on_configure().
+  response_age_.assign(motors_size, 0.0);
 
   const auto & params = info_.hardware_parameters;
   if (params.count("dry_run")) {
@@ -82,6 +87,10 @@ hardware_interface::CallbackReturn MD80HardwareInterface::on_configure(
   const auto & params = info_.hardware_parameters;
   link_stall_cycles_ =
     params.count("link_stall_cycles") ? std::stoul(params.at("link_stall_cycles")) : 200;
+  raw_cur_.assign(3 * md80_info_.size(), 0.0);
+  raw_prev_.assign(3 * md80_info_.size(), 0.0);
+  have_prev_raw_ = false;
+  response_age_tracker_.resize(md80_info_.size());
 
   return CallbackReturn::SUCCESS;
 }
@@ -96,6 +105,8 @@ std::vector<hardware_interface::StateInterface> MD80HardwareInterface::export_st
       info_.joints[i].name, hardware_interface::HW_IF_VELOCITY, &md80_info_[i].state.velocity));
     state_interfaces.emplace_back(hardware_interface::StateInterface(
       info_.joints[i].name, hardware_interface::HW_IF_EFFORT, &md80_info_[i].state.effort));
+    state_interfaces.emplace_back(
+      hardware_interface::StateInterface(info_.joints[i].name, "response_age", &response_age_[i]));
   }
 
   return state_interfaces;
@@ -194,12 +205,10 @@ hardware_interface::CallbackReturn MD80HardwareInterface::on_deactivate(
 }
 
 hardware_interface::return_type MD80HardwareInterface::read(
-  const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
+  const rclcpp::Time & time, const rclcpp::Duration & /*period*/)
 {
   std::size_t i = 0;
-  std::vector<double> raw;
-  raw.reserve(3 * md80_info_.size());
-  for (auto candle : candle_instances) {
+  for (const auto & candle : candle_instances) {
     for (auto & md : candle->md80s) {
       const double pos = md.getPosition();
       const double vel = md.getVelocity();
@@ -207,12 +216,18 @@ hardware_interface::return_type MD80HardwareInterface::read(
       md80_info_[i].state.position = pos - initial_positions_[i];
       md80_info_[i].state.velocity = vel;
       md80_info_[i].state.effort = tau;
-      raw.push_back(pos);
-      raw.push_back(vel);
-      raw.push_back(tau);
+      raw_cur_[3 * i] = pos;
+      raw_cur_[3 * i + 1] = vel;
+      raw_cur_[3 * i + 2] = tau;
       ++i;
     }
   }
+
+  // Stale drives are reported through /dynamic_joint_states.
+  // Logging would take a lock on the control thread.
+  const int64_t now_ns = time.nanoseconds();
+  const bool timed = update_loop_running_ && now_ns != 0;
+  response_age_tracker_.update(now_ns, timed, raw_cur_, response_age_);
 
   // Silent-bus detector. The CANdle library only updates a drive's state
   // when that drive's response frame arrives; when the drives stop
@@ -230,10 +245,10 @@ hardware_interface::return_type MD80HardwareInterface::read(
   // cycled and the drives answer. Skipped in dry_run (disabled drives can sit
   // at exact zeros) and until the update loop has been started.
   if (update_loop_running_ && !dry_run_ && link_stall_cycles_ > 0) {
-    if (raw == last_raw_) {
+    if (have_prev_raw_ && raw_cur_ == raw_prev_) {
       if (++stall_cycles_ >= link_stall_cycles_) {
         RCLCPP_ERROR_STREAM(
-          rclcpp::get_logger(get_name()),
+          logger_,
           "Drive link lost: no fresh data from any of the " << md80_info_.size()
             << " drives for " << stall_cycles_ << " cycles");
         stall_cycles_ = 0;
@@ -258,7 +273,7 @@ hardware_interface::return_type MD80HardwareInterface::read(
       for (auto candle : candle_instances) {
         for (auto & md : candle->md80s) {
           RCLCPP_INFO(
-            rclcpp::get_logger(get_name()),
+            logger_,
             "snapshot cyc %zu can_id %d raw_pos %.4f raw_target %.4f tau %.3f qstatus 0x%04x",
             cyc, md80_info_[k].can_id, md.getPosition(),
             md80_info_[k].command.position + initial_positions_[k], md.getTorque(),
@@ -268,7 +283,8 @@ hardware_interface::return_type MD80HardwareInterface::read(
       }
     }
   }
-  last_raw_ = std::move(raw);
+  std::swap(raw_cur_, raw_prev_);
+  have_prev_raw_ = true;
   return hardware_interface::return_type::OK;
 }
 
@@ -596,7 +612,8 @@ void MD80HardwareInterface::enable_motors()
     candle->begin();
   }
   stall_cycles_ = 0;
-  last_raw_.clear();
+  have_prev_raw_ = false;
+  response_age_tracker_.reset();
   update_loop_running_ = true;
 }
 

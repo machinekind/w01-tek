@@ -27,6 +27,7 @@
 #include "hardware_interface/lexical_casts.hpp"
 #include "hardware_interface/system_interface.hpp"
 #include "hardware_interface/types/hardware_interface_return_values.hpp"
+#include "md80_hardware_interface/drive_response_age.hpp"
 #include "md80_hardware_interface/visibility_control.h"
 #include "rclcpp/macros.hpp"
 #include "rclcpp_lifecycle/state.hpp"
@@ -115,14 +116,23 @@ private:
   void reset_command();
   void log_current_joint_position();
 
+  // Logger creation stays outside the control loop.
+  rclcpp::Logger logger_ = rclcpp::get_logger("MD80HardwareInterface");
   std::vector<MD80Info> md80_info_;
   std::vector<double> initial_positions_;
-  // Silent-bus detector (see read()): the last raw drive state and how many
-  // consecutive cycles it has been bit-identical across all drives.
-  std::vector<double> last_raw_;
+  // Each sample holds raw position, velocity and torque for every drive.
+  // These buffers keep read() free of storage allocations.
+  std::vector<double> raw_cur_;
+  std::vector<double> raw_prev_;
+  // The link stall detector compares samples from the current activation.
+  // It counts consecutive cycles with identical readbacks across all drives.
+  bool have_prev_raw_ = false;
   unsigned int stall_cycles_ = 0;
   unsigned int link_stall_cycles_ = 200;
   bool update_loop_running_ = false;
+  // The exported response_age interfaces require stable storage addresses.
+  std::vector<double> response_age_;
+  DriveResponseAge response_age_tracker_;
   // Bench mode (URDF <hardware> param "dry_run"): keep the CANdle update loop
   // running so encoder states stream, but never enable the drives -- no
   // torque can reach the motors regardless of what is commanded.

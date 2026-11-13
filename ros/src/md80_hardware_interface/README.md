@@ -44,6 +44,35 @@ The detector is skipped in dry-run and detects a complete silent stream, not
 every possible individual-drive fault. `wojtek-cm-watchdog.service` handles the
 subsequent service recovery; see [Maintenance](../../../docs/maintenance.md).
 
+## Response age for each drive
+
+Each joint exports a `response_age` state interface alongside position, velocity
+and effort. The value measures seconds since the drive's raw position, velocity
+or torque last changed. A change in any of these values resets the age to 0.0.
+`joint_state_broadcaster` publishes the age on `/dynamic_joint_states` under each
+joint's `interface_names`. `/joint_states` keeps its existing fields.
+A stale drive has a growing `response_age`. The plugin reports this age through
+the state interface alone.
+
+The communication library updates a drive's cached state only when its response
+frame arrives. A live drive's torque readback carries ADC noise in every frame,
+even at rest. An unchanged readback therefore indicates a missing response.
+The age reveals a silent drive while other drives still answer.
+
+The measurement has these limits.
+
+- Change detection estimates when a response arrived. The age resolves to one
+  controller cycle. A cycle lasts 10 ms at 100 Hz.
+- Disabled drives can return constant readbacks while still answering in
+  `dry_run` mode. Their ages then grow.
+- The age stays at 0.0 until the communication loop runs after activation.
+  Activation reads also report 0.0. These reads carry no time.
+  The first timed cycle sets the baseline.
+- The age uses the controller manager's clock. The age clamps to 0.0 when the
+  clock returns to or precedes the last change.
+
+The mock and simulated hardware expose the same interface. Both keep it at 0.0.
+
 ## Inspect and diagnose
 
 Use the [standalone bus tests](../../hw_tests/README.md) with the ROS stack and

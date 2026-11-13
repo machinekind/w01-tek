@@ -30,6 +30,11 @@
       <state_interface name="effort">
         <param name="initial_value">0.0</param>
       </state_interface>
+      <!-- response_age measures seconds since this drive's readback last changed.
+           The joint state broadcaster publishes it on /dynamic_joint_states. -->
+      <state_interface name="response_age">
+        <param name="initial_value">0.0</param>
+      </state_interface>
 
       <param name="can_id">${can_id}</param>
       <param name="max_torque">${max_torque}</param>

@@ -13,6 +13,7 @@ original files stay untouched. `--robot` builds another robot variant
 """
 
 import argparse
+import json
 
 import mujoco
 import numpy as np
@@ -401,6 +402,90 @@ def write_view(robot: str, home_qpos: np.ndarray, home_ctrl: np.ndarray, **kw) -
     print(f"wrote {files['view_scene']}")
 
 
+def build_contact_spec(robot: str, **kw) -> mujoco.MjSpec:
+    """The contact model of a variant: the built model (servos, mass,
+    solver, home) with the exact outline in place of the primitives.
+
+    The primitives exist for batched training, where several hundred mesh
+    pieces per leg are unaffordable. They are not the robot's shape (the
+    stock base box reaches 26 mm, the v6.27 thigh capsule 13 mm, below the
+    real parts), so a robot lying on them lies wrong. Here every leg body
+    collides with its convex pieces from the CAD export (import_robot,
+    collision.json), the base with its own mesh, and the standoffs the
+    robot lies on (robots.Robot.standoffs) are added, the lever folds to
+    its physical stop (robots.Robot.contact_lever_fold) and the hip as far
+    as the floor lets it (robots.Robot.contact_hip_fold). All of them pair with
+    the floor only (contype 2, conaffinity 1 against the floor's 1/15):
+    contacts between the pieces of one robot are left out, which is the
+    setting that reproduced the real robot lying unpowered (2026-10-22).
+    CPU MuJoCo only: the ROS plant and pose studies load it, nothing trains
+    on it.
+    """
+    rb = robots.get(robot)
+    files = paths.robot_files(robot)
+    pieces = json.loads(files["collision"].read_text())
+    spec = build_spec(robot=robot, **kw)
+    off = {f"{leg}_{link}_floor" for leg in paths.LEGS for link in rb.leg_collision}
+    off |= {f"{leg}_foot_sphere" for leg in paths.LEGS}
+    off |= {name for name, _, _ in base_box_cells()}
+    for geom in spec.geoms:
+        if geom.name in off:
+            geom.contype = 0
+            geom.conaffinity = 0
+    for body, meshes in pieces.items():
+        target = spec.body(body)
+        for k, mesh in enumerate(meshes):
+            name = f"{body}_col{k}"
+            spec.add_mesh(name=name, file=f"{robot}/collision/{mesh}")
+            target.add_geom(name=name, type=mujoco.mjtGeom.mjGEOM_MESH,
+                            meshname=name, contype=2, conaffinity=1, group=3)
+    root = spec.body("root")
+    visual = next(g for g in spec.geoms
+                  if g.parent.name == "root" and g.type == mujoco.mjtGeom.mjGEOM_MESH
+                  and g.meshname == "base_link")
+    root.add_geom(name="base_link_col", type=mujoco.mjtGeom.mjGEOM_MESH,
+                  meshname="base_link", pos=visual.pos, quat=visual.quat,
+                  contype=2, conaffinity=1, group=3)
+    if rb.contact_hip_fold is not None:
+        for leg in paths.LEGS:
+            joint = spec.joint(f"{leg}_second_joint")
+            lo, hi = (float(v) for v in joint.range)
+            if lo > 0:      # front: folds towards +, the high end
+                joint.range = [lo, rb.contact_hip_fold]
+            else:           # rear: folds towards -, the low end
+                joint.range = [-rb.contact_hip_fold, hi]
+    if rb.contact_lever_fold is not None:
+        for leg in paths.LEGS:
+            joint = spec.joint(f"{leg}_third_joint")
+            lo, hi = (float(v) for v in joint.range)
+            if lo > 0:      # folds towards +: the stop is the range's low end
+                joint.range = [rb.contact_lever_fold, hi]
+            else:           # folds towards -: the high end
+                joint.range = [lo, -rb.contact_lever_fold]
+    # The servos reach the whole physical range: the plant ramps the robot
+    # into its folded pose with them, and lie_down commands that pose.
+    for act in spec.actuators:
+        act.ctrlrange = spec.joint(act.target).range.copy()
+    for i, (x, y, z_top) in enumerate(rb.standoffs):
+        h = rb.standoff_height
+        root.add_geom(name=f"standoff_{i}", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+                      size=[rb.standoff_radius, h / 2, 0], pos=[x, y, z_top - h / 2],
+                      contype=2, conaffinity=1, group=3, rgba=[0.1, 0.1, 0.1, 1])
+    return spec
+
+
+def write_contact(robot: str, home_qpos: np.ndarray, home_ctrl: np.ndarray, **kw) -> None:
+    spec = build_contact_spec(robot, **kw)
+    spec.add_key(name="home", qpos=home_qpos, ctrl=home_ctrl)
+    spec.compile()
+    files = paths.robot_files(robot)
+    files["contact_robot"].write_text(spec.to_xml())
+    files["contact_scene"].write_text(
+        SCENE_XML_TEXT.replace(files["robot"].name, files["contact_robot"].name)
+    )
+    print(f"wrote {files['contact_scene']}")
+
+
 def source_stand_qpos(robot: str) -> np.ndarray | None:
     """The first keyframe of the variant's source model, if it has one."""
     source = mujoco.MjModel.from_xml_path(str(paths.robot_files(robot)["source"]))
@@ -427,6 +512,8 @@ def main() -> None:
     if robots.get(args.robot).rest_pose_from_source_key:
         kw.pop("robot")
         write_view(args.robot, qpos, ctrl, **kw)
+        if paths.robot_files(args.robot)["collision"].exists():
+            write_contact(args.robot, qpos, ctrl, **kw)
 
 
 if __name__ == "__main__":

@@ -35,9 +35,14 @@ def test_profiles_are_well_formed():
     body = BODY_XACRO.read_text()
     for name, profile in robots.PROFILES.items():
         assert profile.name == name
-        # A legs value the body macro accepts.
-        assert f"legs == '{profile.legs}'" in body, profile.legs
-        assert profile.training_robot in ("wojtek", "legs_v627")
+        # A legs value the body macro accepts (named in its fatal message,
+        # which lists every set of legs it builds).
+        accepted = body[body.index("wojtek_body: legs must be"):].split(", got")[0]
+        assert f"'{profile.legs}'" in accepted, profile.legs
+        assert profile.training_robot in ("wojtek", "legs_v627", "legs_v646")
+        # A variant runs another's policies only if it is the same linkage.
+        for other in profile.also_runs:
+            assert other in ("wojtek", "legs_v627", "legs_v646")
         assert (CONFIG / profile.joint_map).is_file(), profile.joint_map
         assert isinstance(profile.clamp_knee, bool)
         if profile.default_policy is not None:
@@ -189,3 +194,23 @@ def test_runtime_refuses_other_legs_when_given_a_robot(tmp_path):
     _policy_dir(tmp_path, "legs_v627")
     with pytest.raises(ValueError, match="legs_v627"):
         WojtekPolicy(tmp_path / "policy.npz", robot="wojtek")
+
+
+def test_v3_is_the_v627_four_bar_with_its_own_parts():
+    """wojtek_v3 (legs_v646) runs legs_v627 policies and uses its joint map:
+    that is right only while the two URDFs have the same joints. The leg
+    macro is shared; the generated link macros carry the parts."""
+    v2, v3 = robots.get("wojtek_v2"), robots.get("wojtek_v3")
+    assert v3.legs == v3.training_robot == "legs_v646"
+    assert v3.joint_map == v2.joint_map
+    assert v3.also_runs == ("legs_v627",)
+    robots.check_policy({"robot": "legs_v627"}, "wojtek_v3")
+    robots.check_policy({"robot": "legs_v646"}, "wojtek_v3")
+    with pytest.raises(ValueError):
+        robots.check_policy({"robot": "wojtek"}, "wojtek_v3")
+    with pytest.raises(ValueError):
+        robots.check_policy({"robot": "legs_v646"}, "wojtek_v2")
+    links = (SRC / "wojtek_description" / "urdf" / "legs_v646_links.urdf.xacro").read_text()
+    for leg in ("rear_left", "rear_right", "front_right", "front_left"):
+        for link in ("third", "fourth", "fifth", "sixth"):
+            assert f'name="legs_v646_{leg}_{link}_link"' in links

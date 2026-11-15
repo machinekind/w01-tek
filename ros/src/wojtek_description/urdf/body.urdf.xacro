@@ -3,6 +3,7 @@
   <xacro:include filename="$(find wojtek_description)/urdf/inertia.urdf.xacro" />
   <xacro:include filename="$(find wojtek_description)/urdf/leg.urdf.xacro" />
   <xacro:include filename="$(find wojtek_description)/urdf/leg_v627.urdf.xacro" />
+  <xacro:include filename="$(find wojtek_description)/urdf/legs_v646_links.urdf.xacro" />
 
   <!-- Mechanical assembly shared by every bringup of this robot: material,
        base_link/body_link/imu_link, and the four legs. ros2_control/Gazebo
@@ -48,6 +49,29 @@
       <parent link="base_link" />
       <child link="camera_link" />
       <origin xyz="0.32 0.0 0.07" rpy="0 0.2617994 0" />
+    </joint>
+  </xacro:macro>
+
+  <!-- A standoff under the base: 35 mm, 11 mm foot (the cone's narrow end
+       on the floor), its top on the base's underside at the base_link
+       origin (the basis the 35 mm was worked out on, 2026-10-22). -->
+  <xacro:macro name="standoff" params="n x y">
+    <link name="standoff_${n}_link">
+      <visual>
+        <origin xyz="0 0 ${-0.0175}" rpy="0 0 0" />
+        <geometry><cylinder radius="0.0055" length="0.035" /></geometry>
+        <xacro:grey_material />
+      </visual>
+      <collision>
+        <origin xyz="0 0 ${-0.0175}" rpy="0 0 0" />
+        <geometry><cylinder radius="0.0055" length="0.035" /></geometry>
+      </collision>
+      <xacro:inertia_stub />
+    </link>
+    <joint name="standoff_${n}_joint" type="fixed">
+      <parent link="base_link" />
+      <child link="standoff_${n}_link" />
+      <origin xyz="${x} ${y} 0.0" rpy="0 0 0" />
     </joint>
   </xacro:macro>
 
@@ -152,18 +176,28 @@
       third_joint_gear_correction_dir="1.0"
     />
     </xacro:if>
-    <xacro:if value="${legs == 'legs_v627'}">
+    <xacro:if value="${legs in ('legs_v627', 'legs_v646')}">
       <xacro:leg_v627 prefix="rear_left" xyz="-0.131 0.06 0.06" rpy="0 0 ${pi}"
-        first_joint_offset="${pi}" dir="-1.0" side="1.0" rear="true" />
+        first_joint_offset="${pi}" dir="-1.0" side="1.0" rear="true" variant="${legs}" />
       <xacro:leg_v627 prefix="rear_right" xyz="-0.131 -0.06 0.06" rpy="0 0 ${pi}"
-        first_joint_offset="0.0" dir="1.0" side="-1.0" rear="true" />
+        first_joint_offset="0.0" dir="1.0" side="-1.0" rear="true" variant="${legs}" />
       <xacro:leg_v627 prefix="front_right" xyz="0.131 -0.06 0.06" rpy="0 0 0"
-        first_joint_offset="${pi}" dir="-1.0" side="-1.0" rear="false" />
+        first_joint_offset="${pi}" dir="-1.0" side="-1.0" rear="false" variant="${legs}" />
       <xacro:leg_v627 prefix="front_left" xyz="0.131 0.06 0.06" rpy="0 0 0"
-        first_joint_offset="0.0" dir="1.0" side="1.0" rear="false" />
+        first_joint_offset="0.0" dir="1.0" side="1.0" rear="false" variant="${legs}" />
     </xacro:if>
-    <xacro:unless value="${legs in ('stock', 'legs_v627')}">
-      ${xacro.fatal("wojtek_body: legs must be 'stock' or 'legs_v627', got '" + legs + "'")}
+    <!-- The four 35 mm standoffs the robot lies on (mech/dodatki/nozka_35,
+         since 2026-10-23), with the v6.46 legs. Same numbers as the contact
+         model's (training/wojtek_rl/robots.py LEGS_V646.standoffs),
+         positions assumed until measured. -->
+    <xacro:if value="${legs == 'legs_v646'}">
+      <xacro:standoff n="0" x="0.12" y="0.04" />
+      <xacro:standoff n="1" x="0.12" y="-0.04" />
+      <xacro:standoff n="2" x="-0.12" y="0.04" />
+      <xacro:standoff n="3" x="-0.12" y="-0.04" />
+    </xacro:if>
+    <xacro:unless value="${legs in ('stock', 'legs_v627', 'legs_v646')}">
+      ${xacro.fatal("wojtek_body: legs must be 'stock', 'legs_v627' or 'legs_v646', got '" + legs + "'")}
     </xacro:unless>
   </xacro:macro>
 </robot>

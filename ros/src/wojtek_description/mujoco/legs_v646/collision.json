@@ -1,0 +1,50 @@
+{
+ "rear_left_third_link": [
+  "col_udo_B_0.stl"
+ ],
+ "rear_left_fourth_link": [
+  "col_dzwignia_B_0.stl"
+ ],
+ "rear_left_fifth_link": [
+  "col_wodzik_B_0.stl"
+ ],
+ "rear_left_sixth_link": [
+  "col_golen_B_0.stl"
+ ],
+ "rear_right_third_link": [
+  "col_udo_A_0.stl"
+ ],
+ "rear_right_fourth_link": [
+  "col_dzwignia_A_0.stl"
+ ],
+ "rear_right_fifth_link": [
+  "col_wodzik_A_0.stl"
+ ],
+ "rear_right_sixth_link": [
+  "col_golen_A_0.stl"
+ ],
+ "front_right_third_link": [
+  "col_udo_A_0.stl"
+ ],
+ "front_right_fourth_link": [
+  "col_dzwignia_A_0.stl"
+ ],
+ "front_right_fifth_link": [
+  "col_wodzik_A_0.stl"
+ ],
+ "front_right_sixth_link": [
+  "col_golen_A_0.stl"
+ ],
+ "front_left_third_link": [
+  "col_udo_B_0.stl"
+ ],
+ "front_left_fourth_link": [
+  "col_dzwignia_B_0.stl"
+ ],
+ "front_left_fifth_link": [
+  "col_wodzik_B_0.stl"
+ ],
+ "front_left_sixth_link": [
+  "col_golen_B_0.stl"
+ ]
+}

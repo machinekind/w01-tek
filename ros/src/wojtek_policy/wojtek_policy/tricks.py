@@ -182,7 +182,10 @@ def for_robot(training_robot: str):
     """The trick clips of one set of legs, by training variant name."""
     if training_robot == "wojtek":
         return KeyframeTricks()
-    if training_robot == "legs_v627":
+    if training_robot in ("legs_v627", "legs_v646"):
+        # legs_v646 is the v6.27 four-bar with other parts: the clips are
+        # joint-space, so they carry over (shifted to its home, clipped to
+        # its envelope, like v6.27's).
         p = poses.for_robot(training_robot)
         return SampledTricks(
             _load_data("tricks_legs_v627.json"), p.home_ctrl, p.ctrl_low,
@@ -190,7 +193,7 @@ def for_robot(training_robot: str):
         )
     raise ValueError(
         f"no tricks for training robot {training_robot!r} "
-        "(known: 'wojtek', 'legs_v627')"
+        "(known: 'wojtek', 'legs_v627', 'legs_v646')"
     )
 
 

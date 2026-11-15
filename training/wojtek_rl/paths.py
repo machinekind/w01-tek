@@ -29,6 +29,12 @@ def robot_files(robot: str = DEFAULT_ROBOT) -> dict[str, Path]:
         # For looking at the robot in a viewer; nothing trains on these.
         "view_robot": directory / "wojtek_view.xml",
         "view_scene": directory / "scene_view.xml",
+        # Convex pieces per body (import_robot) and the contact model built
+        # from them: the exact outline against the floor, for lying and
+        # fallen poses on CPU MuJoCo (the ROS plant); nothing trains on it.
+        "collision": directory / "collision.json",
+        "contact_robot": directory / "wojtek_contact.xml",
+        "contact_scene": directory / "scene_contact.xml",
     }
 
 # Room-scan scene (room_assets.py -> build_room.py -> room_app.py).

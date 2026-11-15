@@ -137,6 +137,41 @@ V627_CTRL_HIGH = np.array([
     3.1416, 2.95, 2.83267,
 ])
 
+# The v6.46 legs: the v6.27 four-bar with other parts (link lengths
+# identical in the CAD), so home, the envelope's lever extension and the
+# passive table are v6.27's. The folded pose is not:
+#   - the lever folds to 17.0 deg (the shin meets the thigh's stringer;
+#     the controller limit is 18.0), against 14.0 on v6.27;
+#   - the hips come from the contact model (exact outline from the CAD,
+#     training/wojtek_rl/build_model.build_contact_spec): abduction 0, lever
+#     on its stop, each folded leg swung at the unpowered hip until it rests.
+#     It rests with the shin flat on the floor (within 0.5 mm over 220 mm of
+#     its length) at hip 2.957 rad, the body 37.2 mm above the floor. The
+#     35 mm standoffs hang 2.2 mm clear (with the base underside at the root
+#     origin), so they carry nothing and their exact placement does not move
+#     this pose. Computed 2026-11-15, piesek_ws/tools/lying_v646.py.
+V646_FOLDED_CTRL = np.array([
+    0.0, -2.957, -0.29670597,
+    0.0, -2.957, -0.29670597,
+    0.0, 2.957, 0.29670597,
+    0.0, 2.957, 0.29670597,
+])
+# v6.27's envelope with the hips opened to the folded pose and the lever's
+# folding end at the v6.46 stop.
+V646_CTRL_LOW = np.array([
+    -3.1416, -3.0, -2.83267,
+    -3.1416, -3.0, -2.83267,
+    -3.1416, 1.53589, 0.29670597,
+    -3.1416, 1.53589, 0.29670597,
+])
+V646_CTRL_HIGH = np.array([
+    3.1416, -1.53589, -0.29670597,
+    3.1416, -1.53589, -0.29670597,
+    3.1416, 3.0, 2.83267,
+    3.1416, 3.0, 2.83267,
+])
+
+
 # Passive four-bar joints of the v6.27 legs as a function of the lever
 # (third) joint of the same leg, MuJoCo (policy) convention on both sides:
 # real_io converts through the robot's joint map (joint_map_v627.yaml flips
@@ -229,7 +264,19 @@ def for_robot(training_robot: str, folded_knee_rad: float = None) -> RobotPoses:
             passive_constant=dict(V627_PASSIVE_CONSTANT),
             passive_convention="mjc",
         )
+    if training_robot == "legs_v646":
+        return RobotPoses(
+            training_robot="legs_v646",
+            home_ctrl=V627_HOME_CTRL.copy(),
+            folded_ctrl=V646_FOLDED_CTRL.copy(),
+            ctrl_low=V646_CTRL_LOW.copy(),
+            ctrl_high=V646_CTRL_HIGH.copy(),
+            passive_from_driver=dict(V627_PASSIVE_FROM_LEVER),
+            passive_driver="third_joint",
+            passive_constant=dict(V627_PASSIVE_CONSTANT),
+            passive_convention="mjc",
+        )
     raise ValueError(
         f"no poses for training robot {training_robot!r} "
-        "(known: 'wojtek', 'legs_v627')"
+        "(known: 'wojtek', 'legs_v627', 'legs_v646')"
     )

@@ -88,7 +88,10 @@ block's mass is included in the thigh's inertial.
 | Generated viewing copy | `wojtek_view.xml` and `scene_view.xml` in the same directory |
 | Visual meshes | `ros/src/wojtek_description/meshes/<robot>/` |
 | Config group | `training/wojtek_rl/conf/robot/<robot>.yaml` |
-| URDF leg macro | `ros/src/wojtek_description/urdf/leg_v627.urdf.xacro` |
+| URDF leg macro (joints, shared by the v6.x variants) | `ros/src/wojtek_description/urdf/leg_v627.urdf.xacro` |
+| Generated URDF links of a later variant | `ros/src/wojtek_description/urdf/<robot>_links.urdf.xacro` |
+| Convex contact pieces and their list | `meshes/<robot>/collision/`, `mujoco/<robot>/collision.json` |
+| Generated contact model (CPU only) | `wojtek_contact.xml` and `scene_contact.xml` in the variant's directory |
 | ROS robot profile: legs, joint map, pinned policy, knee clamp | `ros/src/wojtek_policy/wojtek_policy/robots.py` |
 
 The stock robot keeps its original paths in `wojtek_description/mujoco/`. A
@@ -111,6 +114,18 @@ keeps names, joints, inertials, actuators, sensors, the loop-closure
 constraints and the CAD keyframe as exported. `build` then adds the primitive
 colliders, the PD servos and the `home` keyframe, as it does for the stock
 robot.
+
+`import-robot` also keeps what the training model leaves out. The collision
+meshes of the export go to `meshes/<robot>/collision/`, listed per body in
+`mujoco/<robot>/collision.json`. The export's URDF links go to
+`urdf/<robot>_links.urdf.xacro`, one generated macro per link. Each macro
+holds the inertial, the visual mesh and the collision meshes. When a
+collision list exists, `build` writes a third model, the contact model
+(`scene_contact.xml`). It is the built model with the exact outline in place
+of the primitives. Every leg body collides with its pieces, the base with
+its mesh, and the variant's standoffs are added. All of them pair with the
+floor only. CPU MuJoCo only: the ROS plant and pose studies load it, nothing
+trains on it.
 
 A new variant needs an entry in `robots.py` before it can be imported. A new
 export of an existing variant needs its `robots.py` numbers checked again. The
@@ -168,6 +183,63 @@ These solver measurements ran on CPU MuJoCo. The later training run below
 measured GPU training throughput. For a new machine/settings combination,
 `check --robot legs_v627 --gpu --backend warp` measures physics step rate and
 scales it by the timestep before comparing with the Go1 gate.
+
+## The v6.46 legs (`legs_v646`, ROS profile `wojtek_v3`)
+
+The mechanical team's candidate of 2026-11-15, tag `v6.46` of their CAD. It
+is the v6.27 four-bar with other parts. The link lengths in the CAD's
+`geometry.json` are identical (288.24, 32.99, 41.82 and 290.95 mm), so
+everything that follows from the kinematics is v6.27's: stand pose, height
+tables, leg signs, solver settings, the joint map, the trick clips, and the
+policies. `wojtek_v3` runs `legs_v627` policies (`RobotProfile.also_runs`),
+and a test checks that the two URDFs have the same joints. The parts
+differ: masses, inertias, the outline, and the lever's folding stop.
+
+**Export.** The CAD build at `v6.46` (169 parts, 59 screw groups, 138 BOM
+rows, as in the team's report) went through the robot exporter with three
+changes, at the owner's request that the visuals be as built and the
+collision exact, because lying is decided by contacts:
+
+- The meshes hold every part of a link except the motor. Before, they held
+  plates, prints and tubes only. The fasteners left out stuck out of that
+  outline by up to 34 mm (the rod end) and 17 mm (the knee bolt).
+- The visual meshes are not decimated. The 16 000-triangle target moved the
+  thigh's surface by up to 3.4 mm.
+- The contact piece of a link is the convex hull of its exact mesh, built
+  from the mesh's own vertices. A flat floor can touch a rigid body only on
+  its convex hull, so for floor contact this is exact, one piece per link.
+  A convex decomposition does not get there: at 1 900 pieces the thigh's
+  pieces still stood up to 1.7 mm proud of the part. The URDF's collision
+  is the exact mesh itself.
+
+**Folded pose.** The pose the robot lies in and zeroes in follows the
+owner's construction of 2026-10-22: shin folded to its stop, legs parallel,
+each folded leg swung at the unpowered hip until it rests on the floor. On
+the contact model (`piesek_ws/tools/lying_v646.py`), the lever's stop is
+17.0 deg, where the shin meets the thigh's stringer. The commanded limit is
+18.0 deg, and v6.27's stop was 14.0. With that stop the shin lies flat:
+within 0.5 mm of the floor over 220 mm of its length. The hips sit at
+2.957 rad and the body 37.2 mm above the floor. The 35 mm standoffs hang
+2.2 mm clear, so with these legs the robot lies on its shins. The standoffs'
+placement therefore does not move the pose. Their x and y in `robots.py` are
+assumed until measured.
+
+The export's hip range ends at 2.695 rad. That is the CAD's stance envelope,
+not a stop: the robot lies past it with its thighs nearly level. With that
+limit in place the simulated robot lifts itself on its legs to 97 mm and
+tilts 10 deg. The contact model opens the hip to pi, and the floor stops
+the leg first.
+
+**ROS simulation**, `robot:=wojtek_v3 boot_pose:=folded`, on the contact
+model:
+
+| Step | Result |
+|---|---|
+| Plant start, lying | base 36 mm above the floor, 0.018 rad from the folded pose |
+| `zero` | 0.018 rad correction |
+| `stand_up` | 0.344 m |
+| `arm`, 8 s at 0.4 m/s with `wojtek_v2-quiet-locomotion` | 2.19 m, no fall |
+| `lie_down` | base 35 mm |
 
 ## First trained policy
 
@@ -314,7 +386,8 @@ by hand (`ros/hw_tests/signcheck/README.md`). Do that before the first
 torque on any new legs: no simulation can tell which way a drive turns.
 
 `real.launch.py`, `robot.launch.py` and `sim.launch.py` take `robot:=wojtek`,
-the default, or `robot:=wojtek_v2`. The profile sets the xacro `legs`, the joint
+the default, `robot:=wojtek_v2` (v6.27/v6.37a legs) or `robot:=wojtek_v3`
+(v6.46 legs, see above; its plant loads the contact model). The profile sets the xacro `legs`, the joint
 map, `clamp_knee`, and the default policy when no `policy:=` is given. With
 `robot:=wojtek_v2` a MuJoCo plant loads
 `wojtek_description/mujoco/legs_v627/scene_mjx.xml`, which has no props.

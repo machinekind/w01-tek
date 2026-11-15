@@ -13,6 +13,7 @@ run.json records it, so eval, report and export rebuild the same robot.
 This module stays free of mujoco and jax so the unit tests can import it.
 """
 
+import dataclasses
 from dataclasses import dataclass
 
 
@@ -72,6 +73,23 @@ class Robot:
     dsecond_table: tuple
     dthird_table: tuple
     leg_sign: tuple
+    # Standoffs under the base the robot lies on, (x, y, z of the base face
+    # they are screwed to) in the root frame, and their height and foot
+    # radius. Only the contact model (build_model.build_contact_spec) has
+    # them; training models do not.
+    standoffs: tuple = ()
+    standoff_height: float = 0.0
+    standoff_radius: float = 0.0
+    # The lever's physical folding stop (rad, magnitude) where it differs
+    # from the export's joint range: the export ends the range at the
+    # controller's limit, a robot without torque folds to the contact. Only
+    # the contact model uses it.
+    contact_lever_fold: float | None = None
+    # The hip's folding end (rad, magnitude) in the contact model, where the
+    # export's range ends short of the pose the robot lies in. The export's
+    # range ends at the CAD's stance envelope, not at a mechanical stop:
+    # the robot lies with its thighs nearly level, past it.
+    contact_hip_fold: float | None = None
 
 
 # The robot as built. Comments on the individual numbers:
@@ -236,7 +254,38 @@ LEGS_V627 = Robot(
     dthird_table=(-0.9088, -0.7601, -0.6007, -0.4262, -0.2298, 0.0, 0.2899),
     leg_sign=(-1.0, -1.0, 1.0, 1.0),
 )
-ROBOTS = {r.name: r for r in (WOJTEK, LEGS_V627)}
+# The v6.46 legs (mechanical team's candidate of 2026-11-15, tag v6.46 of
+# their CAD). Same four-bar as v6.27 (link lengths 288.24 / 32.99 / 41.82 /
+# 290.95 mm, identical in the CAD's geometry.json), so every number that
+# follows from the kinematics is v6.27's: stand pose, height and extension
+# tables, leg signs, solver settings. What differs is the parts: masses,
+# inertias, visual meshes and the convex collision pieces, all from the
+# export. The leg primitives stay v6.27's; the contact model replaces them
+# with the exact outline.
+#   standoffs: the four 35 mm standoffs the robot lies on since 2026-10-23
+#     (mech/dodatki/nozka_35: a 5 deg cone, 11 mm foot). Their length was
+#     worked out on 2026-10-22 with the base's underside at the root
+#     origin (z = 0), the same basis here. (The stock base mesh, an older
+#     shell, has its flat underside at 7.6 mm.) Positions in x and y are
+#     ASSUMED at the corners of the free strip under the base until
+#     measured on the robot; with these legs they do not carry the robot
+#     lying (it rests on the shins), so they do not move the folded pose.
+LEGS_V646 = dataclasses.replace(
+    LEGS_V627,
+    name="legs_v646",
+    standoffs=((0.12, 0.04, 0.0), (0.12, -0.04, 0.0),
+               (-0.12, 0.04, 0.0), (-0.12, -0.04, 0.0)),
+    standoff_height=0.035,
+    standoff_radius=0.0055,
+    # v6.46 README: the shin meets the thigh's stringer at q2 = 17.0 deg
+    # (first contact); the export's range starts at the controller's 18.0.
+    contact_lever_fold=0.29670597,
+    # The export's hips end at 2.695 rad; lying, they sit at 2.957 (thighs
+    # nearly level, as on the robot's photo of 2026-10-23). Opened to pi:
+    # the floor stops the leg first.
+    contact_hip_fold=3.14159265,
+)
+ROBOTS = {r.name: r for r in (WOJTEK, LEGS_V627, LEGS_V646)}
 NAMES = tuple(ROBOTS)
 
 

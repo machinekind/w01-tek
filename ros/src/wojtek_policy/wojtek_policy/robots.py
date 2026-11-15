@@ -1,6 +1,6 @@
 """Robot profiles: the facts that change when the legs change.
 
-There are two sets of legs for the Wojtek body. The stack has to agree with
+There are several sets of legs for the Wojtek body. The stack has to agree with
 itself about which one it is driving. The URDF has to show those legs. The
 joint map has to match their joint convention. The default policy has to be
 one trained on them. The knee clamp only makes sense on legs that have a
@@ -45,6 +45,11 @@ class RobotProfile:
     # The scene a simulated plant loads when model_xml:= is not given, as a
     # package name and a path inside that package's share directory.
     sim_scene: tuple
+    # Other training variants whose policies these legs run too: variants
+    # with the same four-bar (the same link lengths and joint convention),
+    # whose joint targets are therefore angles of this linkage as well.
+    # Only the parts (masses, inertias, outline) differ.
+    also_runs: tuple = ()
 
 
 # The robot as built.
@@ -100,7 +105,29 @@ WOJTEK_V2 = RobotProfile(
     sim_scene=("wojtek_description", "mujoco/legs_v627/scene_mjx.xml"),
 )
 
-PROFILES = {p.name: p for p in (WOJTEK, WOJTEK_V2)}
+# The v6.46 legs (mechanical team's candidate of 2026-11-15) on the same
+# body. The four-bar is v6.27's (identical link lengths in the CAD), so the
+# joint map, the convention and the policies of legs_v627 carry over; a
+# test checks the lengths in the two URDFs. The parts differ: masses,
+# inertias, the outline, and the lever's folding stop (17.0 deg contact,
+# 18.0 deg controller limit, against 14.0 on v6.27), which moves the
+# folded pose the robot zeroes in.
+#   default_policy: wojtek_v2's (trained on legs_v627) until a policy is
+#     trained on these parts.
+#   sim_scene: the contact model (exact outline from the CAD, standoffs),
+#     so a simulated robot lies and stands up from lying as this one does.
+WOJTEK_V3 = RobotProfile(
+    name="wojtek_v3",
+    legs="legs_v646",
+    training_robot="legs_v646",
+    joint_map="joint_map_v627.yaml",
+    default_policy=WOJTEK_V2.default_policy,
+    clamp_knee=False,
+    sim_scene=("wojtek_description", "mujoco/legs_v646/scene_contact.xml"),
+    also_runs=("legs_v627",),
+)
+
+PROFILES = {p.name: p for p in (WOJTEK, WOJTEK_V2, WOJTEK_V3)}
 NAMES = tuple(PROFILES)
 
 
@@ -127,7 +154,7 @@ def check_policy(meta: dict, robot: str, where: str = "the policy") -> None:
     """
     profile = get(robot)
     trained_on = policy_robot(meta)
-    if trained_on != profile.training_robot:
+    if trained_on not in (profile.training_robot, *profile.also_runs):
         raise ValueError(
             f"{where} was trained for robot {trained_on!r}, but this is "
             f"robot:={profile.name}, which runs {profile.training_robot!r} "

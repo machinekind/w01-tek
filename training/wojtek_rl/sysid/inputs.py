@@ -9,6 +9,8 @@ from wojtek_rl import paths, robots
 JOINT_MAPS = {
     "wojtek": paths.WOJTEK_POLICY_PKG / "config/joint_map.yaml",
     "legs_v627": paths.WOJTEK_POLICY_PKG / "config/joint_map_v627.yaml",
+    # Same four-bar and drives as v6.27, other parts: same map.
+    "legs_v646": paths.WOJTEK_POLICY_PKG / "config/joint_map_v627.yaml",
 }
 
 
@@ -34,7 +36,8 @@ def resolve_inputs(robot="wojtek", xml=None, joint_map=None):
         other_files = paths.robot_files(other)
         if xml in {path.resolve() for path in other_files.values()}:
             raise ValueError(f"model belongs to {other}, but --robot is {robot}")
-        if joint_map == JOINT_MAPS[other].resolve():
+        shared = JOINT_MAPS[other].resolve() == JOINT_MAPS[robot].resolve()
+        if joint_map == JOINT_MAPS[other].resolve() and not shared:
             raise ValueError(f"joint map belongs to {other}, but --robot is {robot}")
     for label, path in (("model", xml), ("joint map", joint_map)):
         if not path.is_file():

@@ -78,7 +78,7 @@ def stock():
     return _axes_in_base("stock")
 
 
-@pytest.mark.parametrize("legs", ["legs_v627"])
+@pytest.mark.parametrize("legs", ["legs_v627", "legs_v646"])
 def test_actuated_axes_match_the_stock_urdf(stock, legs):
     other = _axes_in_base(legs)
     for leg in LEGS:

@@ -88,6 +88,22 @@ def _context(hardware, **overrides):
         defaults.update({"hw": "mock", "model_xml": "", "leg_odom": "false"})
     defaults.update(overrides)
     ctx.launch_configurations.update(defaults)
+    # Every other argument comes from the launch's own declarations, the way
+    # a real launch fills it: an argument added to common_launch_description
+    # (tau_ff_limit, output_lpf_alpha, ...) reaches _launch_setup with its
+    # declared default instead of failing here. Only unset names are filled
+    # and choices are not checked, so a test can still hand _launch_setup a
+    # value the declaration would refuse (test_unknown_robot_is_refused).
+    description = launch_common.common_launch_description(
+        with_rviz=False, bag_default="false", with_gamepad=True, hardware=hardware,
+    )
+    for action in description.entities:
+        if (isinstance(action, DeclareLaunchArgument)
+                and action.default_value is not None
+                and action.name not in ctx.launch_configurations):
+            ctx.launch_configurations[action.name] = perform_substitutions(
+                ctx, action.default_value,
+            )
     return ctx
 
 

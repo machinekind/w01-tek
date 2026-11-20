@@ -22,7 +22,9 @@ also has a 0.5 s command timeout. Height is retained. These stop commanded
 locomotion; they do not remove drive torque.
 
 The gateway normally forwards camera JPEGs as MJPEG. Detection reads the same
-browser image, so it does not request another camera stream. Charts connect to
+browser image, so it does not request another camera stream. To record the
+camera as mp4 on a PC, [`ros/record.sh`](../../record.sh) reads the same stream (see the
+[ROS guide](../../README.md#recording-and-live-diagnostics)). Charts connect to
 Foxglove directly. Fonts, scripts and detector assets are served locally for
 use on an AP without internet.
 

@@ -142,6 +142,14 @@ run, add `bag:=true bag_cpus:=0,1 telemetry:=true foxglove:=true` to the effecti
 launch after checking the board's resource budget. Manual launches also default
 to recording/telemetry off.
 
+To keep the camera as a video on the PC, run `./ros/record.sh` while the
+panel's camera works (the robot service with `deck_camera:=true`, or the
+simulation). It finds the panel the way the Deck's icon does (robot, last
+address, this PC, then the local networks), records the panel's MJPEG stream
+and encodes the H.264 on the PC: the robot carries what one more open panel
+costs, nothing more. Files go to `~/wojtek_recordings/<UTC start>.mp4`; Ctrl-C
+stops, `--minutes N` sets a limit, `./ros/record.sh <host>` skips the search.
+
 `/wojtek/sysinfo` reports computer health; `/wojtek/policy_timing` reports control
 tick timing. Import the [Foxglove layout](foxglove/layouts/README.md). Robot bags
 default to `~/wojtek_bags/run_<timestamp>`; PC-container bags use the persistent

@@ -29,7 +29,8 @@ Websocket protocol (text frames, JSON):
                   bridge_port, policy, imu_mount_rpy}
     {"t":"avail", "svc": {key: bool}}          which services answer
     {"t":"svc", key, value, success, message}  a service call's verdict
-    {"t":"status", drive: idle|live|deadman, height, cam_hz, clients}
+    {"t":"status", drive: idle|live|deadman, owner: operator|bridge|none,
+                   height, cam_hz, clients}
   page -> server
     {"t":"cmd", vx, vy, yaw, [height]}         normalized sticks, >= 10 Hz
     {"t":"stop"}                               explicit stop
@@ -43,6 +44,14 @@ Websocket protocol (text frames, JSON):
                                                lying, because the stack
                                                assumes the folded pose when
                                                it starts
+
+A client that connects to /ws?client=bridge is the bridge: a program on
+another computer that drives for an AI system (the robot-bridge
+repository). Every other client is a person's pad. The person wins: after
+any frame from a pad, the bridge's frames are dropped for a second. The
+bridge may send "cmd" and "stop" and nothing else, so it cannot arm, stand
+the robot up, change the height or restart the stack. `owner` in the status
+frame tells it who the robot obeys; the rules are in drive.py.
 
 Threading is the web_console pattern: rclpy spins in a background thread;
 the ROS side hands data to the asyncio side with call_soon_threadsafe and
@@ -71,7 +80,7 @@ from std_srvs.srv import SetBool, Trigger
 
 from wojtek_policy.imu_mount import IMU_MOUNT_RPY
 from wojtek_policy.policy_source import load_meta
-from wojtek_deck.drive import DriveGate
+from wojtek_deck.drive import BRIDGE_MAY, DriveGate
 
 # JPEG encoder, cheapest first. OpenCV encodes through libjpeg-turbo and
 # releases the GIL while it works, so the asyncio side (the drive tick that
@@ -445,11 +454,13 @@ class Server:
         self.assets_dir = assets_dir
         self.loop = loop
         self.clients = set()      # websocket connections
+        self.bridges = set()      # those of them that are the bridge
         self.streams = set()      # asyncio.Queue per MJPEG viewer
         self.gate = DriveGate(node.cmd_low, node.cmd_high, node.height_range,
                               node.height_default, timeout_s=CMD_TIMEOUT_S,
                               silence_after_s=SILENCE_AFTER_S)
         self._last_state = None
+        self._last_owner = None
 
     # -- cross-thread entry points -----------------------------------------
     def emit(self, obj):
@@ -513,7 +524,11 @@ class Server:
     async def websocket(self, request):
         ws = web.WebSocketResponse(heartbeat=5.0)
         await ws.prepare(request)
+        bridge = request.query.get("client") == "bridge"
         self.clients.add(ws)
+        if bridge:
+            self.bridges.add(ws)
+            self.node.get_logger().info("the bridge connected")
         await ws.send_str(json.dumps(self.hello()))
         await ws.send_str(json.dumps(
             {"t": "avail", "svc": self.node.availability()}))
@@ -523,14 +538,17 @@ class Server:
                 if msg.type != web.WSMsgType.TEXT:
                     continue
                 try:
-                    self._on_message(json.loads(msg.data))
-                except (ValueError, TypeError, KeyError):
+                    self._on_message(json.loads(msg.data), bridge=bridge)
+                except (ValueError, TypeError, KeyError, AttributeError):
                     continue
         finally:
             self.clients.discard(ws)
-            if not self.clients:
-                # Last page gone: whatever it was commanding stops now.
-                self.gate.stop(self.loop.time())
+            self.bridges.discard(ws)
+            # Whatever this client alone was commanding stops now. The
+            # bridge stays connected all the time, so "the last client"
+            # is no longer the test: the last pad is.
+            self.gate.client_gone(self.loop.time(), bridge,
+                                  pads_left=len(self.clients - self.bridges))
         return ws
 
     def hello(self):
@@ -550,6 +568,7 @@ class Server:
         return {
             "t": "status",
             "drive": self.gate.state,
+            "owner": self.gate.owner(self.loop.time()),
             "height": self.gate.height,
             "cam_hz": self.node.cam_hz(),
             "frames_seen": self.node.frames_seen,
@@ -558,12 +577,15 @@ class Server:
             "viewers": len(self.streams),
         }
 
-    def _on_message(self, msg):
+    def _on_message(self, msg, bridge=False):
         t = msg.get("t")
         now = self.loop.time()
+        if bridge and t not in BRIDGE_MAY:
+            return  # the bridge moves the sticks and stops, nothing more
         if t == "cmd":
             self.gate.command(now, msg.get("vx", 0), msg.get("vy", 0),
-                              msg.get("yaw", 0), msg.get("height"))
+                              msg.get("yaw", 0), msg.get("height"),
+                              bridge=bridge)
         elif t == "stop":
             self.gate.stop(now)
         elif t == "height":
@@ -641,6 +663,12 @@ class Server:
                 else:
                     self.node.get_logger().info(f"drive {self.gate.state}")
                 self._last_state = self.gate.state
+                self._broadcast(self.status())
+            owner = self.gate.owner(self.loop.time())
+            if owner != self._last_owner:
+                # Told at once, not at the next 2 Hz status: the bridge
+                # stops sending the moment a person takes the sticks.
+                self._last_owner = owner
                 self._broadcast(self.status())
             await asyncio.sleep(1.0 / DRIVE_TICK_HZ)
 

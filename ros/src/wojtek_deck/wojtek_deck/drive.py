@@ -17,35 +17,97 @@ latches the last /cmd_vel it received and never times it out:
     is the same burst-then-silence, started right away.
   * The standing height is a held set-point: it survives stops, so the
     stance does not jump when the sticks are released.
+
+Two kinds of sender share the gate. A person's pad (the handheld's page) and
+the bridge, a program on another computer that drives for an AI system. The
+person wins:
+
+  * A frame from the bridge is ignored for `human_wins_s` after any frame
+    from a pad. So a person who takes the sticks has the robot at once, and
+    keeps it until they let go for that long.
+  * The bridge moves the sticks and nothing else. Its frames cannot change
+    the standing height, and BRIDGE_MAY lists the only messages the gateway
+    takes from it: it cannot arm, stand the robot up or restart the stack.
+  * `owner` says who the robot obeys now. The bridge reads it from the
+    status frames and must not drive while it cannot.
 """
 
 IDLE = "idle"        # nothing to publish
 LIVE = "live"        # fresh pad frames, sticks drive
 DEADMAN = "deadman"  # frames stopped: zeroing burst
 
+# Who the robot obeys, as the status frame reports it.
+OPERATOR = "operator"  # a person's pad
+BRIDGE = "bridge"      # the bridge, driving for an AI system
+NOBODY = "none"
+
+# The only message types the gateway takes from the bridge.
+BRIDGE_MAY = frozenset({"cmd", "stop"})
+
 
 class DriveGate:
     def __init__(self, cmd_low, cmd_high, height_range, height_default,
-                 timeout_s=0.5, silence_after_s=2.0):
+                 timeout_s=0.5, silence_after_s=2.0, human_wins_s=1.0):
         self.cmd_low = [float(v) for v in cmd_low]
         self.cmd_high = [float(v) for v in cmd_high]
         self.height_range = (float(height_range[0]), float(height_range[1]))
         self.height = float(height_default)
         self.timeout_s = float(timeout_s)
         self.silence_after_s = float(silence_after_s)
+        self.human_wins_s = float(human_wins_s)
         self._cmd = (0.0, 0.0, 0.0)   # normalized [-1, 1] (vx, vy, yaw)
         self._stamp = None            # seconds, of the last pad frame
+        self._human_stamp = None      # seconds, of the last frame from a person
+        self._from_bridge = False     # who sent the frame being obeyed
         self.state = IDLE
 
     # -- input ---------------------------------------------------------------
-    def command(self, now, vx, vy, yaw, height=None):
-        """A pad frame: normalized sticks, optional absolute height (m)."""
+    def command(self, now, vx, vy, yaw, height=None, bridge=False):
+        """A pad frame: normalized sticks, optional absolute height (m).
+
+        `bridge` marks a frame from the bridge. It is dropped while a
+        person is driving, and it never changes the height. Returns whether
+        the frame was taken.
+        """
+        now = float(now)
+        if bridge and self.human_driving(now):
+            return False
         clip = lambda v: max(-1.0, min(1.0, float(v)))  # noqa: E731
         self._cmd = (clip(vx), clip(vy), clip(yaw))
-        if height is not None:
+        if height is not None and not bridge:
             lo, hi = self.height_range
             self.height = max(lo, min(hi, float(height)))
-        self._stamp = float(now)
+        if not bridge:
+            self._human_stamp = now
+        self._from_bridge = bool(bridge)
+        self._stamp = now
+        return True
+
+    def human_driving(self, now):
+        """A person's pad sent a frame within the last `human_wins_s`."""
+        return (self._human_stamp is not None
+                and float(now) - self._human_stamp <= self.human_wins_s)
+
+    def owner(self, now):
+        """Who the robot obeys now: OPERATOR, BRIDGE or NOBODY."""
+        if self.human_driving(now):
+            return OPERATOR
+        fresh = (self._stamp is not None
+                 and float(now) - self._stamp < self.timeout_s)
+        return BRIDGE if fresh and self._from_bridge else NOBODY
+
+    def client_gone(self, now, bridge, pads_left):
+        """A client disconnected: stop what it alone was commanding.
+
+        The bridge leaving stops the robot if the bridge was driving it. A
+        pad leaving stops it if no other pad is connected and a pad was
+        driving. One sender going away never stops the other's motion.
+        """
+        if bridge:
+            if self._from_bridge:
+                self.stop(now)
+        elif pads_left == 0 and not self._from_bridge:
+            self.stop(now)
 
     def stop(self, now):
         """Explicit stop: start the zeroing burst now, keep the height."""

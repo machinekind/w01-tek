@@ -83,6 +83,31 @@ joints near zero before restarting the configured systemd unit. This assumes
 folded boot calibration; verify the physical folded pose first. The page retries
 its connection after the service and gateway restart.
 
+## The bridge
+
+A program on another computer can drive the robot for an AI system: the
+bridge (the `robot-bridge` repository). It
+connects to the same websocket as the page, marked as what it is:
+
+```
+ws://<robot>:8090/ws?client=bridge
+```
+
+| Rule | Where |
+|---|---|
+| The bridge sends pad frames like the page: `{"t":"cmd","vx","vy","yaw"}`, sticks from −1 to 1, and `{"t":"stop"}`. | `drive.py` |
+| Nothing else is taken from it. It cannot arm, stand the robot up, change the height or restart the stack. | `BRIDGE_MAY` |
+| A person wins. After any frame from the page, the bridge's frames are dropped for 1 s. | `human_wins_s` |
+| `status` says who the robot obeys: `"owner": "operator"`, `"bridge"` or `"none"`. It is sent at once when that changes. | `owner()` |
+| The same dead-man covers both: 0.5 s without a frame and the gateway zeroes `/cmd_vel`. | `timeout_s` |
+| The bridge disconnecting stops what the bridge was driving. The last page closing stops what a person was driving. | `client_gone()` |
+
+`owner` knows the page and the bridge only. The robot-paired Xbox pad
+publishes `/cmd_vel` on its own and the gateway does not see it: a person
+driving with that pad is **not** reported as `operator`, and the two would
+compete as described above. Until that is closed, do not let the bridge
+drive while someone holds the robot-paired pad.
+
 ## Detection
 
 YOLOX-nano runs through onnxruntime-web in a worker on the handheld, using WebGPU

@@ -6,9 +6,11 @@ A host counts only when its page carries the panel's title, so a home router
 or some other service listening on port 8090 is not opened by mistake. The
 first test keeps that title and the real page from drifting apart; the
 second runs the probe against a real page, a different page, a socket that
-never answers and a closed port.
+never answers and a closed port. ros/record.sh, which records the panel's
+camera on a PC, finds the panel by the same title, so it is held to the page
+too.
 
-The script lives outside ros/src, so inside the ROS container (only ros/src
+The scripts live outside ros/src, so inside the ROS container (only ros/src
 is mounted) and on the robot (deploy.sh ships ros/src only) these tests
 skip. The probe needs GNU `timeout`, which macOS does not have, so the
 second test runs on a Linux host.
@@ -26,6 +28,7 @@ import pytest
 
 ROS = Path(__file__).resolve().parents[3]
 SCRIPT = ROS / "deploy" / "deck" / "deck_panel.sh"
+RECORDER = ROS / "record.sh"
 PAGE = ROS / "src" / "wojtek_deck" / "web" / "index.html"
 
 pytestmark = pytest.mark.skipif(
@@ -33,14 +36,15 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _marker():
-    found = re.search(r"^MARKER='([^']*)'", SCRIPT.read_text(), re.MULTILINE)
-    assert found, "deck_panel.sh no longer sets MARKER='...'"
+def _marker(script=SCRIPT):
+    found = re.search(r"^MARKER='([^']*)'", script.read_text(), re.MULTILINE)
+    assert found, f"{script.name} no longer sets MARKER='...'"
     return found.group(1)
 
 
-def test_marker_is_the_page_title():
-    assert _marker() in PAGE.read_text()
+@pytest.mark.parametrize("script", [SCRIPT, RECORDER], ids=lambda p: p.name)
+def test_marker_is_the_page_title(script):
+    assert _marker(script) in PAGE.read_text()
 
 
 def _free_port():

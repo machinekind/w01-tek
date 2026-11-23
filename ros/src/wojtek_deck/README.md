@@ -97,7 +97,7 @@ ws://<robot>:8090/ws?client=bridge
 |---|---|
 | The bridge sends pad frames like the page: `{"t":"cmd","vx","vy","yaw"}`, sticks from −1 to 1, and `{"t":"stop"}`. | `drive.py` |
 | Nothing else is taken from it. It cannot arm, stand the robot up, change the height or restart the stack. | `BRIDGE_MAY` |
-| A person wins. After any frame from the page, the bridge's frames are dropped for 1 s. | `human_wins_s` |
+| A person wins. After any frame or stop from the page, the bridge's frames are dropped for 1 s. | `human_wins_s` |
 | `status` says who the robot obeys: `"owner": "operator"`, `"bridge"` or `"none"`. It is sent at once when that changes. | `owner()` |
 | The same dead-man covers both: 0.5 s without a frame and the gateway zeroes `/cmd_vel`. | `timeout_s` |
 | The bridge disconnecting stops what the bridge was driving. The last page closing stops what a person was driving. | `client_gone()` |

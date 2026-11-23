@@ -109,8 +109,15 @@ class DriveGate:
         elif pads_left == 0 and not self._from_bridge:
             self.stop(now)
 
-    def stop(self, now):
-        """Explicit stop: start the zeroing burst now, keep the height."""
+    def stop(self, now, human=False):
+        """Explicit stop: start the zeroing burst now, keep the height.
+
+        `human` marks a stop a person pressed on their pad. It keeps the
+        bridge out for `human_wins_s` like any frame of theirs: a person
+        who just stopped the robot does not want it to drive off again.
+        """
+        if human:
+            self._human_stamp = float(now)
         if self._stamp is None:
             return  # never drove: stay silent, there is nothing to undo
         self._cmd = (0.0, 0.0, 0.0)

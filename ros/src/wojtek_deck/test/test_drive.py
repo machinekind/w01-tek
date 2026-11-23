@@ -162,6 +162,31 @@ def test_a_stop_is_taken_from_either_sender():
     assert g.state == DEADMAN
 
 
+def test_a_persons_stop_keeps_the_bridge_out():
+    g = make(human_wins_s=1.0)
+    g.command(0.0, vx=1.0, vy=0.0, yaw=0.0, bridge=True)
+    g.stop(0.1, human=True)                           # a person pressed stop
+    assert g.owner(0.2) == OPERATOR
+    assert g.command(0.2, vx=1.0, vy=0.0, yaw=0.0, bridge=True) is False
+    assert g.tick(0.2) == (0.0, 0.0, 0.0, 0.125)      # still zeroing
+    assert g.command(1.2, vx=1.0, vy=0.0, yaw=0.0, bridge=True) is True
+
+
+def test_a_persons_stop_before_anyone_drove_still_keeps_the_bridge_out():
+    g = make(human_wins_s=1.0)
+    g.stop(0.0, human=True)
+    assert g.tick(0.0) is None                        # nothing to undo: silent
+    assert g.command(0.5, vx=1.0, vy=0.0, yaw=0.0, bridge=True) is False
+
+
+def test_the_bridges_stop_does_not_make_it_the_person():
+    g = make()
+    g.command(0.0, vx=1.0, vy=0.0, yaw=0.0, bridge=True)
+    g.stop(0.1)
+    assert g.owner(0.2) == NOBODY
+    assert g.command(0.2, vx=1.0, vy=0.0, yaw=0.0, bridge=True) is True
+
+
 def test_the_bridge_leaving_stops_what_the_bridge_was_driving():
     g = make()
     g.command(0.0, vx=1.0, vy=0.0, yaw=0.0, bridge=True)

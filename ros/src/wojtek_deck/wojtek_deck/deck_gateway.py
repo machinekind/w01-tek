@@ -587,7 +587,7 @@ class Server:
                               msg.get("yaw", 0), msg.get("height"),
                               bridge=bridge)
         elif t == "stop":
-            self.gate.stop(now)
+            self.gate.stop(now, human=not bridge)
         elif t == "height":
             h = self.gate.step_height(msg.get("delta", 0.0))
             self._broadcast({"t": "status", **{k: v for k, v in
